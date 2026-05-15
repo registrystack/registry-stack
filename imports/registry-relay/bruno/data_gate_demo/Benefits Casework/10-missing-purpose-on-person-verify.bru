@@ -1,0 +1,22 @@
+meta {
+  name: Missing purpose header on person verify (expects 400)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/person/verify?id={{benefitsPersonAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+docs {
+  Calls person verify with a valid verifyKey but no X-Data-Purpose header.
+  person has require_purpose_header=true, which applies to verify as well as rows.
+  expected: 400 auth.purpose_required
+  Confirms purpose enforcement is symmetric across verify and row surfaces.
+}

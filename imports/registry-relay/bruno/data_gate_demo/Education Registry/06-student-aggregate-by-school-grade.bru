@@ -1,0 +1,23 @@
+meta {
+  name: Student aggregate by school grade and status
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student/aggregates/by_school_grade_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the student aggregate grouped by school, grade level, and enrollment status.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with student counts per school+grade+status group.
+  Groups below min_group_size=5 are omitted (omit disclosure control).
+  Useful for district planning without student-level row access.
+}

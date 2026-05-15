@@ -670,6 +670,13 @@ fn validate_entity_filters(
     entity: &EntityConfig,
     exposed_fields: &BTreeMap<String, String>,
 ) -> Result<(), ConfigError> {
+    let allowed_filter_fields: HashSet<&str> = entity
+        .api
+        .allowed_filters
+        .iter()
+        .map(|f| f.field.as_str())
+        .collect();
+
     for filter in &entity.api.allowed_filters {
         if !exposed_fields.contains_key(&filter.field) {
             tracing::error!(
@@ -692,6 +699,20 @@ fn validate_entity_filters(
             return Err(ConfigError::ValidationError);
         }
     }
+
+    for field in &entity.api.required_filters {
+        if !allowed_filter_fields.contains(field.as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %field,
+                "entity required_filters entry is not present in allowed_filters"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+
     Ok(())
 }
 
@@ -783,6 +804,22 @@ fn validate_entity_relationships(
     entities: &BTreeMap<&str, &EntityConfig>,
 ) -> Result<(), ConfigError> {
     let mut names = HashSet::new();
+    if !entity.api.allowed_expansions.is_empty()
+        && !entity
+            .api
+            .allowed_expansions
+            .iter()
+            .all(|name| entity.relationships.iter().any(|rel| &rel.name == name))
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            "allowed_expansions references an unknown relationship"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
     for relationship in &entity.relationships {
         if !is_valid_id(&relationship.name)
             || is_reserved_relationship_segment(&relationship.name)
@@ -812,21 +849,6 @@ fn validate_entity_relationships(
             .get(target.table.as_str())
             .expect("target entity table was validated earlier or will be validated in same pass");
         validate_relationship_fk(dataset, entity, table, relationship, target, target_table)?;
-        if !entity.api.allowed_expansions.is_empty()
-            && !entity
-                .api
-                .allowed_expansions
-                .iter()
-                .all(|name| entity.relationships.iter().any(|rel| &rel.name == name))
-        {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                entity = %entity.name,
-                "allowed_expansions references an unknown relationship"
-            );
-            return Err(ConfigError::ValidationError);
-        }
     }
     Ok(())
 }

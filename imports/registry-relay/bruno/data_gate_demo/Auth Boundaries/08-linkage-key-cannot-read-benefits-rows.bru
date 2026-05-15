@@ -1,0 +1,24 @@
+meta {
+  name: Linkage key cannot read benefits rows (expects 403)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/household?district=riverbend
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+docs {
+  Attempts to read benefits_casework household rows using the linkage_service key (linkageKey).
+  linkageKey holds only subject_registry scopes: subject_registry:metadata,
+  subject_registry:rows, subject_registry:aggregate. It has no benefits_casework scopes.
+  expected: 403 auth.scope_denied
+  Demonstrates that the linkage persona is narrowly scoped: it can resolve cross-dataset
+  aliases via the subject registry but cannot read either underlying dataset directly.
+}

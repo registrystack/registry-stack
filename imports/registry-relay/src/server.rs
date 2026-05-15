@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP server composition.
 //!
-//! [`build_app`] is the single seam Wave 0's binary entry point uses to
-//! turn a parsed [`Config`], an [`AuthProvider`], and an [`AuditSink`]
-//! into an axum [`Router`]. Layering order follows
-//! `decisions/wave-0.md` Section 6 (file ownership) and Section 7
-//! (integration points), matched against Spec.md Section 12 (audit
-//! headers like `X-Request-ID`) and Section 14 (Wave 0 non-goals: only
-//! `/health` + `/ready`).
+//! [`build_app`] composes the public data-plane router from parsed
+//! [`Config`], [`AuthProvider`], and [`AuditSink`] state. The production
+//! path installs ingest readiness plus entity/query state through
+//! [`build_app_with_entity_query`]. Layering order follows the V1
+//! operational requirements for request ids, audit records, CORS,
+//! body limits, timeouts, and scoped API-key authentication.
 //!
 //! ## Layer order (outer to inner)
 //!
@@ -34,19 +33,18 @@
 //! ## Admin listener
 //!
 //! [`build_admin_app`] mirrors [`build_app`] for the optional admin
-//! listener (`config.server.admin_bind`). Wave 0 has no `/admin/*`
-//! handlers yet; the admin router carries `/health` so operators can
-//! probe the second port and the binary has a real second listener,
-//! satisfying `decisions/wave-0.md` Section 8's two-listener exit
-//! criterion. Wave 4 lands `/admin/reload` and friends on this router.
+//! listener (`config.server.admin_bind`). Admin routes are intentionally
+//! kept off the public data-plane listener. The admin listener carries
+//! `/health`, table reload, and the registry-wide reload placeholder;
+//! `POST /admin/reload` remains a reserved V1.x surface that returns
+//! `501 admin.reload_unavailable`.
 //!
 //! ## What lives elsewhere
 //!
 //! * Middleware *factories* (auth, audit) live in their owning modules.
 //!   This file composes; it does not author middleware.
-//! * Route handlers live in `crate::api`. The data-plane sub-router is
-//!   intentionally *not* assembled here in Wave 0; the integration
-//!   points land in Wave 2-4 as their tracks register routes.
+//! * Route handlers live in `crate::api`; this module only wires those
+//!   routers together with shared state and cross-cutting middleware.
 
 use std::sync::Arc;
 
@@ -100,8 +98,8 @@ impl MakeRequestId for UlidMakeRequestId {
 /// The function is generic over the [`AuthProvider`] type so the
 /// middleware compiles to a single monomorphisation per binary, no
 /// `dyn` dispatch on the hot path. The audit sink is held as
-/// `Arc<dyn AuditSink>` because Wave 4 will swap sinks based on
-/// config and we don't want to force the whole router to be generic on
+/// `Arc<dyn AuditSink>` because the sink is selected from config at
+/// startup and we don't want to force the whole router to be generic on
 /// that choice.
 pub fn build_app<P>(config: Arc<Config>, auth: Arc<P>, audit_sink: Arc<dyn AuditSink>) -> Router
 where
@@ -111,8 +109,8 @@ where
     // top-level router *outside* the auth layer.
     let public = api::health_router();
 
-    // Data-plane sub-router. Empty in Wave 0; Waves 1-4 land routes
-    // here and the auth layer gates them.
+    // Data-plane sub-router. All protected public API routes are merged
+    // here so the auth layer gates them as one surface.
     let protected: Router<()> = Router::new()
         .merge(api::datasets_router())
         .merge(api::entity_router())
@@ -129,11 +127,10 @@ where
     apply_cross_cutting_layers(merged, &config, audit_sink).layer(Extension(config))
 }
 
-/// Assemble the main application with a Wave 1 ingest readiness watch.
+/// Assemble the main application with an ingest readiness watch.
 ///
-/// This is the production path once ingestion is enabled. [`build_app`]
-/// remains as a tiny compatibility wrapper for tests that only need the
-/// Wave 0 HTTP shell.
+/// [`build_app`] remains as a tiny compatibility wrapper for tests that
+/// only need the HTTP shell without live readiness state.
 pub fn build_app_with_readiness<P>(
     config: Arc<Config>,
     auth: Arc<P>,
@@ -146,8 +143,8 @@ where
     build_app(config, auth, audit_sink).layer(Extension(readiness))
 }
 
-/// Assemble the main app with Wave 1 readiness plus Wave 2 entity/query
-/// state installed for entity-shaped API routes.
+/// Assemble the main app with readiness plus entity/query state installed
+/// for entity-shaped API routes.
 pub fn build_app_with_entity_query<P>(
     config: Arc<Config>,
     auth: Arc<P>,
@@ -226,10 +223,17 @@ fn apply_cross_cutting_layers(
     );
 
     with_audit
-        // Request-id layers stay outermost so audit can adopt their
-        // `x-request-id` value and the client receives the same id.
+        // Strip client-supplied request ids, then mint and propagate a
+        // server-owned `x-request-id` value.
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
+        .layer(from_fn(strip_untrusted_request_id))
+}
+
+async fn strip_untrusted_request_id(mut request: Request<Body>, next: Next) -> Response {
+    request.headers_mut().remove("x-request-id");
+    request.extensions_mut().remove::<RequestId>();
+    next.run(request).await
 }
 
 fn audit_sensitive_fields(config: &Config) -> Vec<String> {
@@ -286,9 +290,9 @@ async fn normalize_internal_error_response(request: Request<Body>, next: Next) -
 
 /// Build a `CorsLayer` from configuration.
 ///
-/// Wave 0 follows architect decision #7: default-deny. When
-/// `allowed_origins` is empty, `CorsLayer::new()` is returned (no
-/// origin gets `Access-Control-Allow-Origin`, which is the deny case).
+/// V1 uses default-deny CORS. When `allowed_origins` is empty,
+/// `CorsLayer::new()` is returned (no origin gets
+/// `Access-Control-Allow-Origin`, which is the deny case).
 /// When non-empty, each origin is parsed as a [`HeaderValue`] and the
 /// list installed via [`AllowOrigin::list`]. A malformed origin is
 /// treated as a startup-time mis-config; the parse failure is logged

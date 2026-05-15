@@ -1,0 +1,26 @@
+meta {
+  name: Verify-only key cannot read person rows (expects 403)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/person?id={{benefitsPersonAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read person rows using verifyKey.
+  verifyKey holds only benefits_casework:verify; row reads require benefits_casework:rows.
+  expected: 403 auth.scope_denied
+  Confirms verify scope cannot be widened into a row read even with purpose header set.
+}

@@ -98,17 +98,14 @@ impl Source for LocalFileSource {
 
     fn open<'a>(&'a self) -> SourceFuture<'a, OpenedSource> {
         Box::pin(async move {
-            // Stat first so the metadata reflects the file at open time,
-            // before any bytes are read. This matches the contract in
-            // `decisions/wave-1.md` §2.1: "metadata captured at open time".
-            let std_meta = tokio::fs::metadata(&self.canonical_path)
-                .await
-                .map_err(map_io_err)?;
-            let metadata = metadata_from_std(std_meta);
-
             let file = tokio::fs::File::open(&self.canonical_path)
                 .await
                 .map_err(map_io_err)?;
+            // Stat the opened handle, not the path. This keeps the
+            // size/ETag snapshot tied to the bytes that will be read even
+            // if the configured path is replaced between syscalls.
+            let std_meta = file.metadata().await.map_err(map_io_err)?;
+            let metadata = metadata_from_std(std_meta);
 
             Ok(OpenedSource {
                 reader: Box::pin(file),

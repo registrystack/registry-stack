@@ -1,0 +1,22 @@
+meta {
+  name: Stock event aggregate by medicine and status
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/datasets/clinic_capacity/stock_event/aggregates/by_medicine_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the stock event aggregate grouped by medicine code and stock status.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with event counts and total stockout days per medicine+status group.
+  Useful for emergency planning and supply chain oversight without facility-level row access.
+}

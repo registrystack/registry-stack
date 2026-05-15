@@ -1,0 +1,26 @@
+meta {
+  name: Read student guardians relationship
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student/{{studentAlias}}/guardians
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Reads the guardians relationship for student stu-2001 as a paginated list.
+  Uses casework_system persona (rowsKey). Purpose header required (guardian has PII).
+  Expected: 200 with guardian records showing guardian_id, relationship, contact_verified.
+  Sensitive fields guardian_name, phone, email, address are absent.
+}

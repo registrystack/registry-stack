@@ -1,0 +1,22 @@
+meta {
+  name: Household schema
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/household/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the household entity schema. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with field list (household_id, district, municipality, household_size,
+  poverty_band, enrollment_status, enrolled_on) and relationships (members, cases, payments).
+  Sensitive columns address_line and case_notes are absent from the schema.
+}

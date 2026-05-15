@@ -1,0 +1,21 @@
+meta {
+  name: Filter households by district
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/household?district={{district}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Filters households by the shared demo district. Uses casework_system persona (rowsKey).
+  Expected: 200 with paginated list of households in the riverbend district.
+  No purpose header required; household is not marked require_purpose_header.
+}

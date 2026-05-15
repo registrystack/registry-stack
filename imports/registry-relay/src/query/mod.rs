@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Entity query API over Wave 1 DataFusion table registrations.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion::arrow::json::writer::{JsonArray, WriterBuilder};
@@ -12,7 +13,7 @@ use serde_json::Value;
 use crate::config::{FilterOp, RelationshipKind};
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{Error, FilterError, InternalError, SchemaError};
-use crate::ingest::table_name;
+use crate::ingest::{table_name, table_snapshot};
 
 pub mod aggregates;
 pub use aggregates::{AggregateListItem, AggregateQueryEngine, AggregateResult, AggregateRows};
@@ -55,6 +56,20 @@ pub enum EntityFilterOp {
 pub struct EntityRows {
     pub rows: Vec<Value>,
     pub next_primary_key: Option<Value>,
+    pub cursor_ingest_version: Option<String>,
+    pub validator_ingest_version: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EntityRecord {
+    pub value: Value,
+    pub validator_ingest_version: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntityExists {
+    pub exists: bool,
+    pub ingest_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -67,6 +82,8 @@ pub struct RelationshipPageQuery {
 pub struct EntityRelationshipPage {
     pub value: Value,
     pub next_primary_key: Option<Value>,
+    pub cursor_ingest_version: Option<String>,
+    pub validator_ingest_version: Option<String>,
 }
 
 impl EntityQueryEngine {
@@ -99,7 +116,7 @@ impl EntityQueryEngine {
             None => Some(entity.api.default_limit as usize),
         };
         validate_allowed_filters(entity, &query.filters)?;
-        let mut rows = self
+        let mut result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
@@ -109,16 +126,25 @@ impl EntityQueryEngine {
                 query.after_primary_key,
             )
             .await?;
-        let next_primary_key = truncate_page(&mut rows, limit, &entity.primary_key.name);
-        self.expand_rows(dataset_id, entity, &mut rows, &query.expansions)
-            .await?;
-        strip_projection_fields(&mut rows, &strip_fields);
+        let cursor_ingest_version = table_version(&result.versions, &entity.table_id);
+        let next_primary_key = truncate_page(&mut result.rows, limit, &entity.primary_key.name);
+        merge_versions(
+            &mut result.versions,
+            self.expand_rows(dataset_id, entity, &mut result.rows, &query.expansions)
+                .await?,
+        );
+        strip_projection_fields(&mut result.rows, &strip_fields);
         if strip_primary_key {
-            strip_projection_fields(&mut rows, std::slice::from_ref(&entity.primary_key.name));
+            strip_projection_fields(
+                &mut result.rows,
+                std::slice::from_ref(&entity.primary_key.name),
+            );
         }
         Ok(EntityRows {
-            rows,
+            validator_ingest_version: versions_token(&result.versions),
+            rows: result.rows,
             next_primary_key,
+            cursor_ingest_version,
         })
     }
 
@@ -129,13 +155,13 @@ impl EntityQueryEngine {
         primary_key: Value,
         fields: Option<Vec<String>>,
         expansions: Vec<String>,
-    ) -> Result<Option<Value>, Error> {
+    ) -> Result<Option<EntityRecord>, Error> {
         let entity = self.entity(dataset_id, entity_name)?;
         validate_allowed_expansions(entity, &expansions)?;
         let mut projected_fields = projected_fields(entity, fields.as_deref())?;
         let strip_fields = add_expansion_source_fields(entity, &expansions, &mut projected_fields)?;
         let filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
-        let mut rows = self
+        let mut result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
@@ -145,10 +171,16 @@ impl EntityQueryEngine {
                 None,
             )
             .await?;
-        self.expand_rows(dataset_id, entity, &mut rows, &expansions)
-            .await?;
-        strip_projection_fields(&mut rows, &strip_fields);
-        Ok(rows.into_iter().next())
+        merge_versions(
+            &mut result.versions,
+            self.expand_rows(dataset_id, entity, &mut result.rows, &expansions)
+                .await?,
+        );
+        strip_projection_fields(&mut result.rows, &strip_fields);
+        Ok(result.rows.into_iter().next().map(|value| EntityRecord {
+            value,
+            validator_ingest_version: versions_token(&result.versions),
+        }))
     }
 
     pub async fn verify_exists(
@@ -156,11 +188,11 @@ impl EntityQueryEngine {
         dataset_id: &str,
         entity_name: &str,
         primary_key: Value,
-    ) -> Result<bool, Error> {
+    ) -> Result<EntityExists, Error> {
         let entity = self.entity(dataset_id, entity_name)?;
         let projected_fields = vec![&entity.primary_key];
         let filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
-        let rows = self
+        let result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
@@ -170,7 +202,10 @@ impl EntityQueryEngine {
                 None,
             )
             .await?;
-        Ok(!rows.is_empty())
+        Ok(EntityExists {
+            exists: !result.rows.is_empty(),
+            ingest_version: table_version(&result.versions, &entity.table_id),
+        })
     }
 
     pub async fn read_relationship(
@@ -184,7 +219,7 @@ impl EntityQueryEngine {
         let Some(relationship) = entity.relationships.get(relationship_name) else {
             return Err(SchemaError::UnknownResource.into());
         };
-        let mut rows = self
+        let mut result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
@@ -197,7 +232,7 @@ impl EntityQueryEngine {
                 None,
             )
             .await?;
-        let Some(row) = rows.pop() else {
+        let Some(row) = result.rows.pop() else {
             return Err(SchemaError::UnknownResource.into());
         };
         let expanded = self
@@ -221,7 +256,7 @@ impl EntityQueryEngine {
         let Some(relationship) = entity.relationships.get(relationship_name) else {
             return Err(SchemaError::UnknownResource.into());
         };
-        let mut rows = self
+        let mut host_result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
@@ -234,7 +269,7 @@ impl EntityQueryEngine {
                 None,
             )
             .await?;
-        let Some(row) = rows.pop() else {
+        let Some(row) = host_result.rows.pop() else {
             return Err(SchemaError::UnknownResource.into());
         };
         if relationship.kind != RelationshipKind::HasMany {
@@ -244,9 +279,12 @@ impl EntityQueryEngine {
             if relationship.kind == RelationshipKind::BelongsTo && expanded.value.is_null() {
                 return Err(SchemaError::UnknownResource.into());
             }
+            merge_versions(&mut host_result.versions, expanded.versions);
             return Ok(EntityRelationshipPage {
                 value: expanded.value,
                 next_primary_key: None,
+                cursor_ingest_version: None,
+                validator_ingest_version: versions_token(&host_result.versions),
             });
         }
 
@@ -263,7 +301,7 @@ impl EntityQueryEngine {
             None => target.api.default_limit as usize,
         };
         let target_fields = target.fields.iter().collect::<Vec<_>>();
-        let mut rows = self
+        let mut target_result = self
             .execute_entity_query(
                 dataset_id,
                 target,
@@ -273,10 +311,18 @@ impl EntityQueryEngine {
                 page.after_primary_key,
             )
             .await?;
-        let next_primary_key = truncate_page(&mut rows, Some(limit), &target.primary_key.name);
+        let cursor_ingest_version = table_version(&target_result.versions, &target.table_id);
+        let next_primary_key = truncate_page(
+            &mut target_result.rows,
+            Some(limit),
+            &target.primary_key.name,
+        );
+        merge_versions(&mut host_result.versions, target_result.versions);
         Ok(EntityRelationshipPage {
-            value: Value::Array(rows),
+            value: Value::Array(target_result.rows),
             next_primary_key,
+            cursor_ingest_version,
+            validator_ingest_version: versions_token(&host_result.versions),
         })
     }
 
@@ -298,22 +344,28 @@ impl EntityQueryEngine {
         filters: Vec<EntityFilter>,
         limit: Option<usize>,
         after_primary_key: Option<Value>,
-    ) -> Result<Vec<Value>, Error> {
+    ) -> Result<VersionedRows, Error> {
         if matches!(limit, Some(0)) {
             return Err(FilterError::LimitOutOfRange.into());
         }
 
         let table = table_name_str(dataset_id, &entity.table_id);
-        let mut df = self.ctx.table(table.as_str()).await.map_err(|err| {
-            tracing::error!(
-                event = "query.entity_table_unavailable",
-                dataset_id,
-                entity = %entity.name,
-                table = %table,
-                error = %err,
-            );
-            Error::from(SchemaError::ResourceUnavailable)
-        })?;
+        let snapshot = table_snapshot(&self.ctx, table.as_str())
+            .await
+            .map_err(|err| {
+                tracing::error!(
+                    event = "query.entity_table_unavailable",
+                    dataset_id,
+                    entity = %entity.name,
+                    table = %table,
+                    error = %err,
+                );
+                Error::from(SchemaError::ResourceUnavailable)
+            })?;
+        let mut df = self
+            .ctx
+            .read_table(Arc::clone(&snapshot.provider))
+            .map_err(execution_failed)?;
 
         for filter in filters {
             let field = entity_field(entity, &filter.field)?;
@@ -374,7 +426,12 @@ impl EntityQueryEngine {
         }
 
         let batches = df.collect().await.map_err(execution_failed)?;
-        batches_to_json_rows(&batches)
+        let rows = batches_to_json_rows(&batches)?;
+        let mut versions = BTreeMap::new();
+        if let Some(ingest_ulid) = snapshot.ingest_ulid {
+            versions.insert(entity.table_id.clone(), ingest_ulid.to_string());
+        }
+        Ok(VersionedRows { rows, versions })
     }
 
     async fn expand_rows(
@@ -383,7 +440,8 @@ impl EntityQueryEngine {
         entity: &EntityModel,
         rows: &mut [Value],
         expansions: &[String],
-    ) -> Result<(), Error> {
+    ) -> Result<VersionMap, Error> {
+        let mut versions = BTreeMap::new();
         for expansion in expansions {
             let relationship = entity
                 .relationships
@@ -393,6 +451,7 @@ impl EntityQueryEngine {
                 let expanded = self
                     .expand_relationship(dataset_id, entity, row, expansion, relationship)
                     .await?;
+                merge_versions(&mut versions, expanded.versions.clone());
                 if let Value::Object(object) = row {
                     object.insert(expansion.clone(), expanded.value);
                     if expanded.truncated {
@@ -401,7 +460,7 @@ impl EntityQueryEngine {
                 }
             }
         }
-        Ok(())
+        Ok(versions)
     }
 
     async fn expand_relationship(
@@ -420,7 +479,10 @@ impl EntityQueryEngine {
                     return Err(SchemaError::ResourceUnavailable.into());
                 };
                 if value.is_null() {
-                    return Ok(ExpandedRelationship::untruncated(Value::Null));
+                    return Ok(ExpandedRelationship::untruncated(
+                        Value::Null,
+                        BTreeMap::new(),
+                    ));
                 }
                 (target.primary_key.name.clone(), value.clone(), Some(1))
             }
@@ -445,7 +507,7 @@ impl EntityQueryEngine {
             }
         };
         let target_fields = target.fields.iter().collect::<Vec<_>>();
-        let mut rows = self
+        let mut result = self
             .execute_entity_query(
                 dataset_id,
                 target,
@@ -458,16 +520,20 @@ impl EntityQueryEngine {
         match relationship.kind {
             RelationshipKind::HasMany => {
                 let default_limit = target.api.default_limit as usize;
-                let truncated = rows.len() > default_limit;
-                rows.truncate(default_limit);
+                let truncated = result.rows.len() > default_limit;
+                result.rows.truncate(default_limit);
                 Ok(ExpandedRelationship {
-                    value: Value::Array(rows),
+                    value: Value::Array(result.rows),
                     truncated,
+                    versions: result.versions,
                 })
             }
-            RelationshipKind::BelongsTo | RelationshipKind::HasOne => Ok(
-                ExpandedRelationship::untruncated(rows.pop().unwrap_or(Value::Null)),
-            ),
+            RelationshipKind::BelongsTo | RelationshipKind::HasOne => {
+                Ok(ExpandedRelationship::untruncated(
+                    result.rows.pop().unwrap_or(Value::Null),
+                    result.versions,
+                ))
+            }
         }
         .map_err(|error| {
             tracing::error!(
@@ -486,15 +552,45 @@ impl EntityQueryEngine {
 struct ExpandedRelationship {
     value: Value,
     truncated: bool,
+    versions: VersionMap,
 }
 
 impl ExpandedRelationship {
-    fn untruncated(value: Value) -> Self {
+    fn untruncated(value: Value, versions: VersionMap) -> Self {
         Self {
             value,
             truncated: false,
+            versions,
         }
     }
+}
+
+type VersionMap = BTreeMap<String, String>;
+
+struct VersionedRows {
+    rows: Vec<Value>,
+    versions: VersionMap,
+}
+
+fn merge_versions(target: &mut VersionMap, source: VersionMap) {
+    target.extend(source);
+}
+
+fn table_version(versions: &VersionMap, table_id: &str) -> Option<String> {
+    versions.get(table_id).cloned()
+}
+
+fn versions_token(versions: &VersionMap) -> Option<String> {
+    if versions.is_empty() {
+        return None;
+    }
+    Some(
+        versions
+            .iter()
+            .map(|(table, version)| format!("{table}={version}"))
+            .collect::<Vec<_>>()
+            .join(";"),
+    )
 }
 
 impl EntityCollectionQuery {

@@ -86,7 +86,7 @@ impl ChainState {
 /// before delegating to the configured sink.
 pub struct ChainingSink {
     inner: std::sync::Arc<dyn AuditSink>,
-    state: std::sync::Mutex<ChainState>,
+    state: tokio::sync::Mutex<ChainState>,
 }
 
 impl ChainingSink {
@@ -94,7 +94,7 @@ impl ChainingSink {
     pub fn new(inner: std::sync::Arc<dyn AuditSink>) -> Self {
         Self {
             inner,
-            state: std::sync::Mutex::new(ChainState::new()),
+            state: tokio::sync::Mutex::new(ChainState::new()),
         }
     }
 }
@@ -108,14 +108,16 @@ impl std::fmt::Debug for ChainingSink {
 impl AuditSink for ChainingSink {
     fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
         Box::pin(async move {
-            let envelope = {
-                let mut state = self
-                    .state
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                state.wrap_envelope(envelope)
-            };
-            self.inner.write(envelope).await
+            let mut state = self.state.lock().await;
+            let prev_hash = state.last_hash.clone();
+            let record_hash = record_hash(prev_hash.as_deref(), &envelope.record);
+            let mut envelope = envelope;
+            envelope.prev_hash = prev_hash;
+            envelope.record_hash = Some(record_hash.clone());
+
+            self.inner.write(envelope).await?;
+            state.last_hash = Some(record_hash);
+            Ok(())
         })
     }
 

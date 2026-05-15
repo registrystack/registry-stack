@@ -1,0 +1,21 @@
+meta {
+  name: Verify-only key cannot read student schema (expects 403)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+docs {
+  Attempts to read the student schema using the verification_service key (verifyKey).
+  verifyKey holds only education_registry:verify; schema access requires :metadata.
+  expected: 403 auth.scope_denied
+}

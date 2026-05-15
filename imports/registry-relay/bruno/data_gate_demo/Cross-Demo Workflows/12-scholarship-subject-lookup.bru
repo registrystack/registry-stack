@@ -1,0 +1,29 @@
+meta {
+  name: Scholarship eligibility - subject registry lookup
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/datasets/subject_registry/subject?education_student_alias={{studentAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Step 2 of 4: Scholarship eligibility with subject linkage workflow.
+  Reads the subject_registry row for student stu-2001 to obtain the matching
+  benefits_household_alias. Uses linkage_service persona (linkageKey).
+  Purpose header required. This is the only step that touches the linkage table.
+  Expected: 200 with subject row including benefits_household_alias (e.g. hh-1001).
+  Note the key switch: verifyKey in step 1, linkageKey here, rowsKey in step 3.
+  All three audit entries are visible in the subject_registry file sink.
+}

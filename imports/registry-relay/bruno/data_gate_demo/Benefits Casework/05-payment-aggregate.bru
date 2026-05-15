@@ -1,0 +1,24 @@
+meta {
+  name: Payment aggregate by district and cycle
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/payment/aggregates/by_district_cycle
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the payment aggregate grouped by household district and payment cycle.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with aggregate result showing sum and average payment amounts per
+  district+cycle group. Groups below min_group_size=5 are masked rather than omitted
+  (mask disclosure control). Shows how financial planning aggregates work without
+  exposing individual payment amounts.
+}

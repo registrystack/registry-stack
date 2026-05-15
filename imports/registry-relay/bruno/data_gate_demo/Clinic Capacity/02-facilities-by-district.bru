@@ -1,0 +1,24 @@
+meta {
+  name: Filter facilities by district
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/datasets/clinic_capacity/facility?district={{district}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Filters clinic facilities by the shared demo district (riverbend).
+  Uses casework_system persona (rowsKey). No purpose header required;
+  clinic_capacity has no personal data.
+  Expected: 200 with list of facilities in the riverbend district, including
+  facility_type, ownership, service_level, and coarse location bands.
+  Sensitive fields exact_latitude and exact_longitude are absent from the response.
+}

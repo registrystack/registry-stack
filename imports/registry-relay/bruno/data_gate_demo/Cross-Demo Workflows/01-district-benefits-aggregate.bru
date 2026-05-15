@@ -1,0 +1,23 @@
+meta {
+  name: District planning - benefits aggregate
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/household/aggregates/by_poverty_band
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 1 of 4: District planning workflow.
+  Runs benefits household aggregate to get poverty band distribution across districts.
+  Uses planning_analyst persona (aggregateKey).
+  Run all four steps (01-04) to gather a combined district planning picture.
+  Expected: 200 with household counts per district+poverty_band.
+}

@@ -1,0 +1,23 @@
+meta {
+  name: Read facility with service capacity expanded
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/datasets/clinic_capacity/facility/{{facilityId}}?expand=service_capacity
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Reads facility fac-4001 with service_capacity relationship expanded inline.
+  Uses casework_system persona (rowsKey).
+  Expected: 200 with facility fields plus embedded service_capacity array showing
+  beds_available, staff_on_roster, open_days per service_type and month.
+  Sensitive field internal_roster_notes is absent from the response.
+}

@@ -1,0 +1,24 @@
+meta {
+  name: Clinic rehabilitation - facility record
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/datasets/clinic_capacity/facility/{{facilityId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Step 2 of 3: Clinic rehabilitation follow-up workflow.
+  Reads the clinic_capacity facility record for fac-4001 to confirm current
+  operational state alongside the rehabilitation project from step 8.
+  Uses casework_system persona (rowsKey).
+  Expected: 200 with facility fields: facility_name, district, facility_type,
+  ownership, service_level, latitude_band, longitude_band.
+}

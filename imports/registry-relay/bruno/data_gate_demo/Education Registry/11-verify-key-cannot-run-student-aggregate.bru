@@ -1,0 +1,22 @@
+meta {
+  name: Verify-only key cannot run student aggregate (expects 403)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student/aggregates/by_school_grade_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+docs {
+  Attempts to run a student aggregate using verifyKey.
+  verifyKey holds only education_registry:verify; aggregates require :aggregate.
+  expected: 403 auth.scope_denied
+  Completes the verify-key denial set: verify scope blocks schema, rows, and aggregates.
+}

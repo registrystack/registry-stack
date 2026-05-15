@@ -348,3 +348,109 @@ fn loader_does_not_leak_path_in_error_message() {
         "msg: {msg}"
     );
 }
+
+#[test]
+fn update_frequency_termly_deserializes() {
+    // Verify that the YAML value "termly" parses to UpdateFrequency::Termly.
+    let freq: UpdateFrequency =
+        serde_yml::from_str("termly").expect("termly parses to UpdateFrequency");
+    assert_eq!(freq, UpdateFrequency::Termly);
+}
+
+#[test]
+fn update_frequency_termly_accepted_in_dataset_config() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("termly.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+  - id: education_registry
+    title: Education Registry
+    description: Termly dataset
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: termly
+    source:
+      type: file
+      path: fixtures/education.xlsx
+    refresh:
+      mode: manual
+    tables: []
+    entities: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    )
+    .expect("write config");
+    let config = config::load(&config_path).expect("config loads");
+    assert!(matches!(
+        config.datasets[0].update_frequency,
+        UpdateFrequency::Termly
+    ));
+}
+
+#[test]
+fn update_frequency_as_needed_deserializes() {
+    // Verify that the YAML value "as_needed" parses to UpdateFrequency::AsNeeded.
+    let freq: UpdateFrequency =
+        serde_yml::from_str("as_needed").expect("as_needed parses to UpdateFrequency");
+    assert_eq!(freq, UpdateFrequency::AsNeeded);
+}
+
+#[test]
+fn update_frequency_as_needed_accepted_in_dataset_config() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("as_needed.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+  - id: subject_registry
+    title: Subject Registry
+    description: Event-driven dataset
+    owner: Test
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: as_needed
+    source:
+      type: file
+      path: fixtures/subject_registry.xlsx
+    refresh:
+      mode: manual
+    tables: []
+    entities: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    )
+    .expect("write config");
+    let config = config::load(&config_path).expect("config loads");
+    assert!(matches!(
+        config.datasets[0].update_frequency,
+        UpdateFrequency::AsNeeded
+    ));
+}

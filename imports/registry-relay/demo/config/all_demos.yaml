@@ -1,0 +1,1971 @@
+# SPDX-License-Identifier: Apache-2.0
+# Combined config for cross-demo workflows:
+#   cargo run -- --config demo/config/all_demos.yaml
+#
+# Loads all five datasets together so the Bruno Cross-Demo Workflows folder
+# can compose multi-dataset flows (district planning, school construction,
+# clinic rehab, scholarship eligibility, emergency planning). Each persona
+# carries the union of its per-dataset scopes from the single-dataset
+# configs. The audit sink is a file (demo/var/audit.jsonl) rather than
+# stdout so the scholarship and emergency flows' multi-persona audit trail
+# is durable and inspectable after the fact (spec line 740).
+
+server:
+  bind: 0.0.0.0:4242
+catalog:
+  title: Government Demo Data Gateway (All Demos)
+  base_url: http://127.0.0.1:4242
+  publisher: Government Data Reuse Cell (Demo)
+auth:
+  mode: api_key
+  api_keys:
+    - id: catalog_viewer
+      hash_env: CATALOG_VIEWER_HASH
+      scopes:
+        - benefits_casework:metadata
+        - clinic_capacity:metadata
+        - public_works_projects:metadata
+        - education_registry:metadata
+        - subject_registry:metadata
+    - id: planning_analyst
+      hash_env: PLANNING_ANALYST_HASH
+      scopes:
+        - benefits_casework:metadata
+        - benefits_casework:aggregate
+        - clinic_capacity:metadata
+        - clinic_capacity:aggregate
+        - public_works_projects:metadata
+        - public_works_projects:aggregate
+        - education_registry:metadata
+        - education_registry:aggregate
+        - subject_registry:metadata
+        - subject_registry:aggregate
+    # casework_system: rows on personal datasets (benefits, education) plus
+    # non-personal operational datasets (clinic, public works) where cross-demo
+    # follow-ups need them. Explicitly NOT subject_registry:rows.
+    - id: casework_system
+      hash_env: CASEWORK_SYSTEM_HASH
+      scopes:
+        - benefits_casework:metadata
+        - benefits_casework:rows
+        - benefits_casework:verify
+        - benefits_casework:aggregate
+        - clinic_capacity:metadata
+        - clinic_capacity:rows
+        - clinic_capacity:aggregate
+        - public_works_projects:metadata
+        - public_works_projects:rows
+        - public_works_projects:aggregate
+        - education_registry:metadata
+        - education_registry:rows
+        - education_registry:verify
+        - education_registry:aggregate
+        - subject_registry:metadata
+    - id: verification_service
+      hash_env: VERIFICATION_SERVICE_HASH
+      scopes:
+        - benefits_casework:verify
+        - clinic_capacity:verify
+        - public_works_projects:verify
+        - education_registry:verify
+        - subject_registry:verify
+    # linkage_service: the only persona with subject_registry:rows.
+    # No row scopes on benefits or education; resolves aliases via the registry only.
+    - id: linkage_service
+      hash_env: LINKAGE_SERVICE_HASH
+      scopes:
+        - subject_registry:metadata
+        - subject_registry:rows
+        - subject_registry:aggregate
+    - id: operations_admin
+      hash_env: OPERATIONS_ADMIN_HASH
+      scopes:
+        - admin
+        - benefits_casework:metadata
+        - clinic_capacity:metadata
+        - public_works_projects:metadata
+        - education_registry:metadata
+        - subject_registry:metadata
+audit:
+  sink: file
+  path: demo/var/audit.jsonl
+  format: jsonl
+  rotate:
+    max_size_mb: 50
+    max_files: 5
+datasets:
+  - id: benefits_casework
+    title: Benefits Casework
+    description: >-
+      Household, person, benefit case, and payment data for social protection programme administration. Used for eligibility checks, grievance follow-up, reconciliation, and planning aggregates.
+    owner: Ministry of Social Affairs
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    source:
+      type: file
+      path: demo/data/benefits_casework.xlsx
+    refresh:
+      mode: manual
+    tables:
+      - id: households_table
+        sheet: Households
+        primary_key: household_id
+        schema:
+          strict: true
+          fields:
+            - name: household_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: municipality
+              type: string
+              nullable: false
+            - name: household_size
+              type: number
+              nullable: false
+            - name: poverty_band
+              type: string
+              nullable: false
+            - name: enrollment_status
+              type: string
+              nullable: false
+            - name: enrolled_on
+              type: date
+              nullable: false
+            # address_line and case_notes are present in the workbook but
+            # not projected into any public entity field.
+            - name: address_line
+              type: string
+              nullable: true
+              sensitive: true
+            - name: case_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: persons_table
+        sheet: Persons
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: age_band
+              type: string
+              nullable: false
+            - name: sex
+              type: string
+              nullable: false
+            - name: disability_status
+              type: string
+              nullable: false
+            - name: benefit_role
+              type: string
+              nullable: false
+            - name: eligibility_status
+              type: string
+              nullable: false
+            - name: full_name
+              type: string
+              nullable: true
+              sensitive: true
+            - name: national_id
+              type: string
+              nullable: true
+              sensitive: true
+            - name: phone
+              type: string
+              nullable: true
+              sensitive: true
+      - id: cases_table
+        sheet: Cases
+        primary_key: case_id
+        schema:
+          strict: true
+          fields:
+            - name: case_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: case_type
+              type: string
+              nullable: false
+            - name: case_status
+              type: string
+              nullable: false
+            - name: opened_on
+              type: date
+              nullable: false
+            - name: closed_on
+              type: date
+              nullable: true
+            - name: priority
+              type: string
+              nullable: false
+            - name: caseworker_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: payments_table
+        sheet: Payments
+        primary_key: payment_id
+        schema:
+          strict: true
+          fields:
+            - name: payment_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: cycle
+              type: string
+              nullable: false
+            - name: payment_status
+              type: string
+              nullable: false
+            - name: amount
+              type: number
+              nullable: false
+              unit: USD
+            - name: paid_on
+              type: date
+              nullable: true
+            - name: payment_channel
+              type: string
+              nullable: false
+            - name: bank_account_hint
+              type: string
+              nullable: true
+              sensitive: true
+    entities:
+      - name: household
+        title: Household
+        description: A household enrolled in the benefits programme
+        table: households_table
+        fields:
+          - name: id
+            from: household_id
+          - name: district
+            from: district
+          - name: municipality
+            from: municipality
+          - name: household_size
+            from: household_size
+          - name: poverty_band
+            from: poverty_band
+          - name: enrollment_status
+            from: enrollment_status
+          - name: enrolled_on
+            from: enrolled_on
+        relationships:
+          - name: members
+            kind: has_many
+            target: person
+            foreign_key: household_id
+          - name: cases
+            kind: has_many
+            target: case
+            foreign_key: household_id
+          - name: payments
+            kind: has_many
+            target: payment
+            foreign_key: household_id
+        access:
+          metadata_scope: benefits_casework:metadata
+          aggregate_scope: benefits_casework:aggregate
+          read_scope: benefits_casework:rows
+          verify_scope: benefits_casework:verify
+          bulk_export_scope: benefits_casework:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: municipality
+              ops: [eq, in]
+            - field: poverty_band
+              ops: [eq, in]
+            - field: enrollment_status
+              ops: [eq, in]
+            - field: enrolled_on
+              ops: [gte, lte, between]
+          allowed_expansions: [members, cases, payments]
+        aggregates:
+          - id: by_poverty_band
+            description: Count of households by district and poverty band
+            group_by:
+              - district
+              - poverty_band
+            measures:
+              - name: household_count
+                function: count
+                column: id
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: person
+        title: Person
+        description: An individual member of a benefit household
+        table: persons_table
+        fields:
+          - name: id
+            from: person_id
+          - name: household_id
+            from: household_id
+          - name: age_band
+            from: age_band
+          - name: sex
+            from: sex
+          - name: disability_status
+            from: disability_status
+          - name: benefit_role
+            from: benefit_role
+          - name: eligibility_status
+            from: eligibility_status
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope: benefits_casework:metadata
+          aggregate_scope: benefits_casework:aggregate
+          read_scope: benefits_casework:rows
+          verify_scope: benefits_casework:verify
+          bulk_export_scope: benefits_casework:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          required_filters:
+            - id
+            - household_id
+            - eligibility_status
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: age_band
+              ops: [eq, in]
+            - field: sex
+              ops: [eq, in]
+            - field: disability_status
+              ops: [eq, in]
+            - field: eligibility_status
+              ops: [eq, in]
+          allowed_expansions: [household]
+        aggregates:
+          - id: by_district_age_band
+            description: Count of persons by household district and age band
+            joins:
+              - relationship: household
+            group_by:
+              - household.district
+              - age_band
+            measures:
+              - name: person_count
+                function: count
+                column: id
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: case
+        title: Benefit Case
+        description: An appeal, recertification, or grievance case for a household
+        table: cases_table
+        fields:
+          - name: id
+            from: case_id
+          - name: household_id
+            from: household_id
+          - name: case_type
+            from: case_type
+          - name: case_status
+            from: case_status
+          - name: opened_on
+            from: opened_on
+          - name: closed_on
+            from: closed_on
+          - name: priority
+            from: priority
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope: benefits_casework:metadata
+          aggregate_scope: benefits_casework:aggregate
+          read_scope: benefits_casework:rows
+          verify_scope: benefits_casework:verify
+          bulk_export_scope: benefits_casework:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: case_type
+              ops: [eq, in]
+            - field: case_status
+              ops: [eq, in]
+            - field: opened_on
+              ops: [gte, lte, between]
+            - field: priority
+              ops: [eq, in]
+          allowed_expansions: [household]
+        aggregates:
+          - id: by_status_priority
+            description: Count of cases by status and priority
+            group_by:
+              - case_status
+              - priority
+            measures:
+              - name: case_count
+                function: count
+                column: id
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: payment
+        title: Benefit Payment
+        description: A payment disbursed to a household in a given cycle
+        table: payments_table
+        fields:
+          - name: id
+            from: payment_id
+          - name: household_id
+            from: household_id
+          - name: cycle
+            from: cycle
+          - name: payment_status
+            from: payment_status
+          - name: amount
+            from: amount
+          - name: paid_on
+            from: paid_on
+          - name: payment_channel
+            from: payment_channel
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope: benefits_casework:metadata
+          aggregate_scope: benefits_casework:aggregate
+          read_scope: benefits_casework:rows
+          verify_scope: benefits_casework:verify
+          bulk_export_scope: benefits_casework:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: cycle
+              ops: [eq, in]
+            - field: payment_status
+              ops: [eq, in]
+            - field: paid_on
+              ops: [gte, lte, between]
+          allowed_expansions: [household]
+        aggregates:
+          - id: by_district_cycle
+            description: Sum and average payment amount by household district and cycle
+            joins:
+              - relationship: household
+            group_by:
+              - household.district
+              - cycle
+            measures:
+              - name: total_amount
+                function: sum
+                column: amount
+              - name: average_amount
+                function: avg
+                column: amount
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: mask
+  - id: clinic_capacity
+    title: Clinic Capacity
+    description: >-
+      Operational data about health facilities, monthly service capacity, and medicine stock events. Used by emergency planners and supply teams. No patient-level data.
+    owner: Ministry of Health
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: weekly
+    source:
+      type: file
+      path: demo/data/clinic_capacity.xlsx
+    refresh:
+      mode: manual
+    tables:
+      - id: facilities_table
+        sheet: Facilities
+        primary_key: facility_id
+        schema:
+          strict: true
+          fields:
+            - name: facility_id
+              type: string
+              nullable: false
+            - name: facility_name
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: facility_type
+              type: string
+              nullable: false
+            - name: ownership
+              type: string
+              nullable: false
+            - name: service_level
+              type: string
+              nullable: false
+            - name: latitude_band
+              type: string
+              nullable: false
+            - name: longitude_band
+              type: string
+              nullable: false
+            # exact coordinates are operationally sensitive; not projected publicly
+            - name: exact_latitude
+              type: number
+              nullable: true
+              sensitive: true
+            - name: exact_longitude
+              type: number
+              nullable: true
+              sensitive: true
+      - id: service_capacity_table
+        sheet: ServiceCapacity
+        primary_key: capacity_id
+        schema:
+          strict: true
+          fields:
+            - name: capacity_id
+              type: string
+              nullable: false
+            - name: facility_id
+              type: string
+              nullable: false
+            - name: service_type
+              type: string
+              nullable: false
+            - name: month
+              type: string
+              nullable: false
+            - name: beds_available
+              type: number
+              nullable: false
+            - name: staff_on_roster
+              type: number
+              nullable: false
+            - name: open_days
+              type: number
+              nullable: false
+            - name: internal_roster_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: stock_events_table
+        sheet: StockEvents
+        primary_key: stock_event_id
+        schema:
+          strict: true
+          fields:
+            - name: stock_event_id
+              type: string
+              nullable: false
+            - name: facility_id
+              type: string
+              nullable: false
+            - name: medicine_code
+              type: string
+              nullable: false
+            - name: event_month
+              type: string
+              nullable: false
+            - name: stock_status
+              type: string
+              nullable: false
+            - name: days_stocked_out
+              type: number
+              nullable: false
+            - name: supplier_comment
+              type: string
+              nullable: true
+              sensitive: true
+    entities:
+      - name: facility
+        title: Health Facility
+        description: A health facility in the network
+        table: facilities_table
+        fields:
+          - name: id
+            from: facility_id
+          - name: facility_name
+            from: facility_name
+          - name: district
+            from: district
+          - name: facility_type
+            from: facility_type
+          - name: ownership
+            from: ownership
+          - name: service_level
+            from: service_level
+          - name: latitude_band
+            from: latitude_band
+          - name: longitude_band
+            from: longitude_band
+        relationships:
+          - name: service_capacity
+            kind: has_many
+            target: service_capacity
+            foreign_key: facility_id
+          - name: stock_events
+            kind: has_many
+            target: stock_event
+            foreign_key: facility_id
+        access:
+          metadata_scope: clinic_capacity:metadata
+          aggregate_scope: clinic_capacity:aggregate
+          read_scope: clinic_capacity:rows
+          verify_scope: clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: facility_type
+              ops: [eq, in]
+            - field: ownership
+              ops: [eq, in]
+            - field: service_level
+              ops: [eq, in]
+          allowed_expansions: [service_capacity, stock_events]
+        aggregates:
+          - id: by_district_type
+            description: Count of facilities by district and facility type
+            group_by:
+              - district
+              - facility_type
+            measures:
+              - name: facility_count
+                function: count
+                column: id
+            # operational, no person-level records; counts and capacity sums use omit
+            disclosure_control:
+              min_group_size: 3
+              suppression: omit
+      - name: service_capacity
+        title: Service Capacity Record
+        description: Monthly capacity figures for a service at a facility
+        table: service_capacity_table
+        fields:
+          - name: id
+            from: capacity_id
+          - name: facility_id
+            from: facility_id
+          - name: service_type
+            from: service_type
+          - name: month
+            from: month
+          - name: beds_available
+            from: beds_available
+          - name: staff_on_roster
+            from: staff_on_roster
+          - name: open_days
+            from: open_days
+        relationships:
+          - name: facility
+            kind: belongs_to
+            target: facility
+            foreign_key: facility_id
+        access:
+          metadata_scope: clinic_capacity:metadata
+          aggregate_scope: clinic_capacity:aggregate
+          read_scope: clinic_capacity:rows
+          verify_scope: clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: facility_id
+              ops: [eq, in]
+            - field: service_type
+              ops: [eq, in]
+            - field: month
+              ops: [eq, in]
+          allowed_expansions: [facility]
+        aggregates:
+          - id: by_district_service
+            description: Sum of beds and staff by district and service type
+            joins:
+              - relationship: facility
+            group_by:
+              - facility.district
+              - service_type
+            measures:
+              - name: total_beds
+                function: sum
+                column: beds_available
+              - name: total_staff
+                function: sum
+                column: staff_on_roster
+            # operational, no person-level records; counts and capacity sums use omit
+            disclosure_control:
+              min_group_size: 3
+              suppression: omit
+      - name: stock_event
+        title: Stock Event
+        description: A medicine stock status observation at a facility in a given month
+        table: stock_events_table
+        fields:
+          - name: id
+            from: stock_event_id
+          - name: facility_id
+            from: facility_id
+          - name: medicine_code
+            from: medicine_code
+          - name: event_month
+            from: event_month
+          - name: stock_status
+            from: stock_status
+          - name: days_stocked_out
+            from: days_stocked_out
+        relationships:
+          - name: facility
+            kind: belongs_to
+            target: facility
+            foreign_key: facility_id
+        access:
+          metadata_scope: clinic_capacity:metadata
+          aggregate_scope: clinic_capacity:aggregate
+          read_scope: clinic_capacity:rows
+          verify_scope: clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: facility_id
+              ops: [eq, in]
+            - field: medicine_code
+              ops: [eq, in]
+            - field: event_month
+              ops: [eq, in]
+            - field: stock_status
+              ops: [eq, in]
+          allowed_expansions: [facility]
+        aggregates:
+          - id: by_medicine_status
+            description: Count of stock events and sum of stockout days by medicine and status
+            group_by:
+              - medicine_code
+              - stock_status
+            measures:
+              - name: event_count
+                function: count
+                column: id
+              - name: total_days_stocked_out
+                function: sum
+                column: days_stocked_out
+            # operational, no person-level records; counts and capacity sums use omit
+            disclosure_control:
+              min_group_size: 3
+              suppression: omit
+  - id: public_works_projects
+    title: Public Works Projects
+    description: >-
+      Infrastructure projects, contracts, milestones, and disbursements tracked by the delivery unit. Non-personal but commercially and politically sensitive.
+    owner: Delivery Unit
+    sensitivity: confidential
+    access_rights: non_public
+    update_frequency: monthly
+    source:
+      type: file
+      path: demo/data/public_works_projects.xlsx
+    refresh:
+      mode: manual
+    tables:
+      - id: projects_table
+        sheet: Projects
+        primary_key: project_id
+        schema:
+          strict: true
+          fields:
+            - name: project_id
+              type: string
+              nullable: false
+            - name: project_name
+              type: string
+              nullable: false
+            - name: sector
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: asset_type
+              type: string
+              nullable: false
+            - name: asset_ref
+              type: string
+              nullable: true
+            - name: implementing_agency
+              type: string
+              nullable: false
+            - name: project_status
+              type: string
+              nullable: false
+            - name: start_date
+              type: date
+              nullable: false
+            - name: planned_end_date
+              type: date
+              nullable: true
+            - name: risk_rating
+              type: string
+              nullable: false
+            - name: internal_risk_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: contracts_table
+        sheet: Contracts
+        primary_key: contract_id
+        schema:
+          strict: true
+          fields:
+            - name: contract_id
+              type: string
+              nullable: false
+            - name: project_id
+              type: string
+              nullable: false
+            - name: contractor_ref
+              type: string
+              nullable: false
+            - name: procurement_method
+              type: string
+              nullable: false
+            - name: contract_status
+              type: string
+              nullable: false
+            - name: contract_value
+              type: number
+              nullable: false
+              unit: USD
+            - name: signed_on
+              type: date
+              nullable: true
+            - name: contractor_bank_ref
+              type: string
+              nullable: true
+              sensitive: true
+      - id: milestones_table
+        sheet: Milestones
+        primary_key: milestone_id
+        schema:
+          strict: true
+          fields:
+            - name: milestone_id
+              type: string
+              nullable: false
+            - name: project_id
+              type: string
+              nullable: false
+            - name: milestone_name
+              type: string
+              nullable: false
+            - name: milestone_status
+              type: string
+              nullable: false
+            - name: due_date
+              type: date
+              nullable: false
+            - name: completed_on
+              type: date
+              nullable: true
+            - name: delay_reason
+              type: string
+              nullable: true
+            - name: site_observation_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: disbursements_table
+        sheet: Disbursements
+        primary_key: disbursement_id
+        schema:
+          strict: true
+          fields:
+            - name: disbursement_id
+              type: string
+              nullable: false
+            - name: project_id
+              type: string
+              nullable: false
+            - name: contract_id
+              type: string
+              nullable: false
+            - name: fiscal_year
+              type: string
+              nullable: false
+            - name: quarter
+              type: string
+              nullable: false
+            - name: amount
+              type: number
+              nullable: false
+              unit: USD
+            - name: payment_status
+              type: string
+              nullable: false
+            - name: invoice_ref
+              type: string
+              nullable: true
+              sensitive: true
+    entities:
+      - name: project
+        title: Infrastructure Project
+        description: An infrastructure project tracked by the delivery unit
+        table: projects_table
+        fields:
+          - name: id
+            from: project_id
+          - name: project_name
+            from: project_name
+          - name: sector
+            from: sector
+          - name: district
+            from: district
+          - name: asset_type
+            from: asset_type
+          - name: asset_ref
+            from: asset_ref
+          - name: implementing_agency
+            from: implementing_agency
+          - name: project_status
+            from: project_status
+          - name: start_date
+            from: start_date
+          - name: planned_end_date
+            from: planned_end_date
+          - name: risk_rating
+            from: risk_rating
+        relationships:
+          - name: contracts
+            kind: has_many
+            target: contract
+            foreign_key: project_id
+          - name: milestones
+            kind: has_many
+            target: milestone
+            foreign_key: project_id
+          - name: disbursements
+            kind: has_many
+            target: disbursement
+            foreign_key: project_id
+        access:
+          metadata_scope: public_works_projects:metadata
+          aggregate_scope: public_works_projects:aggregate
+          read_scope: public_works_projects:rows
+          verify_scope: public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: sector
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: asset_type
+              ops: [eq, in]
+            - field: asset_ref
+              ops: [eq, in]
+            - field: project_status
+              ops: [eq, in]
+            - field: risk_rating
+              ops: [eq, in]
+            - field: start_date
+              ops: [gte, lte, between]
+            - field: planned_end_date
+              ops: [gte, lte, between]
+          allowed_expansions: [contracts, milestones, disbursements]
+        aggregates:
+          - id: by_sector_status
+            description: Count of projects by sector and status
+            group_by:
+              - sector
+              - project_status
+            measures:
+              - name: project_count
+                function: count
+                column: id
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: omit
+      - name: contract
+        title: Project Contract
+        description: A contract awarded under a project
+        table: contracts_table
+        fields:
+          - name: id
+            from: contract_id
+          - name: project_id
+            from: project_id
+          - name: contractor_ref
+            from: contractor_ref
+          - name: procurement_method
+            from: procurement_method
+          - name: contract_status
+            from: contract_status
+          - name: contract_value
+            from: contract_value
+          - name: signed_on
+            from: signed_on
+        relationships:
+          - name: project
+            kind: belongs_to
+            target: project
+            foreign_key: project_id
+        access:
+          metadata_scope: public_works_projects:metadata
+          aggregate_scope: public_works_projects:aggregate
+          read_scope: public_works_projects:rows
+          verify_scope: public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: project_id
+              ops: [eq, in]
+            - field: procurement_method
+              ops: [eq, in]
+            - field: contract_status
+              ops: [eq, in]
+            - field: signed_on
+              ops: [gte, lte, between]
+          allowed_expansions: [project]
+        aggregates:
+          - id: by_district_procurement
+            description: Count of contracts and sum of contract value by project district and procurement method
+            joins:
+              - relationship: project
+            group_by:
+              - project.district
+              - procurement_method
+            measures:
+              - name: contract_count
+                function: count
+                column: id
+              - name: total_value
+                function: sum
+                column: contract_value
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: mask
+      - name: milestone
+        title: Project Milestone
+        description: A milestone on the delivery schedule of a project
+        table: milestones_table
+        fields:
+          - name: id
+            from: milestone_id
+          - name: project_id
+            from: project_id
+          - name: milestone_name
+            from: milestone_name
+          - name: milestone_status
+            from: milestone_status
+          - name: due_date
+            from: due_date
+          - name: completed_on
+            from: completed_on
+          - name: delay_reason
+            from: delay_reason
+        relationships:
+          - name: project
+            kind: belongs_to
+            target: project
+            foreign_key: project_id
+        access:
+          metadata_scope: public_works_projects:metadata
+          aggregate_scope: public_works_projects:aggregate
+          read_scope: public_works_projects:rows
+          verify_scope: public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: project_id
+              ops: [eq, in]
+            - field: milestone_status
+              ops: [eq, in]
+            - field: due_date
+              ops: [gte, lte, between]
+            - field: delay_reason
+              ops: [eq, in]
+          allowed_expansions: [project]
+        aggregates:
+          - id: by_status_delay_reason
+            description: Count of milestones by status and delay reason
+            group_by:
+              - milestone_status
+              - delay_reason
+            measures:
+              - name: milestone_count
+                function: count
+                column: id
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: omit
+      - name: disbursement
+        title: Project Disbursement
+        description: A payment disbursed against a project contract in a fiscal period
+        table: disbursements_table
+        fields:
+          - name: id
+            from: disbursement_id
+          - name: project_id
+            from: project_id
+          - name: contract_id
+            from: contract_id
+          - name: fiscal_year
+            from: fiscal_year
+          - name: quarter
+            from: quarter
+          - name: amount
+            from: amount
+          - name: payment_status
+            from: payment_status
+        relationships:
+          - name: project
+            kind: belongs_to
+            target: project
+            foreign_key: project_id
+          - name: contract
+            kind: belongs_to
+            target: contract
+            foreign_key: contract_id
+        access:
+          metadata_scope: public_works_projects:metadata
+          aggregate_scope: public_works_projects:aggregate
+          read_scope: public_works_projects:rows
+          verify_scope: public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: project_id
+              ops: [eq, in]
+            - field: contract_id
+              ops: [eq, in]
+            - field: fiscal_year
+              ops: [eq, in]
+            - field: quarter
+              ops: [eq, in]
+            - field: payment_status
+              ops: [eq, in]
+          allowed_expansions: [project, contract]
+        aggregates:
+          - id: by_fiscal_year_quarter
+            description: Sum and average disbursement amount by fiscal year and quarter
+            group_by:
+              - fiscal_year
+              - quarter
+            measures:
+              - name: total_amount
+                function: sum
+                column: amount
+              - name: average_amount
+                function: avg
+                column: amount
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: mask
+  - id: education_registry
+    title: Education Student Registry
+    description: >-
+      Student registry for the national education system. Covers students, guardians, schools, enrolments, support needs, and attendance summaries. Governed personal data; scholarship, transport, meals, and planning systems access via controlled scopes.
+    owner: Ministry of Education
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: termly
+    source:
+      type: file
+      path: demo/data/education_registry.xlsx
+    refresh:
+      mode: manual
+    tables:
+      - id: students_table
+        sheet: Students
+        primary_key: student_id
+        schema:
+          strict: true
+          fields:
+            - name: student_id
+              type: string
+              nullable: false
+            - name: school_id
+              type: string
+              nullable: false
+            - name: current_enrollment_id
+              type: string
+              nullable: true
+            - name: age_band
+              type: string
+              nullable: false
+            - name: sex
+              type: string
+              nullable: false
+            - name: grade_level
+              type: string
+              nullable: false
+            - name: enrollment_status
+              type: string
+              nullable: false
+            - name: home_district
+              type: string
+              nullable: false
+            - name: language_group
+              type: string
+              nullable: false
+            - name: disability_status
+              type: string
+              nullable: false
+            - name: scholarship_eligible
+              type: boolean
+              nullable: false
+            # date_of_birth suppressed; age_band is the public substitute
+            - name: date_of_birth
+              type: date
+              nullable: true
+              sensitive: true
+            - name: student_name
+              type: string
+              nullable: true
+              sensitive: true
+            - name: national_id
+              type: string
+              nullable: true
+              sensitive: true
+            - name: home_address
+              type: string
+              nullable: true
+              sensitive: true
+            - name: guardian_phone
+              type: string
+              nullable: true
+              sensitive: true
+            - name: student_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: guardians_table
+        sheet: Guardians
+        primary_key: guardian_id
+        schema:
+          strict: true
+          fields:
+            - name: guardian_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: relationship
+              type: string
+              nullable: false
+            - name: contact_verified
+              type: boolean
+              nullable: false
+            - name: guardian_name
+              type: string
+              nullable: true
+              sensitive: true
+            - name: phone
+              type: string
+              nullable: true
+              sensitive: true
+            - name: email
+              type: string
+              nullable: true
+              sensitive: true
+            - name: address
+              type: string
+              nullable: true
+              sensitive: true
+      - id: schools_table
+        sheet: Schools
+        primary_key: school_id
+        schema:
+          strict: true
+          fields:
+            - name: school_id
+              type: string
+              nullable: false
+            - name: school_name
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: school_type
+              type: string
+              nullable: false
+            - name: education_level
+              type: string
+              nullable: false
+            - name: has_meal_program
+              type: boolean
+              nullable: false
+            - name: has_accessibility_support
+              type: boolean
+              nullable: false
+      - id: enrollments_table
+        sheet: Enrollments
+        primary_key: enrollment_id
+        schema:
+          strict: true
+          fields:
+            - name: enrollment_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: school_id
+              type: string
+              nullable: false
+            - name: school_year
+              type: string
+              nullable: false
+            - name: grade_level
+              type: string
+              nullable: false
+            - name: status
+              type: string
+              nullable: false
+            - name: enrolled_on
+              type: date
+              nullable: false
+            - name: exited_on
+              type: date
+              nullable: true
+      - id: support_needs_table
+        sheet: SupportNeeds
+        primary_key: support_need_id
+        schema:
+          strict: true
+          fields:
+            - name: support_need_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: support_type
+              type: string
+              nullable: false
+            - name: eligibility_status
+              type: string
+              nullable: false
+            - name: assessment_date
+              type: date
+              nullable: true
+            - name: active
+              type: boolean
+              nullable: false
+            - name: assessment_notes
+              type: string
+              nullable: true
+              sensitive: true
+      - id: attendance_summary_table
+        sheet: AttendanceSummary
+        primary_key: attendance_id
+        schema:
+          strict: true
+          fields:
+            - name: attendance_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: school_year
+              type: string
+              nullable: false
+            - name: term
+              type: string
+              nullable: false
+            - name: attendance_rate
+              type: number
+              nullable: false
+            - name: chronic_absence_flag
+              type: boolean
+              nullable: false
+    entities:
+      - name: student
+        title: Student
+        description: A student enrolled in the national education system
+        table: students_table
+        fields:
+          - name: id
+            from: student_id
+          - name: school_id
+            from: school_id
+          - name: current_enrollment_id
+            from: current_enrollment_id
+          - name: age_band
+            from: age_band
+          - name: sex
+            from: sex
+          - name: grade_level
+            from: grade_level
+          - name: enrollment_status
+            from: enrollment_status
+          - name: home_district
+            from: home_district
+          - name: language_group
+            from: language_group
+          - name: disability_status
+            from: disability_status
+          - name: scholarship_eligible
+            from: scholarship_eligible
+        relationships:
+          - name: school
+            kind: belongs_to
+            target: school
+            foreign_key: school_id
+          - name: guardians
+            kind: has_many
+            target: guardian
+            foreign_key: student_id
+          - name: enrollments
+            kind: has_many
+            target: enrollment
+            foreign_key: student_id
+          - name: support_needs
+            kind: has_many
+            target: support_need
+            foreign_key: student_id
+          - name: attendance_summaries
+            kind: has_many
+            target: attendance_summary
+            foreign_key: student_id
+        access:
+          metadata_scope: education_registry:metadata
+          aggregate_scope: education_registry:aggregate
+          read_scope: education_registry:rows
+          verify_scope: education_registry:verify
+          bulk_export_scope: education_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          required_filters:
+            - id
+            - school_id
+            - home_district
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: school_id
+              ops: [eq, in]
+            - field: grade_level
+              ops: [eq, in]
+            - field: enrollment_status
+              ops: [eq, in]
+            - field: home_district
+              ops: [eq, in]
+            - field: scholarship_eligible
+              ops: [eq]
+          allowed_expansions: [school, guardians, enrollments, support_needs, attendance_summaries]
+        aggregates:
+          - id: by_school_grade_status
+            description: Count of students by school, grade level, and enrollment status
+            group_by:
+              - school_id
+              - grade_level
+              - enrollment_status
+            measures:
+              - name: student_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+          - id: by_district_language
+            description: Count of students by home district and language group
+            group_by:
+              - home_district
+              - language_group
+            measures:
+              - name: student_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: guardian
+        title: Guardian
+        description: A guardian or caregiver linked to a student
+        table: guardians_table
+        fields:
+          - name: id
+            from: guardian_id
+          - name: student_id
+            from: student_id
+          - name: relationship
+            from: relationship
+          - name: contact_verified
+            from: contact_verified
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+        access:
+          metadata_scope: education_registry:metadata
+          aggregate_scope: education_registry:aggregate
+          read_scope: education_registry:rows
+          verify_scope: education_registry:verify
+          bulk_export_scope: education_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: relationship
+              ops: [eq, in]
+            - field: contact_verified
+              ops: [eq]
+          allowed_expansions: [student]
+      - name: school
+        title: School
+        description: A school in the national education system
+        table: schools_table
+        fields:
+          - name: id
+            from: school_id
+          - name: school_name
+            from: school_name
+          - name: district
+            from: district
+          - name: school_type
+            from: school_type
+          - name: education_level
+            from: education_level
+          - name: has_meal_program
+            from: has_meal_program
+          - name: has_accessibility_support
+            from: has_accessibility_support
+        relationships:
+          - name: students
+            kind: has_many
+            target: student
+            foreign_key: school_id
+          - name: enrollments
+            kind: has_many
+            target: enrollment
+            foreign_key: school_id
+        access:
+          metadata_scope: education_registry:metadata
+          aggregate_scope: education_registry:aggregate
+          read_scope: education_registry:rows
+          verify_scope: education_registry:verify
+          bulk_export_scope: education_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: school_type
+              ops: [eq, in]
+            - field: education_level
+              ops: [eq, in]
+            - field: has_meal_program
+              ops: [eq]
+          allowed_expansions: [students, enrollments]
+        aggregates:
+          - id: by_district_meal_program
+            description: Count of schools by district and meal program status
+            group_by:
+              - district
+              - has_meal_program
+            measures:
+              - name: school_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: enrollment
+        title: Enrollment
+        description: A student enrollment record for a school year
+        table: enrollments_table
+        fields:
+          - name: id
+            from: enrollment_id
+          - name: student_id
+            from: student_id
+          - name: school_id
+            from: school_id
+          - name: school_year
+            from: school_year
+          - name: grade_level
+            from: grade_level
+          - name: status
+            from: status
+          - name: enrolled_on
+            from: enrolled_on
+          - name: exited_on
+            from: exited_on
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+          - name: school
+            kind: belongs_to
+            target: school
+            foreign_key: school_id
+        access:
+          metadata_scope: education_registry:metadata
+          aggregate_scope: education_registry:aggregate
+          read_scope: education_registry:rows
+          verify_scope: education_registry:verify
+          bulk_export_scope: education_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: school_id
+              ops: [eq, in]
+            - field: school_year
+              ops: [eq, in]
+            - field: grade_level
+              ops: [eq, in]
+            - field: status
+              ops: [eq, in]
+            - field: enrolled_on
+              ops: [gte, lte, between]
+          allowed_expansions: [student, school]
+      - name: support_need
+        title: Support Need
+        description: A support need assessment for a student
+        table: support_needs_table
+        fields:
+          - name: id
+            from: support_need_id
+          - name: student_id
+            from: student_id
+          - name: support_type
+            from: support_type
+          - name: eligibility_status
+            from: eligibility_status
+          - name: assessment_date
+            from: assessment_date
+          - name: active
+            from: active
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+        access:
+          metadata_scope: education_registry:metadata
+          aggregate_scope: education_registry:aggregate
+          read_scope: education_registry:rows
+          verify_scope: education_registry:verify
+          bulk_export_scope: education_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: support_type
+              ops: [eq, in]
+            - field: eligibility_status
+              ops: [eq, in]
+            - field: assessment_date
+              ops: [gte, lte, between]
+            - field: active
+              ops: [eq]
+          allowed_expansions: [student]
+        aggregates:
+          - id: by_type_district
+            description: Count of support needs by support type and student home district
+            joins:
+              - relationship: student
+            group_by:
+              - support_type
+              - student.home_district
+            measures:
+              - name: support_need_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: attendance_summary
+        title: Attendance Summary
+        description: Term-level attendance summary for a student
+        table: attendance_summary_table
+        fields:
+          - name: id
+            from: attendance_id
+          - name: student_id
+            from: student_id
+          - name: school_year
+            from: school_year
+          - name: term
+            from: term
+          - name: attendance_rate
+            from: attendance_rate
+          - name: chronic_absence_flag
+            from: chronic_absence_flag
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+        access:
+          metadata_scope: education_registry:metadata
+          aggregate_scope: education_registry:aggregate
+          read_scope: education_registry:rows
+          verify_scope: education_registry:verify
+          bulk_export_scope: education_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: school_year
+              ops: [eq, in]
+            - field: term
+              ops: [eq, in]
+            - field: chronic_absence_flag
+              ops: [eq]
+          allowed_expansions: [student]
+        aggregates:
+          - id: by_school_term
+            description: Average attendance rate and count of chronic absence flags by school and term
+            joins:
+              - relationship: student
+            group_by:
+              - student.school_id
+              - school_year
+              - term
+            measures:
+              - name: average_attendance_rate
+                function: avg
+                column: attendance_rate
+              - name: chronic_absence_count
+                function: count
+                column: chronic_absence_flag
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: mask
+  - id: subject_registry
+    title: Subject Registry
+    description: >-
+      Canonical mapping between subject identifiers used by different administrative datasets. Contains no personal data: only opaque canonical ids and per-dataset aliases. The linkage itself is the sensitive surface; access is gated to the linkage_service persona only.
+    owner: Government Identity Coordination Function
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: as_needed
+    source:
+      type: file
+      path: demo/data/subject_registry.xlsx
+    refresh:
+      mode: manual
+    tables:
+      - id: subjects_table
+        sheet: Subjects
+        primary_key: canonical_id
+        schema:
+          strict: true
+          fields:
+            - name: canonical_id
+              type: string
+              nullable: false
+            - name: benefits_person_alias
+              type: string
+              nullable: true
+            - name: benefits_household_alias
+              type: string
+              nullable: true
+            - name: education_student_alias
+              type: string
+              nullable: true
+            - name: education_guardian_alias
+              type: string
+              nullable: true
+            - name: linkage_method
+              type: string
+              nullable: false
+            - name: linkage_confidence
+              type: string
+              nullable: false
+            - name: linked_on
+              type: date
+              nullable: false
+            # raw match score and reviewer notes are operationally sensitive
+            - name: internal_match_score
+              type: number
+              nullable: true
+              sensitive: true
+            - name: match_notes
+              type: string
+              nullable: true
+              sensitive: true
+    entities:
+      - name: subject
+        title: Subject
+        description: >-
+          A canonical subject identity with per-dataset aliases. The registry deliberately has no relationships to personal datasets; cross-dataset composition stays client-side and is audited per call.
+        table: subjects_table
+        fields:
+          - name: canonical_id
+            from: canonical_id
+          - name: benefits_person_alias
+            from: benefits_person_alias
+          - name: benefits_household_alias
+            from: benefits_household_alias
+          - name: education_student_alias
+            from: education_student_alias
+          - name: education_guardian_alias
+            from: education_guardian_alias
+          - name: linkage_method
+            from: linkage_method
+          - name: linkage_confidence
+            from: linkage_confidence
+          - name: linked_on
+            from: linked_on
+        access:
+          metadata_scope: subject_registry:metadata
+          aggregate_scope: subject_registry:aggregate
+          read_scope: subject_registry:rows
+          verify_scope: subject_registry:verify
+          bulk_export_scope: subject_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          required_filters:
+            - canonical_id
+            - benefits_person_alias
+            - benefits_household_alias
+            - education_student_alias
+            - education_guardian_alias
+          allowed_filters:
+            - field: canonical_id
+              ops: [eq, in]
+            - field: benefits_person_alias
+              ops: [eq, in]
+            - field: benefits_household_alias
+              ops: [eq, in]
+            - field: education_student_alias
+              ops: [eq, in]
+            - field: education_guardian_alias
+              ops: [eq, in]
+            - field: linkage_method
+              ops: [eq, in]
+            - field: linkage_confidence
+              ops: [eq, in]
+        aggregates:
+          - id: by_linkage_method_confidence
+            description: Count of subjects by linkage method and confidence band
+            group_by:
+              - linkage_method
+              - linkage_confidence
+            measures:
+              - name: subject_count
+                function: count
+                column: canonical_id
+            # linkage table is the most sensitive surface in the demo pack; small groups risk pinpointing cross-dataset linkages
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit

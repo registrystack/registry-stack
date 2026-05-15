@@ -1,0 +1,24 @@
+meta {
+  name: Clinic rehabilitation - service capacity
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/datasets/clinic_capacity/facility/{{facilityId}}/service_capacity
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Step 3 of 3: Clinic rehabilitation follow-up workflow.
+  Reads the service_capacity relationship for facility fac-4001.
+  Uses casework_system persona (rowsKey).
+  Together with steps 8-9 this gives: rehabilitation timeline (public works), current
+  operational status (facility record), and capacity detail (this relationship).
+  Expected: 200 with service capacity records per service_type and month.
+}

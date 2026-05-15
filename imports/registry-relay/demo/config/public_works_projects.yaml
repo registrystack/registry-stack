@@ -1,0 +1,489 @@
+# SPDX-License-Identifier: Apache-2.0
+# Single-dataset config for local startup: cargo run -- --config demo/config/public_works_projects.yaml
+
+server:
+  bind: 0.0.0.0:4242
+
+catalog:
+  title: Public Works Projects Gateway (Demo)
+  base_url: http://127.0.0.1:4242
+  publisher: Delivery Unit (Demo)
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: catalog_viewer
+      hash_env: CATALOG_VIEWER_HASH
+      scopes:
+        - public_works_projects:metadata
+
+    - id: planning_analyst
+      hash_env: PLANNING_ANALYST_HASH
+      scopes:
+        - public_works_projects:metadata
+        - public_works_projects:aggregate
+
+    # casework_system reads project / contract / milestone rows here for
+    # operational follow-ups (school construction and clinic rehab
+    # cross-demo flows). Personal datasets are the typical home of
+    # casework:rows, but non-personal operational reads are intentional.
+    # Subject_registry is the only :rows scope casework is explicitly denied.
+    - id: casework_system
+      hash_env: CASEWORK_SYSTEM_HASH
+      scopes:
+        - public_works_projects:metadata
+        - public_works_projects:rows
+        - public_works_projects:aggregate
+
+    - id: verification_service
+      hash_env: VERIFICATION_SERVICE_HASH
+      scopes:
+        - public_works_projects:verify
+
+    - id: operations_admin
+      hash_env: OPERATIONS_ADMIN_HASH
+      scopes:
+        - admin
+        - public_works_projects:metadata
+
+audit:
+  sink: stdout
+  format: jsonl
+
+datasets:
+  - id: public_works_projects
+    title: Public Works Projects
+    description: >-
+      Infrastructure projects, contracts, milestones, and disbursements tracked
+      by the delivery unit. Non-personal but commercially and politically sensitive.
+    owner: Delivery Unit
+    sensitivity: confidential
+    access_rights: non_public
+    update_frequency: monthly
+    source:
+      type: file
+      path: demo/data/public_works_projects.xlsx
+    refresh:
+      mode: manual
+
+    tables:
+      - id: projects_table
+        sheet: Projects
+        primary_key: project_id
+        schema:
+          strict: true
+          fields:
+            - name: project_id
+              type: string
+              nullable: false
+            - name: project_name
+              type: string
+              nullable: false
+            - name: sector
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: asset_type
+              type: string
+              nullable: false
+            - name: asset_ref
+              type: string
+              nullable: true
+            - name: implementing_agency
+              type: string
+              nullable: false
+            - name: project_status
+              type: string
+              nullable: false
+            - name: start_date
+              type: date
+              nullable: false
+            - name: planned_end_date
+              type: date
+              nullable: true
+            - name: risk_rating
+              type: string
+              nullable: false
+            - name: internal_risk_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: contracts_table
+        sheet: Contracts
+        primary_key: contract_id
+        schema:
+          strict: true
+          fields:
+            - name: contract_id
+              type: string
+              nullable: false
+            - name: project_id
+              type: string
+              nullable: false
+            - name: contractor_ref
+              type: string
+              nullable: false
+            - name: procurement_method
+              type: string
+              nullable: false
+            - name: contract_status
+              type: string
+              nullable: false
+            - name: contract_value
+              type: number
+              nullable: false
+              unit: USD
+            - name: signed_on
+              type: date
+              nullable: true
+            - name: contractor_bank_ref
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: milestones_table
+        sheet: Milestones
+        primary_key: milestone_id
+        schema:
+          strict: true
+          fields:
+            - name: milestone_id
+              type: string
+              nullable: false
+            - name: project_id
+              type: string
+              nullable: false
+            - name: milestone_name
+              type: string
+              nullable: false
+            - name: milestone_status
+              type: string
+              nullable: false
+            - name: due_date
+              type: date
+              nullable: false
+            - name: completed_on
+              type: date
+              nullable: true
+            - name: delay_reason
+              type: string
+              nullable: true
+            - name: site_observation_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: disbursements_table
+        sheet: Disbursements
+        primary_key: disbursement_id
+        schema:
+          strict: true
+          fields:
+            - name: disbursement_id
+              type: string
+              nullable: false
+            - name: project_id
+              type: string
+              nullable: false
+            - name: contract_id
+              type: string
+              nullable: false
+            - name: fiscal_year
+              type: string
+              nullable: false
+            - name: quarter
+              type: string
+              nullable: false
+            - name: amount
+              type: number
+              nullable: false
+              unit: USD
+            - name: payment_status
+              type: string
+              nullable: false
+            - name: invoice_ref
+              type: string
+              nullable: true
+              sensitive: true
+
+    entities:
+      - name: project
+        title: Infrastructure Project
+        description: An infrastructure project tracked by the delivery unit
+        table: projects_table
+        fields:
+          - name: id
+            from: project_id
+          - name: project_name
+            from: project_name
+          - name: sector
+            from: sector
+          - name: district
+            from: district
+          - name: asset_type
+            from: asset_type
+          - name: asset_ref
+            from: asset_ref
+          - name: implementing_agency
+            from: implementing_agency
+          - name: project_status
+            from: project_status
+          - name: start_date
+            from: start_date
+          - name: planned_end_date
+            from: planned_end_date
+          - name: risk_rating
+            from: risk_rating
+        relationships:
+          - name: contracts
+            kind: has_many
+            target: contract
+            foreign_key: project_id
+          - name: milestones
+            kind: has_many
+            target: milestone
+            foreign_key: project_id
+          - name: disbursements
+            kind: has_many
+            target: disbursement
+            foreign_key: project_id
+        access:
+          metadata_scope:    public_works_projects:metadata
+          aggregate_scope:   public_works_projects:aggregate
+          read_scope:        public_works_projects:rows
+          verify_scope:      public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: sector
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: asset_type
+              ops: [eq, in]
+            - field: asset_ref
+              ops: [eq, in]
+            - field: project_status
+              ops: [eq, in]
+            - field: risk_rating
+              ops: [eq, in]
+            - field: start_date
+              ops: [gte, lte, between]
+            - field: planned_end_date
+              ops: [gte, lte, between]
+          allowed_expansions: [contracts, milestones, disbursements]
+        aggregates:
+          - id: by_sector_status
+            description: Count of projects by sector and status
+            group_by:
+              - sector
+              - project_status
+            measures:
+              - name: project_count
+                function: count
+                column: id
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: omit
+
+      - name: contract
+        title: Project Contract
+        description: A contract awarded under a project
+        table: contracts_table
+        fields:
+          - name: id
+            from: contract_id
+          - name: project_id
+            from: project_id
+          - name: contractor_ref
+            from: contractor_ref
+          - name: procurement_method
+            from: procurement_method
+          - name: contract_status
+            from: contract_status
+          - name: contract_value
+            from: contract_value
+          - name: signed_on
+            from: signed_on
+        relationships:
+          - name: project
+            kind: belongs_to
+            target: project
+            foreign_key: project_id
+        access:
+          metadata_scope:    public_works_projects:metadata
+          aggregate_scope:   public_works_projects:aggregate
+          read_scope:        public_works_projects:rows
+          verify_scope:      public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: project_id
+              ops: [eq, in]
+            - field: procurement_method
+              ops: [eq, in]
+            - field: contract_status
+              ops: [eq, in]
+            - field: signed_on
+              ops: [gte, lte, between]
+          allowed_expansions: [project]
+        aggregates:
+          - id: by_district_procurement
+            description: Count of contracts and sum of contract value by project district and procurement method
+            joins:
+              - relationship: project
+            group_by:
+              - project.district
+              - procurement_method
+            measures:
+              - name: contract_count
+                function: count
+                column: id
+              - name: total_value
+                function: sum
+                column: contract_value
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: mask
+
+      - name: milestone
+        title: Project Milestone
+        description: A milestone on the delivery schedule of a project
+        table: milestones_table
+        fields:
+          - name: id
+            from: milestone_id
+          - name: project_id
+            from: project_id
+          - name: milestone_name
+            from: milestone_name
+          - name: milestone_status
+            from: milestone_status
+          - name: due_date
+            from: due_date
+          - name: completed_on
+            from: completed_on
+          - name: delay_reason
+            from: delay_reason
+        relationships:
+          - name: project
+            kind: belongs_to
+            target: project
+            foreign_key: project_id
+        access:
+          metadata_scope:    public_works_projects:metadata
+          aggregate_scope:   public_works_projects:aggregate
+          read_scope:        public_works_projects:rows
+          verify_scope:      public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: project_id
+              ops: [eq, in]
+            - field: milestone_status
+              ops: [eq, in]
+            - field: due_date
+              ops: [gte, lte, between]
+            - field: delay_reason
+              ops: [eq, in]
+          allowed_expansions: [project]
+        aggregates:
+          - id: by_status_delay_reason
+            description: Count of milestones by status and delay reason
+            group_by:
+              - milestone_status
+              - delay_reason
+            measures:
+              - name: milestone_count
+                function: count
+                column: id
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: omit
+
+      - name: disbursement
+        title: Project Disbursement
+        description: A payment disbursed against a project contract in a fiscal period
+        table: disbursements_table
+        fields:
+          - name: id
+            from: disbursement_id
+          - name: project_id
+            from: project_id
+          - name: contract_id
+            from: contract_id
+          - name: fiscal_year
+            from: fiscal_year
+          - name: quarter
+            from: quarter
+          - name: amount
+            from: amount
+          - name: payment_status
+            from: payment_status
+        relationships:
+          - name: project
+            kind: belongs_to
+            target: project
+            foreign_key: project_id
+          - name: contract
+            kind: belongs_to
+            target: contract
+            foreign_key: contract_id
+        access:
+          metadata_scope:    public_works_projects:metadata
+          aggregate_scope:   public_works_projects:aggregate
+          read_scope:        public_works_projects:rows
+          verify_scope:      public_works_projects:verify
+          bulk_export_scope: public_works_projects:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: project_id
+              ops: [eq, in]
+            - field: contract_id
+              ops: [eq, in]
+            - field: fiscal_year
+              ops: [eq, in]
+            - field: quarter
+              ops: [eq, in]
+            - field: payment_status
+              ops: [eq, in]
+          allowed_expansions: [project, contract]
+        aggregates:
+          - id: by_fiscal_year_quarter
+            description: Sum and average disbursement amount by fiscal year and quarter
+            group_by:
+              - fiscal_year
+              - quarter
+            measures:
+              - name: total_amount
+                function: sum
+                column: amount
+              - name: average_amount
+                function: avg
+                column: amount
+            # non-personal but commercially sensitive; money measures use mask, status counts use omit; k=2 keeps small synthetic groups visible while still suppressing singletons
+            disclosure_control:
+              min_group_size: 2
+              suppression: mask

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Data Gate Config Review"
+  short_description: "Review data_gate V1 configs for safety"
+  default_prompt: "Use $data-gate-config-review to review this data_gate V1 config before deployment."
+
+policy:
+  allow_implicit_invocation: true

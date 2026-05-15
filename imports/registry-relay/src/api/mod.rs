@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP API routers.
 //!
-//! Wave 0 ships the health/ready routes (this module's `health`
-//! submodule). Entity-shaped route declarations are exposed here for
-//! Wave 2 integration while query execution remains decoupled. Catalog
-//! route declarations are exposed for the metadata slice; the remaining
-//! data-plane endpoints documented in Spec.md Section 7
-//! (`/admin/reload`, `/openapi.json`) land in Waves 2-4 as their owning
-//! tracks register routes here.
+//! This module exposes one router entry point per API area. The public
+//! data-plane router mounts health, readiness, datasets, entity rows,
+//! relationships, aggregates, catalog metadata, and OpenAPI. Admin
+//! routes are exported separately so `server::build_admin_app` can mount
+//! them only on the optional `server.admin_bind` listener.
 //!
 //! Route assembly lives in `server::build_app`; this module's job is to
 //! expose a clean, single-call entry point per feature area so the

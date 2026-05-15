@@ -155,6 +155,106 @@ fn entity_referencing_missing_table_is_rejected() {
     assert_eq!(err.code(), "config.validation_error");
 }
 
+fn dataset_with_required_filters(required_filters: &str) -> String {
+    format!(
+        r#"
+  - id: my_dataset
+    title: My Dataset
+    description: Test
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    source:
+      type: file
+      path: fixtures/my_dataset.xlsx
+    refresh:
+      mode: manual
+    tables:
+      - id: records_table
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+            - name: group_id
+              type: string
+              nullable: true
+    entities:
+      - name: record
+        table: records_table
+        fields:
+          - name: id
+            from: record_id
+          - name: group_id
+        access:
+          metadata_scope: my_dataset:metadata
+          aggregate_scope: my_dataset:aggregate
+          read_scope: my_dataset:rows
+          verify_scope: my_dataset:verify
+          bulk_export_scope: my_dataset:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          required_filters: {required_filters}
+          allowed_filters:
+            - field: id
+              ops: [eq]
+            - field: group_id
+              ops: [eq]
+"#
+    )
+}
+
+#[test]
+fn required_filters_not_in_allowed_filters_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters("[id, unknown_field]");
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let err = data_gate::config::load(&config_path)
+        .expect_err("config rejects required_filters with unknown field");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn required_filters_all_in_allowed_filters_loads_cleanly() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters("[id, group_id]");
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let config = data_gate::config::load(&config_path).expect("config loads");
+    let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
+    let dataset = registry.dataset("my_dataset").expect("dataset");
+    let entity = dataset.entity("record").expect("entity");
+    assert_eq!(entity.api.required_filters, ["id", "group_id"]);
+}
+
+#[test]
+fn required_filters_empty_is_accepted() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters("[]");
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let config = data_gate::config::load(&config_path).expect("config loads");
+    let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
+    let dataset = registry.dataset("my_dataset").expect("dataset");
+    let entity = dataset.entity("record").expect("entity");
+    assert!(entity.api.required_filters.is_empty());
+}
+
+#[test]
+fn allowed_expansions_without_matching_relationship_are_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters("[]").replace(
+        "          max_limit: 1000\n",
+        "          max_limit: 1000\n          allowed_expansions: [ghost]\n",
+    );
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let err = data_gate::config::load(&config_path)
+        .expect_err("config rejects expansion without relationship");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
 #[test]
 fn relationship_foreign_key_type_mismatch_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");

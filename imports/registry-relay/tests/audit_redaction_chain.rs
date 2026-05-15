@@ -4,7 +4,11 @@ use data_gate::audit::chain::{
     verify_chain_lines, verify_chain_lines_from_prev_hash, ChainState, ChainVerificationError,
 };
 use data_gate::audit::redact::{redact_query_with_sensitive_fields, sensitive_value_hash};
-use data_gate::audit::{AuditEnvelope, AuditRecord, EndpointKind};
+use data_gate::audit::{
+    AuditEnvelope, AuditError, AuditFuture, AuditRecord, AuditSink, ChainingSink, EndpointKind,
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 fn sample_record(request_id: usize) -> AuditRecord {
     AuditRecord {
@@ -139,4 +143,59 @@ fn ten_thousand_record_chain_verification_smoke_is_quick() {
     let result = verify_chain_lines(lines.iter().map(String::as_str)).expect("valid chain");
     assert_eq!(result.records, 10_000);
     assert!(result.last_hash.is_some());
+}
+
+#[derive(Debug, Default)]
+struct FailOnceSink {
+    calls: AtomicUsize,
+    captured: Mutex<Vec<AuditEnvelope>>,
+}
+
+impl FailOnceSink {
+    fn captured(&self) -> Vec<AuditEnvelope> {
+        self.captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+impl AuditSink for FailOnceSink {
+    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
+        Box::pin(async move {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(AuditError::Io(std::io::Error::other("forced failure")));
+            }
+            self.captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(envelope);
+            Ok(())
+        })
+    }
+
+    fn flush<'a>(&'a self) -> AuditFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn chaining_sink_does_not_advance_hash_after_failed_write() {
+    let inner = Arc::new(FailOnceSink::default());
+    let sink = ChainingSink::new(inner.clone());
+
+    sink.write(AuditEnvelope::from(sample_record(1)))
+        .await
+        .expect_err("first write fails");
+    sink.write(AuditEnvelope::from(sample_record(2)))
+        .await
+        .expect("second write succeeds");
+
+    let captured = inner.captured();
+    assert_eq!(captured.len(), 1);
+    assert!(
+        captured[0].prev_hash.is_none(),
+        "a failed write must not become the previous hash for the next record"
+    );
+    assert!(captured[0].record_hash.is_some());
 }

@@ -11,9 +11,9 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 ## Current Status
 
-V1 is in active wave development. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. A few surfaces remain intentionally deferred:
+V1.0 is release-ready for protected consultation APIs over local CSV, XLSX, and Parquet sources. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
 
-- `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable`.
+- `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable` on the admin listener when `server.admin_bind` is configured.
 - Bulk export endpoints are contract-locked for V1.x and are not implemented.
 
 Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat deferred surfaces as unavailable until their owning follow-up lands.

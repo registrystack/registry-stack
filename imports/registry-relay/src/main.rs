@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! data_gate binary entry point.
 //!
-//! Wires Wave 0's parts into a runnable HTTP server:
-//! 1. Initialise structured JSON tracing on stderr (architect decision
-//!    #9: logs to stderr only in V1).
+//! Wires the V1 gateway into a runnable HTTP server:
+//! 1. Initialise structured JSON tracing on stderr.
 //! 2. Load and validate the YAML config from `--config <path>`, the
 //!    `DATAGATE_CONFIG` env var, or `./config/example.yaml` (in that
 //!    order of precedence).
@@ -11,14 +10,14 @@
 //!    `hash_env` env var (validated for presence and PHC shape by the
 //!    config loader) and construct an `ApiKeyEntry` per configured id.
 //!    The keyring lives inside `ApiKeyAuth` and is immutable for the
-//!    lifetime of the process; rotation lands in Wave 4.
-//! 4. Build the audit sink. Wave 0 supports only `stdout`; other sink
-//!    variants are flagged in the operational log and fall back to
-//!    stdout so the gateway starts. Wave 4 lands `file` and `syslog`.
-//! 5. Compose the axum router via [`data_gate::server::build_app`].
-//! 6. Bind on `config.server.bind`, optionally bind a second listener
-//!    on `config.server.admin_bind`, serve, and shut down both cleanly
-//!    on `SIGINT`/`Ctrl-C`.
+//!    lifetime of the process.
+//! 4. Build the configured audit sink: stdout, file, or syslog, with
+//!    optional audit-chain envelopes.
+//! 5. Build ingest, readiness, entity registry, row-query, and aggregate
+//!    query state, then compose the public data-plane router.
+//! 6. Bind on `config.server.bind`, optionally bind the admin router on
+//!    `config.server.admin_bind`, serve, and shut down cleanly on
+//!    `SIGINT`/`Ctrl-C`.
 //!
 //! ## Error handling
 //!
@@ -216,10 +215,8 @@ fn resolve_config_path() -> PathBuf {
 /// `ConfigError::MissingSecret` so the binary exits with the same
 /// stable code as the validator does.
 ///
-/// Wave 4 will extend this with key rotation: a watcher reloads the
-/// keyring when an operator rotates a hash, and the `ApiKeyAuth`
-/// internals swap to an `ArcSwap` keyring. The Wave 0 surface
-/// (`ApiKeyAuth::new(Vec<ApiKeyEntry>)`) does not change.
+/// The keyring is immutable for the process lifetime. Key rotation is a
+/// restart operation unless a future provider adds live keyring reload.
 fn build_auth(config: &Config) -> Result<ApiKeyAuth, Error> {
     let mut entries = Vec::with_capacity(config.auth.api_keys.len());
     for key in &config.auth.api_keys {

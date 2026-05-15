@@ -1,0 +1,22 @@
+meta {
+  name: Verify-only key cannot run aggregates (expects 403)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/household/aggregates/by_poverty_band
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+docs {
+  Attempts to run a household aggregate using the verification_service key (verifyKey).
+  verifyKey holds only verify scopes; aggregates require an aggregate scope.
+  expected: 403 auth.scope_denied
+  Verify, row, aggregate, and metadata are all independent scope grants.
+}

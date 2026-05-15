@@ -52,6 +52,7 @@ pub mod validation;
 /// not-null and primary-key uniqueness checks.
 const DEFAULT_SAMPLE_ROWS: usize = 1_000;
 const DEFAULT_XLSX_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+const DEFAULT_MAX_SOURCE_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Per-resource ingestion lifecycle. One `IngestPlan` per
 /// `(dataset_id, resource_id)`.
@@ -70,6 +71,7 @@ pub struct IngestPlan {
     primary_key: Option<String>,
     hints: FormatHints,
     xlsx_max_file_bytes: u64,
+    max_source_file_bytes: u64,
     cache_layout: Arc<CacheLayout>,
     df_ctx: Arc<SessionContext>,
     readiness: Arc<ArcSwap<ResourceReadiness>>,
@@ -106,6 +108,7 @@ impl IngestPlan {
             primary_key: None,
             hints,
             xlsx_max_file_bytes: DEFAULT_XLSX_MAX_FILE_BYTES,
+            max_source_file_bytes: DEFAULT_MAX_SOURCE_FILE_BYTES,
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
@@ -125,6 +128,7 @@ impl IngestPlan {
         cache_root: Arc<Path>,
         df_ctx: Arc<SessionContext>,
         xlsx_max_file_bytes: u64,
+        max_source_file_bytes: u64,
     ) -> Self {
         let declared = Arc::new(DeclaredSchema::from(&resource_cfg.schema));
         let hints = hints_from_config(Arc::clone(&declared), resource_cfg, dataset_source);
@@ -137,6 +141,7 @@ impl IngestPlan {
             primary_key: resource_cfg.primary_key.clone(),
             hints,
             xlsx_max_file_bytes,
+            max_source_file_bytes,
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
@@ -238,19 +243,30 @@ impl IngestPlan {
             }
         })?;
 
-        if self.format.name() == "xlsx" {
-            if let Some(size_bytes) = opened.metadata.size_bytes {
-                if size_bytes > self.xlsx_max_file_bytes {
-                    tracing::error!(
-                        event = "ingest.source_unreadable",
-                        dataset_id = %dataset_id,
-                        resource_id = %resource_id,
-                        size_bytes,
-                        max_file_bytes = self.xlsx_max_file_bytes,
-                        "XLSX source exceeds configured maximum before decode",
-                    );
-                    return Err(IngestError::SourceUnreadable);
-                }
+        if let Some(size_bytes) = opened.metadata.size_bytes {
+            if size_bytes > self.max_source_file_bytes {
+                tracing::error!(
+                    event = "ingest.source_unreadable",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    format = self.format.name(),
+                    size_bytes,
+                    max_file_bytes = self.max_source_file_bytes,
+                    "source exceeds configured maximum before decode",
+                );
+                return Err(IngestError::SourceUnreadable);
+            }
+
+            if self.format.name() == "xlsx" && size_bytes > self.xlsx_max_file_bytes {
+                tracing::error!(
+                    event = "ingest.source_unreadable",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    size_bytes,
+                    max_file_bytes = self.xlsx_max_file_bytes,
+                    "XLSX source exceeds configured maximum before decode",
+                );
+                return Err(IngestError::SourceUnreadable);
             }
         }
 
@@ -326,8 +342,13 @@ impl IngestPlan {
 
         // Step 8: register (or replace) the DataFusion table.
         let table_name = table_name(dataset_id, resource_id);
-        self.register_table(&table_name, &final_path, Arc::clone(&output_schema))
-            .await?;
+        self.register_table(
+            &table_name,
+            &final_path,
+            Arc::clone(&output_schema),
+            ingest_ulid,
+        )
+        .await?;
 
         // Step 9: rotate readiness and GC stale files.
         self.readiness.store(Arc::new(ResourceReadiness::Ready {
@@ -356,6 +377,7 @@ impl IngestPlan {
         table_name: &str,
         parquet_path: &std::path::Path,
         schema: SchemaRef,
+        ingest_ulid: Ulid,
     ) -> Result<(), IngestError> {
         use datafusion::datasource::file_format::parquet::ParquetFormat as DFParquetFormat;
 
@@ -418,13 +440,16 @@ impl IngestPlan {
                 IngestError::RegistrationFailed
             })?;
             if let Some(swappable) = existing.as_any().downcast_ref::<SwappableTableProvider>() {
-                swappable.replace(table);
+                swappable.replace(ingest_ulid, table);
                 return Ok(());
             }
         }
 
         self.df_ctx
-            .register_table(table_name, Arc::new(SwappableTableProvider::new(table)))
+            .register_table(
+                table_name,
+                Arc::new(SwappableTableProvider::new(ingest_ulid, table)),
+            )
             .map_err(|e| {
                 tracing::error!(
                     event = "ingest.registration_failed",
@@ -439,23 +464,70 @@ impl IngestPlan {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct TableSnapshot {
+    pub(crate) ingest_ulid: Option<Ulid>,
+    pub(crate) provider: Arc<dyn TableProvider>,
+}
+
+pub(crate) async fn table_snapshot(
+    ctx: &SessionContext,
+    table_name: &str,
+) -> DataFusionResult<TableSnapshot> {
+    let provider = ctx.table_provider(table_name).await?;
+    if let Some(swappable) = provider.as_any().downcast_ref::<SwappableTableProvider>() {
+        return Ok(swappable.snapshot());
+    }
+    Ok(TableSnapshot {
+        ingest_ulid: None,
+        provider,
+    })
+}
+
+pub fn register_versioned_table(
+    ctx: &SessionContext,
+    table_name: String,
+    ingest_ulid: Ulid,
+    provider: Arc<dyn TableProvider>,
+) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
+    ctx.register_table(
+        table_name,
+        Arc::new(SwappableTableProvider::new(ingest_ulid, provider)),
+    )
+}
+
+#[derive(Clone)]
+struct VersionedTableProvider {
+    ingest_ulid: Ulid,
+    inner: Arc<dyn TableProvider>,
+}
+
 struct SwappableTableProvider {
-    inner: RwLock<Arc<dyn TableProvider>>,
+    inner: RwLock<VersionedTableProvider>,
 }
 
 impl SwappableTableProvider {
-    fn new(inner: Arc<dyn TableProvider>) -> Self {
+    fn new(ingest_ulid: Ulid, inner: Arc<dyn TableProvider>) -> Self {
         Self {
-            inner: RwLock::new(inner),
+            inner: RwLock::new(VersionedTableProvider { ingest_ulid, inner }),
         }
     }
 
-    fn replace(&self, inner: Arc<dyn TableProvider>) {
-        *self.inner.write().expect("table provider lock poisoned") = inner;
+    fn replace(&self, ingest_ulid: Ulid, inner: Arc<dyn TableProvider>) {
+        *self.inner.write().expect("table provider lock poisoned") =
+            VersionedTableProvider { ingest_ulid, inner };
+    }
+
+    fn snapshot(&self) -> TableSnapshot {
+        let inner = self.inner.read().expect("table provider lock poisoned");
+        TableSnapshot {
+            ingest_ulid: Some(inner.ingest_ulid),
+            provider: Arc::clone(&inner.inner),
+        }
     }
 
     fn inner(&self) -> Arc<dyn TableProvider> {
-        Arc::clone(&self.inner.read().expect("table provider lock poisoned"))
+        self.snapshot().provider
     }
 }
 
@@ -580,6 +652,7 @@ impl IngestRegistry {
                     Arc::clone(&cache_root),
                     Arc::clone(&df_ctx),
                     config.server.xlsx_max_file_bytes,
+                    config.server.max_source_file_bytes,
                 );
 
                 plans.insert((dataset.id.clone(), resource.id.clone()), Arc::new(plan));

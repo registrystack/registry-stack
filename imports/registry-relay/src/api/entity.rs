@@ -25,7 +25,7 @@ use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::{Config, DatasetId, ResourceId};
 use crate::entity::{EntityModel, EntityRegistry};
-use crate::error::{AuthError, Error, InternalError, SchemaError};
+use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
 use crate::query::{
@@ -151,20 +151,15 @@ async fn entity_collection(
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     let audit_context = registry
         .as_ref()
         .and_then(|Extension(registry)| audit_context_for_entity(registry, &path));
-    let mut ingest_version = None;
+    let mut required_filters: Vec<String> = Vec::new();
     if let Some(Extension(registry)) = registry.as_ref() {
         match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
-                ingest_version = ingest_version_for_entity(
-                    readiness.as_ref().map(|Extension(readiness)| readiness),
-                    &path.dataset_id,
-                    entity,
-                );
                 if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                     return error.into_response();
                 }
@@ -184,6 +179,7 @@ async fn entity_collection(
                         return error.into_response();
                     }
                 }
+                required_filters = entity.api.required_filters.clone();
             }
             Err(error) => return error.into_response(),
         }
@@ -202,35 +198,53 @@ async fn entity_collection(
         entity: path.entity.clone(),
         relationship: None,
         filters: Vec::new(),
-        ingest_version: ingest_version.clone(),
+        ingest_version: None,
     };
     let query_params = match collection_query_from_params(params, cursor_context) {
         Ok(query_params) => query_params,
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
     };
-    let next_cursor_context = CursorContext {
-        dataset_id: path.dataset_id.clone(),
-        entity: path.entity.clone(),
-        relationship: None,
-        filters: cursor_filters_from_filters(&query_params.filters),
-        ingest_version: ingest_version.clone(),
-    };
+    if !required_filters.is_empty() {
+        let satisfied = query_params
+            .filters
+            .iter()
+            .any(|f| required_filters.iter().any(|r| r == &f.field));
+        if !satisfied {
+            return Error::from(EntityError::FilterRequired {
+                required: required_filters,
+            })
+            .into_response();
+        }
+    }
+    let cursor = query_params.cursor.clone();
     match query
-        .read_collection(&path.dataset_id, &path.entity, query_params)
+        .read_collection(&path.dataset_id, &path.entity, query_params.query)
         .await
     {
         Ok(rows) => {
+            let cursor_context = CursorContext {
+                dataset_id: path.dataset_id.clone(),
+                entity: path.entity.clone(),
+                relationship: None,
+                filters: query_params.filters.clone(),
+                ingest_version: rows.cursor_ingest_version.clone(),
+            };
+            if let Some(cursor) = cursor.as_ref() {
+                if validate_cursor(cursor, &cursor_context).is_err() {
+                    return cursor_invalidated();
+                }
+            }
             let row_count = rows.rows.len() as u64;
             let next_cursor = if let Some(position) = rows.next_primary_key {
                 let cursor = PageCursor {
                     version: 1,
-                    dataset_id: next_cursor_context.dataset_id,
-                    entity: next_cursor_context.entity,
-                    relationship: next_cursor_context.relationship,
+                    dataset_id: cursor_context.dataset_id,
+                    entity: cursor_context.entity,
+                    relationship: cursor_context.relationship,
                     position,
-                    filters: next_cursor_context.filters,
-                    ingest_version: next_cursor_context.ingest_version,
+                    filters: cursor_context.filters,
+                    ingest_version: cursor_context.ingest_version,
                 };
                 let encoded = match encode_cursor(&cursor) {
                     Ok(encoded) => encoded,
@@ -245,7 +259,7 @@ async fn entity_collection(
                 "collection",
                 &path.dataset_id,
                 &path.entity,
-                ingest_version.as_deref(),
+                rows.validator_ingest_version.as_deref(),
                 &validator,
             );
             let mut response = if let Some(etag) = etag.as_deref() {
@@ -278,22 +292,16 @@ async fn entity_verify(
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     let audit_context = registry
         .as_ref()
         .and_then(|Extension(registry)| audit_context_for_entity(registry, &path));
-    let mut ingest_version = None;
     let mut primary_key_name = None;
     if let Some(Extension(registry)) = registry.as_ref() {
         match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
                 primary_key_name = Some(entity.primary_key.name.clone());
-                ingest_version = ingest_version_for_entity(
-                    readiness.as_ref().map(|Extension(readiness)| readiness),
-                    &path.dataset_id,
-                    entity,
-                );
                 if let Err(error) = require_principal_scope(principal, &entity.access.verify_scope)
                 {
                     return error.into_response();
@@ -320,30 +328,30 @@ async fn entity_verify(
         Err(error) => return error.into_response(),
     };
 
-    let body = |exists| VerifyResponse {
-        exists,
-        ingest_version: ingest_version.clone(),
-    };
     match query
         .verify_exists(&path.dataset_id, &path.entity, json!(primary_key))
         .await
     {
-        Ok(exists) => {
+        Ok(result) => {
+            let body = VerifyResponse {
+                exists: result.exists,
+                ingest_version: result.ingest_version.clone(),
+            };
             let etag = entity_etag(
                 "verify",
                 &path.dataset_id,
                 &path.entity,
-                ingest_version.as_deref(),
+                result.ingest_version.as_deref(),
                 &primary_key,
             );
             let response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
                 } else {
-                    with_etag(Json(body(exists)).into_response(), etag)
+                    with_etag(Json(body).into_response(), etag)
                 }
             } else {
-                Json(body(exists)).into_response()
+                Json(body).into_response()
             };
             with_optional_audit_context(response, audit_context)
         }
@@ -358,20 +366,14 @@ async fn entity_record(
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     let audit_context = registry.as_ref().and_then(|Extension(registry)| {
         audit_context_for_entity_record(registry, &path.dataset_id, &path.entity)
     });
-    let mut ingest_version = None;
     if let Some(Extension(registry)) = registry.as_ref() {
         match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
-                ingest_version = ingest_version_for_entity(
-                    readiness.as_ref().map(|Extension(readiness)| readiness),
-                    &path.dataset_id,
-                    entity,
-                );
                 if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                     return error.into_response();
                 }
@@ -417,22 +419,22 @@ async fn entity_record(
         )
         .await
     {
-        Ok(Some(row)) => {
+        Ok(Some(record)) => {
             let etag = entity_etag(
                 "record",
                 &path.dataset_id,
                 &path.entity,
-                ingest_version.as_deref(),
+                record.validator_ingest_version.as_deref(),
                 &validator,
             );
             let mut response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
                 } else {
-                    with_etag(Json(row).into_response(), etag)
+                    with_etag(Json(record.value).into_response(), etag)
                 }
             } else {
-                Json(row).into_response()
+                Json(record.value).into_response()
             };
             if let Some(mut context) = audit_context {
                 context.row_count = Some(1);
@@ -452,21 +454,15 @@ async fn entity_relationship(
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     let audit_context = registry.as_ref().and_then(|Extension(registry)| {
         audit_context_for_relationship(registry, &path.dataset_id, &path.entity, &path.relationship)
     });
     let mut page_context = None;
-    let mut relationship_ingest_version = None;
     if let Some(Extension(registry)) = registry.as_ref() {
         match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
-                let host_ingest_version = ingest_version_for_entity(
-                    readiness.as_ref().map(|Extension(readiness)| readiness),
-                    &path.dataset_id,
-                    entity,
-                );
                 if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                     return error.into_response();
                 }
@@ -489,14 +485,6 @@ async fn entity_relationship(
                         Ok(target) => target,
                         Err(error) => return error.into_response(),
                     };
-                    let target_ingest_version = ingest_version_for_entity(
-                        readiness.as_ref().map(|Extension(readiness)| readiness),
-                        &path.dataset_id,
-                        target,
-                    );
-                    relationship_ingest_version = host_ingest_version
-                        .zip(target_ingest_version.clone())
-                        .map(|(host, target)| format!("host={host};target={target}"));
                     if relationship.kind == crate::config::RelationshipKind::HasMany {
                         let target_fk_name =
                             match field_name_by_table_column(target, &relationship.foreign_key) {
@@ -512,7 +500,7 @@ async fn entity_relationship(
                                 op: "eq".to_string(),
                                 value: json!(path.id.clone()),
                             }],
-                            ingest_version: target_ingest_version,
+                            ingest_version: None,
                         });
                     }
                 }
@@ -539,13 +527,14 @@ async fn entity_relationship(
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
     };
+    let cursor = relationship_query.cursor.clone();
     match query
         .read_relationship_page(
             &path.dataset_id,
             &path.entity,
             json!(path.id),
             &path.relationship,
-            relationship_query,
+            relationship_query.query,
         )
         .await
     {
@@ -554,10 +543,16 @@ async fn entity_relationship(
                 "relationship",
                 &path.dataset_id,
                 &path.entity,
-                relationship_ingest_version.as_deref(),
+                page.validator_ingest_version.as_deref(),
                 &validator,
             );
-            if let Some(context) = page_context {
+            if let Some(mut context) = page_context {
+                context.ingest_version = page.cursor_ingest_version.clone();
+                if let Some(cursor) = cursor.as_ref() {
+                    if validate_cursor(cursor, &context).is_err() {
+                        return cursor_invalidated();
+                    }
+                }
                 let row_count = page.value.as_array().map_or(0, |rows| rows.len()) as u64;
                 let next_cursor = if let Some(position) = page.next_primary_key {
                     let cursor = PageCursor {
@@ -934,7 +929,7 @@ fn relationship_kind(kind: crate::config::RelationshipKind) -> &'static str {
 fn collection_query_from_params(
     params: HashMap<String, String>,
     mut cursor_context: CursorContext,
-) -> Result<EntityCollectionQuery, PageParamError> {
+) -> Result<ParsedCollectionQuery, PageParamError> {
     let mut query = EntityCollectionQuery::new();
     let mut cursor = None;
     for (name, value) in params {
@@ -967,20 +962,31 @@ fn collection_query_from_params(
         }
     }
     cursor_context.filters = cursor_filters_from_filters(&query.filters);
-    if let Some(cursor) = cursor {
+    let cursor = if let Some(cursor) = cursor {
         let cursor = decode_cursor(&cursor)?;
         validate_cursor(&cursor, &cursor_context)?;
-        query = query.with_after_primary_key(cursor.position);
-    }
-    Ok(query)
+        query = query.with_after_primary_key(cursor.position.clone());
+        Some(cursor)
+    } else {
+        None
+    };
+    let filters = cursor_context.filters;
+    Ok(ParsedCollectionQuery {
+        query,
+        filters,
+        cursor,
+    })
 }
 
 fn relationship_query_from_params(
     params: HashMap<String, String>,
     cursor_context: Option<&CursorContext>,
-) -> Result<RelationshipPageQuery, PageParamError> {
+) -> Result<ParsedRelationshipQuery, PageParamError> {
     if params.is_empty() {
-        return Ok(RelationshipPageQuery::new());
+        return Ok(ParsedRelationshipQuery {
+            query: RelationshipPageQuery::new(),
+            cursor: None,
+        });
     }
     let Some(cursor_context) = cursor_context else {
         return Err(crate::error::FilterError::UnsupportedOp.into());
@@ -1001,12 +1007,26 @@ fn relationship_query_from_params(
             _ => return Err(crate::error::FilterError::UnsupportedOp.into()),
         }
     }
-    if let Some(cursor) = cursor {
+    let cursor = if let Some(cursor) = cursor {
         let cursor = decode_cursor(&cursor)?;
         validate_cursor(&cursor, cursor_context)?;
-        query = query.with_after_primary_key(cursor.position);
-    }
-    Ok(query)
+        query = query.with_after_primary_key(cursor.position.clone());
+        Some(cursor)
+    } else {
+        None
+    };
+    Ok(ParsedRelationshipQuery { query, cursor })
+}
+
+struct ParsedCollectionQuery {
+    query: EntityCollectionQuery,
+    filters: Vec<CursorFilter>,
+    cursor: Option<PageCursor>,
+}
+
+struct ParsedRelationshipQuery {
+    query: RelationshipPageQuery,
+    cursor: Option<PageCursor>,
 }
 
 #[derive(Debug)]
@@ -1094,7 +1114,7 @@ fn validate_cursor(cursor: &PageCursor, context: &CursorContext) -> Result<(), P
         || cursor.entity != context.entity
         || cursor.relationship != context.relationship
         || cursor.filters != context.filters
-        || cursor.ingest_version != context.ingest_version
+        || (context.ingest_version.is_some() && cursor.ingest_version != context.ingest_version)
     {
         return Err(PageParamError::CursorInvalidated);
     }

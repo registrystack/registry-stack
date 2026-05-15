@@ -1,0 +1,26 @@
+meta {
+  name: Emergency planning - benefits district aggregate
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/person/aggregates/by_district_age_band
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 2 of 3: Emergency planning workflow.
+  Reads benefits person aggregate (count of persons by household district and age band)
+  to size the affected population in each district by age. Uses planning_analyst (aggregateKey).
+  Expected: 200, aggregate grouped by (household.district, age_band) with small groups
+  suppressed below min_group_size=3.
+  Combine with stockout (step 1) and public works status (step 3) to triage:
+  pick a district with high stockout exposure, large affected population, and at-risk
+  road or facility projects, then escalate.
+}

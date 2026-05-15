@@ -1,0 +1,23 @@
+meta {
+  name: Disbursement aggregate by fiscal year and quarter
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/datasets/public_works_projects/disbursement/aggregates/by_fiscal_year_quarter
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the disbursement aggregate grouped by fiscal year and quarter.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with sum and average disbursement amounts per fiscal_year+quarter group.
+  Money measures masked where group size is below min_group_size=2.
+  Useful for budget execution monitoring without invoice-level details.
+}

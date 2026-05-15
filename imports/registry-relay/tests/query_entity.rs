@@ -278,7 +278,7 @@ async fn single_record_filters_by_entity_primary_key() {
         .expect("read record")
         .expect("matching row");
 
-    assert_eq!(row, json!({"id": "hh-2", "region": "south"}));
+    assert_eq!(row.value, json!({"id": "hh-2", "region": "south"}));
 }
 
 #[tokio::test]
@@ -435,7 +435,7 @@ async fn single_record_expands_belongs_to() {
         .expect("matching row");
 
     assert_eq!(
-        row,
+        row.value,
         json!({
             "id": "p-1",
             "household_id": "hh-1",

@@ -1,0 +1,22 @@
+meta {
+  name: List visible datasets
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/datasets
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Lists all datasets the caller can see based on their metadata scopes.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with JSON array of dataset summaries including id, title, sensitivity,
+  access_rights, and entity names.
+}

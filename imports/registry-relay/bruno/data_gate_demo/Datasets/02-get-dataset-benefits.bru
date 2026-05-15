@@ -1,0 +1,21 @@
+meta {
+  name: Get benefits_casework dataset
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the benefits_casework dataset summary. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with dataset metadata including sensitivity=personal, access_rights=restricted,
+  update_frequency=monthly, and list of entity names.
+}

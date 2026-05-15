@@ -1,0 +1,29 @@
+meta {
+  name: Emergency planning - clinic stockout aggregate
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/datasets/clinic_capacity/stock_event/aggregates/by_medicine_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 1 of 3: Emergency planning workflow.
+  Reads stock event aggregate (counts and total stockout days by medicine and status)
+  to identify which medicines are most exposed in the current period.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200, aggregate grouped by (medicine_code, stock_status) with small groups
+  suppressed below min_group_size=3.
+  Combine with steps 2-3 to build the picture for one district: stockout incidence
+  here, household burden in step 2, and project status in step 3. The aggregate is
+  not district-grouped (it is medicine-grouped); callers focused on a single district
+  read stock_event rows with rowsKey instead, but for an aggregate-only persona the
+  medicine cut is the right starting point.
+}

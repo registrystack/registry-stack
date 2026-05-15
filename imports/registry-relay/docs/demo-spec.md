@@ -7,9 +7,10 @@ Create a small set of realistic government demo datasets that show `data_gate` a
 The demos should help a reviewer understand:
 
 - how private storage tables become public domain entities;
-- how row, metadata, aggregate, verify, admin, and future bulk-export scopes stay independent;
+- how row, metadata, aggregate, verify, and admin scopes stay independent (`bulk_export` is a reserved future scope and is not emitted in V1 demo configs);
 - how sensitive fields can exist in source spreadsheets without being exposed through public entity projections;
-- how purpose headers, relationship expansion, verify-only lookups, and disclosure-controlled aggregates work;
+- how purpose headers, relationship expansion, verify-only lookups, required-filter entities, and disclosure-controlled aggregates work;
+- how cross-dataset personal-data reuse is coordinated through a subject registry that holds opaque canonical ids and per-dataset aliases without centralizing personal data;
 - how a Bruno collection can exercise expected and denied flows without requiring custom scripts.
 
 ## Deliverables
@@ -25,13 +26,16 @@ demo/
     clinic_capacity.yaml
     public_works_projects.yaml
     education_registry.yaml
+    subject_registry.yaml
   data/
     benefits_casework.xlsx
     clinic_capacity.xlsx
     public_works_projects.xlsx
     education_registry.xlsx
+    subject_registry.xlsx
   scripts/
     generate_demo_data.py
+    generate_demo_keys.py
 bruno/
   data_gate_demo/
     bruno.json
@@ -44,6 +48,7 @@ bruno/
     Clinic Capacity/
     Public Works Projects/
     Education Registry/
+    Subject Registry/
     Cross-Demo Workflows/
     Auth Boundaries/
 ```
@@ -54,16 +59,30 @@ The exact Bruno folder spelling may follow Bruno conventions, but the collection
 
 - All source data must be synthetic and safe to commit.
 - Synthetic records must not contain real names, real national identifiers, real addresses, real phone numbers, real emails, or data copied from production systems.
-- Use obviously fake stable identifiers such as `hh-1001`, `stu-2001`, `sch-3001`, `fac-4001`, and `prj-5001`.
+- Use obviously fake stable identifiers such as `hh-1001`, `per-2001`, `stu-2001`, `gua-2501`, `sch-3001`, `fac-4001`, `prj-5001`, and `sub-9001`.
 - Use a shared fictional geography across all demos so they can be read together: `north`, `central`, `riverbend`, `highlands`, `coast`, and `south`.
 - Use shared reporting periods where useful: school year `2026`, fiscal year `FY2026`, and monthly periods such as `2026-01`.
 - Each workbook should contain 50 to 300 rows per primary sheet. Keep files small enough for fast local startup and easy review.
-- Each config should use `source.type: file`, `refresh.mode: manual`, and `audit.sink: stdout`.
+- Each config should use `source.type: file`, `refresh.mode: manual`, and `audit.sink: stdout`. The combined config may route `subject_registry` audit to a file sink so linkage calls are visibly logged during the demo walkthrough.
 - Every dataset should declare strict schemas and public entity field projections.
 - Sensitive source columns may be present in workbook sheets, but must be omitted from public `entities[].fields` unless explicitly needed for a controlled demo flow.
-- Row or verify endpoints for personal data must set `require_purpose_header: true`.
-- Aggregates must declare disclosure control explicitly.
-- Config examples must use placeholder `hash_env` names only. Do not commit API keys or Argon2 PHC hashes.
+- Row or verify endpoints for personal data must set `require_purpose_header: true`. The same applies to row endpoints on `subject_registry`.
+- Aggregates must declare disclosure control explicitly, and each dataset's `min_group_size` choice must carry a one-line rationale in the config (a YAML comment is fine) so the per-dataset value is defensible at review time.
+- The generator uses a single seeded RNG and asserts that the produced data exercises disclosure control visibly: every cross-tab aggregate must produce at least one suppressed and one shown group, and at least one masked measure where masking is configured. This is what makes the disclosure-control demo deterministic instead of accidentally clean.
+- Config examples must use placeholder `hash_env` names only. Do not commit API keys or Argon2 PHC hashes. A `demo/scripts/generate_demo_keys.py` helper must exist that emits the env vars a reviewer needs for a local run; without it, first-time setup gets stuck on key hashing.
+- `<dataset>:bulk_export` is a contract-reserved scope. Each entity must declare a `bulk_export_scope` string per the platform schema (it's a required field), but no key in any V1 demo config's access block should be granted that scope. The Bruno collection does not include any bulk-export request; the README documents the absence.
+
+## Required Filters
+
+Some entities must not be listable without a discriminating filter. Their `entities[].filters` block declares a `required_any_of` set; a row read that supplies none of those filters returns `400` with the error code `entity.filter_required`. This prevents bulk enumeration of sensitive entities where unfiltered list would defeat governance.
+
+Required-filter applies to:
+
+- `subject_registry.subject`: at least one of `canonical_id`, `benefits_person_alias`, `benefits_household_alias`, `education_student_alias`, `education_guardian_alias`.
+- `benefits_casework.person`: at least one of `id`, `household_id`, or `eligibility_status`.
+- `education_registry.student`: at least one of `id`, `school_id`, or `home_district`.
+
+This is a data_gate platform prerequisite, not a demo-only feature. If `required_any_of` does not yet exist in the entity filter spec, the subject-registry section is blocked on adding it. The semantics are simple and useful beyond the demos.
 
 ## Imperfect Data Rules
 
@@ -94,16 +113,17 @@ Shared concepts:
 | Facility ids such as `fac-4001` | Clinic capacity and public works clinic projects |
 | Reporting periods | Benefits payments, clinic capacity, public works disbursements, attendance summaries |
 | Program support categories | Benefits cases and education support needs |
+| Subject canonical ids such as `sub-9001` and per-dataset aliases | Subject registry, benefits casework, education registry |
 
 Cross-demo Bruno scenarios:
 
 - District planning: run benefits poverty aggregates, education enrollment aggregates, clinic capacity aggregates, and public works project status aggregates for the same district.
-- School construction follow-up: read a public works project with `asset_type=school` and `asset_ref=sch-3001`, then read the matching education `school` record and enrollment aggregate.
+- School construction follow-up: read a public works project with `asset_type=school` and `asset_ref=sch-3001`, then read the matching education `school` record and enrollment aggregate. Note: `asset_ref` is a client-side soft pointer, not a system-enforced foreign key; the subject registry below is what makes person-level cross-dataset reuse safe.
 - Clinic rehabilitation follow-up: read a public works project with `asset_type=facility` and `asset_ref=fac-4001`, then read the matching clinic `facility` and service capacity records.
-- Scholarship eligibility: verify a student in `education_registry`, then use benefits aggregate data for the student's home district to show planning context without exposing household rows.
+- Scholarship eligibility with subject linkage: verify a student in `education_registry`, then read one subject row from `subject_registry` filtered by the student alias to obtain the matching benefits household alias, then read that household and run district-level benefits aggregates. Demonstrates that linkage is itself a controlled scope, separate from reading either underlying dataset.
 - Emergency planning: combine clinic stockout aggregates, district-level benefits household counts, and public works road or facility project status for one district.
 
-These flows should be explicit in Bruno request descriptions. They are allowed to be a little manual: the point is to show how controlled APIs compose in the real world, where one consumer often makes several scoped calls instead of receiving one giant joined extract.
+These flows should be explicit in Bruno request descriptions. They are allowed to be a little manual: the point is to show how controlled APIs compose in the real world, where one consumer often makes several scoped calls instead of receiving one giant joined extract. The subject registry is the only place where personal-data identifiers from two datasets are knowingly tied together, and it is gated by a dedicated key persona.
 
 ## Shared API Keys And Scopes
 
@@ -113,8 +133,9 @@ Each demo config should include key entries that show least-privilege consumers:
 | --- | --- |
 | `catalog_viewer` | Metadata scopes only |
 | `planning_analyst` | Metadata and aggregate scopes |
-| `casework_system` | Metadata, row, verify, and selected aggregate scopes for personal datasets |
+| `casework_system` | Metadata, row, verify, and selected aggregate scopes for personal datasets, plus row scopes on non-personal operational datasets (clinic capacity, public works) where cross-demo follow-ups need them. Explicitly no `subject_registry:rows`: the registry stays linkage-service only. |
 | `verification_service` | Verify scopes only |
+| `linkage_service` | `subject_registry:metadata`, `subject_registry:rows`, `subject_registry:aggregate` only. The sole persona authorized to resolve cross-dataset subject linkages. No row access to benefits or education. |
 | `operations_admin` | `admin` only, plus metadata only if a demo request needs dataset discovery |
 
 Use dataset-specific scope names:
@@ -124,10 +145,9 @@ Use dataset-specific scope names:
 <dataset>:aggregate
 <dataset>:rows
 <dataset>:verify
-<dataset>:bulk_export
 ```
 
-`<dataset>:bulk_export` should be present in config access blocks where appropriate, but Bruno should document that bulk export endpoints are contract-locked and not implemented in current V1.
+`<dataset>:bulk_export` is contract-reserved for a future version. Each entity must still declare a `bulk_export_scope` string per the platform schema (it's a required field), but no key in V1 demo configs should be granted that scope. The Bruno collection contains no bulk-export request; the README documents that the surface is unimplemented in V1.
 
 ## Demo 1: Benefits Casework
 
@@ -583,6 +603,68 @@ Use `min_group_size: 5`. Use `omit` for student and support counts, and `mask` f
 - demonstrate that a planning aggregate key cannot read student rows;
 - demonstrate that a verify-only key cannot read schema, rows, or aggregates.
 
+## Demo 5: Subject Registry
+
+### Reuse Story
+
+A government identity coordination function holds the canonical mapping between subject identifiers used by different administrative datasets. The registry contains no personal data: only opaque canonical ids (`sub-9001`) and the per-dataset aliases that point to the same human. Authorized linkage callers can ask "given alias X in dataset Y, what is the canonical id and what aliases does the same human have in other datasets?", scoped, purpose-tagged, and audited per call.
+
+The dataset's whole sensitivity is the linkage itself: a holder of `subject_registry:rows` who can list every row holds the full join table between benefits and education subjects. The `subject` entity therefore declares required filters: any row read must filter by canonical id or by at least one alias, so the caller must already hold one identifier to learn the others. Unfiltered list is not permitted.
+
+This demo demonstrates centralized linkage without centralized personal data, and shows linkage governance as a first-class API scope rather than an implicit join inside a downstream consumer's database.
+
+### Dataset
+
+- Dataset id: `subject_registry`
+- Sensitivity: `confidential` (no PII, but the linkage is sensitive)
+- Access rights: `restricted`
+- Update frequency: `as_needed`
+- Source file: `demo/data/subject_registry.xlsx`
+
+### Workbook Sheets
+
+`Subjects`
+
+| Column | Type | Public? | Notes |
+| --- | --- | --- | --- |
+| `canonical_id` | string | yes | primary key, opaque, e.g. `sub-9001` |
+| `benefits_person_alias` | string | yes | nullable, e.g. `per-2001` |
+| `benefits_household_alias` | string | yes | nullable, e.g. `hh-1001` |
+| `education_student_alias` | string | yes | nullable, e.g. `stu-2001` |
+| `education_guardian_alias` | string | yes | nullable, e.g. `gua-2501` |
+| `linkage_method` | string | yes | codelist: deterministic, probabilistic, manual |
+| `linkage_confidence` | string | yes | codelist: high, medium, low |
+| `linked_on` | date | yes | when linkage was asserted |
+| `internal_match_score` | number | no | sensitive raw match score |
+| `match_notes` | string | no | sensitive free-text reviewer notes |
+
+Most rows have non-null aliases for one or two datasets, not all four. Realistic overlap is approximately one third of benefits persons matched to an education student; the remainder appear in one dataset only. This is enforced by the generator, not left to chance.
+
+### Public Entities
+
+- `subject`
+  - Relationships: none. The registry deliberately does not expand into personal datasets; cross-dataset composition stays client-side and audited per call.
+  - Filters: `canonical_id`, `benefits_person_alias`, `benefits_household_alias`, `education_student_alias`, `education_guardian_alias`, `linkage_method`, `linkage_confidence`
+  - Required filters (`required_any_of`): `canonical_id`, `benefits_person_alias`, `benefits_household_alias`, `education_student_alias`, `education_guardian_alias`
+  - Purpose header required
+
+### Aggregates
+
+- `subject.by_linkage_method_confidence`: count subjects by linkage method and confidence band. Aggregate output exposes only governance metadata about the linkage process, not population characteristics.
+
+Use `min_group_size: 5`. Rationale: the linkage table is the most sensitive surface in the demo pack; small groups even in procedural aggregates risk pinpointing individuals across datasets.
+
+### Bruno Requests
+
+- read `subject/schema` with the linkage key;
+- attempt to read `subject` with no filters using the linkage key and expect `400 entity.filter_required`;
+- read one `subject` filtered by `?education_student_alias={{studentAlias}}` with `X-Data-Purpose` and observe the matching benefits aliases in the row body;
+- read one `subject` filtered by `?canonical_id={{canonicalId}}` and confirm the same row is returned;
+- run `subject/aggregates/by_linkage_method_confidence` with the planning key;
+- demonstrate that `casework_system` cannot read `subject` rows (missing `subject_registry:rows` scope returns 403);
+- demonstrate that missing `X-Data-Purpose` on a `subject` row read returns `auth.purpose_required`;
+- demonstrate that a verify-only key cannot read `subject` rows, schema, or aggregates.
+
 ## Bruno Collection Requirements
 
 The Bruno collection should be usable against a local server started from any one single-dataset demo config. The `Cross-Demo Workflows` folder should target `demo/config/all_demos.yaml`, where all four datasets are loaded together.
@@ -591,16 +673,20 @@ Environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `baseUrl` | default `http://127.0.0.1:8080` |
+| `baseUrl` | default `http://127.0.0.1:4242` |
 | `metadataKey` | raw key for metadata-only calls |
 | `aggregateKey` | raw key for aggregate calls |
 | `rowsKey` | raw key for row and relationship calls |
 | `verifyKey` | raw key for verify-only calls |
+| `linkageKey` | raw key for the `linkage_service` persona, used to read `subject_registry` rows |
 | `adminKey` | raw key for admin reload calls |
 | `purpose` | default demo purpose, for example `demo-review` |
 | `district` | default shared district, for example `riverbend` |
 | `schoolId` | default cross-demo school id, for example `sch-3001` |
 | `facilityId` | default cross-demo facility id, for example `fac-4001` |
+| `studentAlias` | default cross-demo student alias, for example `stu-2001` |
+| `benefitsPersonAlias` | default cross-demo benefits person alias, for example `per-2001` |
+| `canonicalId` | default cross-demo subject canonical id, for example `sub-9001` |
 
 Each protected request should set either:
 
@@ -622,45 +708,56 @@ The `Auth Boundaries` folder should include negative checks for:
 - wrong scope returns 403;
 - missing purpose header returns `auth.purpose_required`;
 - verify-only key can call verify but cannot read rows, schema, or aggregates;
-- aggregate-only key can run aggregates but cannot read rows.
+- aggregate-only key can run aggregates but cannot read rows;
+- linkage key can read `subject_registry` rows but cannot read benefits or education rows;
+- `casework_system` cannot read `subject_registry` rows;
+- unfiltered row read on `subject_registry.subject`, `benefits_casework.person`, or `education_registry.student` returns `400 entity.filter_required`.
 
 The `Cross-Demo Workflows` folder should include request sequences for:
 
-- district planning across all four datasets using the same `district` value;
-- school construction follow-up using public works `asset_ref={{schoolId}}` and education `school/{{schoolId}}`;
+- district planning across all four operational datasets using the same `district` value;
+- school construction follow-up using public works `asset_ref={{schoolId}}` and education `school/{{schoolId}}`, with a note that `asset_ref` is a client-side soft pointer and not a system-enforced foreign key;
 - clinic rehabilitation follow-up using public works `asset_ref={{facilityId}}` and clinic `facility/{{facilityId}}`;
-- scholarship planning using education student verification plus benefits district aggregates.
+- scholarship eligibility with subject linkage: verify `student?id={{studentAlias}}`, then `subject_registry/subject?education_student_alias={{studentAlias}}` to obtain the matching `benefits_household_alias`, then read that household and run benefits district aggregates. Each call uses a different key persona; all three audit entries are visible in the file sink configured for the combined config.
+- emergency planning: clinic `stock_event/aggregates/by_medicine_status` with the planning key, then benefits `person/aggregates/by_district_age_band` to size the affected population per district, then public works `project?district={{district}}&project_status=delayed` with the rows key to surface road or facility projects that compound the emergency. Three personas, three audit entries, one composite picture, no single key with broad access.
 
 ## README Requirements
 
 `demo/README.md` should explain:
 
-- what each demo dataset represents;
-- how to generate or refresh synthetic spreadsheets;
+- what each demo dataset represents, including the subject registry's role as a linkage governance surface;
+- how to generate or refresh synthetic spreadsheets, and how the generator coordinates aliases across datasets so registry rows resolve to real rows in benefits and education;
 - how to set `DATAGATE_CONFIG` or pass `--config`;
-- how to provide placeholder API-key hash environment variables for local testing;
+- how to run `demo/scripts/generate_demo_keys.py` to produce the env vars (Argon2 PHC hashes plus raw keys) the reviewer needs for a local run, including a separate `linkageKey`;
 - how to open the Bruno collection and choose the local environment;
+- how to walk through the scholarship eligibility cross-demo flow end-to-end and where to find the audit entries in the configured file sink;
 - which current V1 surfaces are intentionally unavailable, especially bulk export and registry-wide admin reload.
 
 The README must not include real API keys, PHC hashes, secrets, or production-looking personal data.
 
 ## Acceptance Criteria
 
-- Four demo configs load successfully with `config::load` and pass validator checks.
-- The combined `all_demos.yaml` config loads successfully with all four datasets.
-- Four source workbooks are generated deterministically by `demo/scripts/generate_demo_data.py`.
+- Five demo configs load successfully with `config::load` and pass validator checks: the four domain demos plus `subject_registry.yaml`.
+- The combined `all_demos.yaml` config loads successfully with all five datasets and routes `subject_registry` audit to a file sink.
+- Five source workbooks are generated deterministically by `demo/scripts/generate_demo_data.py` from a single seeded RNG, and the generator asserts that disclosure-control aggregates produce a mix of suppressed, masked, and shown groups.
+- The generator coordinates aliases across files: every non-null alias column in `subject_registry.Subjects` resolves to an existing row in the referenced demo's primary sheet, and overlap is realistic (not full join).
 - Public entity fields never expose columns marked non-public in this spec.
-- Personal-data row and verify endpoints require `X-Data-Purpose`.
-- At least one request per dataset demonstrates a relationship expansion or nested relationship endpoint.
-- At least one aggregate per dataset uses a relationship join.
-- At least three Bruno requests demonstrate cross-dataset reuse through shared district, school, facility, or reporting-period values.
+- Personal-data row and verify endpoints require `X-Data-Purpose`; `subject_registry` row reads do too.
+- Required filters are enforced on `subject_registry.subject`, `benefits_casework.person`, and `education_registry.student`; unfiltered reads return `400 entity.filter_required`.
+- Each dataset's `min_group_size` choice has a one-line rationale documented in its config.
+- `<dataset>:bulk_export` does not appear in any V1 config's key access blocks.
+- At least one request per dataset demonstrates a relationship expansion or nested relationship endpoint (`subject_registry` is exempt: it intentionally has no relationships).
+- At least one aggregate per dataset uses a relationship join (`subject_registry` is exempt for the same reason).
+- At least three Bruno requests demonstrate cross-dataset reuse through shared district, school, facility, or reporting-period values, and at least one cross-demo flow uses `subject_registry` to compose benefits and education for the same human.
+- `casework_system` cannot read `subject_registry` rows; `linkage_service` cannot read benefits or education rows. Both negative cases are exercised in Bruno.
 - Demo data includes realistic domain messiness while still passing strict schema validation.
 - Bruno has positive and negative requests for scope boundaries.
-- The demo README provides a complete local run path without requiring hidden setup.
+- `demo/scripts/generate_demo_keys.py` produces a working set of env vars; the demo README provides a complete local run path without requiring hidden setup.
 - Verification includes a focused config loading check and the relevant project test command available at implementation time.
 
 ## Open Implementation Decisions
 
 - Whether to generate XLSX only, or generate CSV copies for easier diff review. Recommendation: XLSX as the primary source because it exercises multi-table workbook ingest; optional CSV exports can be generated but should not be used by config unless there is a specific test need.
-- Whether the combined config should be hand-authored or generated from the four individual configs. Recommendation: hand-author `all_demos.yaml` first for clarity, and avoid clever merging until the example shape settles.
-- Whether demo key hashing should be scripted. Recommendation: document the required environment variables first, then add a helper only if local testing becomes repetitive.
+- Whether the combined config should be hand-authored or generated from the five individual configs. Recommendation: hand-author `all_demos.yaml` first for clarity, and avoid clever merging until the example shape settles.
+- Whether `required_any_of` filter semantics already exist in data_gate. If yes, this is configuration only. If no, it is a small platform feature to add as a prerequisite for the subject registry section, and worth adopting for personal-data row endpoints generally.
+- Whether the `subject_registry` workbook should also carry a `LinkageEvents` sheet recording each historical linkage assertion, separate from the current `Subjects` snapshot. Recommendation: keep V1 to `Subjects` only; revisit if the demo grows an audit-history story.

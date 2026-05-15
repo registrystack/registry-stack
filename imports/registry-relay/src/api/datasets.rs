@@ -145,10 +145,12 @@ fn update_frequency(update_frequency: UpdateFrequency) -> &'static str {
         UpdateFrequency::Continuous => "continuous",
         UpdateFrequency::Daily => "daily",
         UpdateFrequency::Weekly => "weekly",
+        UpdateFrequency::Termly => "termly",
         UpdateFrequency::Monthly => "monthly",
         UpdateFrequency::Quarterly => "quarterly",
         UpdateFrequency::Annual => "annual",
         UpdateFrequency::Irregular => "irregular",
+        UpdateFrequency::AsNeeded => "as_needed",
         UpdateFrequency::Unknown => "unknown",
     }
 }

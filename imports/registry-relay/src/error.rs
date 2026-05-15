@@ -56,6 +56,8 @@ pub enum Error {
     #[error("{0}")]
     Auth(#[from] AuthError),
     #[error("{0}")]
+    Entity(#[from] EntityError),
+    #[error("{0}")]
     Filter(#[from] FilterError),
     #[error("{0}")]
     Schema(#[from] SchemaError),
@@ -69,6 +71,17 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("{0}")]
     Internal(#[from] InternalError),
+}
+
+/// `entity.*` codes.
+#[derive(Debug, Error)]
+pub enum EntityError {
+    /// Returned when a row-collection read on an entity that declares
+    /// `required_filters` receives no query parameter matching any of
+    /// those fields. The `required` vec carries the field names that
+    /// would satisfy the requirement.
+    #[error("filter required")]
+    FilterRequired { required: Vec<String> },
 }
 
 /// `auth.*` codes.
@@ -193,6 +206,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::Auth(e) => e.code(),
+            Error::Entity(e) => e.code(),
             Error::Filter(e) => e.code(),
             Error::Schema(e) => e.code(),
             Error::Ingest(e) => e.code(),
@@ -213,6 +227,7 @@ impl Error {
     pub fn http_status(&self) -> StatusCode {
         match self {
             Error::Auth(e) => e.http_status(),
+            Error::Entity(e) => e.http_status(),
             Error::Filter(e) => e.http_status(),
             Error::Schema(e) => e.http_status(),
             Error::Ingest(e) => e.http_status(),
@@ -229,6 +244,7 @@ impl Error {
     pub fn title(&self) -> &'static str {
         match self {
             Error::Auth(e) => e.title(),
+            Error::Entity(e) => e.title(),
             Error::Filter(e) => e.title(),
             Error::Schema(e) => e.title(),
             Error::Ingest(e) => e.title(),
@@ -247,6 +263,7 @@ impl Error {
     pub fn detail(&self) -> String {
         match self {
             Error::Auth(e) => e.detail(),
+            Error::Entity(e) => e.detail(),
             Error::Filter(e) => e.detail().to_string(),
             Error::Schema(e) => e.detail().to_string(),
             Error::Ingest(e) => e.detail().to_string(),
@@ -273,6 +290,35 @@ impl Error {
             .title(self.title())
             .detail(self.detail())
             .value("code", &json!(self.code()))
+    }
+}
+
+impl EntityError {
+    fn code(&self) -> &'static str {
+        match self {
+            EntityError::FilterRequired { .. } => "entity.filter_required",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            EntityError::FilterRequired { .. } => StatusCode::BAD_REQUEST,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            EntityError::FilterRequired { .. } => "Filter required",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            EntityError::FilterRequired { required } => {
+                let fields = required.join(", ");
+                truncate(format!("one of: {fields}"), MAX_DETAIL_LEN)
+            }
+        }
     }
 }
 

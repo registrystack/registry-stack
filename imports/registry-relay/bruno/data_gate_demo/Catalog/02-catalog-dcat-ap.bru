@@ -1,0 +1,21 @@
+meta {
+  name: Catalog DCAT-AP JSON-LD
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/catalog/dcat-ap.jsonld
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the DCAT-AP catalog as JSON-LD. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json body containing dcat:Catalog and dcat:Dataset
+  descriptions for all accessible datasets.
+}

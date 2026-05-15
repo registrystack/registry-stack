@@ -1,0 +1,27 @@
+meta {
+  name: Read household members relationship
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/household/hh-1001/members
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Reads the members relationship for household hh-1001 as a paginated list.
+  Uses casework_system persona (rowsKey). Purpose header required because person
+  rows require it.
+  Expected: 200 with paginated person records for all members of hh-1001.
+  Demonstrates relationship endpoint (separate from expand= inline embedding).
+}

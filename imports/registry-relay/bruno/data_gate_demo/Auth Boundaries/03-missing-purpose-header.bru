@@ -1,0 +1,23 @@
+meta {
+  name: Missing purpose header on personal data (expects 400)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/person?household_id=hh-1001
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Reads benefits_casework person rows with a valid key but no X-Data-Purpose header.
+  person has require_purpose_header=true.
+  expected: 400 auth.purpose_required
+  Demonstrates that purpose tagging enforcement is automatic and cannot be bypassed
+  by a caller with valid row-scope credentials.
+}

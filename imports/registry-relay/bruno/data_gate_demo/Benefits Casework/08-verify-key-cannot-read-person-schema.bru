@@ -1,0 +1,22 @@
+meta {
+  name: Verify-only key cannot read person schema (expects 403)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/datasets/benefits_casework/person/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+docs {
+  Attempts to read the person schema using the verification_service key (verifyKey).
+  verifyKey holds only benefits_casework:verify; schema access requires benefits_casework:metadata.
+  expected: 403 auth.scope_denied
+  Dataset-local restatement of the cross-cutting check in the Auth Boundaries folder.
+}

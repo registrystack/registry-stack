@@ -1,0 +1,24 @@
+meta {
+  name: Project schema (metadata-only access)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/datasets/public_works_projects/project/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the project entity schema using a metadata-only key.
+  Uses catalog_viewer persona (metadataKey) which has only metadata scopes.
+  Expected: 200 with field and relationship definitions.
+  Demonstrates that schema access is gated by metadata scope, not rows scope,
+  and that a catalog_viewer can discover the data model without being able to
+  read actual rows (row reads with metadataKey would return 403).
+}

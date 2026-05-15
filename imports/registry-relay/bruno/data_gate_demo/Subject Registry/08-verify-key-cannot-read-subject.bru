@@ -1,0 +1,26 @@
+meta {
+  name: Verify-only key cannot read subject rows (expects 403)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/datasets/subject_registry/subject?canonical_id={{canonicalId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read subject_registry rows using the verification_service key (verifyKey).
+  verification_service has only verify scopes; it cannot read rows, schema, or aggregates.
+  expected: 403 auth.scope_denied
+  The verify scope is intentionally separate from rows/metadata/aggregate scopes.
+}

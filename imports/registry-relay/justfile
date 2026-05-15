@@ -27,7 +27,7 @@ fmt-check:
 
 # Run all cargo-deny checks (licenses, advisories, bans, sources).
 deny:
-    cargo deny check
+    if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check; else cargo deny check; fi
 
 # Validate a generated DCAT-AP JSON-LD catalog with pySHACL.
 # Usage: just validate-catalog-shacl catalog=target/catalog.dcat-ap.jsonld
@@ -37,7 +37,7 @@ validate-catalog-shacl catalog:
 
 # Check advisories only (alias for a quick security scan).
 audit:
-    cargo deny check advisories
+    if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check advisories; else cargo deny check advisories; fi
 
 # Run the full CI gate locally: fmt-check, lint, test, deny.
 ci: fmt-check lint test deny

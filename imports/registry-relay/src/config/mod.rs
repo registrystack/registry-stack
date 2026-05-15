@@ -54,6 +54,8 @@ pub struct ServerConfig {
     pub cache_dir: PathBuf,
     #[serde(default = "default_xlsx_max_file_bytes")]
     pub xlsx_max_file_bytes: u64,
+    #[serde(default = "default_max_source_file_bytes")]
+    pub max_source_file_bytes: u64,
     #[serde(default)]
     pub trust_proxy: TrustProxyConfig,
     #[serde(default)]
@@ -71,6 +73,10 @@ fn default_cache_dir() -> PathBuf {
 }
 
 fn default_xlsx_max_file_bytes() -> u64 {
+    256 * 1024 * 1024
+}
+
+fn default_max_source_file_bytes() -> u64 {
     256 * 1024 * 1024
 }
 
@@ -438,6 +444,8 @@ pub struct EntityApiConfig {
     #[serde(default)]
     pub require_purpose_header: bool,
     #[serde(default)]
+    pub required_filters: Vec<String>,
+    #[serde(default)]
     pub allowed_filters: Vec<AllowedFilter>,
     #[serde(default)]
     pub allowed_expansions: Vec<String>,
@@ -642,10 +650,12 @@ pub enum UpdateFrequency {
     Continuous,
     Daily,
     Weekly,
+    Termly,
     Monthly,
     Quarterly,
     Annual,
     Irregular,
+    AsNeeded,
     Unknown,
 }
 
@@ -719,6 +729,11 @@ mod tests {
     #[test]
     fn default_xlsx_max_file_bytes_is_256_mib() {
         assert_eq!(default_xlsx_max_file_bytes(), 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn default_max_source_file_bytes_is_256_mib() {
+        assert_eq!(default_max_source_file_bytes(), 256 * 1024 * 1024);
     }
 
     #[test]

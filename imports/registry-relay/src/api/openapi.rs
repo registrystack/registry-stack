@@ -202,7 +202,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "openapi": "3.1.0",
         "info": {
             "title": catalog.title,
-            "version": "0.1.0",
+            "version": env!("CARGO_PKG_VERSION"),
             "description": "Best-effort data_gate API document generated from visible metadata.",
         },
         "servers": [{ "url": catalog.base_url }],

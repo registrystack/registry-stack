@@ -1,0 +1,23 @@
+meta {
+  name: Verify-only key cannot read education schema (expects 403)
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+docs {
+  Attempts to read education_registry student schema using verification_service key (verifyKey).
+  verifyKey has only verify scopes; education_registry:metadata is required for schema access.
+  expected: 403 auth.scope_denied
+  Together with requests 04-06, demonstrates that verify-only keys have no schema,
+  row, or aggregate access across any dataset.
+}

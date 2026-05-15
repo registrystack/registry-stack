@@ -1,0 +1,22 @@
+meta {
+  name: Missing purpose on subject read (expects 400)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/datasets/subject_registry/subject?canonical_id={{canonicalId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+docs {
+  Reads a subject row with a valid linkage_service key but without the X-Data-Purpose header.
+  subject_registry rows require require_purpose_header=true.
+  expected: 400 auth.purpose_required
+  Demonstrates that purpose tagging is enforced at the platform level, not left to callers.
+}

@@ -1,0 +1,20 @@
+meta {
+  name: Catalog index
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/catalog
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the top-level catalog index. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with JSON listing all datasets visible to the caller's metadata scopes.
+}

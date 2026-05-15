@@ -1,0 +1,20 @@
+meta {
+  name: Get public_works_projects dataset
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/datasets/public_works_projects
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the public_works_projects dataset summary. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with sensitivity=confidential, access_rights=non_public, update_frequency=monthly.
+}

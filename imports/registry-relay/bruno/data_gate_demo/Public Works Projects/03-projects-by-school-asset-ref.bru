@@ -1,0 +1,24 @@
+meta {
+  name: Filter projects by asset_ref=schoolId
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/datasets/public_works_projects/project?asset_ref={{schoolId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Filters projects where asset_ref matches the demo school id (sch-3001).
+  Uses casework_system persona (rowsKey).
+  asset_ref is a client-side soft pointer: the platform stores it as a plain string;
+  no system-enforced foreign key relationship to education_registry exists.
+  Expected: 200 with the project(s) linked to school sch-3001. Follow with
+  Cross-Demo Workflows/school-construction-followup for the full scenario.
+}

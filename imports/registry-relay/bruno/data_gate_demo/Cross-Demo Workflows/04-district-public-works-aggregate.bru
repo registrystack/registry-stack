@@ -1,0 +1,24 @@
+meta {
+  name: District planning - public works aggregate
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/datasets/public_works_projects/project/aggregates/by_sector_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 4 of 4: District planning workflow.
+  Runs public works project status aggregate. Uses planning_analyst persona (aggregateKey).
+  Combined with steps 1-3, completes the district planning picture across four
+  operational datasets. All four calls use the same district value (riverbend)
+  as the shared geographic frame, even though each dataset is queried independently.
+  Expected: 200 with project counts per sector+status.
+}

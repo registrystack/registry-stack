@@ -8,7 +8,7 @@ use data_gate::api::{aggregates_router, entity_router};
 use data_gate::auth::{AuthMode, Principal, ScopeSet};
 use data_gate::config::{self, DatasetId, ResourceId};
 use data_gate::entity::EntityRegistry;
-use data_gate::ingest::{table_name, ReadinessSnapshot};
+use data_gate::ingest::{register_versioned_table, table_name, ReadinessSnapshot};
 use data_gate::query::EntityQueryEngine;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -42,6 +42,13 @@ async fn server_with_query() -> TestServer {
 }
 
 async fn server_with_query_version(ingest_version: &str) -> TestServer {
+    server_with_query_versions(ingest_version, ingest_version).await
+}
+
+async fn server_with_query_versions(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
     std::fs::write(
@@ -190,9 +197,16 @@ audit:
     .expect("batch");
     let table = MemTable::try_new(schema, vec![vec![batch]]).expect("mem table");
     let dataset: DatasetId = id("social_registry");
+    let table_ingest_version = Ulid::from_string(table_ingest_version).expect("ulid");
+    let readiness_ingest_version = Ulid::from_string(readiness_ingest_version).expect("ulid");
     let resource: ResourceId = id("households_table");
-    ctx.register_table(table_name(&dataset, &resource), Arc::new(table))
-        .expect("register table");
+    register_versioned_table(
+        &ctx,
+        table_name(&dataset, &resource),
+        table_ingest_version,
+        Arc::new(table),
+    )
+    .expect("register table");
     let individual_schema = Arc::new(Schema::new(vec![
         Field::new("individual_id", DataType::Utf8, false),
         Field::new("household_id", DataType::Utf8, false),
@@ -210,18 +224,22 @@ audit:
     let individual_table =
         MemTable::try_new(individual_schema, vec![vec![individual_batch]]).expect("mem table");
     let resource: ResourceId = id("individuals_table");
-    ctx.register_table(table_name(&dataset, &resource), Arc::new(individual_table))
-        .expect("register individual table");
+    register_versioned_table(
+        &ctx,
+        table_name(&dataset, &resource),
+        table_ingest_version,
+        Arc::new(individual_table),
+    )
+    .expect("register individual table");
     let query = Arc::new(EntityQueryEngine::new(ctx, Arc::clone(&registry)));
     let mut snapshot = ReadinessSnapshot::default();
-    let ingest_version = Ulid::from_string(ingest_version).expect("ulid");
     snapshot.ready.insert(
         (id("social_registry"), id("households_table")),
-        ingest_version,
+        readiness_ingest_version,
     );
     snapshot.ready.insert(
         (id("social_registry"), id("individuals_table")),
-        ingest_version,
+        readiness_ingest_version,
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
@@ -642,6 +660,23 @@ async fn entity_verify_uses_verify_scope_and_returns_one_bit() {
 }
 
 #[tokio::test]
+async fn entity_verify_uses_table_snapshot_version_not_stale_readiness() {
+    let server =
+        server_with_query_versions("01J5K8M0000000000000000001", "01J5K8M0000000000000000000")
+            .await;
+
+    let resp = server
+        .get("/datasets/social_registry/individual/verify?id=p-1")
+        .add_header("x-data-purpose", "route-test")
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    assert_eq!(body["exists"], true);
+    assert_eq!(body["ingest_version"], "01J5K8M0000000000000000001");
+}
+
+#[tokio::test]
 async fn entity_verify_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
@@ -816,4 +851,232 @@ async fn storage_shaped_resources_rows_route_is_not_registered() {
     let resp = server().get("/resources/beneficiaries/rows").await;
 
     resp.assert_status(StatusCode::NOT_FOUND);
+}
+
+async fn server_with_required_filters() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("required_filters.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+  - id: test_dataset
+    title: Test Dataset
+    description: Test
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    source:
+      type: file
+      path: fixtures/test.csv
+    refresh:
+      mode: manual
+    tables:
+      - id: items_table
+        primary_key: item_id
+        schema:
+          strict: true
+          fields:
+            - name: item_id
+              type: string
+              nullable: false
+            - name: group_id
+              type: string
+              nullable: true
+      - id: unrestricted_table
+        primary_key: thing_id
+        schema:
+          strict: true
+          fields:
+            - name: thing_id
+              type: string
+              nullable: false
+    entities:
+      - name: item
+        table: items_table
+        fields:
+          - name: id
+            from: item_id
+          - name: group_id
+        access:
+          metadata_scope: test_dataset:metadata
+          aggregate_scope: test_dataset:aggregate
+          read_scope: test_dataset:rows
+          verify_scope: test_dataset:verify
+          bulk_export_scope: test_dataset:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          required_filters: [id, group_id]
+          allowed_filters:
+            - field: id
+              ops: [eq]
+            - field: group_id
+              ops: [eq]
+      - name: thing
+        table: unrestricted_table
+        fields:
+          - name: id
+            from: thing_id
+        access:
+          metadata_scope: test_dataset:metadata
+          aggregate_scope: test_dataset:aggregate
+          read_scope: test_dataset:rows
+          verify_scope: test_dataset:verify
+          bulk_export_scope: test_dataset:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq]
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    )
+    .expect("write config");
+    let cfg = Arc::new(config::load(&config_path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("item_id", DataType::Utf8, false),
+        Field::new("group_id", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec!["item-1"])),
+            Arc::new(StringArray::from(vec!["grp-1"])),
+        ],
+    )
+    .expect("batch");
+    let table = MemTable::try_new(schema, vec![vec![batch]]).expect("mem table");
+    let dataset: DatasetId = id("test_dataset");
+    let ingest_version = ulid::Ulid::from_string("01J5K8M0000000000000000000").expect("ulid");
+    let resource: ResourceId = id("items_table");
+    register_versioned_table(
+        &ctx,
+        table_name(&dataset, &resource),
+        ingest_version,
+        Arc::new(table),
+    )
+    .expect("register table");
+
+    let unrestricted_schema = Arc::new(Schema::new(vec![Field::new(
+        "thing_id",
+        DataType::Utf8,
+        false,
+    )]));
+    let unrestricted_batch = RecordBatch::try_new(
+        Arc::clone(&unrestricted_schema),
+        vec![Arc::new(StringArray::from(vec!["thing-1"]))],
+    )
+    .expect("batch");
+    let unrestricted_table =
+        MemTable::try_new(unrestricted_schema, vec![vec![unrestricted_batch]]).expect("mem table");
+    let resource: ResourceId = id("unrestricted_table");
+    register_versioned_table(
+        &ctx,
+        table_name(&dataset, &resource),
+        ingest_version,
+        Arc::new(unrestricted_table),
+    )
+    .expect("register table");
+
+    let query = Arc::new(EntityQueryEngine::new(ctx, Arc::clone(&registry)));
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot
+        .ready
+        .insert((id("test_dataset"), id("items_table")), ingest_version);
+    snapshot.ready.insert(
+        (id("test_dataset"), id("unrestricted_table")),
+        ingest_version,
+    );
+    let (_tx, readiness) = watch::channel(snapshot);
+
+    TestServer::new(
+        entity_router::<()>()
+            .layer(Extension(query))
+            .layer(Extension(registry))
+            .layer(Extension(cfg))
+            .layer(Extension(readiness))
+            .layer(Extension(principal(&[
+                "test_dataset:metadata",
+                "test_dataset:rows",
+                "test_dataset:verify",
+            ]))),
+    )
+}
+
+#[tokio::test]
+async fn entity_collection_with_required_filter_satisfied_returns_200() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/datasets/test_dataset/item?id=item-1")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["data"][0]["id"], "item-1");
+}
+
+#[tokio::test]
+async fn entity_collection_with_required_filter_group_id_satisfied_returns_200() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/datasets/test_dataset/item?group_id=grp-1")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["data"][0]["group_id"], "grp-1");
+}
+
+#[tokio::test]
+async fn entity_collection_with_unrelated_filter_returns_filter_required() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/datasets/test_dataset/item?unrelated=x")
+        .await;
+
+    // unrelated param is parsed as a filter but rejected as not_allowed
+    // before required_filters is checked; either 400 is acceptable but
+    // filter.not_allowed fires first in this implementation.
+    resp.assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn entity_collection_with_no_filters_returns_filter_required() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/datasets/test_dataset/item")
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "entity.filter_required");
+    assert!(body["detail"].as_str().unwrap().contains("id"));
+}
+
+#[tokio::test]
+async fn entity_collection_without_required_filters_accepts_no_filter() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/datasets/test_dataset/thing")
+        .await;
+
+    // No required_filters on thing; unfiltered request should succeed.
+    resp.assert_status(StatusCode::OK);
 }

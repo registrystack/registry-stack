@@ -1,0 +1,361 @@
+# SPDX-License-Identifier: Apache-2.0
+# Single-dataset config for local startup: cargo run -- --config demo/config/clinic_capacity.yaml
+
+server:
+  bind: 0.0.0.0:4242
+
+catalog:
+  title: Clinic Capacity Gateway (Demo)
+  base_url: http://127.0.0.1:4242
+  publisher: Ministry of Health (Demo)
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: catalog_viewer
+      hash_env: CATALOG_VIEWER_HASH
+      scopes:
+        - clinic_capacity:metadata
+
+    - id: planning_analyst
+      hash_env: PLANNING_ANALYST_HASH
+      scopes:
+        - clinic_capacity:metadata
+        - clinic_capacity:aggregate
+
+    # casework_system reads facility / capacity rows here for operational
+    # follow-ups (e.g. clinic rehab cross-demo flow). Personal datasets are
+    # the typical home of casework:rows, but non-personal operational reads
+    # are intentional. Subject_registry is the only :rows scope casework
+    # is explicitly denied.
+    - id: casework_system
+      hash_env: CASEWORK_SYSTEM_HASH
+      scopes:
+        - clinic_capacity:metadata
+        - clinic_capacity:rows
+        - clinic_capacity:aggregate
+
+    - id: verification_service
+      hash_env: VERIFICATION_SERVICE_HASH
+      scopes:
+        - clinic_capacity:verify
+
+    - id: operations_admin
+      hash_env: OPERATIONS_ADMIN_HASH
+      scopes:
+        - admin
+        - clinic_capacity:metadata
+
+audit:
+  sink: stdout
+  format: jsonl
+
+datasets:
+  - id: clinic_capacity
+    title: Clinic Capacity
+    description: >-
+      Operational data about health facilities, monthly service capacity,
+      and medicine stock events. Used by emergency planners and supply teams.
+      No patient-level data.
+    owner: Ministry of Health
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: weekly
+    source:
+      type: file
+      path: demo/data/clinic_capacity.xlsx
+    refresh:
+      mode: manual
+
+    tables:
+      - id: facilities_table
+        sheet: Facilities
+        primary_key: facility_id
+        schema:
+          strict: true
+          fields:
+            - name: facility_id
+              type: string
+              nullable: false
+            - name: facility_name
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: facility_type
+              type: string
+              nullable: false
+            - name: ownership
+              type: string
+              nullable: false
+            - name: service_level
+              type: string
+              nullable: false
+            - name: latitude_band
+              type: string
+              nullable: false
+            - name: longitude_band
+              type: string
+              nullable: false
+            # exact coordinates are operationally sensitive; not projected publicly
+            - name: exact_latitude
+              type: number
+              nullable: true
+              sensitive: true
+            - name: exact_longitude
+              type: number
+              nullable: true
+              sensitive: true
+
+      - id: service_capacity_table
+        sheet: ServiceCapacity
+        primary_key: capacity_id
+        schema:
+          strict: true
+          fields:
+            - name: capacity_id
+              type: string
+              nullable: false
+            - name: facility_id
+              type: string
+              nullable: false
+            - name: service_type
+              type: string
+              nullable: false
+            - name: month
+              type: string
+              nullable: false
+            - name: beds_available
+              type: number
+              nullable: false
+            - name: staff_on_roster
+              type: number
+              nullable: false
+            - name: open_days
+              type: number
+              nullable: false
+            - name: internal_roster_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: stock_events_table
+        sheet: StockEvents
+        primary_key: stock_event_id
+        schema:
+          strict: true
+          fields:
+            - name: stock_event_id
+              type: string
+              nullable: false
+            - name: facility_id
+              type: string
+              nullable: false
+            - name: medicine_code
+              type: string
+              nullable: false
+            - name: event_month
+              type: string
+              nullable: false
+            - name: stock_status
+              type: string
+              nullable: false
+            - name: days_stocked_out
+              type: number
+              nullable: false
+            - name: supplier_comment
+              type: string
+              nullable: true
+              sensitive: true
+
+    entities:
+      - name: facility
+        title: Health Facility
+        description: A health facility in the network
+        table: facilities_table
+        fields:
+          - name: id
+            from: facility_id
+          - name: facility_name
+            from: facility_name
+          - name: district
+            from: district
+          - name: facility_type
+            from: facility_type
+          - name: ownership
+            from: ownership
+          - name: service_level
+            from: service_level
+          - name: latitude_band
+            from: latitude_band
+          - name: longitude_band
+            from: longitude_band
+        relationships:
+          - name: service_capacity
+            kind: has_many
+            target: service_capacity
+            foreign_key: facility_id
+          - name: stock_events
+            kind: has_many
+            target: stock_event
+            foreign_key: facility_id
+        access:
+          metadata_scope:    clinic_capacity:metadata
+          aggregate_scope:   clinic_capacity:aggregate
+          read_scope:        clinic_capacity:rows
+          verify_scope:      clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: facility_type
+              ops: [eq, in]
+            - field: ownership
+              ops: [eq, in]
+            - field: service_level
+              ops: [eq, in]
+          allowed_expansions: [service_capacity, stock_events]
+        aggregates:
+          - id: by_district_type
+            description: Count of facilities by district and facility type
+            group_by:
+              - district
+              - facility_type
+            measures:
+              - name: facility_count
+                function: count
+                column: id
+            # operational, no person-level records; counts and capacity sums use omit
+            disclosure_control:
+              min_group_size: 3
+              suppression: omit
+
+      - name: service_capacity
+        title: Service Capacity Record
+        description: Monthly capacity figures for a service at a facility
+        table: service_capacity_table
+        fields:
+          - name: id
+            from: capacity_id
+          - name: facility_id
+            from: facility_id
+          - name: service_type
+            from: service_type
+          - name: month
+            from: month
+          - name: beds_available
+            from: beds_available
+          - name: staff_on_roster
+            from: staff_on_roster
+          - name: open_days
+            from: open_days
+        relationships:
+          - name: facility
+            kind: belongs_to
+            target: facility
+            foreign_key: facility_id
+        access:
+          metadata_scope:    clinic_capacity:metadata
+          aggregate_scope:   clinic_capacity:aggregate
+          read_scope:        clinic_capacity:rows
+          verify_scope:      clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: facility_id
+              ops: [eq, in]
+            - field: service_type
+              ops: [eq, in]
+            - field: month
+              ops: [eq, in]
+          allowed_expansions: [facility]
+        aggregates:
+          - id: by_district_service
+            description: Sum of beds and staff by district and service type
+            joins:
+              - relationship: facility
+            group_by:
+              - facility.district
+              - service_type
+            measures:
+              - name: total_beds
+                function: sum
+                column: beds_available
+              - name: total_staff
+                function: sum
+                column: staff_on_roster
+            # operational, no person-level records; counts and capacity sums use omit
+            disclosure_control:
+              min_group_size: 3
+              suppression: omit
+
+      - name: stock_event
+        title: Stock Event
+        description: A medicine stock status observation at a facility in a given month
+        table: stock_events_table
+        fields:
+          - name: id
+            from: stock_event_id
+          - name: facility_id
+            from: facility_id
+          - name: medicine_code
+            from: medicine_code
+          - name: event_month
+            from: event_month
+          - name: stock_status
+            from: stock_status
+          - name: days_stocked_out
+            from: days_stocked_out
+        relationships:
+          - name: facility
+            kind: belongs_to
+            target: facility
+            foreign_key: facility_id
+        access:
+          metadata_scope:    clinic_capacity:metadata
+          aggregate_scope:   clinic_capacity:aggregate
+          read_scope:        clinic_capacity:rows
+          verify_scope:      clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: facility_id
+              ops: [eq, in]
+            - field: medicine_code
+              ops: [eq, in]
+            - field: event_month
+              ops: [eq, in]
+            - field: stock_status
+              ops: [eq, in]
+          allowed_expansions: [facility]
+        aggregates:
+          - id: by_medicine_status
+            description: Count of stock events and sum of stockout days by medicine and status
+            group_by:
+              - medicine_code
+              - stock_status
+            measures:
+              - name: event_count
+                function: count
+                column: id
+              - name: total_days_stocked_out
+                function: sum
+                column: days_stocked_out
+            # operational, no person-level records; counts and capacity sums use omit
+            disclosure_control:
+              min_group_size: 3
+              suppression: omit

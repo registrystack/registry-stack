@@ -30,6 +30,7 @@ fn write_config(
     resource_id: &str,
     sheet: Option<&str>,
     xlsx_max_file_bytes: Option<u64>,
+    max_source_file_bytes: Option<u64>,
 ) -> std::path::PathBuf {
     let cache_dir = tmp.path().join("cache");
     let sheet_line = sheet
@@ -38,12 +39,16 @@ fn write_config(
     let xlsx_max_line = xlsx_max_file_bytes
         .map(|bytes| format!("  xlsx_max_file_bytes: {bytes}\n"))
         .unwrap_or_default();
+    let max_source_line = max_source_file_bytes
+        .map(|bytes| format!("  max_source_file_bytes: {bytes}\n"))
+        .unwrap_or_default();
     let yaml = format!(
         r#"
 server:
   bind: 127.0.0.1:0
   cache_dir: "{cache_dir}"
 {xlsx_max_line}
+{max_source_line}
 
 catalog:
   title: Test
@@ -111,6 +116,7 @@ audit:
 "#,
         cache_dir = cache_dir.to_string_lossy(),
         xlsx_max_line = xlsx_max_line,
+        max_source_line = max_source_line,
     );
     let path = tmp.path().join(format!("{resource_id}.yaml"));
     std::fs::write(&path, yaml).expect("write config");
@@ -124,7 +130,7 @@ async fn ingest_fixture(
 ) -> (TempDir, Arc<SessionContext>, ReadinessSnapshot) {
     let _ = tracing_subscriber::fmt::try_init();
     let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(&tmp, source_path, resource_id, sheet, None);
+    let config_path = write_config(&tmp, source_path, resource_id, sheet, None, None);
     let cfg = config::load(&config_path).expect("config loads");
     let ctx = Arc::new(SessionContext::new());
     let registry = IngestRegistry::from_config(
@@ -160,6 +166,38 @@ async fn ingest_fixture_with_xlsx_limit(
         resource_id,
         sheet,
         Some(xlsx_max_file_bytes),
+        None,
+    );
+    let cfg = config::load(&config_path).expect("config loads");
+    let ctx = Arc::new(SessionContext::new());
+    let registry = IngestRegistry::from_config(
+        &cfg,
+        Arc::new(FormatRegistry::with_v1_defaults()),
+        Arc::from(cfg.server.cache_dir.as_path()),
+        ctx,
+    )
+    .expect("registry builds");
+    let (tx, _rx) = watch::channel(registry.snapshot());
+
+    registry.run_initial_ingest(tx).await;
+    registry.snapshot()
+}
+
+async fn ingest_fixture_with_source_limit(
+    source_path: &str,
+    resource_id: &str,
+    sheet: Option<&str>,
+    max_source_file_bytes: u64,
+) -> ReadinessSnapshot {
+    let _ = tracing_subscriber::fmt::try_init();
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        source_path,
+        resource_id,
+        sheet,
+        None,
+        Some(max_source_file_bytes),
     );
     let cfg = config::load(&config_path).expect("config loads");
     let ctx = Arc::new(SessionContext::new());
@@ -220,6 +258,50 @@ async fn xlsx_over_configured_max_fails_before_decode() {
 
     let dataset: DatasetId = id("social_registry");
     let resource: ResourceId = id("beneficiaries_xlsx_limit");
+    assert_eq!(
+        snapshot.failed.get(&(dataset, resource)).copied(),
+        Some("ingest.source_unreadable")
+    );
+}
+
+#[tokio::test]
+async fn csv_over_configured_source_max_fails_before_decode() {
+    let source_path = fixture("social_registry.csv");
+    let size = std::fs::metadata(&source_path)
+        .expect("fixture metadata")
+        .len();
+    let snapshot = ingest_fixture_with_source_limit(
+        &source_path,
+        "beneficiaries_csv_limit",
+        None,
+        size.saturating_sub(1),
+    )
+    .await;
+
+    let dataset: DatasetId = id("social_registry");
+    let resource: ResourceId = id("beneficiaries_csv_limit");
+    assert_eq!(
+        snapshot.failed.get(&(dataset, resource)).copied(),
+        Some("ingest.source_unreadable")
+    );
+}
+
+#[tokio::test]
+async fn parquet_over_configured_source_max_fails_before_decode() {
+    let source_path = fixture("social_registry.parquet");
+    let size = std::fs::metadata(&source_path)
+        .expect("fixture metadata")
+        .len();
+    let snapshot = ingest_fixture_with_source_limit(
+        &source_path,
+        "beneficiaries_parquet_limit",
+        None,
+        size.saturating_sub(1),
+    )
+    .await;
+
+    let dataset: DatasetId = id("social_registry");
+    let resource: ResourceId = id("beneficiaries_parquet_limit");
     assert_eq!(
         snapshot.failed.get(&(dataset, resource)).copied(),
         Some("ingest.source_unreadable")

@@ -1,0 +1,17 @@
+meta {
+  name: Readiness check
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/ready
+  body: none
+  auth: none
+}
+
+docs {
+  Readiness probe. Expected: 200 once all configured datasets have completed
+  their initial ingest. Returns a non-2xx status while ingestion is still loading.
+  No auth required.
+}

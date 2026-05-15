@@ -1,0 +1,27 @@
+meta {
+  name: Linkage key cannot read education rows (expects 403)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student?school_id={{schoolId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read education_registry student rows using the linkage_service key (linkageKey).
+  linkageKey has no education_registry:rows scope.
+  expected: 403 auth.scope_denied
+  The linkage_service persona is the only one authorized to cross dataset identity boundaries,
+  but it does so only through the subject_registry, never by reading source dataset rows.
+}

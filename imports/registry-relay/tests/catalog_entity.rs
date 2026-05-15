@@ -505,6 +505,7 @@ async fn openapi_json_includes_visible_entity_semantic_extensions() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_eq!(body["openapi"], "3.1.0");
+    assert_eq!(body["info"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(body["paths"]["/datasets/social_registry/household"].is_object());
     assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());

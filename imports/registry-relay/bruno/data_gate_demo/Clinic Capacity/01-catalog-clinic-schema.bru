@@ -1,0 +1,22 @@
+meta {
+  name: Clinic capacity DCAT metadata
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/catalog/datasets/clinic_capacity/facility/schema.jsonld
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the DCAT-AP JSON-LD schema document for the clinic_capacity facility entity.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json body describing the facility entity's fields
+  and relationships in machine-readable catalog format.
+}

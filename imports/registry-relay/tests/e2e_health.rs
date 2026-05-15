@@ -132,6 +132,25 @@ async fn health_response_carries_x_request_id_header() {
 }
 
 #[tokio::test]
+async fn client_supplied_x_request_id_is_replaced() {
+    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+    let spoofed = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    let resp = server
+        .get("/health")
+        .add_header("x-request-id", spoofed)
+        .await;
+    resp.assert_status(StatusCode::OK);
+
+    let header = resp.header("x-request-id");
+    let header_value = header.to_str().expect("x-request-id is ASCII");
+    assert_ne!(header_value, spoofed);
+    Ulid::from_string(header_value).expect("server-owned request id is a ULID");
+}
+
+#[tokio::test]
 async fn ready_returns_200_in_wave_0() {
     // Wave 0 readiness check is trivial: once `build_app` returns,
     // the process is ready. Dataset-gated readiness arrives in Wave 1.

@@ -1,0 +1,28 @@
+meta {
+  name: Scholarship eligibility - verify student
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student/verify?id={{studentAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{verifyKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Step 1 of 4: Scholarship eligibility with subject linkage workflow.
+  Verifies that student stu-2001 exists and is enrolled. Uses verification_service
+  persona (verifyKey). Purpose header required.
+  Expected: 200 with { "exists": true }.
+  A scholarship system first confirms enrollment before initiating linkage.
+  Each step uses a different key persona, demonstrating composed least-privilege access.
+}

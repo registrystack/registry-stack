@@ -1,0 +1,25 @@
+meta {
+  name: Subject schema
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/datasets/subject_registry/subject/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+docs {
+  Reads the subject entity schema using the linkage_service key.
+  Expected: 200 with field list (canonical_id, benefits_person_alias,
+  benefits_household_alias, education_student_alias, education_guardian_alias,
+  linkage_method, linkage_confidence, linked_on). Sensitive fields
+  internal_match_score and match_notes are absent.
+  Required filters (required_any_of): canonical_id, benefits_person_alias,
+  benefits_household_alias, education_student_alias, education_guardian_alias.
+}

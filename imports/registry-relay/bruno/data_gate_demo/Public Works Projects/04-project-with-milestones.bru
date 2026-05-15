@@ -1,0 +1,23 @@
+meta {
+  name: Read project with milestones expanded
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/datasets/public_works_projects/project/prj-5001?expand=milestones
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Reads project prj-5001 with milestones relationship expanded inline.
+  Uses casework_system persona (rowsKey).
+  Expected: 200 with project fields plus embedded milestones array showing
+  milestone_name, milestone_status, due_date, completed_on, delay_reason.
+  Sensitive site_observation_notes is absent.
+}

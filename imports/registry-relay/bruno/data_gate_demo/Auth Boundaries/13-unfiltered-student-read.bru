@@ -1,0 +1,27 @@
+meta {
+  name: Unfiltered education student read (expects 400)
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/datasets/education_registry/student
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to list all education_registry student rows with no filter.
+  The entity declares required_any_of: id, school_id, home_district.
+  expected: 400 entity.filter_required
+  Prevents bulk extraction of the full student registry without a discriminating filter.
+  A caller must supply at least a school id, home district, or student id.
+}

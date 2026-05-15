@@ -1,0 +1,28 @@
+meta {
+  name: Subject unfiltered read (expects 400)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/datasets/subject_registry/subject
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+headers {
+  X-Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read subject rows with no filters. The subject entity declares
+  required_any_of filters to prevent bulk enumeration of the linkage table.
+  expected: 400 entity.filter_required
+  The error body should list the required filters: canonical_id,
+  benefits_person_alias, benefits_household_alias, education_student_alias,
+  education_guardian_alias.
+}
