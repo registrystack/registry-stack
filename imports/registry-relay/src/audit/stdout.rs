@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Stdout audit sink: writes one JSONL record per call to process stdout.
 //!
-//! Implementation choices for Wave 0:
-//! - Synchronous `std::io::stdout().lock()` under a `tokio::task::spawn_blocking`
-//!   would be overkill; we use a synchronous lock inline. Stdout is already
-//!   line-buffered (or block-buffered in pipes), and the audit middleware
-//!   awaits the future, so contention only happens between concurrent
-//!   in-flight requests. The lock is held only for the duration of the
-//!   `write_all` + `flush` pair, which is microseconds for a single line.
-//! - We deliberately do not buffer across writes: each record must be
-//!   durable on stdout before the request completes, otherwise a panic
-//!   between buffer fill and flush would silently drop audit. Wave 4's
-//!   `FileSink` introduces internal batching with a writer task; stdout
-//!   does not need it because the container runtime owns durability.
+//! Each write is dispatched via `tokio::task::spawn_blocking` because
+//! `std::io::stdout().lock()` acquires a global OS-level lock shared with
+//! `tracing`'s fmt subscriber and any log collector attached to the
+//! process. Holding that lock on an async runtime thread can stall all
+//! tasks on that thread while a slow collector drains the pipe.
+//!
+//! We deliberately do not buffer across writes: each record must be
+//! durable on stdout before the request completes, otherwise a panic
+//! between buffer fill and flush would silently drop audit. The container
+//! runtime owns durability once the line reaches stdout.
 
 use std::io::{self, Write};
 
@@ -39,23 +37,29 @@ impl AuditSink for StdoutSink {
     fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
         Box::pin(async move {
             let line = envelope.to_jsonl()?;
-            // Acquire the stdout lock for the write+flush pair so that
-            // concurrent records never interleave mid-line. Stdout is a
-            // global; the lock here is the only correctness boundary.
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            handle.write_all(line.as_bytes()).map_err(AuditError::Io)?;
-            handle.flush().map_err(AuditError::Io)?;
-            Ok(())
+            // Dispatch to a blocking thread so the stdout lock (a global
+            // OS-level lock shared with tracing's fmt subscriber) is never
+            // held on an async runtime thread.
+            tokio::task::spawn_blocking(move || {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                handle.write_all(line.as_bytes()).map_err(AuditError::Io)?;
+                handle.flush().map_err(AuditError::Io)
+            })
+            .await
+            .map_err(|join_err| AuditError::Io(std::io::Error::other(join_err)))?
         })
     }
 
     fn flush<'a>(&'a self) -> AuditFuture<'a> {
         Box::pin(async move {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            handle.flush().map_err(AuditError::Io)?;
-            Ok(())
+            tokio::task::spawn_blocking(|| {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                handle.flush().map_err(AuditError::Io)
+            })
+            .await
+            .map_err(|join_err| AuditError::Io(std::io::Error::other(join_err)))?
         })
     }
 }
