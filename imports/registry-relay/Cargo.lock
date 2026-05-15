@@ -902,6 +902,7 @@ dependencies = [
  "utoipa-axum",
  "utoipa-swagger-ui",
  "zeroize",
+ "zip 7.2.0",
 ]
 
 [[package]]

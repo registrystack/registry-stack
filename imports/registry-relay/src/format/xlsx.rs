@@ -26,6 +26,21 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use crate::config::FieldType;
 use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHints};
 
+/// Upper bound on the number of cells (rows x columns) calamine is allowed
+/// to materialise for one XLSX worksheet.
+///
+/// Mitigates the decompression-bomb vector described in
+/// `docs/security-review-2026-05-16.md`. The on-disk size cap (`xlsx_max_*`
+/// in [`crate::ingest`]) only bounds the compressed ZIP; an attacker can
+/// declare a 26 col x 10M row `<dimension>` element in a kilobyte of XML
+/// and watch calamine allocate a 16 GB sparse `Range`. We refuse the
+/// workbook *before* calling `worksheet_range` (which itself calls
+/// `Range::from_sparse`, the allocating step).
+///
+/// 10M cells is generous for legitimate use (a 1M-row sheet with 10
+/// columns); calibrate down later if real workloads stay well below this.
+pub(crate) const MAX_XLSX_CELLS: usize = 10_000_000;
+
 /// Decoder for XLSX input.
 #[derive(Debug, Default, Clone)]
 pub struct XlsxFormat;
@@ -91,9 +106,49 @@ fn decode_xlsx(bytes: Vec<u8>, hints: FormatHints) -> Result<DecodedStream, Form
     // header_row is 1-indexed config value; default is 1.
     let header_row_1indexed: u32 = hints.header_row.unwrap_or(1);
 
+    // ── Decompression-bomb guard (W1-9 follow-up, security review 2026-05-16).
+    //
+    // The on-disk cap enforced in `crate::ingest` only sees compressed bytes.
+    // Before calamine's `worksheet_range` calls `from_sparse` (which allocates
+    // `vec![Data::default(); height * width]`), look at the worksheet's
+    // declared `<dimension>` element via the cell reader and refuse anything
+    // over `MAX_XLSX_CELLS`. A second post-check below catches lying
+    // dimensions where the actual cell positions exceed the declared bounds.
+    //
+    // The error string is deliberately generic: it does not echo the declared
+    // cell count, so an attacker probing the cap cannot pull it out of the
+    // response.
+    {
+        let reader = wb
+            .worksheet_cells_reader(&sheet_name)
+            .map_err(|e| FormatError::Parse(format!("sheet {sheet_name:?} not found: {e}")))?;
+        let dims = reader.dimensions();
+        let declared_h = (dims.end.0.saturating_sub(dims.start.0) as usize).saturating_add(1);
+        let declared_w = (dims.end.1.saturating_sub(dims.start.1) as usize).saturating_add(1);
+        let declared_cells = declared_h.saturating_mul(declared_w);
+        if declared_cells > MAX_XLSX_CELLS {
+            return Err(FormatError::LimitExceeded(
+                "xlsx worksheet declared cell count exceeds configured maximum".to_string(),
+            ));
+        }
+    }
+
     let full_range = wb
         .worksheet_range(&sheet_name)
         .map_err(|e| FormatError::Parse(format!("sheet {sheet_name:?} not found: {e}")))?;
+
+    // Post-check: a workbook can under-declare its `<dimension>` and place
+    // real cells outside the advertised range. `Range::get_size` reflects the
+    // materialised cells; reject if they exceed the cap even though the
+    // declared dimension was small.
+    {
+        let (h, w) = full_range.get_size();
+        if h.saturating_mul(w) > MAX_XLSX_CELLS {
+            return Err(FormatError::LimitExceeded(
+                "xlsx worksheet materialised cell count exceeds configured maximum".to_string(),
+            ));
+        }
+    }
 
     // Apply the data_range window if specified.
     // range_start_row/col are 1-indexed; calamine Range uses 0-indexed absolute.

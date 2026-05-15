@@ -194,7 +194,86 @@ async fn surfaces_corrupt_parquet_as_format_error() {
     }
 }
 
-// ─── 5. multiple row groups → multiple batches ────────────────────────────────
+// ─── 5. decompression bomb guards (security review 2026-05-16) ──────────────
+
+/// A file whose tail does not end with the `PAR1` magic must be rejected as
+/// a parse error before `ParquetRecordBatchReaderBuilder::try_new` is asked
+/// to allocate a footer. This is the cheap-magic-check branch of the
+/// pre-decode validation added in response to the footer-bomb finding.
+#[tokio::test]
+async fn rejects_parquet_without_par1_magic() {
+    // 16 zero bytes: enough to clear the 8-byte minimum so the size check
+    // does not short-circuit, but the trailing four bytes are not `PAR1`.
+    let bytes = vec![0u8; 16];
+    let fmt = ParquetFormat::new();
+    let result = fmt.decode(boxed_reader(bytes), empty_hints()).await;
+
+    match result {
+        Err(FormatError::Parse(_)) => {}
+        Err(other) => panic!("expected FormatError::Parse, got {other:?}"),
+        Ok(_) => panic!("non-Parquet bytes must be rejected"),
+    }
+}
+
+/// A file whose footer-length field at `len - 8` advertises a footer larger
+/// than `MAX_PARQUET_FOOTER_BYTES` must be rejected with `LimitExceeded`
+/// before any 4 GB allocation is attempted. We forge such a file by writing
+/// a real, valid Parquet, then rewriting the four footer-length bytes at
+/// offset `len - 8` to `u32::MAX`. The trailing `PAR1` magic stays intact
+/// so the magic check passes and the cap is what causes the rejection.
+#[tokio::test]
+async fn rejects_parquet_with_oversized_footer_length() {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    let vals = Arc::new(Int64Array::from(vec![1_i64, 2, 3]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![vals]).expect("RecordBatch::try_new");
+    let mut bytes = write_parquet(schema, &[batch], None).await;
+
+    // Overwrite the footer-length u32 LE at offset (len - 8) with u32::MAX.
+    let n = bytes.len();
+    assert!(n >= 8);
+    bytes[n - 8..n - 4].copy_from_slice(&u32::MAX.to_le_bytes());
+
+    let fmt = ParquetFormat::new();
+    let result = fmt.decode(boxed_reader(bytes), empty_hints()).await;
+    match result {
+        Err(FormatError::LimitExceeded(_)) => {}
+        Err(other) => panic!("expected FormatError::LimitExceeded, got {other:?}"),
+        Ok(_) => panic!("a bomb footer must be rejected"),
+    }
+}
+
+/// A file with more than `MAX_PARQUET_COLUMNS` columns must be rejected
+/// after `try_new` succeeds. We build a 5000-column file (cap is 4096) of
+/// nullable Utf8 columns with one empty row; the column count guard fires.
+#[tokio::test]
+async fn rejects_parquet_with_too_many_columns() {
+    use datafusion::arrow::array::StringArray;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    const N: usize = 5000;
+    let fields: Vec<Field> = (0..N)
+        .map(|i| Field::new(format!("c{i}"), DataType::Utf8, true))
+        .collect();
+    let schema = Arc::new(Schema::new(fields));
+    let columns: Vec<Arc<dyn datafusion::arrow::array::Array>> = (0..N)
+        .map(|_| Arc::new(StringArray::from(vec![Option::<&str>::None])) as _)
+        .collect();
+    let batch = RecordBatch::try_new(schema.clone(), columns).expect("RecordBatch::try_new");
+    let bytes = write_parquet(schema, &[batch], None).await;
+
+    let fmt = ParquetFormat::new();
+    let result = fmt.decode(boxed_reader(bytes), empty_hints()).await;
+    match result {
+        Err(FormatError::LimitExceeded(_)) => {}
+        Err(other) => panic!("expected FormatError::LimitExceeded, got {other:?}"),
+        Ok(_) => panic!("a high column count must be rejected"),
+    }
+}
+
+// ─── 6. multiple row groups → multiple batches ────────────────────────────────
 
 #[tokio::test]
 async fn multi_batch_parquet_streams_through() {
