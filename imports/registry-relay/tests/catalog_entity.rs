@@ -110,8 +110,20 @@ datasets:
           max_limit: 1000
           allowed_filters:
             - field: region
-              ops: [eq]
+              ops: [eq, in]
           allowed_expansions: [members]
+        aggregates:
+          - id: households_by_region
+            description: Household count by region
+            group_by:
+              - region
+            measures:
+              - name: household_count
+                function: count
+                column: id
+            disclosure_control:
+              min_group_size: 2
+              suppression: omit
       - name: individual
         table: individuals_table
         fields:
@@ -224,6 +236,9 @@ fn assert_structural_dcat_shacl(body: &Value) {
     assert_eq!(body["@context"]["dcat"], "http://www.w3.org/ns/dcat#");
     assert_eq!(body["@context"]["dcterms"], "http://purl.org/dc/terms/");
     assert_eq!(body["@context"]["sh"], "http://www.w3.org/ns/shacl#");
+    assert_eq!(body["@context"]["sh:path"]["@type"], "@id");
+    assert_eq!(body["@context"]["sh:targetClass"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:accessURL"]["@type"], "@id");
     assert!(body["dcat:dataset"]
         .as_array()
         .expect("datasets")
@@ -244,7 +259,9 @@ fn assert_structural_dcat_shacl(body: &Value) {
                 && shape["sh:targetClass"].is_string()
                 && shape["sh:property"].as_array().is_some_and(|properties| {
                     properties.iter().all(|property| {
-                        property["sh:path"].is_string() && property["sh:name"].is_string()
+                        property["@type"] == "sh:PropertyShape"
+                            && property["sh:path"].is_string()
+                            && property["sh:name"].is_string()
                     })
                 })
         }));
@@ -426,6 +443,47 @@ async fn dcat_ap_returns_etag_and_honors_if_none_match() {
 }
 
 #[tokio::test]
+async fn generated_catalog_can_run_external_shacl_validation_when_enabled() {
+    if std::env::var("DATAGATE_RUN_EXTERNAL_SHACL").as_deref() != Ok("1") {
+        return;
+    }
+
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    let tmp = TempDir::new().expect("tempdir");
+    let catalog_path = tmp.path().join("catalog.dcat-ap.jsonld");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec_pretty(&body).expect("catalog serializes"),
+    )
+    .expect("write catalog");
+
+    let output = std::process::Command::new("uv")
+        .args([
+            "run",
+            "--with",
+            "pyshacl>=0.27,<0.31",
+            "--with",
+            "rdflib-jsonld>=0.6",
+            "python",
+            "scripts/validate_dcat_shacl.py",
+            "--catalog",
+            catalog_path.to_str().expect("utf-8 temp path"),
+        ])
+        .output()
+        .expect("run external SHACL validation");
+
+    assert!(
+        output.status.success(),
+        "external SHACL validation failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
 async fn single_entity_schema_jsonld_returns_schema_and_shape() {
     let resp = server()
         .get("/catalog/datasets/social_registry/household/schema.jsonld")
@@ -476,6 +534,98 @@ async fn openapi_json_includes_visible_entity_semantic_extensions() {
         household["properties"]["members"]["x-target-entity"],
         "individual"
     );
+}
+
+#[tokio::test]
+async fn openapi_json_describes_entity_v1_client_generation_surface() {
+    let resp = server().get("/openapi.json").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert!(body["components"]["schemas"]["ProblemDetails"].is_object());
+    assert!(body["components"]["schemas"]["Pagination"].is_object());
+
+    let collection = &body["components"]["schemas"]["Entity_social_registry_householdCollection"];
+    assert_eq!(
+        collection["properties"]["data"]["items"]["$ref"],
+        "#/components/schemas/Entity_social_registry_household"
+    );
+    assert_eq!(
+        collection["properties"]["pagination"]["$ref"],
+        "#/components/schemas/Pagination"
+    );
+
+    let collection_get = &body["paths"]["/datasets/social_registry/household"]["get"];
+    assert_eq!(
+        collection_get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/Entity_social_registry_householdCollection"
+    );
+    assert_eq!(
+        collection_get["responses"]["default"]["content"]["application/problem+json"]["schema"]
+            ["$ref"],
+        "#/components/schemas/ProblemDetails"
+    );
+    let collection_params = collection_get["parameters"].as_array().expect("parameters");
+    for name in ["limit", "cursor", "fields", "expand", "region", "region.in"] {
+        assert!(
+            collection_params
+                .iter()
+                .any(|parameter| parameter["name"] == name),
+            "missing parameter {name}"
+        );
+    }
+    assert!(collection_params
+        .iter()
+        .any(|parameter| parameter["name"] == "expand"
+            && parameter["schema"]["enum"][0] == "members"));
+
+    let record_get = &body["paths"]["/datasets/social_registry/household/{id}"]["get"];
+    assert_eq!(
+        record_get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/Entity_social_registry_household"
+    );
+    assert!(record_get["parameters"]
+        .as_array()
+        .expect("record parameters")
+        .iter()
+        .any(|parameter| parameter["name"] == "id" && parameter["in"] == "path"));
+
+    let verify_get = &body["paths"]["/datasets/social_registry/household/verify"]["get"];
+    assert_eq!(
+        verify_get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/VerifyResponse"
+    );
+    assert!(verify_get["parameters"]
+        .as_array()
+        .expect("verify parameters")
+        .iter()
+        .any(|parameter| parameter["name"] == "id" && parameter["in"] == "query"));
+
+    let relationship_get =
+        &body["paths"]["/datasets/social_registry/household/{id}/members"]["get"];
+    assert_eq!(
+        relationship_get["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+            ["pagination"]["$ref"],
+        "#/components/schemas/Pagination"
+    );
+    assert!(relationship_get["parameters"]
+        .as_array()
+        .expect("relationship parameters")
+        .iter()
+        .any(|parameter| parameter["name"] == "cursor"));
+
+    assert_eq!(
+        body["paths"]["/datasets/social_registry/household/aggregates"]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AggregateListResponse"
+    );
+    assert_eq!(
+        body["paths"]["/datasets/social_registry/household/aggregates/{aggregate_id}"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AggregateResult"
+    );
+    assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
+    assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
 }
 
 #[tokio::test]

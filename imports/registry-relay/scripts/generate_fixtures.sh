@@ -11,16 +11,7 @@ FIXTURES_DIR="$PROJECT_ROOT/fixtures"
 # Create fixtures directory if needed
 mkdir -p "$FIXTURES_DIR"
 
-# Set up a temporary venv and install dependencies
-VENV_DIR=$(mktemp -d)
-trap 'rm -rf "$VENV_DIR"' EXIT
-
-python3 -m venv "$VENV_DIR"
-# shellcheck disable=SC1091
-source "$VENV_DIR/bin/activate"
-pip install -q openpyxl pyarrow pandas
-
-FIXTURES_DIR="$FIXTURES_DIR" python3 <<'PYTHON_EOF'
+FIXTURES_DIR="$FIXTURES_DIR" uv run --with openpyxl --with pyarrow --with pandas python3 <<'PYTHON_EOF'
 import csv
 import random
 import string
@@ -34,6 +25,7 @@ random.seed(42)
 # Output paths
 fixtures_dir = Path(os.environ['FIXTURES_DIR'])
 xlsx_path = fixtures_dir / "social_registry.xlsx"
+example_xlsx_path = fixtures_dir / "example_social_registry.xlsx"
 csv_path = fixtures_dir / "social_registry.csv"
 parquet_path = fixtures_dir / "social_registry.parquet"
 malformed_csv_path = fixtures_dir / "malformed_csv_truncated.csv"
@@ -123,7 +115,7 @@ metadata_sheet['B2'] = "beneficiaries"
 metadata_sheet['A3'] = "Rows"
 metadata_sheet['B3'] = len(data)
 metadata_sheet['A4'] = "Generated"
-metadata_sheet['B4'] = datetime.now().isoformat()
+metadata_sheet['B4'] = "2026-01-01T00:00:00"
 
 # Data sheet
 data_sheet = wb.create_sheet("data")
@@ -136,6 +128,41 @@ for row_idx, row_data in enumerate(data, 2):
         data_sheet.cell(row_idx, col_idx, value)
 
 wb.save(xlsx_path)
+
+# Write entity-shaped XLSX used by config/example.yaml and release smoke.
+example_wb = openpyxl.Workbook()
+example_wb.remove(example_wb.active)
+
+households_sheet = example_wb.create_sheet("Households")
+households_sheet.append(["household_id", "region_code", "enrollment_date"])
+regions = ["north", "central", "south"]
+for idx in range(1, 13):
+    households_sheet.append([
+        f"hh-{idx:03d}",
+        regions[(idx - 1) % len(regions)],
+        (datetime(2025, 1, 1) + timedelta(days=idx)).strftime("%Y-%m-%d"),
+    ])
+
+individuals_sheet = example_wb.create_sheet("Individuals")
+individuals_sheet.append([
+    "individual_id",
+    "household_id",
+    "municipality_code",
+    "payment_amount",
+])
+municipalities = ["AA001", "AA002", "AA003"]
+individual_id = 1
+for household_idx in range(1, 13):
+    for _member_idx in range(1, 4):
+        individuals_sheet.append([
+            f"ind-{individual_id:03d}",
+            f"hh-{household_idx:03d}",
+            municipalities[(household_idx - 1) % len(municipalities)],
+            100 + (individual_id * 7),
+        ])
+        individual_id += 1
+
+example_wb.save(example_xlsx_path)
 
 # Write Parquet via pandas for consistency
 import pandas as pd
@@ -188,6 +215,7 @@ df_extra.to_parquet(parquet_mismatch_path, index=False)
 print(f"Generated {len(data)} rows of synthetic data")
 print(f"  CSV: {csv_path}")
 print(f"  XLSX: {xlsx_path}")
+print(f"  Entity example XLSX: {example_xlsx_path}")
 print(f"  Parquet: {parquet_path}")
 print(f"  Malformed CSV: {malformed_csv_path}")
 print(f"  XLSX type mismatch: {xlsx_mismatch_path}")

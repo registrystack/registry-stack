@@ -12,7 +12,7 @@ use serde_json::{json, Map, Value};
 
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
-use crate::config::Config;
+use crate::config::{Config, EntityConfig, FilterOp};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 use crate::metadata::catalog::{
@@ -45,7 +45,7 @@ async fn openapi(
     };
     let catalog = catalog_document_for_entity_ids(&config, &registry, &visible_entity_ids);
 
-    Json(openapi_document(&catalog)).into_response()
+    Json(openapi_document(&catalog, &config)).into_response()
 }
 
 fn openapi_state(
@@ -83,7 +83,7 @@ fn visible_metadata_entity_ids(
     }
 }
 
-fn openapi_document(catalog: &CatalogDocument) -> Value {
+fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     let mut paths = Map::new();
     insert_json_path(&mut paths, "/health", "get", "Health", "HealthResponse");
     insert_json_path(
@@ -120,15 +120,60 @@ fn openapi_document(catalog: &CatalogDocument) -> Value {
             json_path_item("get", "Dataset metadata", "DatasetSummary"),
         );
         for entity in &dataset.entities {
+            let Some(entity_config) = entity_config(config, &dataset.dataset_id, &entity.name)
+            else {
+                continue;
+            };
             let component = entity_component_name(&dataset.dataset_id, &entity.name);
+            let collection_component = entity_collection_component_name(&component);
             paths.insert(
                 format!("/datasets/{}/{}", dataset.dataset_id, entity.name),
-                json_path_item("get", "Entity collection", &component),
+                entity_collection_path_item(
+                    "Entity collection",
+                    &collection_component,
+                    entity_config,
+                ),
+            );
+            paths.insert(
+                format!("/datasets/{}/{}/{{id}}", dataset.dataset_id, entity.name),
+                entity_record_path_item("Entity record", &component, entity_config),
             );
             paths.insert(
                 format!("/datasets/{}/{}/schema", dataset.dataset_id, entity.name),
                 json_path_item("get", "Entity schema", &format!("{component}Schema")),
             );
+            paths.insert(
+                format!("/datasets/{}/{}/verify", dataset.dataset_id, entity.name),
+                entity_verify_path_item(entity),
+            );
+            paths.insert(
+                format!(
+                    "/datasets/{}/{}/aggregates",
+                    dataset.dataset_id, entity.name
+                ),
+                json_path_item("get", "Entity aggregates", "AggregateListResponse"),
+            );
+            paths.insert(
+                format!(
+                    "/datasets/{}/{}/aggregates/{{aggregate_id}}",
+                    dataset.dataset_id, entity.name
+                ),
+                path_item_with_params(
+                    "get",
+                    "Entity aggregate result",
+                    "AggregateResult",
+                    vec![path_parameter("aggregate_id", "Aggregate identifier")],
+                ),
+            );
+            for relationship in &entity.relationships {
+                paths.insert(
+                    format!(
+                        "/datasets/{}/{}/{{id}}/{}",
+                        dataset.dataset_id, entity.name, relationship.name
+                    ),
+                    entity_relationship_path_item(dataset, relationship),
+                );
+            }
             paths.insert(
                 format!(
                     "/catalog/datasets/{}/{}/schema.jsonld",
@@ -175,6 +220,11 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     schemas.insert("CatalogDocument".to_string(), json!({ "type": "object" }));
     schemas.insert("DatasetList".to_string(), json!({ "type": "object" }));
     schemas.insert("DatasetSummary".to_string(), json!({ "type": "object" }));
+    schemas.insert("Pagination".to_string(), pagination_schema());
+    schemas.insert("ProblemDetails".to_string(), problem_details_schema());
+    schemas.insert("VerifyResponse".to_string(), verify_response_schema());
+    schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
+    schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
 
     for dataset in &catalog.datasets {
         for entity in &dataset.entities {
@@ -184,6 +234,10 @@ fn schemas(catalog: &CatalogDocument) -> Value {
                 entity_response_schema(catalog, dataset, entity),
             );
             schemas.insert(
+                entity_collection_component_name(&component),
+                entity_collection_schema(&component),
+            );
+            schemas.insert(
                 format!("{component}Schema"),
                 entity_metadata_schema(dataset, entity),
             );
@@ -191,6 +245,118 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     }
 
     Value::Object(schemas)
+}
+
+fn pagination_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["has_more"],
+        "properties": {
+            "has_more": { "type": "boolean" },
+            "next_cursor": { "type": "string" },
+        },
+    })
+}
+
+fn problem_details_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "title", "status", "detail", "code"],
+        "properties": {
+            "type": { "type": "string", "format": "uri" },
+            "title": { "type": "string" },
+            "status": { "type": "integer", "format": "int32" },
+            "detail": { "type": "string" },
+            "code": { "type": "string" },
+        },
+        "additionalProperties": true,
+    })
+}
+
+fn verify_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["exists"],
+        "properties": {
+            "exists": { "type": "boolean" },
+            "ingest_version": { "type": "string", "nullable": true },
+        },
+    })
+}
+
+fn aggregate_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["aggregate_id", "description", "group_by", "measures", "min_group_size"],
+                    "properties": {
+                        "aggregate_id": { "type": "string" },
+                        "description": { "type": "string" },
+                        "group_by": { "type": "array", "items": { "type": "string" } },
+                        "measures": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["name", "function", "column"],
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "function": {
+                                        "type": "string",
+                                        "enum": ["count", "sum", "avg", "min", "max", "median", "count_distinct", "stddev"]
+                                    },
+                                    "column": { "type": "string" },
+                                },
+                            },
+                        },
+                        "min_group_size": { "type": "integer", "format": "int32", "minimum": 1 },
+                    },
+                },
+            },
+        },
+    })
+}
+
+fn aggregate_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "dataset_id",
+            "entity",
+            "aggregate_id",
+            "computed_at",
+            "min_group_size",
+            "suppressed_groups",
+            "rows"
+        ],
+        "properties": {
+            "dataset_id": { "type": "string" },
+            "entity": { "type": "string" },
+            "aggregate_id": { "type": "string" },
+            "computed_at": { "type": "string", "format": "date-time" },
+            "min_group_size": { "type": "integer", "format": "int32", "minimum": 1 },
+            "suppressed_groups": { "type": "integer", "format": "int64", "minimum": 0 },
+            "rows": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        },
+    })
+}
+
+fn entity_collection_schema(component: &str) -> Value {
+    json!({
+        "type": "object",
+        "required": ["data", "pagination"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": { "$ref": format!("#/components/schemas/{component}") },
+            },
+            "pagination": { "$ref": "#/components/schemas/Pagination" },
+        },
+    })
 }
 
 fn entity_response_schema(
@@ -311,6 +477,20 @@ fn entity_metadata_schema(dataset: &DatasetMetadata, entity: &EntityMetadata) ->
     })
 }
 
+fn entity_config<'a>(
+    config: &'a Config,
+    dataset_id: &str,
+    entity_name: &str,
+) -> Option<&'a EntityConfig> {
+    config
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id.as_str() == dataset_id)?
+        .entities
+        .iter()
+        .find(|entity| entity.name == entity_name)
+}
+
 fn insert_json_path(
     paths: &mut Map<String, Value>,
     path: &str,
@@ -322,9 +502,19 @@ fn insert_json_path(
 }
 
 fn json_path_item(method: &str, summary: &str, schema: &str) -> Value {
+    path_item_with_params(method, summary, schema, Vec::new())
+}
+
+fn path_item_with_params(
+    method: &str,
+    summary: &str,
+    schema: &str,
+    parameters: Vec<Value>,
+) -> Value {
     json!({
         method: {
             "summary": summary,
+            "parameters": parameters,
             "responses": {
                 "200": {
                     "description": "Successful response",
@@ -333,9 +523,206 @@ fn json_path_item(method: &str, summary: &str, schema: &str) -> Value {
                             "schema": { "$ref": format!("#/components/schemas/{schema}") }
                         }
                     }
+                },
+                "default": {
+                    "description": "Problem Details error response",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                        }
+                    }
                 }
             }
         }
+    })
+}
+
+fn entity_collection_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
+    let mut parameters = pagination_parameters();
+    parameters.push(query_parameter(
+        "fields",
+        "Comma-separated entity field projection",
+    ));
+    if !entity.api.allowed_expansions.is_empty() {
+        parameters.push(enum_query_parameter(
+            "expand",
+            "Comma-separated relationship expansion list",
+            entity
+                .api
+                .allowed_expansions
+                .iter()
+                .map(String::as_str)
+                .collect(),
+        ));
+    }
+    parameters.extend(filter_parameters(entity));
+    path_item_with_params("get", summary, schema, parameters)
+}
+
+fn entity_record_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
+    let mut parameters = vec![path_parameter("id", "Entity primary key")];
+    parameters.push(query_parameter(
+        "fields",
+        "Comma-separated entity field projection",
+    ));
+    if !entity.api.allowed_expansions.is_empty() {
+        parameters.push(enum_query_parameter(
+            "expand",
+            "Comma-separated relationship expansion list",
+            entity
+                .api
+                .allowed_expansions
+                .iter()
+                .map(String::as_str)
+                .collect(),
+        ));
+    }
+    path_item_with_params("get", summary, schema, parameters)
+}
+
+fn entity_verify_path_item(entity: &EntityMetadata) -> Value {
+    path_item_with_params(
+        "get",
+        "Entity record existence check",
+        "VerifyResponse",
+        vec![query_parameter(
+            &entity.primary_key,
+            "Entity primary key value to verify",
+        )],
+    )
+}
+
+fn entity_relationship_path_item(
+    dataset: &DatasetMetadata,
+    relationship: &RelationshipMetadata,
+) -> Value {
+    let target_component = dataset
+        .entities
+        .iter()
+        .find(|entity| entity.name == relationship.target)
+        .map(|entity| entity_component_name(&dataset.dataset_id, &entity.name));
+    let schema = match relationship.kind {
+        "has_many" => {
+            let items = target_component
+                .as_deref()
+                .map(|component| json!({ "$ref": format!("#/components/schemas/{component}") }))
+                .unwrap_or_else(|| json!({ "type": "object", "additionalProperties": true }));
+            json!({
+            "type": "object",
+            "required": ["data", "pagination"],
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": items,
+                },
+                "pagination": { "$ref": "#/components/schemas/Pagination" },
+            },
+            })
+        }
+        _ if target_component.is_some() => {
+            let component = target_component.expect("checked is_some");
+            json!({ "$ref": format!("#/components/schemas/{component}") })
+        }
+        _ => json!({ "type": "object", "additionalProperties": true }),
+    };
+    json!({
+        "get": {
+            "summary": "Entity relationship",
+            "parameters": relationship_parameters(relationship.kind),
+            "responses": {
+                "200": {
+                    "description": "Successful response",
+                    "content": {
+                        "application/json": {
+                            "schema": schema
+                        }
+                    }
+                },
+                "default": {
+                    "description": "Problem Details error response",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn pagination_parameters() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "format": "int32", "minimum": 1 },
+            "description": "Maximum records to return",
+        }),
+        query_parameter("cursor", "Opaque pagination cursor"),
+    ]
+}
+
+fn relationship_parameters(kind: &str) -> Vec<Value> {
+    let mut parameters = vec![path_parameter("id", "Entity primary key")];
+    if kind == "has_many" {
+        parameters.extend(pagination_parameters());
+    }
+    parameters
+}
+
+fn filter_parameters(entity: &EntityConfig) -> Vec<Value> {
+    entity
+        .api
+        .allowed_filters
+        .iter()
+        .flat_map(|filter| {
+            filter.ops.iter().map(|op| {
+                let name = filter_parameter_name(&filter.field, *op);
+                query_parameter(&name, "Allowed entity filter")
+            })
+        })
+        .collect()
+}
+
+fn filter_parameter_name(field: &str, op: FilterOp) -> String {
+    match op {
+        FilterOp::Eq => field.to_string(),
+        FilterOp::In => format!("{field}.in"),
+        FilterOp::Gte => format!("{field}.gte"),
+        FilterOp::Lte => format!("{field}.lte"),
+        FilterOp::Between => format!("{field}.between"),
+    }
+}
+
+fn path_parameter(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "in": "path",
+        "required": true,
+        "description": description,
+        "schema": { "type": "string" },
+    })
+}
+
+fn query_parameter(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "in": "query",
+        "required": false,
+        "description": description,
+        "schema": { "type": "string" },
+    })
+}
+
+fn enum_query_parameter(name: &str, description: &str, values: Vec<&str>) -> Value {
+    json!({
+        "name": name,
+        "in": "query",
+        "required": false,
+        "description": description,
+        "schema": { "type": "string", "enum": values },
     })
 }
 
@@ -345,6 +732,10 @@ fn entity_component_name(dataset_id: &str, entity_name: &str) -> String {
         sanitize_component_part(dataset_id),
         sanitize_component_part(entity_name)
     )
+}
+
+fn entity_collection_component_name(entity_component: &str) -> String {
+    format!("{entity_component}Collection")
 }
 
 fn sanitize_component_part(value: &str) -> String {

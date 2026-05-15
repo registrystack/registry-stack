@@ -359,6 +359,16 @@ impl IngestPlan {
     ) -> Result<(), IngestError> {
         use datafusion::datasource::file_format::parquet::ParquetFormat as DFParquetFormat;
 
+        let parquet_path = tokio::fs::canonicalize(parquet_path).await.map_err(|e| {
+            tracing::error!(
+                event = "ingest.registration_failed",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                path = %parquet_path.display(),
+                error = %e,
+            );
+            IngestError::RegistrationFailed
+        })?;
         let url_str = format!("file://{}", parquet_path.display());
         let table_url = ListingTableUrl::parse(&url_str).map_err(|e| {
             tracing::error!(

@@ -500,6 +500,27 @@ async fn entity_relationship_route_executes_query_when_state_installed() {
 }
 
 #[tokio::test]
+async fn entity_relationship_returns_etag_and_honors_if_none_match() {
+    let server = server_with_query().await;
+    let resp = server
+        .get("/datasets/social_registry/individual/p-1/household")
+        .add_header("x-data-purpose", "route-test")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let etag = resp.header("etag").to_str().expect("etag").to_string();
+
+    let cached = server
+        .get("/datasets/social_registry/individual/p-1/household")
+        .add_header("x-data-purpose", "route-test")
+        .add_header("if-none-match", &etag)
+        .await;
+
+    cached.assert_status(StatusCode::NOT_MODIFIED);
+    assert_eq!(cached.header("etag").to_str().expect("etag"), etag);
+}
+
+#[tokio::test]
 async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
     let server = server_with_query().await;
 
@@ -540,6 +561,27 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
     );
     assert_eq!(body["pagination"]["has_more"], false);
     assert!(body["pagination"].get("next_cursor").is_none());
+}
+
+#[tokio::test]
+async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
+    let server = server_with_query().await;
+    let resp = server
+        .get("/datasets/social_registry/household/hh-1/members?limit=1")
+        .add_header("x-data-purpose", "route-test")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let etag = resp.header("etag").to_str().expect("etag").to_string();
+
+    let cached = server
+        .get("/datasets/social_registry/household/hh-1/members?limit=1")
+        .add_header("x-data-purpose", "route-test")
+        .add_header("if-none-match", &etag)
+        .await;
+
+    cached.assert_status(StatusCode::NOT_MODIFIED);
+    assert_eq!(cached.header("etag").to_str().expect("etag"), etag);
 }
 
 #[tokio::test]

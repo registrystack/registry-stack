@@ -49,6 +49,15 @@ Test data for error and validation paths:
 - **parquet_schema_mismatch.parquet** (29 KB)
   Parquet with the standard 7 columns plus an extra column `internal_notes` (String) not declared in the schema. Used by Track 5 (strict-extra-column test).
 
+### Entity API Example Fixture
+
+- **example_social_registry.xlsx** (7 KB)
+  XLSX with the domain-shaped sheets used by `config/example.yaml`:
+  - `Households`: `household_id`, `region_code`, `enrollment_date`
+  - `Individuals`: `individual_id`, `household_id`, `municipality_code`, `payment_amount`
+
+  Use this file for local and container smoke tests by copying it to `data/social_registry.xlsx`. The older `social_registry.xlsx` fixture remains the Wave 1 format/ingest fixture and intentionally keeps its `metadata` and `data` sheets.
+
 ## Generation
 
 ### Regenerate
@@ -58,10 +67,10 @@ Test data for error and validation paths:
 ```
 
 The script:
-1. Creates a temporary Python venv
-2. Installs openpyxl, pyarrow, pandas
-3. Runs an inline Python generator with seed=42
-4. Produces all six fixture files atomically
+1. Runs the inline Python generator through `uv`
+2. Installs openpyxl, pyarrow, pandas into the ephemeral `uv` environment
+3. Uses seed=42 for the Wave 1 table fixtures
+4. Produces all fixture files atomically
 
 Output is idempotent: re-running produces byte-for-byte identical files (verified with MD5).
 

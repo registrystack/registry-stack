@@ -11,11 +11,10 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 ## Current Status
 
-V1 is in active wave development. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload, and refresh loops are present. A few surfaces remain intentionally deferred:
+V1 is in active wave development. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. A few surfaces remain intentionally deferred:
 
 - `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable`.
 - Bulk export endpoints are contract-locked for V1.x and are not implemented.
-- `/openapi.json` is specified as best-effort but is not currently mounted.
 
 Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat deferred surfaces as unavailable until their owning follow-up lands.
 
@@ -84,7 +83,7 @@ The example config references data under `./data/social_registry.xlsx`, so eithe
 
 ```sh
 mkdir -p data
-cp fixtures/social_registry.xlsx data/social_registry.xlsx
+cp fixtures/example_social_registry.xlsx data/social_registry.xlsx
 export PROGRAM_SYSTEM_API_KEY_HASH='<argon2id PHC hash>'
 export STATS_OFFICE_API_KEY_HASH='<argon2id PHC hash>'
 export VERIFICATION_SERVICE_API_KEY_HASH='<argon2id PHC hash>'
@@ -124,6 +123,29 @@ GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
+
+## DCAT-AP And SHACL Validation
+
+The generated `/catalog/dcat-ap.jsonld` document is JSON-LD with embedded entity SHACL node shapes. To validate a saved catalog or a running endpoint with a real SHACL engine:
+
+```sh
+just validate-catalog-shacl catalog=target/catalog.dcat-ap.jsonld
+uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
+  python scripts/validate_dcat_shacl.py \
+  --catalog http://127.0.0.1:8080/catalog/dcat-ap.jsonld \
+  --header "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY"
+```
+
+The recipe uses `uv` to run `pyshacl` and the local smoke profile at `tests/fixtures/shacl/dcat-ap-catalog-smoke.ttl`. Pass stricter national or EU DCAT-AP shapes directly to the script when they are available:
+
+```sh
+uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
+  python scripts/validate_dcat_shacl.py \
+  --catalog target/catalog.dcat-ap.jsonld \
+  --shapes path/to/external-dcat-ap-shapes.ttl
+```
+
+For CI jobs that should exercise the external engine from Rust tests, set `DATAGATE_RUN_EXTERNAL_SHACL=1` before running `cargo test --test catalog_entity generated_catalog_can_run_external_shacl_validation_when_enabled`.
 
 ## Container Image
 

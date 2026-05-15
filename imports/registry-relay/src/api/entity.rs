@@ -458,9 +458,15 @@ async fn entity_relationship(
         audit_context_for_relationship(registry, &path.dataset_id, &path.entity, &path.relationship)
     });
     let mut page_context = None;
+    let mut relationship_ingest_version = None;
     if let Some(Extension(registry)) = registry.as_ref() {
         match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
+                let host_ingest_version = ingest_version_for_entity(
+                    readiness.as_ref().map(|Extension(readiness)| readiness),
+                    &path.dataset_id,
+                    entity,
+                );
                 if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
                     return error.into_response();
                 }
@@ -475,15 +481,23 @@ async fn entity_relationship(
                     return error.into_response();
                 }
                 if let Some(relationship) = entity.relationships.get(&path.relationship) {
+                    let target = match entity_from_registry(
+                        registry,
+                        &path.dataset_id,
+                        &relationship.target,
+                    ) {
+                        Ok(target) => target,
+                        Err(error) => return error.into_response(),
+                    };
+                    let target_ingest_version = ingest_version_for_entity(
+                        readiness.as_ref().map(|Extension(readiness)| readiness),
+                        &path.dataset_id,
+                        target,
+                    );
+                    relationship_ingest_version = host_ingest_version
+                        .zip(target_ingest_version.clone())
+                        .map(|(host, target)| format!("host={host};target={target}"));
                     if relationship.kind == crate::config::RelationshipKind::HasMany {
-                        let target = match entity_from_registry(
-                            registry,
-                            &path.dataset_id,
-                            &relationship.target,
-                        ) {
-                            Ok(target) => target,
-                            Err(error) => return error.into_response(),
-                        };
                         let target_fk_name =
                             match field_name_by_table_column(target, &relationship.foreign_key) {
                                 Ok(field) => field,
@@ -498,11 +512,7 @@ async fn entity_relationship(
                                 op: "eq".to_string(),
                                 value: json!(path.id.clone()),
                             }],
-                            ingest_version: ingest_version_for_entity(
-                                readiness.as_ref().map(|Extension(readiness)| readiness),
-                                &path.dataset_id,
-                                target,
-                            ),
+                            ingest_version: target_ingest_version,
                         });
                     }
                 }
@@ -518,6 +528,12 @@ async fn entity_relationship(
     };
 
     let link_params = params.clone();
+    let validator = format!(
+        "{}:{}?{}",
+        path.id,
+        path.relationship,
+        params_validator(&link_params)
+    );
     let relationship_query = match relationship_query_from_params(params, page_context.as_ref()) {
         Ok(query) => query,
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
@@ -534,6 +550,13 @@ async fn entity_relationship(
         .await
     {
         Ok(page) => {
+            let etag = entity_etag(
+                "relationship",
+                &path.dataset_id,
+                &path.entity,
+                relationship_ingest_version.as_deref(),
+                &validator,
+            );
             if let Some(context) = page_context {
                 let row_count = page.value.as_array().map_or(0, |rows| rows.len()) as u64;
                 let next_cursor = if let Some(position) = page.next_primary_key {
@@ -555,18 +578,21 @@ async fn entity_relationship(
                     None
                 };
                 let body = paginated_body(page.value, next_cursor.as_deref());
-                let mut response = Json(body).into_response();
-                let next_link = next_cursor
-                    .as_deref()
-                    .map(|cursor| relationship_next_link(&path, &link_params, cursor));
-                response = with_next_link(response, next_link.as_deref());
+                let mut response = relationship_response(body, etag.as_deref(), &headers);
+                if response.status() != StatusCode::NOT_MODIFIED {
+                    let next_link = next_cursor
+                        .as_deref()
+                        .map(|cursor| relationship_next_link(&path, &link_params, cursor));
+                    response = with_next_link(response, next_link.as_deref());
+                }
                 if let Some(mut context) = audit_context {
                     context.row_count = Some(row_count);
                     response = with_audit_context(response, context);
                 }
                 response
             } else {
-                with_optional_audit_context(Json(page.value).into_response(), audit_context)
+                let response = relationship_response(page.value, etag.as_deref(), &headers);
+                with_optional_audit_context(response, audit_context)
             }
         }
         Err(error) => error.into_response(),
@@ -804,6 +830,18 @@ fn with_next_link(mut response: Response, next_link: Option<&str>) -> Response {
         response.headers_mut().insert(header::LINK, link);
     }
     response
+}
+
+fn relationship_response(body: Value, etag: Option<&str>, headers: &HeaderMap) -> Response {
+    if let Some(etag) = etag {
+        if if_none_match_matches(headers, etag) {
+            not_modified_response(etag)
+        } else {
+            with_etag(Json(body).into_response(), etag)
+        }
+    } else {
+        Json(body).into_response()
+    }
 }
 
 fn collection_next_link(

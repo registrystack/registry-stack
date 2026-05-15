@@ -147,6 +147,7 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
 fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetadata) -> Value {
     let field_properties = entity.fields.iter().map(|field| {
         let mut property = json!({
+            "@type": "sh:PropertyShape",
             "sh:path": field_property_uri(base_url, &dataset.dataset_id, &entity.name, field),
             "sh:name": field.name,
             "data_gate:type": field.r#type,
@@ -184,6 +185,7 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
                 )
             });
         json!({
+            "@type": "sh:PropertyShape",
             "sh:path": path,
             "sh:name": relationship.name,
             "data_gate:relationshipKind": relationship.kind,
@@ -305,5 +307,14 @@ fn context() -> Value {
         "foaf": "http://xmlns.com/foaf/0.1/",
         "sh": "http://www.w3.org/ns/shacl#",
         "data_gate": "https://data-gate.dev/ns#",
+        "dcat:accessURL": { "@type": "@id" },
+        "dcat:distribution": { "@type": "@id" },
+        "dcterms:accessRights": { "@type": "@id" },
+        "dcterms:accrualPeriodicity": { "@type": "@id" },
+        "dcterms:conformsTo": { "@type": "@id" },
+        "dcterms:isPartOf": { "@type": "@id" },
+        "sh:class": { "@type": "@id" },
+        "sh:path": { "@type": "@id" },
+        "sh:targetClass": { "@type": "@id" },
     })
 }

@@ -29,6 +29,12 @@ fmt-check:
 deny:
     cargo deny check
 
+# Validate a generated DCAT-AP JSON-LD catalog with pySHACL.
+# Usage: just validate-catalog-shacl catalog=target/catalog.dcat-ap.jsonld
+#        just validate-catalog-shacl catalog=http://127.0.0.1:8080/catalog/dcat-ap.jsonld
+validate-catalog-shacl catalog:
+    uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' python scripts/validate_dcat_shacl.py --catalog {{catalog}}
+
 # Check advisories only (alias for a quick security scan).
 audit:
     cargo deny check advisories
