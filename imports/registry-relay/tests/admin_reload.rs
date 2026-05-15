@@ -232,3 +232,46 @@ async fn table_reload_with_admin_key_reaches_registry_reload_path() {
     assert_eq!(body["dataset_id"], "social_registry");
     assert_eq!(body["table_id"], "beneficiaries_csv");
 }
+
+#[tokio::test]
+async fn reload_all_without_credential_is_rejected() {
+    let fixture = build_fixture();
+
+    let resp = fixture.server.post("/admin/reload").await;
+
+    assert_problem(resp, StatusCode::UNAUTHORIZED, "auth.missing_credential").await;
+}
+
+#[tokio::test]
+async fn reload_all_with_non_admin_key_is_rejected() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .post("/admin/reload")
+        .add_header("Authorization", format!("Bearer {NON_ADMIN_KEY}"))
+        .await;
+
+    let body = assert_problem(resp, StatusCode::FORBIDDEN, "auth.scope_denied").await;
+    assert_eq!(body["detail"], "required scope: admin");
+}
+
+#[tokio::test]
+async fn reload_all_with_admin_key_returns_not_implemented() {
+    let fixture = build_fixture();
+
+    let resp = fixture
+        .server
+        .post("/admin/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+
+    // The endpoint is authenticated but not yet implemented; it returns
+    // 501 once the scope check passes.
+    assert_problem(
+        resp,
+        StatusCode::NOT_IMPLEMENTED,
+        "admin.reload_unavailable",
+    )
+    .await;
+}

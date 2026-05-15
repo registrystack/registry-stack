@@ -72,7 +72,10 @@ async fn reload_table(
     }
 }
 
-async fn reload_all() -> Response {
+async fn reload_all(principal: Option<Extension<Principal>>) -> Response {
+    if let Err(error) = require_admin_scope(principal) {
+        return error.into_response();
+    }
     reload_unavailable("admin reload-all route matched, but registry-wide reload is not available")
 }
 

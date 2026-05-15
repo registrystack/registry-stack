@@ -116,9 +116,14 @@ impl Source for LocalFileSource {
 
     fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata> {
         Box::pin(async move {
-            let std_meta = tokio::fs::metadata(&self.canonical_path)
+            // Open the file handle first, then stat it so the metadata
+            // corresponds to the same inode that was opened, eliminating
+            // the TOCTOU window that exists when using the path-based
+            // `tokio::fs::metadata` call.
+            let file = tokio::fs::File::open(&self.canonical_path)
                 .await
                 .map_err(map_io_err)?;
+            let std_meta = file.metadata().await.map_err(map_io_err)?;
             Ok(metadata_from_std(std_meta))
         })
     }
