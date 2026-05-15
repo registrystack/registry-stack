@@ -65,7 +65,7 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use ulid::Ulid;
 
-use crate::api;
+use crate::api::{self, CursorSigner};
 use crate::audit::{self, AuditSettings, AuditSink};
 use crate::auth::{middleware::auth_layer, AuthProvider};
 use crate::config::{Config, CorsConfig};
@@ -78,6 +78,12 @@ use crate::query::{AggregateQueryEngine, EntityQueryEngine};
 /// the limit exists so a misbehaving client cannot exhaust memory by
 /// streaming a body the server will discard anyway.
 const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
+/// Defensive cap on request URI length (path + query, 8 KiB). The 1 MiB
+/// body limit does not apply to GET query strings, so a separate cap is
+/// installed at the transport layer. Requests exceeding the cap are
+/// rejected with `414 URI Too Long` before any handler runs.
+const MAX_URI_BYTES: usize = 8192;
 
 /// `MakeRequestId` impl that mints fresh ULIDs. Generic over header
 /// name so the same shape is reusable if we ever change `x-request-id`
@@ -126,7 +132,14 @@ where
     // layers installed below.
     let merged: Router<()> = Router::new().merge(public).merge(protected);
 
-    apply_cross_cutting_layers(merged, &config, audit_sink).layer(Extension(config))
+    // Pagination cursor signer: ephemeral, generated per process.
+    // A restart invalidates outstanding cursors, which is acceptable
+    // for opaque pagination tokens.
+    let cursor_signer = Arc::new(CursorSigner::new_random());
+
+    apply_cross_cutting_layers(merged, &config, audit_sink)
+        .layer(Extension(cursor_signer))
+        .layer(Extension(config))
 }
 
 /// Assemble the main application with a Wave 1 ingest readiness watch.
@@ -215,6 +228,7 @@ fn apply_cross_cutting_layers(
             config.server.request_timeout,
         ))
         .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT_BYTES))
+        .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -264,6 +278,19 @@ fn audit_sensitive_fields(config: &Config) -> Vec<String> {
         }
     }
     fields
+}
+
+/// Reject requests whose URI (path + query string) exceeds
+/// [`MAX_URI_BYTES`]. Installed inside the audit layer so rejections
+/// produce an audit record with the `internal.uri_too_long` code, and
+/// outside the body-limit layer so the GET-only query string is bound
+/// independently of any request body. Returns a Problem Details
+/// response shaped identically to the body-limit and timeout layers.
+async fn reject_overlong_uri(request: Request<Body>, next: Next) -> Response {
+    if request.uri().to_string().len() > MAX_URI_BYTES {
+        return Error::from(InternalError::UriTooLong).into_response();
+    }
+    next.run(request).await
 }
 
 async fn normalize_internal_error_response(request: Request<Body>, next: Next) -> Response {

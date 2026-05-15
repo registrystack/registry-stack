@@ -104,6 +104,8 @@ pub enum FilterError {
     InvalidValue,
     #[error("too many filter values")]
     TooManyValues,
+    #[error("too many filters")]
+    TooManyFilters,
     #[error("invalid range")]
     InvalidRange,
     #[error("limit out of range")]
@@ -182,6 +184,8 @@ pub enum InternalError {
     Timeout,
     #[error("payload too large")]
     PayloadTooLarge,
+    #[error("uri too long")]
+    UriTooLong,
     #[error("unhandled internal error")]
     Unhandled,
 }
@@ -338,6 +342,7 @@ impl FilterError {
             FilterError::UnsupportedOp => "filter.unsupported_op",
             FilterError::InvalidValue => "filter.invalid_value",
             FilterError::TooManyValues => "filter.too_many_values",
+            FilterError::TooManyFilters => "filter.too_many_filters",
             FilterError::InvalidRange => "filter.invalid_range",
             FilterError::LimitOutOfRange => "filter.limit_out_of_range",
         }
@@ -353,6 +358,7 @@ impl FilterError {
             | FilterError::NotAllowed
             | FilterError::UnsupportedOp
             | FilterError::InvalidValue
+            | FilterError::TooManyFilters
             | FilterError::InvalidRange
             | FilterError::LimitOutOfRange => StatusCode::BAD_REQUEST,
         }
@@ -365,6 +371,7 @@ impl FilterError {
             FilterError::UnsupportedOp => "Unsupported filter operator",
             FilterError::InvalidValue => "Invalid filter value",
             FilterError::TooManyValues => "Too many filter values",
+            FilterError::TooManyFilters => "Too many filters",
             FilterError::InvalidRange => "Invalid range",
             FilterError::LimitOutOfRange => "Limit out of range",
         }
@@ -379,6 +386,9 @@ impl FilterError {
             FilterError::UnsupportedOp => "operator is not allowed for this field",
             FilterError::InvalidValue => "value does not parse for the field's type",
             FilterError::TooManyValues => "in-list exceeds the configured maximum of 100 values",
+            FilterError::TooManyFilters => {
+                "request carries more filter parameters than the per-request cap allows"
+            }
             FilterError::InvalidRange => "range bounds are inverted or invalid",
             FilterError::LimitOutOfRange => {
                 "limit exceeds the configured max_limit or is non-positive"
@@ -581,6 +591,7 @@ impl InternalError {
         match self {
             InternalError::Timeout => "internal.timeout",
             InternalError::PayloadTooLarge => "internal.payload_too_large",
+            InternalError::UriTooLong => "internal.uri_too_long",
             InternalError::Unhandled => "internal.unhandled",
         }
     }
@@ -589,6 +600,7 @@ impl InternalError {
         match self {
             InternalError::Timeout => StatusCode::GATEWAY_TIMEOUT,
             InternalError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            InternalError::UriTooLong => StatusCode::URI_TOO_LONG,
             InternalError::Unhandled => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -597,6 +609,7 @@ impl InternalError {
         match self {
             InternalError::Timeout => "Request timed out",
             InternalError::PayloadTooLarge => "Payload too large",
+            InternalError::UriTooLong => "URI too long",
             InternalError::Unhandled => "Internal server error",
         }
     }
@@ -606,6 +619,9 @@ impl InternalError {
             InternalError::Timeout => "request exceeded the configured timeout",
             InternalError::PayloadTooLarge => {
                 "request body or response cardinality exceeds configured caps"
+            }
+            InternalError::UriTooLong => {
+                "request URI (path plus query string) exceeds the configured length cap"
             }
             InternalError::Unhandled => "the request could not be served",
         }

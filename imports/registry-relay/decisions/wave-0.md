@@ -310,6 +310,7 @@ Stable codes. They appear verbatim in audit `error_code` and in the `code` exten
 | `filter.unsupported_op` | 400 | Operator not allowed for this field. |
 | `filter.invalid_value` | 400 | Value does not parse for the field's physical type. |
 | `filter.too_many_values` | 413 | `in` list exceeds 100 entries. (Spec §7.bis.5.) |
+| `filter.too_many_filters` | 400 | Request carries more filter parameters than the per-request cap (defense-in-depth against DoS amplification). |
 | `filter.invalid_range` | 400 | `between` `from > to`, or `gte`/`lte` inverted. |
 | `filter.limit_out_of_range` | 400 | `limit` exceeds `max_limit` or is non-positive. |
 
@@ -363,6 +364,7 @@ Stable codes. They appear verbatim in audit `error_code` and in the `code` exten
 |---|---|---|
 | `internal.timeout` | 504 | Request exceeded `server.request_timeout`. |
 | `internal.payload_too_large` | 413 | Request body or response cardinality exceeds configured caps. |
+| `internal.uri_too_long` | 414 | Request URI (path plus query string) exceeds the configured length cap. |
 | `internal.unhandled` | 500 | Catch-all; mapped from any error not otherwise classified. Never includes stack trace in response. |
 
 ---

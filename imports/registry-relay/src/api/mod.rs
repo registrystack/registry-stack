@@ -26,5 +26,6 @@ pub use aggregates::router as aggregates_router;
 pub use catalog::router as catalog_router;
 pub use datasets::router as datasets_router;
 pub use entity::router as entity_router;
+pub use entity::CursorSigner;
 pub use health::router as health_router;
 pub use openapi::router as openapi_router;
