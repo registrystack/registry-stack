@@ -86,3 +86,8 @@ proptest = { version = "1" }
 tempfile = { version = "3" }
 insta = { version = "1", features = ["json"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
+# Used only by format_xlsx tests to construct a synthetic XLSX (a ZIP)
+# whose `<dimension>` element advertises a cell count over the cap. The
+# package version matches the one calamine 0.35 pulls transitively so we
+# don't multiply build-time copies.
+zip = { version = "7", default-features = false, features = ["deflate"] }

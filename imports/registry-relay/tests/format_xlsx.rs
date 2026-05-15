@@ -417,6 +417,123 @@ async fn infers_utf8_when_no_declared_schema() {
     assert_eq!(batch.num_columns(), 5);
 }
 
+// ── Decompression-bomb guard (security review 2026-05-16) ─────────────────
+
+/// Build a minimal, valid XLSX (a ZIP) whose `<dimension>` element advertises
+/// a huge cell count while the on-disk payload is tiny. Used to reproduce the
+/// XLSX cell-count bomb described in `docs/security-review-2026-05-16.md`.
+///
+/// `dim_ref` is the A1-notation reference to embed in the sheet's `<dimension>`
+/// element (e.g. `"A1:Z10000000"` for a 26 col x 10M row sheet).
+fn build_bomb_xlsx(dim_ref: &str) -> Vec<u8> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    // Minimal OOXML package. We only need: [Content_Types].xml, the
+    // workbook _rels, the workbook itself, and one worksheet whose
+    // <dimension> advertises the bomb. Shared strings are unnecessary
+    // because the single data cell carries an inline string.
+    let content_types = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#;
+
+    let root_rels = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#;
+
+    let workbook = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="data" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#;
+
+    let workbook_rels = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+
+    // The sheet declares a giant dimension via `<dimension ref="...">`,
+    // but the actual <sheetData> contains a single inline-string cell.
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="{dim_ref}"/>
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>hdr</t></is></c></row>
+  </sheetData>
+</worksheet>"#
+    );
+
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut buf);
+        let mut zip = ZipWriter::new(cursor);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        zip.start_file("[Content_Types].xml", opts).unwrap();
+        zip.write_all(content_types).unwrap();
+        zip.start_file("_rels/.rels", opts).unwrap();
+        zip.write_all(root_rels).unwrap();
+        zip.start_file("xl/workbook.xml", opts).unwrap();
+        zip.write_all(workbook).unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+        zip.write_all(workbook_rels).unwrap();
+        zip.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+        zip.write_all(sheet.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+/// The synthetic-bomb helper above must actually be a workbook calamine
+/// will open. This sanity test uses a tiny dimension so `worksheet_range`
+/// is cheap and the bomb-guard path is not exercised. If this fails, the
+/// bomb tests below are also untrustworthy.
+#[tokio::test]
+async fn synthetic_xlsx_helper_produces_a_workbook_calamine_can_open() {
+    let bytes = build_bomb_xlsx("A1:A1");
+    let decoded = XlsxFormat::new()
+        .decode(Box::pin(std::io::Cursor::new(bytes)), hints_default())
+        .await
+        .expect("synthetic xlsx should decode");
+    let batches: Vec<_> = decoded.batches.collect::<Vec<_>>().await;
+    let batch = batches[0].as_ref().expect("batch");
+    // Header row only; no data rows.
+    assert_eq!(batch.num_rows(), 0);
+}
+
+/// A workbook whose `<dimension>` advertises more than `MAX_XLSX_CELLS`
+/// cells must be rejected with a `LimitExceeded` error before calamine's
+/// `from_sparse` allocates `vec![Default; height*width]`. Reproduces the
+/// XLSX bomb from the 2026-05-16 security review.
+///
+/// The cap in `src/format/xlsx.rs` is 10_000_000. The dimension below
+/// (`A1:L1000000` = 12 columns x 1,000,000 rows = 12,000,000 cells) is
+/// just over the cap; small enough that this test does not OOM the
+/// process when the cap is absent (defensive against false negatives).
+#[tokio::test]
+async fn rejects_xlsx_when_declared_dimension_exceeds_cell_cap() {
+    let bytes = build_bomb_xlsx("A1:L1000000");
+    let result = XlsxFormat::new()
+        .decode(Box::pin(std::io::Cursor::new(bytes)), hints_default())
+        .await;
+
+    match result {
+        Err(FormatError::LimitExceeded(_)) => {}
+        Err(other) => panic!("expected FormatError::LimitExceeded, got {other:?}"),
+        Ok(_) => panic!("expected the cell-count cap to reject this workbook"),
+    }
+}
+
 // ── Timestamp test (bonus) ─────────────────────────────────────────────────
 
 /// A column declared as Timestamp from a Date cell (Excel DateTime) should
