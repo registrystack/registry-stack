@@ -34,6 +34,7 @@ pub async fn run_refresh_loop(
     plan: Arc<IngestPlan>,
     policy: RefreshPolicy,
     shutdown: CancellationToken,
+    publish_readiness: Arc<dyn Fn() + Send + Sync>,
 ) {
     match policy {
         RefreshPolicy::Manual => {
@@ -41,15 +42,20 @@ pub async fn run_refresh_loop(
             shutdown.cancelled().await;
         }
         RefreshPolicy::Interval { interval } => {
-            run_interval_loop(plan, interval, shutdown).await;
+            run_interval_loop(plan, interval, shutdown, publish_readiness).await;
         }
         RefreshPolicy::Mtime { interval } => {
-            run_mtime_loop(plan, interval, shutdown).await;
+            run_mtime_loop(plan, interval, shutdown, publish_readiness).await;
         }
     }
 }
 
-async fn run_interval_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: CancellationToken) {
+async fn run_interval_loop(
+    plan: Arc<IngestPlan>,
+    interval: Duration,
+    shutdown: CancellationToken,
+    publish_readiness: Arc<dyn Fn() + Send + Sync>,
+) {
     let mut backoff = BackoffState::new();
     loop {
         let wait = backoff.next_wait(interval);
@@ -64,7 +70,10 @@ async fn run_interval_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: 
             "refresh: interval tick",
         );
         match plan.refresh().await {
-            Ok(()) => backoff.reset(),
+            Ok(()) => {
+                backoff.reset();
+                publish_readiness();
+            }
             Err(e) => {
                 tracing::error!(
                     event = "ingest.refresh_failed",
@@ -73,12 +82,18 @@ async fn run_interval_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: 
                     error = %e,
                 );
                 backoff.record_failure();
+                publish_readiness();
             }
         }
     }
 }
 
-async fn run_mtime_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: CancellationToken) {
+async fn run_mtime_loop(
+    plan: Arc<IngestPlan>,
+    interval: Duration,
+    shutdown: CancellationToken,
+    publish_readiness: Arc<dyn Fn() + Send + Sync>,
+) {
     let mut backoff = BackoffState::new();
     let mut last_etag: Option<String> = None;
 
@@ -101,6 +116,7 @@ async fn run_mtime_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: Can
                     error = %e,
                 );
                 backoff.record_failure();
+                publish_readiness();
                 continue;
             }
         };
@@ -133,6 +149,7 @@ async fn run_mtime_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: Can
             Ok(()) => {
                 last_etag = current_etag;
                 backoff.reset();
+                publish_readiness();
             }
             Err(e) => {
                 tracing::error!(
@@ -142,6 +159,7 @@ async fn run_mtime_loop(plan: Arc<IngestPlan>, interval: Duration, shutdown: Can
                     error = %e,
                 );
                 backoff.record_failure();
+                publish_readiness();
             }
         }
     }

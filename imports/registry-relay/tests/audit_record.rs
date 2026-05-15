@@ -18,8 +18,8 @@ use axum::routing::get;
 use axum::Extension;
 use axum::Router;
 use data_gate::audit::{
-    audit_layer, redact_query, AuditEnvelope, AuditOutcome, AuditRecord, AuditSettings, AuditSink,
-    EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
+    audit_layer, redact_query, AuditContextExt, AuditEnvelope, AuditOutcome, AuditRecord,
+    AuditSettings, AuditSink, EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
 };
 use data_gate::auth::{AuthMode, Principal, ScopeSet};
 use serde_json::Value;
@@ -36,7 +36,9 @@ fn sample_record() -> AuditRecord {
         path: "/datasets".to_string(),
         endpoint_kind: EndpointKind::Catalog,
         dataset_id: None,
-        resource_id: None,
+        entity_name: None,
+        table_id: None,
+        relationship: None,
         aggregate_id: None,
         scopes_used: vec!["catalog".to_string()],
         query_params: serde_json::json!({}),
@@ -49,11 +51,11 @@ fn sample_record() -> AuditRecord {
     }
 }
 
-/// Section 5 contract: exactly the documented set of required + conditional
+/// Section 13.1 contract: exactly the documented set of required + conditional
 /// keys must appear on every record. The chain envelope fields are
 /// off-by-default in Wave 0 and must not appear.
 #[test]
-fn record_serialises_to_expected_19_field_shape() {
+fn record_serialises_to_expected_field_shape() {
     let record = sample_record();
     let json = serde_json::to_value(&record).expect("serialize");
 
@@ -67,7 +69,9 @@ fn record_serialises_to_expected_19_field_shape() {
         "path",
         "endpoint_kind",
         "dataset_id",
-        "resource_id",
+        "entity_name",
+        "table_id",
+        "relationship",
         "aggregate_id",
         "scopes_used",
         "query_params",
@@ -108,7 +112,9 @@ fn record_field_types_match_contract() {
     assert!(json["duration_ms"].is_u64());
     // Optional fields serialise as JSON null when absent.
     assert!(json["dataset_id"].is_null());
-    assert!(json["resource_id"].is_null());
+    assert!(json["entity_name"].is_null());
+    assert!(json["table_id"].is_null());
+    assert!(json["relationship"].is_null());
     assert!(json["aggregate_id"].is_null());
     assert!(json["row_count"].is_null());
     assert!(json["suppressed_groups"].is_null());
@@ -283,6 +289,7 @@ fn endpoint_kind_renders_canonical_strings() {
         (Catalog, "catalog"),
         (Dataset, "dataset"),
         (Schema, "schema"),
+        (Verify, "verify"),
         (Rows, "rows"),
         (AggregateList, "aggregate_list"),
         (Aggregate, "aggregate"),
@@ -450,6 +457,60 @@ fn ip_default_when_no_connect_info() {
     assert!(!s.is_empty());
 }
 
+#[tokio::test]
+async fn middleware_hashes_configured_sensitive_query_values() {
+    let sink = Arc::new(InMemorySink::new());
+    let settings = AuditSettings {
+        include_health: true,
+        trust_proxy_enabled: false,
+        trusted_proxies: Vec::new(),
+        sensitive_fields: vec!["social_registry:individual:id".to_string()],
+    };
+    let app = Router::new()
+        .route(
+            "/datasets/social_registry/individual",
+            get(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.extensions_mut().insert(AuditContextExt {
+                    dataset_id: Some("social_registry".to_string()),
+                    entity_name: Some("individual".to_string()),
+                    table_id: Some("individuals_table".to_string()),
+                    ..AuditContextExt::default()
+                });
+                response
+            }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(settings))
+        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/datasets/social_registry/individual?id=IND-001234&limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    assert_eq!(parsed["dataset_id"], "social_registry");
+    assert_eq!(parsed["entity_name"], "individual");
+    assert_eq!(parsed["table_id"], "individuals_table");
+    assert_eq!(parsed["query_params"]["id"]["op"], "eq");
+    assert!(parsed["query_params"]["id"]["value_hash"]
+        .as_str()
+        .expect("value hash")
+        .starts_with("sha256:"));
+    assert_eq!(parsed["query_params"]["limit"]["op"], "eq");
+    assert!(!records[0].contains("IND-001234"));
+}
+
 /// BLK-1 (production layer order): in the real server stack, audit
 /// sits *outside* auth. The auth middleware attaches `Principal` to
 /// response extensions after the inner handler runs, and the audit
@@ -565,6 +626,7 @@ async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
         include_health: true,
         trust_proxy_enabled: true,
         trusted_proxies: vec!["10.0.0.0/8".to_string()],
+        sensitive_fields: Vec::new(),
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
@@ -598,6 +660,7 @@ async fn middleware_ignores_x_forwarded_for_from_untrusted_peer() {
         include_health: true,
         trust_proxy_enabled: true,
         trusted_proxies: vec!["10.0.0.0/8".to_string()],
+        sensitive_fields: Vec::new(),
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))

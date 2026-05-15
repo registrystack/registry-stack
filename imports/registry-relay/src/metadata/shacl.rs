@@ -1,19 +1,46 @@
 // SPDX-License-Identifier: Apache-2.0
 //! JSON-LD DCAT-AP and SHACL renderers for entity metadata.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::entity::EntityRegistry;
 
 use super::catalog::{
-    catalog_document, entity_class_uri, field_property_uri, normalized_base_url, DatasetMetadata,
-    EntityMetadata, FieldMetadata,
+    catalog_document, catalog_document_for_dataset_ids, catalog_document_for_entity_ids,
+    entity_class_uri, field_property_uri, normalized_base_url, DatasetMetadata, EntityMetadata,
+    FieldMetadata,
 };
 
 #[must_use]
 pub fn dcat_ap_document(config: &Config, registry: &EntityRegistry) -> Value {
     let catalog = catalog_document(config, registry);
+    dcat_ap_document_from_catalog(catalog)
+}
+
+#[must_use]
+pub fn dcat_ap_document_for_dataset_ids(
+    config: &Config,
+    registry: &EntityRegistry,
+    dataset_ids: &BTreeSet<String>,
+) -> Value {
+    let catalog = catalog_document_for_dataset_ids(config, registry, dataset_ids);
+    dcat_ap_document_from_catalog(catalog)
+}
+
+#[must_use]
+pub fn dcat_ap_document_for_entity_ids(
+    config: &Config,
+    registry: &EntityRegistry,
+    entity_ids: &BTreeSet<(String, String)>,
+) -> Value {
+    let catalog = catalog_document_for_entity_ids(config, registry, entity_ids);
+    dcat_ap_document_from_catalog(catalog)
+}
+
+fn dcat_ap_document_from_catalog(catalog: super::catalog::CatalogDocument) -> Value {
     let datasets = catalog
         .datasets
         .iter()
@@ -35,7 +62,7 @@ pub fn dcat_ap_document(config: &Config, registry: &EntityRegistry) -> Value {
         "@id": catalog.links.dcat_ap,
         "@type": "dcat:Catalog",
         "dcterms:title": catalog.title,
-        "dcterms:publisher": catalog.publisher,
+        "dcterms:publisher": publisher_agent(&catalog.publisher),
         "dcat:dataset": datasets,
         "sh:shapesGraph": shapes,
     })
@@ -66,6 +93,27 @@ pub fn entity_shape_document(
     }))
 }
 
+#[must_use]
+pub fn entity_schema_document(
+    config: &Config,
+    registry: &EntityRegistry,
+    dataset_id: &str,
+    entity_name: &str,
+) -> Option<Value> {
+    let base_url = normalized_base_url(&config.catalog.base_url);
+    let catalog = catalog_document(config, registry);
+    let dataset = catalog
+        .datasets
+        .iter()
+        .find(|dataset| dataset.dataset_id == dataset_id)?;
+    let entity = dataset
+        .entities
+        .iter()
+        .find(|entity| entity.name == entity_name)?;
+
+    Some(entity_schema_object(&base_url, dataset, entity))
+}
+
 fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
     let distributions = dataset
         .entities
@@ -87,10 +135,10 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
         "dcterms:identifier": dataset.dataset_id,
         "dcterms:title": dataset.title,
         "dcterms:description": dataset.description,
-        "dcterms:publisher": dataset.publisher,
+        "dcterms:publisher": publisher_agent(&dataset.publisher),
         "dcterms:rightsHolder": dataset.owner,
-        "dcterms:accessRights": dataset.access_rights,
-        "dcterms:accrualPeriodicity": dataset.update_frequency,
+        "dcterms:accessRights": access_rights_uri(dataset.access_rights),
+        "dcterms:accrualPeriodicity": frequency_uri(dataset.update_frequency),
         "dcterms:conformsTo": dataset.conforms_to,
         "dcat:distribution": distributions,
     })
@@ -204,6 +252,7 @@ fn field_schema_object(
     json!({
         "name": field.name,
         "type": field.r#type,
+        "physical_type": field.r#type,
         "nullable": field.nullable,
         "concept_uri": field.concept_uri,
         "codelist": field.codelist,
@@ -219,10 +268,41 @@ fn insert_optional(target: &mut Value, key: &'static str, value: Option<&str>) {
     }
 }
 
+fn publisher_agent(name: &str) -> Value {
+    json!({
+        "@type": "foaf:Agent",
+        "foaf:name": name,
+    })
+}
+
+fn access_rights_uri(access_rights: &str) -> &'static str {
+    match access_rights {
+        "public" => "http://publications.europa.eu/resource/authority/access-right/PUBLIC",
+        "restricted" => "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
+        "non_public" => "http://publications.europa.eu/resource/authority/access-right/NON_PUBLIC",
+        _ => "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
+    }
+}
+
+fn frequency_uri(frequency: &str) -> &'static str {
+    match frequency {
+        "continuous" => "http://publications.europa.eu/resource/authority/frequency/CONT",
+        "daily" => "http://publications.europa.eu/resource/authority/frequency/DAILY",
+        "weekly" => "http://publications.europa.eu/resource/authority/frequency/WEEKLY",
+        "monthly" => "http://publications.europa.eu/resource/authority/frequency/MONTHLY",
+        "quarterly" => "http://publications.europa.eu/resource/authority/frequency/QUARTERLY",
+        "annual" => "http://publications.europa.eu/resource/authority/frequency/ANNUAL",
+        "irregular" => "http://publications.europa.eu/resource/authority/frequency/IRREG",
+        "unknown" => "http://publications.europa.eu/resource/authority/frequency/UNKNOWN",
+        _ => "http://publications.europa.eu/resource/authority/frequency/UNKNOWN",
+    }
+}
+
 fn context() -> Value {
     json!({
         "dcat": "http://www.w3.org/ns/dcat#",
         "dcterms": "http://purl.org/dc/terms/",
+        "foaf": "http://xmlns.com/foaf/0.1/",
         "sh": "http://www.w3.org/ns/shacl#",
         "data_gate": "https://data-gate.dev/ns#",
     })

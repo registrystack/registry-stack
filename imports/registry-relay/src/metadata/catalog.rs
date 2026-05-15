@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Stable JSON catalog renderer over configured entity metadata.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -103,11 +103,43 @@ pub struct RelationshipLinks {
 
 #[must_use]
 pub fn catalog_document(config: &Config, registry: &EntityRegistry) -> CatalogDocument {
+    catalog_document_with_entity_filter(config, registry, |_, _| true)
+}
+
+#[must_use]
+pub fn catalog_document_for_dataset_ids(
+    config: &Config,
+    registry: &EntityRegistry,
+    dataset_ids: &BTreeSet<String>,
+) -> CatalogDocument {
+    catalog_document_with_entity_filter(config, registry, |dataset, _entity| {
+        dataset_ids.contains(dataset.id.as_str())
+    })
+}
+
+#[must_use]
+pub fn catalog_document_for_entity_ids(
+    config: &Config,
+    registry: &EntityRegistry,
+    entity_ids: &BTreeSet<(String, String)>,
+) -> CatalogDocument {
+    catalog_document_with_entity_filter(config, registry, |dataset, entity| {
+        entity_ids.contains(&(dataset.id.to_string(), entity.name.clone()))
+    })
+}
+
+fn catalog_document_with_entity_filter(
+    config: &Config,
+    registry: &EntityRegistry,
+    is_visible: impl Fn(&DatasetConfig, &EntityConfig) -> bool,
+) -> CatalogDocument {
     let base_url = normalized_base_url(&config.catalog.base_url);
     let datasets = config
         .datasets
         .iter()
-        .filter_map(|dataset| dataset_metadata(config, registry, &base_url, dataset))
+        .filter_map(|dataset| {
+            dataset_metadata_with_entity_filter(config, registry, &base_url, dataset, &is_visible)
+        })
         .collect();
 
     CatalogDocument {
@@ -129,6 +161,16 @@ pub fn dataset_metadata(
     base_url: &str,
     dataset: &DatasetConfig,
 ) -> Option<DatasetMetadata> {
+    dataset_metadata_with_entity_filter(config, registry, base_url, dataset, &|_, _| true)
+}
+
+fn dataset_metadata_with_entity_filter(
+    config: &Config,
+    registry: &EntityRegistry,
+    base_url: &str,
+    dataset: &DatasetConfig,
+    is_visible: &impl Fn(&DatasetConfig, &EntityConfig) -> bool,
+) -> Option<DatasetMetadata> {
     let dataset_id = dataset.id.as_str();
     let compiled = registry.dataset(dataset_id)?;
     let entity_configs = dataset
@@ -140,16 +182,23 @@ pub fn dataset_metadata(
     let entities = compiled
         .entities()
         .filter_map(|entity| {
+            let entity_config = entity_configs.get(entity.name.as_str()).copied()?;
+            if !is_visible(dataset, entity_config) {
+                return None;
+            }
             entity_metadata(
                 config,
                 base_url,
                 dataset_id,
                 entity,
-                entity_configs.get(entity.name.as_str()).copied(),
+                Some(entity_config),
                 &table_fields,
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if entities.is_empty() {
+        return None;
+    }
 
     Some(DatasetMetadata {
         dataset_id: dataset_id.to_string(),

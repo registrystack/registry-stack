@@ -19,6 +19,8 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::stream;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::config::FieldType;
@@ -476,63 +478,9 @@ fn excel_datetime_to_millis(edt: ExcelDateTime) -> Option<i64> {
 
 /// Parse an RFC 3339 / ISO 8601 string to milliseconds since UNIX epoch.
 fn parse_rfc3339_to_millis(s: &str) -> Option<i64> {
-    // Minimal parser: YYYY-MM-DDTHH:MM:SS[.fff][Z|+00:00]
-    let s = s.trim();
-    // Split on 'T'.
-    let t_pos = s.find('T')?;
-    let date_part = &s[..t_pos];
-    let time_part = &s[t_pos + 1..];
-
-    // Parse date.
-    let date_parts: Vec<&str> = date_part.splitn(3, '-').collect();
-    if date_parts.len() != 3 {
-        return None;
-    }
-    let year: i32 = date_parts[0].parse().ok()?;
-    let month: u32 = date_parts[1].parse().ok()?;
-    let day: u32 = date_parts[2].parse().ok()?;
-    let date_days = ymd_to_unix_days(year, month, day)?;
-
-    // Strip timezone suffix.
-    let time_no_tz = time_part
-        .trim_end_matches('Z')
-        .split('+')
-        .next()
-        .unwrap_or(time_part)
-        .trim_end_matches('Z');
-
-    // Parse HH:MM:SS[.fff].
-    let time_parts: Vec<&str> = time_no_tz.splitn(3, ':').collect();
-    if time_parts.len() < 2 {
-        return None;
-    }
-    let hour: i64 = time_parts[0].parse().ok()?;
-    let min: i64 = time_parts[1].parse().ok()?;
-    let (sec_int, frac_ms) = if time_parts.len() == 3 {
-        let sec_str = time_parts[2];
-        if let Some(dot) = sec_str.find('.') {
-            let sec: i64 = sec_str[..dot].parse().ok()?;
-            let frac_str = &sec_str[dot + 1..];
-            let frac: i64 = frac_str.parse().ok().map(|v: i64| {
-                // Normalise to milliseconds (3 digits).
-                match frac_str.len() {
-                    1 => v * 100,
-                    2 => v * 10,
-                    3 => v,
-                    _ => v / 10i64.pow((frac_str.len() - 3) as u32),
-                }
-            })?;
-            (sec, frac)
-        } else {
-            let sec: i64 = sec_str.parse().ok()?;
-            (sec, 0)
-        }
-    } else {
-        (0, 0)
-    };
-
-    let time_ms = hour * 3_600_000 + min * 60_000 + sec_int * 1_000 + frac_ms;
-    Some((date_days as i64) * 86_400_000 + time_ms)
+    let dt = OffsetDateTime::parse(s.trim(), &Rfc3339).ok()?;
+    let nanos = dt.unix_timestamp_nanos();
+    i64::try_from(nanos.div_euclid(1_000_000)).ok()
 }
 
 fn build_utf8_col(col_data: &[&Data]) -> ArrayRef {
@@ -632,5 +580,18 @@ fn declared_to_arrow(ty: FieldType) -> DataType {
         FieldType::Boolean => DataType::Boolean,
         FieldType::Date => DataType::Date32,
         FieldType::Timestamp => DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_rfc3339_to_millis;
+
+    #[test]
+    fn parses_rfc3339_negative_utc_offset_as_utc_millis() {
+        assert_eq!(
+            parse_rfc3339_to_millis("2024-01-01T00:30:00-02:00"),
+            parse_rfc3339_to_millis("2024-01-01T02:30:00Z")
+        );
     }
 }

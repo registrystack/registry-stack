@@ -70,6 +70,20 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+      - name: individual
+        table: households_table
+        fields:
+          - name: id
+            from: household_id
+        access:
+          metadata_scope: social_registry:individual:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+          verify_scope: social_registry:verify
+          bulk_export_scope: social_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
 
   - id: payments
     title: Payments
@@ -156,6 +170,29 @@ async fn datasets_lists_only_datasets_with_entity_metadata_scope() {
         "https://example.test/profile/social"
     );
     assert_eq!(data[0]["entities"], serde_json::json!(["household"]));
+}
+
+#[tokio::test]
+async fn datasets_filter_entities_inside_visible_dataset_by_metadata_scope() {
+    let resp = server(&["social_registry:individual:metadata"])
+        .get("/datasets")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["dataset_id"], "social_registry");
+    assert_eq!(data[0]["entities"], serde_json::json!(["individual"]));
+}
+
+#[tokio::test]
+async fn verify_only_scope_cannot_read_datasets() {
+    let resp = server(&["social_registry:verify"]).get("/datasets").await;
+
+    resp.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "auth.scope_denied");
 }
 
 #[tokio::test]

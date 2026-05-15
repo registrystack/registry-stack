@@ -71,7 +71,7 @@ use crate::auth::{middleware::auth_layer, AuthProvider};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
-use crate::ingest::ReadinessSnapshot;
+use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 use crate::query::{AggregateQueryEngine, EntityQueryEngine};
 
 /// Defensive cap on request body size (1 MiB). V1 endpoints are GET only;
@@ -117,7 +117,8 @@ where
         .merge(api::datasets_router())
         .merge(api::entity_router())
         .merge(api::aggregates_router())
-        .merge(api::catalog_router());
+        .merge(api::catalog_router())
+        .merge(api::openapi_router());
     let protected = auth_layer(protected, auth);
 
     // Merge public + protected; everything above this point is inside
@@ -167,14 +168,27 @@ where
 
 /// Assemble the admin HTTP application for `config.server.admin_bind`.
 ///
-/// Wave 0 mounts the same `/health` route as the main listener so
-/// operators can probe the second port without authentication. Wave 4
-/// will add `/admin/reload` and `/admin/datasets/{id}/reload` here
-/// behind a scope check.
-pub fn build_admin_app(config: Arc<Config>, audit_sink: Arc<dyn AuditSink>) -> Router {
+/// Mounts the same `/health` route as the main listener so operators
+/// can probe the second port without authentication. Admin reload
+/// routes are mounted behind authentication and their handlers enforce
+/// the `admin` scope.
+pub fn build_admin_app<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    ingest: Arc<IngestRegistry>,
+) -> Router
+where
+    P: AuthProvider,
+{
     let public = api::health_router();
-    let merged: Router<()> = Router::new().merge(public);
+    let protected = api::admin_router().layer(Extension(ingest));
+    let protected = auth_layer(protected, auth);
+    let merged: Router<()> = Router::new().merge(public).merge(protected);
     apply_cross_cutting_layers(merged, &config, audit_sink)
+        .layer(Extension(readiness))
+        .layer(Extension(config))
 }
 
 /// Install the cross-cutting tower layers (audit, request-id, CORS,
@@ -192,6 +206,7 @@ fn apply_cross_cutting_layers(
         include_health: config.audit.include_health,
         trust_proxy_enabled: config.server.trust_proxy.enabled,
         trusted_proxies: config.server.trust_proxy.trusted_proxies.clone(),
+        sensitive_fields: audit_sensitive_fields(config),
     };
 
     let with_operational_layers = router
@@ -215,6 +230,40 @@ fn apply_cross_cutting_layers(
         // `x-request-id` value and the client receives the same id.
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
+}
+
+fn audit_sensitive_fields(config: &Config) -> Vec<String> {
+    let mut fields = Vec::new();
+    for dataset in &config.datasets {
+        for entity in &dataset.entities {
+            let table = dataset
+                .table_configs()
+                .find(|table| table.id.as_str() == entity.table.as_str());
+            let Some(table) = table else {
+                continue;
+            };
+            if entity.fields.is_empty() {
+                for field in table.schema.fields.iter().filter(|field| field.sensitive) {
+                    fields.push(format!("{}:{}:{}", dataset.id, entity.name, field.name));
+                }
+                continue;
+            }
+            for field in &entity.fields {
+                let table_column = field.from.as_deref().unwrap_or(field.name.as_str());
+                let table_sensitive = table
+                    .schema
+                    .fields
+                    .iter()
+                    .find(|candidate| candidate.name == table_column)
+                    .map(|candidate| candidate.sensitive)
+                    .unwrap_or(false);
+                if field.sensitive || table_sensitive {
+                    fields.push(format!("{}:{}:{}", dataset.id, entity.name, field.name));
+                }
+            }
+        }
+    }
+    fields
 }
 
 async fn normalize_internal_error_response(request: Request<Body>, next: Next) -> Response {

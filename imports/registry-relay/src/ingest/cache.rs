@@ -164,8 +164,9 @@ async fn write_tmp(
 
 /// Garbage-collect stale Parquet files for one resource.
 ///
-/// Keeps the file matching `keep_ulid`; deletes every other `<ulid>.parquet`
-/// and any `.tmp-*.parquet` left from crashes. Best-effort: logs warnings
+/// Keeps the file matching `keep_ulid` plus the immediately previous
+/// `<ulid>.parquet`; deletes older cache files and any `.tmp-*.parquet`
+/// left from crashes. Best-effort: logs warnings
 /// but never errors the pipeline.
 pub async fn gc_resource(
     layout: &CacheLayout,
@@ -180,6 +181,8 @@ pub async fn gc_resource(
         .to_path_buf();
 
     let keep_name = format!("{keep_ulid}.parquet");
+    let mut previous: Option<Ulid> = None;
+    let mut parquet_entries = Vec::new();
 
     let mut entries = match fs::read_dir(&dir).await {
         Ok(e) => e,
@@ -210,13 +213,7 @@ pub async fn gc_resource(
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
 
-        let should_delete = if name == keep_name {
-            false
-        } else {
-            name.ends_with(".parquet") || name.starts_with(".tmp-")
-        };
-
-        if should_delete {
+        if name.starts_with(".tmp-") {
             if let Err(e) = fs::remove_file(entry.path()).await {
                 tracing::warn!(
                     event = "ingest.gc_remove_failed",
@@ -227,6 +224,42 @@ pub async fn gc_resource(
                 tracing::debug!(
                     event = "ingest.gc_removed",
                     path = %entry.path().display(),
+                );
+            }
+            continue;
+        }
+
+        if name.ends_with(".parquet") {
+            if let Some(stem) = name.strip_suffix(".parquet") {
+                if let Ok(ulid) = stem.parse::<Ulid>() {
+                    if ulid < keep_ulid {
+                        previous = Some(previous.map_or(ulid, |prev| prev.max(ulid)));
+                    }
+                }
+            }
+            parquet_entries.push(entry.path());
+        }
+    }
+
+    let previous_name = previous.map(|ulid| format!("{ulid}.parquet"));
+
+    for path in parquet_entries {
+        let Some(name) = path.file_name().map(|name| name.to_string_lossy()) else {
+            continue;
+        };
+        let should_delete = name != keep_name && previous_name.as_deref() != Some(name.as_ref());
+
+        if should_delete {
+            if let Err(e) = fs::remove_file(&path).await {
+                tracing::warn!(
+                    event = "ingest.gc_remove_failed",
+                    path = %path.display(),
+                    error = %e,
+                );
+            } else {
+                tracing::debug!(
+                    event = "ingest.gc_removed",
+                    path = %path.display(),
                 );
             }
         }
@@ -252,4 +285,49 @@ fn cache_err(op: &str, e: io::Error) -> IngestError {
         error = %e,
     );
     IngestError::CacheWriteFailed
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
+    use super::{gc_resource, CacheLayout};
+    use crate::config::{DatasetId, ResourceId};
+
+    fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
+        serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
+    }
+
+    #[tokio::test]
+    async fn gc_keeps_current_and_one_previous_ulid() {
+        let tmp = TempDir::new().expect("tempdir");
+        let layout = CacheLayout::new(Arc::from(tmp.path()));
+        let dataset: DatasetId = id("dataset");
+        let resource: ResourceId = id("resource");
+        let older = ulid::Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let previous = ulid::Ulid::from_string("01BRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let current = ulid::Ulid::from_string("01CRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let future = ulid::Ulid::from_string("01DRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+
+        for ulid in [older, previous, current, future] {
+            let path = layout.final_path(&dataset, &resource, ulid);
+            tokio::fs::create_dir_all(path.parent().unwrap())
+                .await
+                .unwrap();
+            tokio::fs::write(path, b"cache").await.unwrap();
+        }
+        tokio::fs::write(layout.tmp_path(&dataset, &resource, current), b"tmp")
+            .await
+            .unwrap();
+
+        gc_resource(&layout, &dataset, &resource, current).await;
+
+        assert!(!layout.final_path(&dataset, &resource, older).exists());
+        assert!(layout.final_path(&dataset, &resource, previous).exists());
+        assert!(layout.final_path(&dataset, &resource, current).exists());
+        assert!(!layout.final_path(&dataset, &resource, future).exists());
+        assert!(!layout.tmp_path(&dataset, &resource, current).exists());
+    }
 }

@@ -1,11 +1,167 @@
 # data_gate
 
-Controlled Data Gateway: a config-driven Rust service that turns sensitive government tabular files into protected, read-only APIs with metadata, schemas, configured aggregates, and audit logging.
+Controlled Data Gateway is a config-driven Rust service that turns sensitive government tabular files into protected, read-only, domain-oriented APIs.
 
-## Status
+V1 is built around two layers:
 
-V1 in development. See [Spec.md](Spec.md) for the design contract and [decisions/wave-0.md](decisions/wave-0.md) for the implementation plan.
+- Storage tables read local CSV, XLSX, or Parquet files into Arrow/DataFusion. Table ids are private implementation detail.
+- Entities expose domain resources such as `household` or `individual`, with field projection, relationships, scopes, configured aggregates, semantic metadata, and audit records.
 
----
+This is not an open-data portal and not a spreadsheet wrapper. It publishes restricted consultation APIs for authorized systems.
 
-*This README is a Wave 0 skeleton. Wave 5 owns the full content.*
+## Current Status
+
+V1 is in active wave development. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload, and refresh loops are present. A few surfaces remain intentionally deferred:
+
+- `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable`.
+- Bulk export endpoints are contract-locked for V1.x and are not implemented.
+- `/openapi.json` is specified as best-effort but is not currently mounted.
+
+Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat deferred surfaces as unavailable until their owning follow-up lands.
+
+## Repository Map
+
+- [Spec.md](Spec.md): V1 product and architecture contract.
+- [config/example.yaml](config/example.yaml): canonical example config.
+- [docs/ops.md](docs/ops.md): deployment and operations runbook.
+- [fixtures/](fixtures/): small local files for development and demos.
+- [src/](src/): gateway implementation.
+- [tests/](tests/): focused integration and unit tests.
+
+## Build
+
+Prerequisites:
+
+- Rust stable toolchain
+- `just` for task shortcuts
+
+```sh
+just setup
+just build
+```
+
+The release binary is written to `target/release/data_gate`.
+
+## Configure
+
+The binary reads config from the first available source:
+
+1. `--config <path>`
+2. `DATAGATE_CONFIG`
+3. `./config/example.yaml`
+
+API keys are never stored in the YAML file. Each configured key points at an environment variable containing an Argon2id PHC hash:
+
+```yaml
+auth:
+  mode: api_key
+  api_keys:
+    - id: program_system
+      hash_env: PROGRAM_SYSTEM_API_KEY_HASH
+      scopes:
+        - social_registry:metadata
+        - social_registry:aggregate
+        - social_registry:rows
+```
+
+Clients authenticate with either:
+
+```http
+Authorization: Bearer <api-key>
+```
+
+or:
+
+```http
+X-Api-Key: <api-key>
+```
+
+Use dataset scopes narrowly. `metadata`, `aggregate`, `rows`, `verify`, `bulk_export`, and `admin` are independent. A verify-only key cannot list metadata, run aggregates, read rows, or reload data.
+
+## Run Locally
+
+The example config references data under `./data/social_registry.xlsx`, so either adapt the path or copy a fixture into place:
+
+```sh
+mkdir -p data
+cp fixtures/social_registry.xlsx data/social_registry.xlsx
+export PROGRAM_SYSTEM_API_KEY_HASH='<argon2id PHC hash>'
+export STATS_OFFICE_API_KEY_HASH='<argon2id PHC hash>'
+export VERIFICATION_SERVICE_API_KEY_HASH='<argon2id PHC hash>'
+just run
+```
+
+Health endpoints are unauthenticated:
+
+```sh
+curl -i http://127.0.0.1:8080/health
+curl -i http://127.0.0.1:8080/ready
+```
+
+Protected endpoints require a configured API key:
+
+```sh
+curl -H "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY" \
+  http://127.0.0.1:8080/datasets
+```
+
+## Public API Shape
+
+The public URL space is entity-shaped:
+
+```text
+GET /catalog
+GET /catalog/dcat-ap.jsonld
+GET /datasets
+GET /datasets/{dataset_id}
+GET /datasets/{dataset_id}/{entity}/schema
+GET /datasets/{dataset_id}/{entity}
+GET /datasets/{dataset_id}/{entity}/{id}
+GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
+GET /datasets/{dataset_id}/{entity}/verify
+GET /datasets/{dataset_id}/{entity}/aggregates
+GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+```
+
+Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
+
+## Container Image
+
+Build the production image with Docker:
+
+```sh
+docker build -t data_gate:local .
+```
+
+or with the helper:
+
+```sh
+scripts/build-image.sh data_gate:local
+```
+
+The image:
+
+- builds the Rust release binary in a cargo builder stage;
+- copies only the binary and license into a small Debian runtime stage;
+- runs as the non-root `data_gate` user;
+- exposes port `8080`;
+- uses `/etc/data_gate/config.yaml` as the default config path;
+- creates `/var/lib/data_gate/cache`, `/var/lib/data_gate/data`, and `/var/log/data_gate`.
+
+Example run:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e PROGRAM_SYSTEM_API_KEY_HASH \
+  -e STATS_OFFICE_API_KEY_HASH \
+  -e VERIFICATION_SERVICE_API_KEY_HASH \
+  -v "$PWD/config/example.yaml:/etc/data_gate/config.yaml:ro" \
+  -v "$PWD/fixtures:/var/lib/data_gate/data:ro" \
+  data_gate:local
+```
+
+For production, mount a deployment-specific config, mount source data read-only, provide API-key hashes through the platform secret store, and choose the audit sink that matches the platform logging model.
+
+## Operations
+
+See [docs/ops.md](docs/ops.md) for deploy, configuration, key rotation, audit handling, dataset reload, and troubleshooting guidance.

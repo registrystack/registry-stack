@@ -19,6 +19,7 @@ pub mod catalog;
 pub mod datasets;
 pub mod entity;
 pub mod health;
+pub mod openapi;
 
 pub use admin::router as admin_router;
 pub use aggregates::router as aggregates_router;
@@ -26,3 +27,4 @@ pub use catalog::router as catalog_router;
 pub use datasets::router as datasets_router;
 pub use entity::router as entity_router;
 pub use health::router as health_router;
+pub use openapi::router as openapi_router;

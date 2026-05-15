@@ -390,6 +390,8 @@ pub struct EntityFieldConfig {
     #[serde(default)]
     pub from: Option<String>,
     #[serde(default)]
+    pub sensitive: bool,
+    #[serde(default)]
     pub concept_uri: Option<String>,
     #[serde(default)]
     pub codelist: Option<String>,
@@ -460,6 +462,8 @@ pub struct FieldConfig {
     pub r#type: FieldType,
     #[serde(default)]
     pub nullable: bool,
+    #[serde(default)]
+    pub sensitive: bool,
     #[serde(default)]
     pub concept_uri: Option<String>,
     #[serde(default)]

@@ -29,6 +29,7 @@ pub struct EntityQueryEngine {
 pub struct EntityCollectionQuery {
     pub fields: Option<Vec<String>>,
     pub limit: Option<usize>,
+    pub after_primary_key: Option<Value>,
     pub filters: Vec<EntityFilter>,
     pub expansions: Vec<String>,
 }
@@ -44,11 +45,28 @@ pub struct EntityFilter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityFilterOp {
     Eq,
+    In,
+    Gte,
+    Lte,
+    Between,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityRows {
     pub rows: Vec<Value>,
+    pub next_primary_key: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RelationshipPageQuery {
+    pub limit: Option<usize>,
+    pub after_primary_key: Option<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EntityRelationshipPage {
+    pub value: Value,
+    pub next_primary_key: Option<Value>,
 }
 
 impl EntityQueryEngine {
@@ -68,6 +86,11 @@ impl EntityQueryEngine {
         let mut projected_fields = projected_fields(entity, requested_fields.as_deref())?;
         let strip_fields =
             add_expansion_source_fields(entity, &query.expansions, &mut projected_fields)?;
+        let strip_primary_key = add_pagination_primary_key_field(
+            entity,
+            requested_fields.as_deref(),
+            &mut projected_fields,
+        );
         let limit = match query.limit {
             Some(limit) if limit == 0 || limit > entity.api.max_limit as usize => {
                 return Err(FilterError::LimitOutOfRange.into());
@@ -77,12 +100,26 @@ impl EntityQueryEngine {
         };
         validate_allowed_filters(entity, &query.filters)?;
         let mut rows = self
-            .execute_entity_query(dataset_id, entity, &projected_fields, query.filters, limit)
+            .execute_entity_query(
+                dataset_id,
+                entity,
+                &projected_fields,
+                query.filters,
+                limit.map(|limit| limit.saturating_add(1)),
+                query.after_primary_key,
+            )
             .await?;
+        let next_primary_key = truncate_page(&mut rows, limit, &entity.primary_key.name);
         self.expand_rows(dataset_id, entity, &mut rows, &query.expansions)
             .await?;
         strip_projection_fields(&mut rows, &strip_fields);
-        Ok(EntityRows { rows })
+        if strip_primary_key {
+            strip_projection_fields(&mut rows, std::slice::from_ref(&entity.primary_key.name));
+        }
+        Ok(EntityRows {
+            rows,
+            next_primary_key,
+        })
     }
 
     pub async fn read_record(
@@ -99,12 +136,41 @@ impl EntityQueryEngine {
         let strip_fields = add_expansion_source_fields(entity, &expansions, &mut projected_fields)?;
         let filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
         let mut rows = self
-            .execute_entity_query(dataset_id, entity, &projected_fields, vec![filter], Some(1))
+            .execute_entity_query(
+                dataset_id,
+                entity,
+                &projected_fields,
+                vec![filter],
+                Some(1),
+                None,
+            )
             .await?;
         self.expand_rows(dataset_id, entity, &mut rows, &expansions)
             .await?;
         strip_projection_fields(&mut rows, &strip_fields);
         Ok(rows.into_iter().next())
+    }
+
+    pub async fn verify_exists(
+        &self,
+        dataset_id: &str,
+        entity_name: &str,
+        primary_key: Value,
+    ) -> Result<bool, Error> {
+        let entity = self.entity(dataset_id, entity_name)?;
+        let projected_fields = vec![&entity.primary_key];
+        let filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
+        let rows = self
+            .execute_entity_query(
+                dataset_id,
+                entity,
+                &projected_fields,
+                vec![filter],
+                Some(1),
+                None,
+            )
+            .await?;
+        Ok(!rows.is_empty())
     }
 
     pub async fn read_relationship(
@@ -128,13 +194,90 @@ impl EntityQueryEngine {
                     primary_key,
                 )],
                 Some(1),
+                None,
             )
             .await?;
         let Some(row) = rows.pop() else {
             return Err(SchemaError::UnknownResource.into());
         };
-        self.expand_relationship(dataset_id, entity, &row, relationship_name, relationship)
-            .await
+        let expanded = self
+            .expand_relationship(dataset_id, entity, &row, relationship_name, relationship)
+            .await?;
+        if relationship.kind == RelationshipKind::BelongsTo && expanded.value.is_null() {
+            return Err(SchemaError::UnknownResource.into());
+        }
+        Ok(expanded.value)
+    }
+
+    pub async fn read_relationship_page(
+        &self,
+        dataset_id: &str,
+        entity_name: &str,
+        primary_key: Value,
+        relationship_name: &str,
+        page: RelationshipPageQuery,
+    ) -> Result<EntityRelationshipPage, Error> {
+        let entity = self.entity(dataset_id, entity_name)?;
+        let Some(relationship) = entity.relationships.get(relationship_name) else {
+            return Err(SchemaError::UnknownResource.into());
+        };
+        let mut rows = self
+            .execute_entity_query(
+                dataset_id,
+                entity,
+                &entity.fields.iter().collect::<Vec<_>>(),
+                vec![EntityFilter::eq(
+                    entity.primary_key.name.clone(),
+                    primary_key,
+                )],
+                Some(1),
+                None,
+            )
+            .await?;
+        let Some(row) = rows.pop() else {
+            return Err(SchemaError::UnknownResource.into());
+        };
+        if relationship.kind != RelationshipKind::HasMany {
+            let expanded = self
+                .expand_relationship(dataset_id, entity, &row, relationship_name, relationship)
+                .await?;
+            if relationship.kind == RelationshipKind::BelongsTo && expanded.value.is_null() {
+                return Err(SchemaError::UnknownResource.into());
+            }
+            return Ok(EntityRelationshipPage {
+                value: expanded.value,
+                next_primary_key: None,
+            });
+        }
+
+        let target = self.entity(dataset_id, &relationship.target)?;
+        let Some(value) = row.get(&entity.primary_key.name) else {
+            return Err(SchemaError::ResourceUnavailable.into());
+        };
+        let target_fk = entity_field_by_table_column(target, &relationship.foreign_key)?;
+        let limit = match page.limit {
+            Some(limit) if limit == 0 || limit > target.api.max_limit as usize => {
+                return Err(FilterError::LimitOutOfRange.into());
+            }
+            Some(limit) => limit,
+            None => target.api.default_limit as usize,
+        };
+        let target_fields = target.fields.iter().collect::<Vec<_>>();
+        let mut rows = self
+            .execute_entity_query(
+                dataset_id,
+                target,
+                &target_fields,
+                vec![EntityFilter::eq(target_fk.name.clone(), value.clone())],
+                Some(limit.saturating_add(1)),
+                page.after_primary_key,
+            )
+            .await?;
+        let next_primary_key = truncate_page(&mut rows, Some(limit), &target.primary_key.name);
+        Ok(EntityRelationshipPage {
+            value: Value::Array(rows),
+            next_primary_key,
+        })
     }
 
     fn entity<'a>(&'a self, dataset_id: &str, entity_name: &str) -> Result<&'a EntityModel, Error> {
@@ -154,6 +297,7 @@ impl EntityQueryEngine {
         projected_fields: &[&EntityField],
         filters: Vec<EntityFilter>,
         limit: Option<usize>,
+        after_primary_key: Option<Value>,
     ) -> Result<Vec<Value>, Error> {
         if matches!(limit, Some(0)) {
             return Err(FilterError::LimitOutOfRange.into());
@@ -173,15 +317,52 @@ impl EntityQueryEngine {
 
         for filter in filters {
             let field = entity_field(entity, &filter.field)?;
-            let value = literal_value(&filter.value)?;
+            let column = col(field.table_column.as_str());
             match filter.op {
                 EntityFilterOp::Eq => {
                     df = df
-                        .filter(col(field.table_column.as_str()).eq(value))
+                        .filter(column.eq(literal_value(&filter.value)?))
+                        .map_err(execution_failed)?;
+                }
+                EntityFilterOp::In => {
+                    let values = literal_list(&filter.value)?;
+                    df = df
+                        .filter(column.in_list(values, false))
+                        .map_err(execution_failed)?;
+                }
+                EntityFilterOp::Gte => {
+                    df = df
+                        .filter(column.gt_eq(literal_value(&filter.value)?))
+                        .map_err(execution_failed)?;
+                }
+                EntityFilterOp::Lte => {
+                    df = df
+                        .filter(column.lt_eq(literal_value(&filter.value)?))
+                        .map_err(execution_failed)?;
+                }
+                EntityFilterOp::Between => {
+                    let (lower, upper) = literal_range(&filter.value)?;
+                    df = df
+                        .filter(column.clone().gt_eq(lower).and(column.lt_eq(upper)))
                         .map_err(execution_failed)?;
                 }
             }
         }
+
+        if let Some(after_primary_key) = after_primary_key {
+            df = df
+                .filter(
+                    col(entity.primary_key.table_column.as_str())
+                        .gt(literal_value(&after_primary_key)?),
+                )
+                .map_err(execution_failed)?;
+        }
+
+        df = df
+            .sort(vec![
+                col(entity.primary_key.table_column.as_str()).sort(true, false)
+            ])
+            .map_err(execution_failed)?;
 
         let exprs = projected_fields
             .iter()
@@ -213,7 +394,10 @@ impl EntityQueryEngine {
                     .expand_relationship(dataset_id, entity, row, expansion, relationship)
                     .await?;
                 if let Value::Object(object) = row {
-                    object.insert(expansion.clone(), expanded);
+                    object.insert(expansion.clone(), expanded.value);
+                    if expanded.truncated {
+                        mark_expansion_truncated(object, expansion);
+                    }
                 }
             }
         }
@@ -227,7 +411,7 @@ impl EntityQueryEngine {
         row: &Value,
         relationship_name: &str,
         relationship: &crate::config::EntityRelationshipConfig,
-    ) -> Result<Value, Error> {
+    ) -> Result<ExpandedRelationship, Error> {
         let target = self.entity(dataset_id, &relationship.target)?;
         let (filter_field, filter_value, limit) = match relationship.kind {
             RelationshipKind::BelongsTo => {
@@ -235,6 +419,9 @@ impl EntityQueryEngine {
                 let Some(value) = row.get(&source_fk.name) else {
                     return Err(SchemaError::ResourceUnavailable.into());
                 };
+                if value.is_null() {
+                    return Ok(ExpandedRelationship::untruncated(Value::Null));
+                }
                 (target.primary_key.name.clone(), value.clone(), Some(1))
             }
             RelationshipKind::HasOne => {
@@ -249,10 +436,11 @@ impl EntityQueryEngine {
                     return Err(SchemaError::ResourceUnavailable.into());
                 };
                 let target_fk = entity_field_by_table_column(target, &relationship.foreign_key)?;
+                let default_limit = target.api.default_limit as usize;
                 (
                     target_fk.name.clone(),
                     value.clone(),
-                    Some(target.api.default_limit as usize),
+                    Some(default_limit.saturating_add(1)),
                 )
             }
         };
@@ -264,13 +452,22 @@ impl EntityQueryEngine {
                 &target_fields,
                 vec![EntityFilter::eq(filter_field, filter_value)],
                 limit,
+                None,
             )
             .await?;
         match relationship.kind {
-            RelationshipKind::HasMany => Ok(Value::Array(rows)),
-            RelationshipKind::BelongsTo | RelationshipKind::HasOne => {
-                Ok(rows.pop().unwrap_or(Value::Null))
+            RelationshipKind::HasMany => {
+                let default_limit = target.api.default_limit as usize;
+                let truncated = rows.len() > default_limit;
+                rows.truncate(default_limit);
+                Ok(ExpandedRelationship {
+                    value: Value::Array(rows),
+                    truncated,
+                })
             }
+            RelationshipKind::BelongsTo | RelationshipKind::HasOne => Ok(
+                ExpandedRelationship::untruncated(rows.pop().unwrap_or(Value::Null)),
+            ),
         }
         .map_err(|error| {
             tracing::error!(
@@ -286,6 +483,20 @@ impl EntityQueryEngine {
     }
 }
 
+struct ExpandedRelationship {
+    value: Value,
+    truncated: bool,
+}
+
+impl ExpandedRelationship {
+    fn untruncated(value: Value) -> Self {
+        Self {
+            value,
+            truncated: false,
+        }
+    }
+}
+
 impl EntityCollectionQuery {
     pub fn new() -> Self {
         Self::default()
@@ -293,6 +504,11 @@ impl EntityCollectionQuery {
 
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
+        self
+    }
+
+    pub fn with_after_primary_key(mut self, primary_key: impl Into<Value>) -> Self {
+        self.after_primary_key = Some(primary_key.into());
         self
     }
 
@@ -315,11 +531,35 @@ impl EntityCollectionQuery {
     }
 }
 
+impl RelationshipPageQuery {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn with_after_primary_key(mut self, primary_key: impl Into<Value>) -> Self {
+        self.after_primary_key = Some(primary_key.into());
+        self
+    }
+}
+
 impl EntityFilter {
     pub fn eq(field: impl Into<String>, value: impl Into<Value>) -> Self {
         Self {
             field: field.into(),
             op: EntityFilterOp::Eq,
+            value: value.into(),
+        }
+    }
+
+    pub fn with_op(field: impl Into<String>, op: EntityFilterOp, value: impl Into<Value>) -> Self {
+        Self {
+            field: field.into(),
+            op,
             value: value.into(),
         }
     }
@@ -366,6 +606,37 @@ fn add_expansion_source_fields<'a>(
     Ok(strip_fields)
 }
 
+fn add_pagination_primary_key_field<'a>(
+    entity: &'a EntityModel,
+    requested_fields: Option<&[String]>,
+    projected_fields: &mut Vec<&'a EntityField>,
+) -> bool {
+    let should_strip = requested_fields
+        .filter(|fields| !fields.is_empty())
+        .is_some_and(|fields| !fields.iter().any(|field| field == &entity.primary_key.name));
+    if should_strip
+        && !projected_fields
+            .iter()
+            .any(|field| field.name == entity.primary_key.name)
+    {
+        projected_fields.push(&entity.primary_key);
+    }
+    should_strip
+}
+
+fn truncate_page(
+    rows: &mut Vec<Value>,
+    limit: Option<usize>,
+    primary_key_name: &str,
+) -> Option<Value> {
+    let limit = limit?;
+    if rows.len() <= limit {
+        return None;
+    }
+    rows.truncate(limit);
+    rows.last()?.get(primary_key_name).cloned()
+}
+
 fn strip_projection_fields(rows: &mut [Value], field_names: &[String]) {
     for row in rows {
         let Value::Object(object) = row else {
@@ -375,6 +646,28 @@ fn strip_projection_fields(rows: &mut [Value], field_names: &[String]) {
             object.remove(field_name);
         }
     }
+}
+
+fn mark_expansion_truncated(object: &mut serde_json::Map<String, Value>, relationship: &str) {
+    let expansion = object
+        .entry("_expansion")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let Value::Object(expansion) = expansion else {
+        return;
+    };
+    expansion.insert(
+        relationship.to_string(),
+        json_object([("truncated", Value::Bool(true))]),
+    );
+}
+
+fn json_object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+    Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect(),
+    )
 }
 
 fn entity_field<'a>(entity: &'a EntityModel, name: &str) -> Result<&'a EntityField, Error> {
@@ -398,15 +691,24 @@ fn entity_field_by_table_column<'a>(
 
 fn validate_allowed_filters(entity: &EntityModel, filters: &[EntityFilter]) -> Result<(), Error> {
     for filter in filters {
-        let allowed =
-            entity.api.allowed_filters.iter().any(|allowed| {
-                allowed.field == filter.field && allowed.ops.contains(&FilterOp::Eq)
-            });
+        let allowed = entity.api.allowed_filters.iter().any(|allowed| {
+            allowed.field == filter.field && allowed.ops.contains(&filter_op_config(filter.op))
+        });
         if !allowed {
             return Err(FilterError::NotAllowed.into());
         }
     }
     Ok(())
+}
+
+fn filter_op_config(op: EntityFilterOp) -> FilterOp {
+    match op {
+        EntityFilterOp::Eq => FilterOp::Eq,
+        EntityFilterOp::In => FilterOp::In,
+        EntityFilterOp::Gte => FilterOp::Gte,
+        EntityFilterOp::Lte => FilterOp::Lte,
+        EntityFilterOp::Between => FilterOp::Between,
+    }
 }
 
 fn validate_allowed_expansions(entity: &EntityModel, expansions: &[String]) -> Result<(), Error> {
@@ -443,6 +745,47 @@ fn literal_value(value: &Value) -> Result<datafusion::prelude::Expr, Error> {
             }
         }
         Value::Null | Value::Array(_) | Value::Object(_) => Err(FilterError::InvalidValue.into()),
+    }
+}
+
+fn literal_list(value: &Value) -> Result<Vec<datafusion::prelude::Expr>, Error> {
+    let values = match value {
+        Value::Array(values) => values,
+        _ => return Err(FilterError::InvalidValue.into()),
+    };
+    if values.is_empty() {
+        return Err(FilterError::InvalidValue.into());
+    }
+    if values.len() > 100 {
+        return Err(FilterError::TooManyValues.into());
+    }
+    values.iter().map(literal_value).collect()
+}
+
+fn literal_range(
+    value: &Value,
+) -> Result<(datafusion::prelude::Expr, datafusion::prelude::Expr), Error> {
+    let values = match value {
+        Value::Array(values) if values.len() == 2 => values,
+        _ => return Err(FilterError::InvalidRange.into()),
+    };
+    validate_range_order(&values[0], &values[1])?;
+    Ok((literal_value(&values[0])?, literal_value(&values[1])?))
+}
+
+fn validate_range_order(lower: &Value, upper: &Value) -> Result<(), Error> {
+    let valid = match (lower, upper) {
+        (Value::String(lower), Value::String(upper)) => lower <= upper,
+        (Value::Number(lower), Value::Number(upper)) => match (lower.as_f64(), upper.as_f64()) {
+            (Some(lower), Some(upper)) => lower <= upper,
+            _ => false,
+        },
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(FilterError::InvalidRange.into())
     }
 }
 

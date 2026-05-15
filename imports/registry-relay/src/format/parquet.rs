@@ -26,12 +26,11 @@
 //! (`src/ingest/validation.rs`). This decoder returns the observed
 //! Arrow schema as-is.
 
-use std::io::Cursor;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use datafusion::parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
-use futures::StreamExt as _;
+use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use futures::stream;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 
 use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHints};
@@ -79,30 +78,27 @@ async fn decode_parquet(
         .await
         .map_err(FormatError::Io)?;
 
-    // Step 2: wrap in a seekable cursor and hand to the async Parquet reader.
-    // `Cursor<Vec<u8>>` implements both `AsyncRead` and `AsyncSeek`, which
-    // satisfies the `AsyncFileReader` blanket impl in the `parquet` crate.
-    let cursor = Cursor::new(raw);
-
-    let builder = ParquetRecordBatchStreamBuilder::new(cursor)
-        .await
-        .map_err(|e| FormatError::Parse(format!("parquet metadata error: {e}")))?;
-
-    // Step 3: capture the observed schema before consuming the builder.
-    let observed_schema = Arc::clone(builder.schema());
-
-    // Step 4: build the record batch stream.
-    let stream = builder
-        .build()
-        .map_err(|e| FormatError::Parse(format!("parquet stream build error: {e}")))?;
-
-    // Step 5: map `ParquetError` to `FormatError` on the stream items.
-    let mapped = stream.map(|result| {
-        result.map_err(|e| FormatError::Parse(format!("parquet batch decode error: {e}")))
-    });
+    let (observed_schema, batches) = tokio::task::spawn_blocking(move || {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(raw))
+            .map_err(|e| FormatError::Parse(format!("parquet metadata error: {e}")))?;
+        let observed_schema = Arc::clone(builder.schema());
+        let reader = builder
+            .build()
+            .map_err(|e| FormatError::Parse(format!("parquet stream build error: {e}")))?;
+        let batches = reader
+            .map(|result| {
+                result.map_err(|e| FormatError::Parse(format!("parquet batch decode error: {e}")))
+            })
+            .collect::<Vec<_>>();
+        Ok::<_, FormatError>((observed_schema, batches))
+    })
+    .await
+    .map_err(|join_err| {
+        FormatError::Parse(format!("parquet decode task panicked: {join_err}"))
+    })??;
 
     Ok(DecodedStream {
         observed_schema,
-        batches: Box::pin(mapped),
+        batches: Box::pin(stream::iter(batches)),
     })
 }

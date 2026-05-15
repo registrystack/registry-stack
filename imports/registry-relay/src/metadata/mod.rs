@@ -9,4 +9,7 @@ pub mod catalog;
 pub mod shacl;
 
 pub use catalog::catalog_document;
-pub use shacl::{dcat_ap_document, entity_shape_document};
+pub use shacl::{
+    dcat_ap_document, dcat_ap_document_for_dataset_ids, dcat_ap_document_for_entity_ids,
+    entity_schema_document, entity_shape_document,
+};

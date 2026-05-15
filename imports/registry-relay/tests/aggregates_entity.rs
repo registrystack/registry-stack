@@ -141,9 +141,26 @@ datasets:
               - name: individual_count
                 function: count
                 column: id
+              - name: min_payment
+                function: min
+                column: payment_amount
+              - name: max_payment
+                function: max
+                column: payment_amount
             disclosure_control:
               min_group_size: 1
               suppression: omit
+          - id: by_municipality_masked
+            description: Masked number of individuals by municipality
+            group_by:
+              - municipality_code
+            measures:
+              - name: individual_count
+                function: count
+                column: id
+            disclosure_control:
+              min_group_size: 2
+              suppression: mask
           - id: by_household_region
             description: Number of individuals by household region
             joins:
@@ -238,9 +255,11 @@ async fn lists_configured_entity_aggregates() {
 
     resp.assert_status_ok();
     let body: Value = resp.json();
-    assert_eq!(body["data"].as_array().expect("data array").len(), 2);
+    assert_eq!(body["data"].as_array().expect("data array").len(), 3);
     assert_eq!(body["data"][0]["aggregate_id"], "by_municipality");
     assert_eq!(body["data"][0]["measures"][0]["function"], "count");
+    assert_eq!(body["data"][0]["measures"][1]["function"], "min");
+    assert_eq!(body["data"][0]["measures"][2]["function"], "max");
 }
 
 #[tokio::test]
@@ -256,8 +275,38 @@ async fn executes_single_entity_count_aggregate() {
     assert_eq!(
         sorted_rows(&body),
         vec![
+            json!({
+                "municipality_code": "mun-1",
+                "individual_count": 2,
+                "min_payment": 10.0,
+                "max_payment": 20.0
+            }),
+            json!({
+                "municipality_code": "mun-2",
+                "individual_count": 1,
+                "min_payment": 30.0,
+                "max_payment": 30.0
+            }),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn masks_measures_below_min_group_size_without_removing_group_keys() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/datasets/social_registry/individual/aggregates/by_municipality_masked")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_eq!(body["min_group_size"], 2);
+    assert_eq!(body["suppressed_groups"], 1);
+    assert_eq!(
+        sorted_rows(&body),
+        vec![
             json!({"municipality_code": "mun-1", "individual_count": 2}),
-            json!({"municipality_code": "mun-2", "individual_count": 1}),
+            json!({"municipality_code": "mun-2", "individual_count": null}),
         ]
     );
 }

@@ -559,6 +559,21 @@ fn validate_entity_uris(
             }
         }
     }
+    for relationship in &entity.relationships {
+        if let Some(uri) = &relationship.concept_uri {
+            if super::vocabularies::expand(uri, registry).is_none() {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    relationship = %relationship.name,
+                    uri = %uri,
+                    "entity relationship concept_uri uses an unregistered vocabulary prefix"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+    }
     Ok(())
 }
 

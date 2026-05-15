@@ -89,15 +89,26 @@ async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>)
             })
         })
         .collect::<Vec<_>>();
+    let unresolved_entities = snapshot
+        .unresolved_entities
+        .iter()
+        .map(|(dataset_id, entity_name)| {
+            json!({
+                "dataset_id": dataset_id.as_str(),
+                "entity": entity_name,
+            })
+        })
+        .collect::<Vec<_>>();
 
     let body = Json(json!({
         "type": "https://data.example.gov/problems/schema/resource_unavailable",
         "title": "Resource unavailable",
         "status": 503,
-        "detail": "one or more configured resources failed ingest or are not ready",
+        "detail": "one or more configured resources failed ingest, are not ready, or have unresolved entity mappings",
         "code": "schema.resource_unavailable",
         "failed_resources": failed_resources,
         "not_ready_resources": not_ready_resources,
+        "unresolved_entities": unresolved_entities,
     }));
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     response.headers_mut().insert(

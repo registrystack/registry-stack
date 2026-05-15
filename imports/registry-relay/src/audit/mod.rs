@@ -2,17 +2,13 @@
 //! Audit core: trait, record schema, JSONL envelope, and helpers.
 //!
 //! The canonical record schema lives in `decisions/wave-0.md` Section 5.
-//! Wave 0 ships only the in-process trait, the `AuditRecord` struct, the
-//! `StdoutSink` implementation, and the request-scoped middleware.
+//! V1 ships the in-process trait, the `AuditRecord` struct, stdout/file
+//! / syslog sinks, optional chaining, and the request-scoped middleware.
 //!
 //! Forward compatibility:
-//! - `FileSink` and `SyslogSink` land in Wave 4 alongside chained-hash
-//!   tamper-evidence; their module slots are reserved in this file
-//!   header for visibility but are not implemented in Wave 0.
-//! - The `ChainingSink<S: AuditSink>` wrapper introduced in Wave 4 will
-//!   inject `prev_hash` / `record_hash` envelope fields onto an
-//!   `AuditEnvelope` before delegating to the inner sink. The
-//!   `AuditRecord` itself stays stable.
+//! - `FileSink` and `SyslogSink` are production audit destinations.
+//! - Chained-hash tamper-evidence injects `prev_hash` / `record_hash`
+//!   envelope fields while keeping the core `AuditRecord` stable.
 //!
 //! Integration:
 //! - The middleware reads `Principal` from request extensions (Wave 0
@@ -22,7 +18,6 @@
 //!   responses via the `ErrorCodeExt` response extension defined in
 //!   this module; the audit middleware reads it and records it.
 
-use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -34,17 +29,25 @@ use axum::http::{HeaderMap, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 use time::OffsetDateTime;
 use tracing::error;
 use ulid::Ulid;
 
+pub mod chain;
+pub mod file;
 pub mod middleware;
+pub mod redact;
 pub mod stdout;
+pub mod syslog;
 
+pub use chain::ChainingSink;
+pub use file::FileSink;
+pub use redact::{redact_query_with_sensitive_fields, sensitive_value_hash, QueryRedactor};
 pub use stdout::StdoutSink;
+pub use syslog::SyslogSink;
 
 /// Response extension carrying the stable error code emitted by failing
 /// handlers (typically `crate::error::Error::into_response`). The audit
@@ -63,6 +66,21 @@ pub struct AuditSettings {
     pub include_health: bool,
     pub trust_proxy_enabled: bool,
     pub trusted_proxies: Vec<String>,
+    pub sensitive_fields: Vec<String>,
+}
+
+/// Optional structured context projected by handlers that have
+/// resolved entity-layer state. The middleware falls back to path
+/// parsing when this extension is absent.
+#[derive(Debug, Clone, Default)]
+pub struct AuditContextExt {
+    pub dataset_id: Option<String>,
+    pub entity_name: Option<String>,
+    pub table_id: Option<String>,
+    pub relationship: Option<String>,
+    pub aggregate_id: Option<String>,
+    pub row_count: Option<u64>,
+    pub suppressed_groups: Option<u64>,
 }
 
 /// Endpoint family for an audit record. Mirrors Spec.md Section 13.1.
@@ -74,6 +92,7 @@ pub enum EndpointKind {
     Catalog,
     Dataset,
     Schema,
+    Verify,
     Rows,
     AggregateList,
     Aggregate,
@@ -131,8 +150,12 @@ pub struct AuditRecord {
     pub endpoint_kind: EndpointKind,
     /// Set on dataset/schema/rows/aggregate_list/aggregate.
     pub dataset_id: Option<String>,
-    /// Set when path includes a resource.
-    pub resource_id: Option<String>,
+    /// Set when path includes an entity.
+    pub entity_name: Option<String>,
+    /// Internal backing table when known by the handler.
+    pub table_id: Option<String>,
+    /// Relationship traversed by a nested entity request.
+    pub relationship: Option<String>,
     /// Set on aggregate only.
     pub aggregate_id: Option<String>,
     /// Scopes actually checked on this request, in declaration order.
@@ -159,13 +182,21 @@ pub struct AuditRecord {
 /// never changes.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditEnvelope {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_hash: Option<String>,
     #[serde(flatten)]
     pub record: AuditRecord,
 }
 
 impl From<AuditRecord> for AuditEnvelope {
     fn from(record: AuditRecord) -> Self {
-        Self { record }
+        Self {
+            prev_hash: None,
+            record_hash: None,
+            record,
+        }
     }
 }
 
@@ -242,56 +273,38 @@ pub fn now_iso8601_millis() -> String {
 // Query redaction
 // ---------------------------------------------------------------------------
 
-/// Parameter names whose values are redacted unconditionally. The
-/// denylist is intentionally short and conservative; per-field hashed
-/// redaction lands in Wave 4 driven by config.
-const SENSITIVE_PARAM_NAMES: &[&str] = &[
-    "token",
-    "key",
-    "api_key",
-    "apikey",
-    "password",
-    "secret",
-    "authorization",
-    "auth",
-];
-
-/// Redact a URL-encoded query string into the canonical
-/// `query_params` JSON shape: `{ "<name>": { "op": "<op>" } }`. Values
-/// are never copied; only the operator (always `eq` in Wave 0, since
-/// the filter parser arrives in Wave 2) and the special `redacted`
-/// marker for denylisted names appear in output.
+/// Redact a URL-encoded query string into the canonical `query_params`
+/// JSON shape with no field-specific hashing. Kept as a public helper
+/// for tests and callers that do not have entity config context.
 #[must_use]
 pub fn redact_query(query: &str) -> Value {
-    if query.is_empty() {
-        return json!({});
-    }
-    let mut out: BTreeMap<String, Value> = BTreeMap::new();
-    for pair in query.split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        let (raw_name, _value) = pair.split_once('=').unwrap_or((pair, ""));
-        // Strip any percent-encoded tail in the name itself by taking
-        // up to the first '='; values are never logged so they don't
-        // need decoding here.
-        let name = raw_name.to_string();
-        let entry = if is_sensitive_param(&name) {
-            json!({ "op": "redacted" })
-        } else {
-            json!({ "op": "eq" })
-        };
-        out.insert(name, entry);
-    }
-    serde_json::to_value(out).unwrap_or_else(|e| {
-        error!(error = %e, "query redaction serialization failed; returning empty object");
-        json!({})
-    })
+    QueryRedactor::default().redact_query(query)
 }
 
+#[cfg(test)]
 fn is_sensitive_param(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    SENSITIVE_PARAM_NAMES.iter().any(|s| *s == lower)
+    redact::is_secret_param_name(name)
+}
+
+fn context_sensitive_fields(settings: &AuditSettings, context: &AuditContextExt) -> Vec<String> {
+    let mut fields = Vec::new();
+    for field in &settings.sensitive_fields {
+        let parts = field.split(':').collect::<Vec<_>>();
+        match parts.as_slice() {
+            [dataset, entity, name]
+                if context.dataset_id.as_deref() == Some(*dataset)
+                    && context.entity_name.as_deref() == Some(*entity) =>
+            {
+                fields.push((*name).to_string());
+            }
+            [entity, name] if context.entity_name.as_deref() == Some(*entity) => {
+                fields.push((*name).to_string());
+            }
+            [name] => fields.push((*name).to_string()),
+            _ => {}
+        }
+    }
+    fields
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +435,11 @@ pub async fn audit_layer(
         .extensions()
         .get::<ErrorCodeExt>()
         .map(|c| c.0.clone());
+    let context = response
+        .extensions()
+        .get::<AuditContextExt>()
+        .cloned()
+        .unwrap_or_else(|| infer_context_from_path(&path));
 
     // Auth middleware (inner) attaches `Principal` to the response on
     // success after the handler returns. Prefer that as the canonical
@@ -450,6 +468,9 @@ pub async fn audit_layer(
         return response;
     }
 
+    let query_params =
+        redact_query_with_sensitive_fields(&query, context_sensitive_fields(&settings, &context));
+
     let record = AuditRecord {
         ts: now_iso8601_millis(),
         request_id,
@@ -459,15 +480,17 @@ pub async fn audit_layer(
         method,
         path,
         endpoint_kind,
-        dataset_id: None,
-        resource_id: None,
-        aggregate_id: None,
+        dataset_id: context.dataset_id,
+        entity_name: context.entity_name,
+        table_id: context.table_id,
+        relationship: context.relationship,
+        aggregate_id: context.aggregate_id,
         scopes_used,
-        query_params: redact_query(&query),
+        query_params,
         purpose,
         status_code,
-        row_count: None,
-        suppressed_groups: None,
+        row_count: context.row_count,
+        suppressed_groups: context.suppressed_groups,
         duration_ms,
         error_code,
     };
@@ -571,25 +594,78 @@ fn auth_mode_label(mode: crate::auth::AuthMode) -> &'static str {
 }
 
 fn classify_endpoint(path: &str) -> EndpointKind {
-    // Cheap prefix-based classification; the routing layer will refine
-    // this as endpoints land in Waves 1-3.
     if path == "/health" {
         EndpointKind::Health
     } else if path == "/ready" {
         EndpointKind::Ready
-    } else if path == "/datasets" || path == "/catalog" {
+    } else if path.starts_with("/catalog/datasets/") {
+        EndpointKind::Schema
+    } else if path == "/datasets" || path == "/catalog" || path.starts_with("/catalog/") {
         EndpointKind::Catalog
     } else if path.starts_with("/admin") {
         EndpointKind::Admin
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
     } else if path.starts_with("/datasets/") {
-        // Refinement (rows / aggregate) is left to the data plane in
-        // Wave 1 where the router has structured params. For Wave 0 we
-        // collapse to `dataset`.
-        EndpointKind::Dataset
+        classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
+    }
+}
+
+fn classify_dataset_endpoint(path: &str) -> EndpointKind {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["datasets", _dataset] => EndpointKind::Dataset,
+        ["datasets", _dataset, _entity, "schema"] => EndpointKind::Schema,
+        ["datasets", _dataset, _entity, "aggregates"] => EndpointKind::AggregateList,
+        ["datasets", _dataset, _entity, "aggregates", _aggregate] => EndpointKind::Aggregate,
+        ["datasets", _dataset, _entity, "verify"] => EndpointKind::Verify,
+        ["datasets", _dataset, _entity] => EndpointKind::Rows,
+        ["datasets", _dataset, _entity, _id] => EndpointKind::Rows,
+        ["datasets", _dataset, _entity, _id, _relationship] => EndpointKind::Rows,
+        _ => EndpointKind::Dataset,
+    }
+}
+
+fn infer_context_from_path(path: &str) -> AuditContextExt {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["datasets", dataset] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            ..AuditContextExt::default()
+        },
+        ["datasets", dataset, entity, "aggregates"] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            entity_name: Some((*entity).to_string()),
+            ..AuditContextExt::default()
+        },
+        ["datasets", dataset, entity, "aggregates", aggregate] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            entity_name: Some((*entity).to_string()),
+            aggregate_id: Some((*aggregate).to_string()),
+            ..AuditContextExt::default()
+        },
+        ["datasets", dataset, entity]
+        | ["datasets", dataset, entity, "schema"]
+        | ["datasets", dataset, entity, "verify"]
+        | ["datasets", dataset, entity, _] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            entity_name: Some((*entity).to_string()),
+            ..AuditContextExt::default()
+        },
+        ["datasets", dataset, entity, _id, relationship] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            entity_name: Some((*entity).to_string()),
+            relationship: Some((*relationship).to_string()),
+            ..AuditContextExt::default()
+        },
+        ["catalog", "datasets", dataset, entity, "schema.jsonld"] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            entity_name: Some((*entity).to_string()),
+            ..AuditContextExt::default()
+        },
+        _ => AuditContextExt::default(),
     }
 }
 
@@ -620,8 +696,20 @@ mod tests {
         assert_eq!(classify_endpoint("/health"), EndpointKind::Health);
         assert_eq!(classify_endpoint("/ready"), EndpointKind::Ready);
         assert_eq!(classify_endpoint("/datasets"), EndpointKind::Catalog);
+        assert_eq!(
+            classify_endpoint("/catalog/dcat-ap.jsonld"),
+            EndpointKind::Catalog
+        );
+        assert_eq!(
+            classify_endpoint("/catalog/datasets/social_registry/individual/schema.jsonld"),
+            EndpointKind::Schema
+        );
         assert_eq!(classify_endpoint("/admin/reload"), EndpointKind::Admin);
-        assert_eq!(classify_endpoint("/datasets/x/rows"), EndpointKind::Dataset);
+        assert_eq!(
+            classify_endpoint("/datasets/x/individual/verify"),
+            EndpointKind::Verify
+        );
+        assert_eq!(classify_endpoint("/datasets/x/rows"), EndpointKind::Rows);
         assert_eq!(classify_endpoint("/anything-else"), EndpointKind::Other);
     }
 

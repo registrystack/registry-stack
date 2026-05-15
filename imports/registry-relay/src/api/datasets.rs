@@ -56,8 +56,7 @@ async fn datasets(
     let summaries = config
         .datasets
         .iter()
-        .filter(|dataset| has_dataset_metadata_scope(&principal, dataset))
-        .map(dataset_summary)
+        .filter_map(|dataset| dataset_summary(dataset, &principal))
         .collect::<Vec<_>>();
 
     if summaries.is_empty() {
@@ -89,25 +88,28 @@ async fn dataset(
         return Error::from(SchemaError::UnknownDataset).into_response();
     };
 
-    if !has_dataset_metadata_scope(&principal, dataset) {
+    let Some(summary) = dataset_summary(dataset, &principal) else {
         return Error::from(AuthError::ScopeDenied {
             required: "metadata scope on one entity in dataset".to_string(),
         })
         .into_response();
-    }
+    };
 
-    Json(dataset_summary(dataset)).into_response()
+    Json(summary).into_response()
 }
 
-fn has_dataset_metadata_scope(principal: &Principal, dataset: &DatasetConfig) -> bool {
-    dataset
+fn dataset_summary(dataset: &DatasetConfig, principal: &Principal) -> Option<DatasetSummary> {
+    let entities = dataset
         .entities
         .iter()
-        .any(|entity| principal.scopes.contains(&entity.access.metadata_scope))
-}
+        .filter(|entity| principal.scopes.contains(&entity.access.metadata_scope))
+        .map(|entity| entity.name.clone())
+        .collect::<Vec<_>>();
+    if entities.is_empty() {
+        return None;
+    }
 
-fn dataset_summary(dataset: &DatasetConfig) -> DatasetSummary {
-    DatasetSummary {
+    Some(DatasetSummary {
         dataset_id: dataset.id.to_string(),
         title: dataset.title.clone(),
         description: dataset.description.clone(),
@@ -116,12 +118,8 @@ fn dataset_summary(dataset: &DatasetConfig) -> DatasetSummary {
         access_rights: access_rights(dataset.access_rights),
         update_frequency: update_frequency(dataset.update_frequency),
         conforms_to: dataset.conforms_to.clone(),
-        entities: dataset
-            .entities
-            .iter()
-            .map(|entity| entity.name.clone())
-            .collect(),
-    }
+        entities,
+    })
 }
 
 fn sensitivity(sensitivity: Sensitivity) -> &'static str {

@@ -11,7 +11,7 @@ use axum::{Extension, Router};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::audit::ErrorCodeExt;
+use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::entity::{EntityModel, EntityRegistry};
@@ -55,8 +55,11 @@ async fn list_aggregates(
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<AggregateQueryEngine>>>,
 ) -> Response {
-    if let Some(Extension(registry)) = registry {
-        match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let audit_context = registry
+        .as_ref()
+        .and_then(|Extension(registry)| audit_context_for_entity(registry, &path));
+    if let Some(Extension(registry)) = registry.as_ref() {
+        match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
                 if let Err(error) =
                     require_principal_scope(principal, &entity.access.aggregate_scope)
@@ -93,7 +96,10 @@ async fn list_aggregates(
                     })
                 })
                 .collect::<Vec<_>>();
-            Json(json!({ "data": data })).into_response()
+            with_optional_audit_context(
+                Json(json!({ "data": data })).into_response(),
+                audit_context,
+            )
         }
         Err(error) => error.into_response(),
     }
@@ -105,8 +111,11 @@ async fn execute_aggregate(
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<AggregateQueryEngine>>>,
 ) -> Response {
-    if let Some(Extension(registry)) = registry {
-        match entity_from_registry(&registry, &path.dataset_id, &path.entity) {
+    let audit_context = registry.as_ref().and_then(|Extension(registry)| {
+        audit_context_for_aggregate(registry, &path.dataset_id, &path.entity, &path.aggregate_id)
+    });
+    if let Some(Extension(registry)) = registry.as_ref() {
+        match entity_from_registry(registry, &path.dataset_id, &path.entity) {
             Ok(entity) => {
                 if let Err(error) =
                     require_principal_scope(principal, &entity.access.aggregate_scope)
@@ -128,7 +137,17 @@ async fn execute_aggregate(
         .execute_aggregate(&path.dataset_id, &path.entity, &path.aggregate_id)
         .await
     {
-        Ok(result) => Json(aggregate_result_json(result)).into_response(),
+        Ok(result) => {
+            let row_count = result.rows.len() as u64;
+            let suppressed_groups = result.suppressed_groups as u64;
+            let mut response = Json(aggregate_result_json(result)).into_response();
+            if let Some(mut context) = audit_context {
+                context.row_count = Some(row_count);
+                context.suppressed_groups = Some(suppressed_groups);
+                response = with_audit_context(response, context);
+            }
+            response
+        }
         Err(error) => error.into_response(),
     }
 }
@@ -166,6 +185,47 @@ fn require_principal_scope(
         return Err(AuthError::MissingCredential.into());
     };
     require_scope(&principal, required)
+}
+
+fn audit_context_for_entity(
+    registry: &EntityRegistry,
+    path: &AggregatePath,
+) -> Option<AuditContextExt> {
+    let entity = registry.dataset(&path.dataset_id)?.entity(&path.entity)?;
+    Some(AuditContextExt {
+        dataset_id: Some(path.dataset_id.clone()),
+        entity_name: Some(path.entity.clone()),
+        table_id: Some(entity.table_id.clone()),
+        ..AuditContextExt::default()
+    })
+}
+
+fn audit_context_for_aggregate(
+    registry: &EntityRegistry,
+    dataset_id: &str,
+    entity_name: &str,
+    aggregate_id: &str,
+) -> Option<AuditContextExt> {
+    let entity = registry.dataset(dataset_id)?.entity(entity_name)?;
+    Some(AuditContextExt {
+        dataset_id: Some(dataset_id.to_string()),
+        entity_name: Some(entity_name.to_string()),
+        table_id: Some(entity.table_id.clone()),
+        aggregate_id: Some(aggregate_id.to_string()),
+        ..AuditContextExt::default()
+    })
+}
+
+fn with_optional_audit_context(response: Response, context: Option<AuditContextExt>) -> Response {
+    match context {
+        Some(context) => with_audit_context(response, context),
+        None => response,
+    }
+}
+
+fn with_audit_context(mut response: Response, context: AuditContextExt) -> Response {
+    response.extensions_mut().insert(context);
+    response
 }
 
 fn query_unavailable(detail: &'static str) -> Response {

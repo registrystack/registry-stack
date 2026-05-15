@@ -35,8 +35,10 @@ use axum_test::TestServer;
 use data_gate::audit::{AuditSink, InMemorySink};
 use data_gate::auth::api_key::ApiKeyAuth;
 use data_gate::config::{Config, DatasetId, ResourceId};
-use data_gate::ingest::ReadinessSnapshot;
+use data_gate::format::FormatRegistry;
+use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
 use data_gate::server::{build_admin_app, build_app, build_app_with_readiness};
+use datafusion::execution::context::SessionContext;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -192,6 +194,31 @@ async fn ready_503_lists_failed_resources() {
 }
 
 #[tokio::test]
+async fn ready_503_lists_unresolved_entities_separately() {
+    let dataset: DatasetId = id("social_registry");
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot
+        .unresolved_entities
+        .insert((dataset, "individual".to_string()));
+
+    let server = TestServer::new(build_test_app_with_readiness(snapshot));
+    let resp = server.get("/ready").await;
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "schema.resource_unavailable");
+    assert_eq!(
+        body["unresolved_entities"][0]["dataset_id"],
+        "social_registry"
+    );
+    assert_eq!(body["unresolved_entities"][0]["entity"], "individual");
+    assert!(body["failed_resources"]
+        .as_array()
+        .expect("failed resources")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn audit_middleware_fires_on_health() {
     let inmem = InMemorySink::new();
     let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
@@ -315,12 +342,29 @@ async fn admin_bind_serves_health_on_second_listener() {
     let mut cfg = load_example_config();
     cfg.server.bind = main_addr;
     cfg.server.admin_bind = Some(admin_addr);
+    cfg.datasets.clear();
     let config = Arc::new(cfg);
 
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let ingest = Arc::new(
+        IngestRegistry::from_config(
+            &config,
+            Arc::new(FormatRegistry::with_v1_defaults()),
+            Arc::from(config.server.cache_dir.as_path()),
+            Arc::new(SessionContext::new()),
+        )
+        .expect("empty ingest registry builds"),
+    );
+    let (_readiness_tx, readiness_rx) = watch::channel(ingest.snapshot());
     let main_app = build_app(Arc::clone(&config), Arc::clone(&auth), Arc::clone(&sink));
-    let admin_app = build_admin_app(Arc::clone(&config), Arc::clone(&sink));
+    let admin_app = build_admin_app(
+        Arc::clone(&config),
+        Arc::clone(&auth),
+        Arc::clone(&sink),
+        readiness_rx,
+        ingest,
+    );
 
     // Serve both routers in background tasks. We do not bother with
     // graceful shutdown here because the test process tears them down

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
-use datafusion::functions_aggregate::expr_fn::{avg, count, count_distinct, sum};
+use datafusion::functions_aggregate::expr_fn::{avg, count, count_distinct, max, min, sum};
 use datafusion::prelude::{col, JoinType};
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
@@ -436,9 +436,9 @@ fn measure_expr(
         AggregateFunction::Count => Ok(count(col(column))),
         AggregateFunction::Sum => Ok(sum(col(column))),
         AggregateFunction::Avg => Ok(avg(col(column))),
-        AggregateFunction::Min
-        | AggregateFunction::Max
-        | AggregateFunction::Median
+        AggregateFunction::Min => Ok(min(col(column))),
+        AggregateFunction::Max => Ok(max(col(column))),
+        AggregateFunction::Median
         | AggregateFunction::CountDistinct
         | AggregateFunction::Stddev => Err(AggregateError::MeasureUnsupported.into()),
     }

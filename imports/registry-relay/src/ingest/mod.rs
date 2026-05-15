@@ -6,17 +6,24 @@
 //! orchestration logic and the submodules [`cache`], [`refresh`], and
 //! the rest of [`validation`].
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::{Result as DataFusionResult, Statistics};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::physical_plan::ExecutionPlan;
 use futures::stream;
 use futures::StreamExt as _;
 use time::OffsetDateTime;
@@ -44,6 +51,7 @@ pub mod validation;
 /// Default number of sample rows forwarded to validation for the
 /// not-null and primary-key uniqueness checks.
 const DEFAULT_SAMPLE_ROWS: usize = 1_000;
+const DEFAULT_XLSX_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Per-resource ingestion lifecycle. One `IngestPlan` per
 /// `(dataset_id, resource_id)`.
@@ -61,6 +69,7 @@ pub struct IngestPlan {
     declared: Arc<DeclaredSchema>,
     primary_key: Option<String>,
     hints: FormatHints,
+    xlsx_max_file_bytes: u64,
     cache_layout: Arc<CacheLayout>,
     df_ctx: Arc<SessionContext>,
     readiness: Arc<ArcSwap<ResourceReadiness>>,
@@ -96,6 +105,7 @@ impl IngestPlan {
             declared,
             primary_key: None,
             hints,
+            xlsx_max_file_bytes: DEFAULT_XLSX_MAX_FILE_BYTES,
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
@@ -114,6 +124,7 @@ impl IngestPlan {
         dataset_source: &SourceConfig,
         cache_root: Arc<Path>,
         df_ctx: Arc<SessionContext>,
+        xlsx_max_file_bytes: u64,
     ) -> Self {
         let declared = Arc::new(DeclaredSchema::from(&resource_cfg.schema));
         let hints = hints_from_config(Arc::clone(&declared), resource_cfg, dataset_source);
@@ -125,6 +136,7 @@ impl IngestPlan {
             declared,
             primary_key: resource_cfg.primary_key.clone(),
             hints,
+            xlsx_max_file_bytes,
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
@@ -138,13 +150,10 @@ impl IngestPlan {
         let result = self.run_pipeline().await;
         if let Err(ref e) = result {
             let code = ingest_error_code(e);
-            let prior = self.readiness.load();
+            let prior = self.readiness.load_full();
             // Only set Failed if we aren't already Ready (shouldn't happen on initial, but defensive).
             if !matches!(prior.as_ref(), ResourceReadiness::Ready { .. }) {
-                self.readiness.store(Arc::new(ResourceReadiness::Failed {
-                    code,
-                    since: OffsetDateTime::now_utc(),
-                }));
+                self.store_failed(code, prior.as_ref());
             }
         }
         result
@@ -161,10 +170,7 @@ impl IngestPlan {
             let code = ingest_error_code(e);
             // Preserve prior Ready state on refresh failure (W1-15).
             if !matches!(prior.as_ref(), ResourceReadiness::Ready { .. }) {
-                self.readiness.store(Arc::new(ResourceReadiness::Failed {
-                    code,
-                    since: OffsetDateTime::now_utc(),
-                }));
+                self.store_failed(code, prior.as_ref());
             }
             // If we were already Ready, leave it unchanged so queries
             // keep serving the last good data.
@@ -180,6 +186,15 @@ impl IngestPlan {
     /// Stable composite identifier used by the cache path and audit.
     pub fn descriptor(&self) -> (&DatasetId, &ResourceId) {
         (&self.dataset_id, &self.resource_id)
+    }
+
+    fn store_failed(&self, code: &'static str, prior: &ResourceReadiness) {
+        let since = match prior {
+            ResourceReadiness::Failed { since, .. } => *since,
+            _ => OffsetDateTime::now_utc(),
+        };
+        self.readiness
+            .store(Arc::new(ResourceReadiness::Failed { code, since }));
     }
 
     /// Expose dataset_id for the refresh loop.
@@ -222,6 +237,22 @@ impl IngestPlan {
                 _ => IngestError::SourceUnreadable,
             }
         })?;
+
+        if self.format.name() == "xlsx" {
+            if let Some(size_bytes) = opened.metadata.size_bytes {
+                if size_bytes > self.xlsx_max_file_bytes {
+                    tracing::error!(
+                        event = "ingest.source_unreadable",
+                        dataset_id = %dataset_id,
+                        resource_id = %resource_id,
+                        size_bytes,
+                        max_file_bytes = self.xlsx_max_file_bytes,
+                        "XLSX source exceeds configured maximum before decode",
+                    );
+                    return Err(IngestError::SourceUnreadable);
+                }
+            }
+        }
 
         // Step 2: decode.
         let decoded = self
@@ -319,7 +350,7 @@ impl IngestPlan {
     }
 
     /// Register the parquet file as a DataFusion table, replacing any
-    /// prior registration atomically via deregister + register.
+    /// prior provider atomically inside a stable table registration.
     async fn register_table(
         &self,
         table_name: &str,
@@ -356,10 +387,8 @@ impl IngestPlan {
             IngestError::RegistrationFailed
         })?;
 
-        // Deregister any prior version so register_table doesn't error
-        // on "table already exists". Outstanding Arc<dyn TableProvider>
-        // handles from running queries keep the old provider alive until
-        // their streams complete (W1-8 atomicity guarantee).
+        let table: Arc<dyn TableProvider> = Arc::new(table);
+
         if self.df_ctx.table_exist(table_name).map_err(|e| {
             tracing::error!(
                 event = "ingest.registration_failed",
@@ -369,7 +398,7 @@ impl IngestPlan {
             );
             IngestError::RegistrationFailed
         })? {
-            self.df_ctx.deregister_table(table_name).map_err(|e| {
+            let existing = self.df_ctx.table_provider(table_name).await.map_err(|e| {
                 tracing::error!(
                     event = "ingest.registration_failed",
                     dataset_id = %self.dataset_id,
@@ -378,10 +407,14 @@ impl IngestPlan {
                 );
                 IngestError::RegistrationFailed
             })?;
+            if let Some(swappable) = existing.as_any().downcast_ref::<SwappableTableProvider>() {
+                swappable.replace(table);
+                return Ok(());
+            }
         }
 
         self.df_ctx
-            .register_table(table_name, Arc::new(table))
+            .register_table(table_name, Arc::new(SwappableTableProvider::new(table)))
             .map_err(|e| {
                 tracing::error!(
                     event = "ingest.registration_failed",
@@ -393,6 +426,69 @@ impl IngestPlan {
             })?;
 
         Ok(())
+    }
+}
+
+struct SwappableTableProvider {
+    inner: RwLock<Arc<dyn TableProvider>>,
+}
+
+impl SwappableTableProvider {
+    fn new(inner: Arc<dyn TableProvider>) -> Self {
+        Self {
+            inner: RwLock::new(inner),
+        }
+    }
+
+    fn replace(&self, inner: Arc<dyn TableProvider>) {
+        *self.inner.write().expect("table provider lock poisoned") = inner;
+    }
+
+    fn inner(&self) -> Arc<dyn TableProvider> {
+        Arc::clone(&self.inner.read().expect("table provider lock poisoned"))
+    }
+}
+
+impl fmt::Debug for SwappableTableProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SwappableTableProvider")
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl TableProvider for SwappableTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.inner().schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner().table_type()
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        self.inner().scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        self.inner().supports_filters_pushdown(filters)
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.inner().statistics()
     }
 }
 
@@ -473,6 +569,7 @@ impl IngestRegistry {
                     &dataset.source,
                     Arc::clone(&cache_root),
                     Arc::clone(&df_ctx),
+                    config.server.xlsx_max_file_bytes,
                 );
 
                 plans.insert((dataset.id.clone(), resource.id.clone()), Arc::new(plan));
@@ -563,7 +660,13 @@ impl IngestRegistry {
             let policy = policy_for_dataset(ds_id);
 
             set.spawn(async move {
-                run_refresh_loop(plan.clone(), policy, shutdown_clone).await;
+                let publish_registry = Arc::clone(&registry);
+                let publish_tx = tx.clone();
+                let publish = Arc::new(move || {
+                    let snapshot = publish_registry.snapshot();
+                    let _ = publish_tx.send(snapshot);
+                });
+                run_refresh_loop(plan.clone(), policy, shutdown_clone, publish).await;
                 // After the loop ends (shutdown), send a final snapshot.
                 let snapshot = registry.snapshot();
                 let _ = tx.send(snapshot);
@@ -615,12 +718,13 @@ pub struct ReadinessSnapshot {
     pub ready: BTreeMap<(DatasetId, ResourceId), Ulid>,
     pub not_ready: BTreeSet<(DatasetId, ResourceId)>,
     pub failed: BTreeMap<(DatasetId, ResourceId), &'static str>,
+    pub unresolved_entities: BTreeSet<(DatasetId, String)>,
 }
 
 impl ReadinessSnapshot {
     /// True iff every resource is in `Ready` state.
     pub fn fully_ready(&self) -> bool {
-        self.not_ready.is_empty() && self.failed.is_empty()
+        self.not_ready.is_empty() && self.failed.is_empty() && self.unresolved_entities.is_empty()
     }
 }
 
@@ -732,5 +836,151 @@ fn refresh_policy_from_config(cfg: &RefreshConfig) -> RefreshPolicy {
             interval: *interval,
         },
         RefreshConfig::Manual {} => RefreshPolicy::Manual,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tempfile::TempDir;
+    use tokio::sync::Notify;
+    use tokio::time::{timeout, Duration};
+
+    use super::*;
+    use crate::config::{FieldConfig, FieldType};
+    use crate::format::{DecodedStream, FormatError, FormatFuture};
+    use crate::source::{OpenedSource, SourceDescriptor, SourceFuture, SourceMetadata};
+
+    fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
+        serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
+    }
+
+    struct EmptySource;
+
+    impl Source for EmptySource {
+        fn descriptor(&self) -> SourceDescriptor {
+            SourceDescriptor {
+                scheme: "test",
+                target: "empty".to_string(),
+            }
+        }
+
+        fn open<'a>(&'a self) -> SourceFuture<'a, OpenedSource> {
+            Box::pin(async {
+                Ok(OpenedSource {
+                    reader: Box::pin(tokio::io::empty()),
+                    metadata: SourceMetadata {
+                        size_bytes: Some(0),
+                        ..SourceMetadata::default()
+                    },
+                })
+            })
+        }
+
+        fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata> {
+            Box::pin(async { Ok(SourceMetadata::default()) })
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingFormat;
+
+    impl Format for FailingFormat {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        fn decode<'a>(
+            &'a self,
+            _reader: Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>,
+            _hints: FormatHints,
+        ) -> FormatFuture<'a, DecodedStream> {
+            Box::pin(async { Err(FormatError::Parse("boom".to_string())) })
+        }
+    }
+
+    fn schema_config() -> SchemaConfig {
+        SchemaConfig {
+            strict: false,
+            fields: vec![FieldConfig {
+                name: "id".to_string(),
+                r#type: FieldType::Integer,
+                nullable: true,
+                sensitive: false,
+                concept_uri: None,
+                codelist: None,
+                unit: None,
+                language: None,
+            }],
+        }
+    }
+
+    fn test_plan(format: Arc<dyn Format>) -> IngestPlan {
+        let tmp = TempDir::new().expect("tempdir");
+        IngestPlan::new(
+            id("dataset"),
+            id("resource"),
+            Arc::new(EmptySource),
+            format,
+            schema_config(),
+            Arc::from(tmp.path()),
+            Arc::new(SessionContext::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn repeated_failures_preserve_failed_since_until_success() {
+        let plan = test_plan(Arc::new(FailingFormat));
+
+        let first = plan.initial_ingest().await.expect_err("first failure");
+        assert!(matches!(first, IngestError::SourceUnreadable));
+        let first_since = match plan.readiness() {
+            ResourceReadiness::Failed { since, .. } => since,
+            other => panic!("expected failed readiness, got {other:?}"),
+        };
+
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        plan.initial_ingest().await.expect_err("second failure");
+        let second_since = match plan.readiness() {
+            ResourceReadiness::Failed { since, .. } => since,
+            other => panic!("expected failed readiness, got {other:?}"),
+        };
+
+        assert_eq!(first_since, second_since);
+    }
+
+    #[tokio::test]
+    async fn refresh_loop_publishes_readiness_after_runtime_failure() {
+        let plan = Arc::new(test_plan(Arc::new(FailingFormat)));
+        let notified = Arc::new(Notify::new());
+        let publish_count = Arc::new(AtomicUsize::new(0));
+        let shutdown = CancellationToken::new();
+        let publish = {
+            let notified = Arc::clone(&notified);
+            let publish_count = Arc::clone(&publish_count);
+            Arc::new(move || {
+                publish_count.fetch_add(1, Ordering::SeqCst);
+                notified.notify_one();
+            })
+        };
+
+        let task = tokio::spawn(run_refresh_loop(
+            plan,
+            RefreshPolicy::Interval {
+                interval: Duration::from_millis(1),
+            },
+            shutdown.clone(),
+            publish,
+        ));
+
+        timeout(Duration::from_secs(1), notified.notified())
+            .await
+            .expect("refresh loop published readiness");
+        shutdown.cancel();
+        task.await.expect("refresh loop task joins");
+
+        assert!(publish_count.load(Ordering::SeqCst) >= 1);
     }
 }

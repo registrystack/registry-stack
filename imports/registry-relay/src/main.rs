@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use data_gate::audit::{AuditSink, StdoutSink};
+use data_gate::audit::{AuditSink, ChainingSink, FileSink, StdoutSink, SyslogSink};
 use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use data_gate::auth::ScopeSet;
 use data_gate::config::{self, ApiKeyConfig, AuditSinkConfig, Config};
@@ -115,7 +115,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&audit_sink),
-        readiness_rx,
+        readiness_rx.clone(),
         entity_registry,
         query,
         aggregate_query,
@@ -151,8 +151,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // the other.
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
         if let Some(admin_listener) = admin_listener {
-            let admin_app =
-                data_gate::server::build_admin_app(Arc::clone(&config), Arc::clone(&audit_sink));
+            let admin_app = data_gate::server::build_admin_app(
+                Arc::clone(&config),
+                Arc::clone(&auth),
+                Arc::clone(&audit_sink),
+                readiness_rx.clone(),
+                Arc::clone(&ingest),
+            );
             let admin_serve = axum::serve(admin_listener, admin_app.into_make_service())
                 .with_graceful_shutdown(shutdown_signal());
             tokio::select! {
@@ -253,41 +258,41 @@ fn build_api_key_entry(key: &ApiKeyConfig) -> Result<ApiKeyEntry, Error> {
     })
 }
 
-/// Instantiate the configured audit sink. Wave 0 supports `stdout`
-/// only; the other variants log a warning and fall back to stdout so
-/// the gateway still starts. Wave 4 implements `file` and `syslog`.
+/// Instantiate the configured audit sink.
 fn build_audit_sink(config: &Config) -> Arc<dyn AuditSink> {
-    match &config.audit.sink {
+    let sink: Arc<dyn AuditSink> = match &config.audit.sink {
         AuditSinkConfig::Stdout {} => Arc::new(StdoutSink::new()),
-        AuditSinkConfig::File { .. } => {
-            warn!(
-                requested = "file",
-                "audit sink not implemented in Wave 0; falling back to stdout"
-            );
-            Arc::new(StdoutSink::new())
+        AuditSinkConfig::File { path, rotate } => {
+            match FileSink::new(path, rotate.max_size_mb, rotate.max_files) {
+                Ok(sink) => Arc::new(sink),
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        requested = "file",
+                        "audit file sink unavailable; falling back to stdout"
+                    );
+                    Arc::new(StdoutSink::new())
+                }
+            }
         }
-        AuditSinkConfig::Syslog {} => {
-            warn!(
-                requested = "syslog",
-                "audit sink not implemented in Wave 0; falling back to stdout"
-            );
-            Arc::new(StdoutSink::new())
-        }
-        // `AuditSinkConfig` is `#[non_exhaustive]`; future variants
-        // fall back to stdout with an explicit warning until their
-        // wave implements them.
+        AuditSinkConfig::Syslog {} => Arc::new(SyslogSink::new()),
         _ => {
             warn!("unknown audit sink variant; falling back to stdout");
             Arc::new(StdoutSink::new())
         }
+    };
+    if config.audit.chain {
+        Arc::new(ChainingSink::new(sink))
+    } else {
+        sink
     }
 }
 
 fn audit_sink_kind(config: &Config) -> &'static str {
     match &config.audit.sink {
         AuditSinkConfig::Stdout {} => "stdout",
-        AuditSinkConfig::File { .. } => "file (fallback: stdout)",
-        AuditSinkConfig::Syslog {} => "syslog (fallback: stdout)",
+        AuditSinkConfig::File { .. } => "file",
+        AuditSinkConfig::Syslog {} => "syslog",
         _ => "unknown (fallback: stdout)",
     }
 }

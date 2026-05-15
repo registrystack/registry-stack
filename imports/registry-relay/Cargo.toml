@@ -38,8 +38,11 @@ csv = { version = "1" }
 # of datafusion but pinned here so the public surface compiles without
 # relying on a re-export path.
 futures = { version = "0.3" }
+bytes = { version = "1" }
 # Atomic state swap for IngestPlan readiness (single-writer, many-reader).
 arc-swap = { version = "1" }
+# Implements DataFusion's async TableProvider delegation for atomic swaps.
+async-trait = { version = "0.1" }
 # CancellationToken for refresh-loop shutdown.
 tokio-util = { version = "0.7" }
 
@@ -54,6 +57,7 @@ humantime-serde = { version = "1" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 argon2 = { version = "0.5" }
+sha2 = { version = "0.10" }
 subtle = { version = "2" }
 zeroize = { version = "1" }
 
