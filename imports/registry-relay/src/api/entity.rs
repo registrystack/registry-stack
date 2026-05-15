@@ -15,10 +15,13 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
+use hmac::{Mac, SimpleHmac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use tokio::sync::watch;
+use zeroize::Zeroizing;
 
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
@@ -35,6 +38,72 @@ use crate::query::{
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "entity.query_unavailable";
 const CURSOR_INVALIDATED_CODE: &str = "pagination.cursor_invalidated";
+
+/// Defensive cap on the number of filter parameters accepted on a
+/// single entity-collection request. Pairs with the URI length cap in
+/// `server.rs` to bound the cost a single client can impose on filter
+/// parsing and DataFusion logical-plan construction.
+const MAX_FILTERS_PER_REQUEST: usize = 20;
+
+/// Truncated HMAC tag length, in bytes. 16 bytes (128 bits) preserves
+/// the standard collision-resistance bound for HMAC while keeping the
+/// hex-encoded cursor short.
+const CURSOR_MAC_LEN: usize = 16;
+
+/// Server-side signer for opaque pagination cursors.
+///
+/// The key is generated at startup from the OS CSPRNG via
+/// [`getrandom::fill`] and lives only in process memory; restarting the
+/// gateway invalidates outstanding cursors, which is acceptable for
+/// opaque pagination tokens (clients must always be prepared for
+/// `pagination.cursor_invalidated`). Held in [`Zeroizing`] so the key
+/// is wiped on drop.
+pub struct CursorSigner {
+    key: Zeroizing<[u8; 32]>,
+}
+
+impl CursorSigner {
+    /// Generate a fresh signer with a random 32-byte key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS CSPRNG is unavailable. On supported targets
+    /// (Linux, macOS, BSD, Windows) `getrandom` only fails in
+    /// catastrophic conditions (e.g. early-boot before the kernel pool
+    /// is seeded); failing fast at startup is preferred over running
+    /// the gateway without cursor integrity.
+    #[must_use]
+    pub fn new_random() -> Self {
+        let mut key = Zeroizing::new([0u8; 32]);
+        getrandom::fill(key.as_mut_slice()).expect("OS CSPRNG must be available at startup");
+        Self { key }
+    }
+
+    fn tag(&self, message: &[u8]) -> [u8; CURSOR_MAC_LEN] {
+        let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(self.key.as_ref())
+            .expect("HMAC-SHA256 accepts any key length");
+        mac.update(message);
+        let full = mac.finalize().into_bytes();
+        let mut tag = [0u8; CURSOR_MAC_LEN];
+        tag.copy_from_slice(&full[..CURSOR_MAC_LEN]);
+        tag
+    }
+
+    /// Constant-time verify that `tag` is the MAC of `message`.
+    fn verify(&self, message: &[u8], tag: &[u8]) -> bool {
+        if tag.len() != CURSOR_MAC_LEN {
+            return false;
+        }
+        let expected = self.tag(message);
+        expected.ct_eq(tag).into()
+    }
+}
+
+impl std::fmt::Debug for CursorSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CursorSigner").finish_non_exhaustive()
+    }
+}
 
 /// Sub-router for entity-shaped dataset routes from Spec.md Section 7.
 ///
@@ -144,6 +213,7 @@ async fn entity_schema(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn entity_collection(
     Path(path): Path<EntityPath>,
     Query(params): Query<HashMap<String, String>>,
@@ -152,6 +222,7 @@ async fn entity_collection(
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
     let audit_context = registry
         .as_ref()
@@ -191,6 +262,12 @@ async fn entity_collection(
         );
     };
 
+    let Some(Extension(signer)) = signer else {
+        return query_unavailable(
+            "entity collection route matched, but cursor signer is not installed",
+        );
+    };
+
     let validator = params_validator(&params);
     let link_params = params.clone();
     let cursor_context = CursorContext {
@@ -200,7 +277,7 @@ async fn entity_collection(
         filters: Vec::new(),
         ingest_version: None,
     };
-    let query_params = match collection_query_from_params(params, cursor_context) {
+    let query_params = match collection_query_from_params(&signer, params, cursor_context) {
         Ok(query_params) => query_params,
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
@@ -246,7 +323,7 @@ async fn entity_collection(
                     filters: cursor_context.filters,
                     ingest_version: cursor_context.ingest_version,
                 };
-                let encoded = match encode_cursor(&cursor) {
+                let encoded = match encode_cursor(&signer, &cursor) {
                     Ok(encoded) => encoded,
                     Err(error) => return error.into_response(),
                 };
@@ -447,6 +524,7 @@ async fn entity_record(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn entity_relationship(
     Path(path): Path<EntityRelationshipPath>,
     Query(params): Query<HashMap<String, String>>,
@@ -455,6 +533,7 @@ async fn entity_relationship(
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
     let audit_context = registry.as_ref().and_then(|Extension(registry)| {
         audit_context_for_relationship(registry, &path.dataset_id, &path.entity, &path.relationship)
@@ -515,6 +594,12 @@ async fn entity_relationship(
         );
     };
 
+    let Some(Extension(signer)) = signer else {
+        return query_unavailable(
+            "entity relationship route matched, but cursor signer is not installed",
+        );
+    };
+
     let link_params = params.clone();
     let validator = format!(
         "{}:{}?{}",
@@ -522,11 +607,12 @@ async fn entity_relationship(
         path.relationship,
         params_validator(&link_params)
     );
-    let relationship_query = match relationship_query_from_params(params, page_context.as_ref()) {
-        Ok(query) => query,
-        Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
-        Err(PageParamError::Error(error)) => return error.into_response(),
-    };
+    let relationship_query =
+        match relationship_query_from_params(&signer, params, page_context.as_ref()) {
+            Ok(query) => query,
+            Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
+            Err(PageParamError::Error(error)) => return error.into_response(),
+        };
     let cursor = relationship_query.cursor.clone();
     match query
         .read_relationship_page(
@@ -564,7 +650,7 @@ async fn entity_relationship(
                         filters: context.filters,
                         ingest_version: context.ingest_version,
                     };
-                    let encoded = match encode_cursor(&cursor) {
+                    let encoded = match encode_cursor(&signer, &cursor) {
                         Ok(encoded) => encoded,
                         Err(error) => return error.into_response(),
                     };
@@ -927,6 +1013,7 @@ fn relationship_kind(kind: crate::config::RelationshipKind) -> &'static str {
 }
 
 fn collection_query_from_params(
+    signer: &CursorSigner,
     params: HashMap<String, String>,
     mut cursor_context: CursorContext,
 ) -> Result<ParsedCollectionQuery, PageParamError> {
@@ -957,13 +1044,16 @@ fn collection_query_from_params(
             name => {
                 let (field, op) = parse_filter_name(name)?;
                 let value = parse_filter_value(op, value)?;
+                if query.filters.len() >= MAX_FILTERS_PER_REQUEST {
+                    return Err(crate::error::FilterError::TooManyFilters.into());
+                }
                 query = query.with_filter(EntityFilter::with_op(field, op, value));
             }
         }
     }
     cursor_context.filters = cursor_filters_from_filters(&query.filters);
     let cursor = if let Some(cursor) = cursor {
-        let cursor = decode_cursor(&cursor)?;
+        let cursor = decode_cursor(signer, &cursor)?;
         validate_cursor(&cursor, &cursor_context)?;
         query = query.with_after_primary_key(cursor.position.clone());
         Some(cursor)
@@ -979,6 +1069,7 @@ fn collection_query_from_params(
 }
 
 fn relationship_query_from_params(
+    signer: &CursorSigner,
     params: HashMap<String, String>,
     cursor_context: Option<&CursorContext>,
 ) -> Result<ParsedRelationshipQuery, PageParamError> {
@@ -1008,7 +1099,7 @@ fn relationship_query_from_params(
         }
     }
     let cursor = if let Some(cursor) = cursor {
-        let cursor = decode_cursor(&cursor)?;
+        let cursor = decode_cursor(signer, &cursor)?;
         validate_cursor(&cursor, cursor_context)?;
         query = query.with_after_primary_key(cursor.position.clone());
         Some(cursor)
@@ -1121,15 +1212,25 @@ fn validate_cursor(cursor: &PageCursor, context: &CursorContext) -> Result<(), P
     Ok(())
 }
 
-fn encode_cursor(cursor: &PageCursor) -> Result<String, Error> {
-    serde_json::to_vec(cursor)
-        .map(|bytes| hex_lower(&bytes))
-        .map_err(|_| InternalError::Unhandled.into())
+fn encode_cursor(signer: &CursorSigner, cursor: &PageCursor) -> Result<String, Error> {
+    let payload = serde_json::to_vec(cursor).map_err(|_| Error::from(InternalError::Unhandled))?;
+    let tag = signer.tag(&payload);
+    let mut buf = Vec::with_capacity(CURSOR_MAC_LEN + payload.len());
+    buf.extend_from_slice(&tag);
+    buf.extend_from_slice(&payload);
+    Ok(hex_lower(&buf))
 }
 
-fn decode_cursor(cursor: &str) -> Result<PageCursor, Error> {
+fn decode_cursor(signer: &CursorSigner, cursor: &str) -> Result<PageCursor, Error> {
     let bytes = hex_decode(cursor).ok_or(crate::error::FilterError::InvalidValue)?;
-    serde_json::from_slice(&bytes).map_err(|_| crate::error::FilterError::InvalidValue.into())
+    if bytes.len() <= CURSOR_MAC_LEN {
+        return Err(crate::error::FilterError::InvalidValue.into());
+    }
+    let (tag, payload) = bytes.split_at(CURSOR_MAC_LEN);
+    if !signer.verify(payload, tag) {
+        return Err(crate::error::FilterError::InvalidValue.into());
+    }
+    serde_json::from_slice(payload).map_err(|_| crate::error::FilterError::InvalidValue.into())
 }
 
 fn hex_decode(value: &str) -> Option<Vec<u8>> {

@@ -355,6 +355,31 @@ async fn server_request_timeout_field_reaches_timeout_layer() {
 }
 
 #[tokio::test]
+async fn overlong_uri_returns_414_uri_too_long() {
+    // The transport-layer URI cap fires before any handler runs. A
+    // request with a path + query string over 8 KiB must return 414
+    // with the `internal.uri_too_long` problem-details code, matching
+    // the shape used by the timeout and body-limit layers.
+    let inmem = InMemorySink::new();
+    let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+    let app = build_test_app(sink);
+    let server = TestServer::new(app);
+
+    // Build a URI well over the 8 KiB cap. The leading `/health?` plus
+    // 9000 ASCII bytes of query string puts us comfortably past the
+    // limit. We hit `/health` because it is the simplest always-mounted
+    // route; the cap is enforced before route matching.
+    let big_param = "a".repeat(9_000);
+    let url = format!("/health?x={big_param}");
+    let resp = server.get(&url).await;
+
+    resp.assert_status(StatusCode::URI_TOO_LONG);
+    assert_eq!(resp.header("content-type"), "application/problem+json");
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "internal.uri_too_long");
+}
+
+#[tokio::test]
 async fn admin_bind_serves_health_on_second_listener() {
     // Bind two ephemeral ports, spin up the main and admin routers,
     // and confirm `/health` is reachable on both. The integration test

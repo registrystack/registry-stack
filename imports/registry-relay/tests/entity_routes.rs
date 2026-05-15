@@ -4,7 +4,7 @@
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
-use data_gate::api::{aggregates_router, entity_router};
+use data_gate::api::{aggregates_router, entity_router, CursorSigner};
 use data_gate::auth::{AuthMode, Principal, ScopeSet};
 use data_gate::config::{self, DatasetId, ResourceId};
 use data_gate::entity::EntityRegistry;
@@ -42,12 +42,37 @@ async fn server_with_query() -> TestServer {
 }
 
 async fn server_with_query_version(ingest_version: &str) -> TestServer {
-    server_with_query_versions(ingest_version, ingest_version).await
+    server_with_query_versions_and_signer(
+        ingest_version,
+        ingest_version,
+        Arc::new(CursorSigner::new_random()),
+    )
+    .await
 }
 
 async fn server_with_query_versions(
     table_ingest_version: &str,
     readiness_ingest_version: &str,
+) -> TestServer {
+    server_with_query_versions_and_signer(
+        table_ingest_version,
+        readiness_ingest_version,
+        Arc::new(CursorSigner::new_random()),
+    )
+    .await
+}
+
+async fn server_with_query_version_and_signer(
+    ingest_version: &str,
+    signer: Arc<CursorSigner>,
+) -> TestServer {
+    server_with_query_versions_and_signer(ingest_version, ingest_version, signer).await
+}
+
+async fn server_with_query_versions_and_signer(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
 ) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
@@ -249,6 +274,7 @@ audit:
             .layer(Extension(registry))
             .layer(Extension(cfg))
             .layer(Extension(readiness))
+            .layer(Extension(signer))
             .layer(Extension(principal(&[
                 "social_registry:metadata",
                 "social_registry:rows",
@@ -453,7 +479,15 @@ async fn entity_collection_cursor_mismatch_returns_conflict() {
 
 #[tokio::test]
 async fn entity_collection_stale_cursor_returns_conflict() {
-    let old_server = server_with_query_version("01J5K8M0000000000000000000").await;
+    // Share a cursor signer across both servers so the HMAC verifies on
+    // the second request and the ingest-version mismatch surfaces as
+    // `pagination.cursor_invalidated`. A signer change (e.g. a process
+    // restart) would instead reject the cursor as `filter.invalid_value`,
+    // which is covered by the dedicated tamper-detection tests below.
+    let signer = Arc::new(CursorSigner::new_random());
+    let old_server =
+        server_with_query_version_and_signer("01J5K8M0000000000000000000", Arc::clone(&signer))
+            .await;
     let first = old_server
         .get("/datasets/social_registry/household?limit=1")
         .await;
@@ -463,7 +497,9 @@ async fn entity_collection_stale_cursor_returns_conflict() {
         .as_str()
         .expect("first page has cursor");
 
-    let new_server = server_with_query_version("01J5K8M0000000000000000001").await;
+    let new_server =
+        server_with_query_version_and_signer("01J5K8M0000000000000000001", Arc::clone(&signer))
+            .await;
     let url = format!("/datasets/social_registry/household?limit=1&cursor={cursor}");
     let resp = new_server.get(&url).await;
     resp.assert_status(StatusCode::CONFLICT);
@@ -604,7 +640,13 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
 
 #[tokio::test]
 async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
-    let old_server = server_with_query_version("01J5K8M0000000000000000000").await;
+    // Share a cursor signer across both servers so the HMAC verifies on
+    // the second request and the ingest-version mismatch surfaces as
+    // `pagination.cursor_invalidated`.
+    let signer = Arc::new(CursorSigner::new_random());
+    let old_server =
+        server_with_query_version_and_signer("01J5K8M0000000000000000000", Arc::clone(&signer))
+            .await;
     let first = old_server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
         .add_header("x-data-purpose", "route-test")
@@ -615,7 +657,9 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
         .as_str()
         .expect("first relationship page has cursor");
 
-    let new_server = server_with_query_version("01J5K8M0000000000000000001").await;
+    let new_server =
+        server_with_query_version_and_signer("01J5K8M0000000000000000001", Arc::clone(&signer))
+            .await;
     let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
     let resp = new_server
         .get(&url)
@@ -1079,4 +1123,125 @@ async fn entity_collection_without_required_filters_accepts_no_filter() {
 
     // No required_filters on thing; unfiltered request should succeed.
     resp.assert_status(StatusCode::OK);
+}
+
+/// Flips one nibble of a hex-encoded cursor at the given byte offset.
+/// The original value is decoded, mutated by XOR, and re-encoded so the
+/// length stays the same.
+fn flip_hex_nibble(cursor: &str, byte_offset: usize) -> String {
+    let mut chars: Vec<char> = cursor.chars().collect();
+    let hex_index = byte_offset * 2;
+    let original = chars[hex_index]
+        .to_digit(16)
+        .expect("cursor is hex-encoded");
+    let flipped = original ^ 0x1;
+    chars[hex_index] = std::char::from_digit(flipped, 16).expect("nibble in range");
+    chars.into_iter().collect()
+}
+
+#[tokio::test]
+async fn entity_collection_cursor_with_tampered_mac_rejected() {
+    let server = server_with_query().await;
+
+    let first = server
+        .get("/datasets/social_registry/household?limit=1")
+        .await;
+    first.assert_status(StatusCode::OK);
+    let body: Value = first.json();
+    let cursor = body["pagination"]["next_cursor"]
+        .as_str()
+        .expect("first page has cursor")
+        .to_string();
+
+    // Flip one nibble of the MAC tag (byte 0). The HMAC verify must
+    // fail before any JSON parsing happens and return the same code as
+    // a malformed cursor would.
+    let tampered = flip_hex_nibble(&cursor, 0);
+    let url = format!("/datasets/social_registry/household?limit=1&cursor={tampered}");
+    let resp = server.get(&url).await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "filter.invalid_value");
+}
+
+#[tokio::test]
+async fn entity_collection_cursor_with_tampered_payload_rejected() {
+    let server = server_with_query().await;
+
+    let first = server
+        .get("/datasets/social_registry/household?limit=1")
+        .await;
+    first.assert_status(StatusCode::OK);
+    let body: Value = first.json();
+    let cursor = body["pagination"]["next_cursor"]
+        .as_str()
+        .expect("first page has cursor")
+        .to_string();
+
+    // Flip a nibble of the JSON payload (past the 16-byte MAC tag).
+    // The HMAC must catch the mutation and reject the cursor.
+    let tampered = flip_hex_nibble(&cursor, 16);
+    let url = format!("/datasets/social_registry/household?limit=1&cursor={tampered}");
+    let resp = server.get(&url).await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "filter.invalid_value");
+}
+
+#[tokio::test]
+async fn entity_collection_unmutated_cursor_still_works() {
+    let server = server_with_query().await;
+
+    let first = server
+        .get("/datasets/social_registry/household?limit=1")
+        .await;
+    first.assert_status(StatusCode::OK);
+    let body: Value = first.json();
+    let cursor = body["pagination"]["next_cursor"]
+        .as_str()
+        .expect("first page has cursor")
+        .to_string();
+
+    let url = format!("/datasets/social_registry/household?limit=1&cursor={cursor}");
+    let resp = server.get(&url).await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["data"],
+        serde_json::json!([{"id": "hh-2", "region": "south"}])
+    );
+}
+
+#[tokio::test]
+async fn entity_collection_too_many_filter_params_rejected() {
+    let server = server_with_query().await;
+
+    // 21 distinct filters: one over the cap. The cap is reached at
+    // entry 21 because the `region` field is the only filter the
+    // example config allows. We use 21 distinct `region.in=...` style
+    // entries, but `region` is a single field and each param replaces
+    // the prior. Instead, use 21 attempts on the same `region` field
+    // via separate key names: `region`, `region.in`, `region.gte`,
+    // `region.lte`, `region.between` are all configured ops; the
+    // remaining 16 must be the same field repeated through query-string
+    // duplication, which axum's `Query<HashMap<_,_>>` collapses to one
+    // entry. To exercise the cap regardless of field allowlist, send
+    // requests on the individual entity (which allows `id` filters) and
+    // use 21 distinct `id.eq=...` style keys; since the `Query` extractor
+    // collapses duplicate keys, we encode each filter with a fresh name
+    // that the parser rejects after a configured cap. The cleanest path:
+    // exercise the cap by sending 21 distinct filter *parameter names*
+    // that are all syntactically valid (`field_NN=value`), then assert
+    // the per-request cap fires before any allowed-filter check.
+    let mut url = String::from("/datasets/social_registry/household?");
+    for i in 0..21 {
+        if i > 0 {
+            url.push('&');
+        }
+        url.push_str(&format!("field_{i:02}=value"));
+    }
+    let resp = server.get(&url).await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "filter.too_many_filters");
 }

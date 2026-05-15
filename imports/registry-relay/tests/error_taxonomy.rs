@@ -41,6 +41,7 @@ fn all_variants() -> Vec<Error> {
         Error::Filter(FilterError::UnsupportedOp),
         Error::Filter(FilterError::InvalidValue),
         Error::Filter(FilterError::TooManyValues),
+        Error::Filter(FilterError::TooManyFilters),
         Error::Filter(FilterError::InvalidRange),
         Error::Filter(FilterError::LimitOutOfRange),
         // schema.*
@@ -70,6 +71,7 @@ fn all_variants() -> Vec<Error> {
         // internal.*
         Error::Internal(InternalError::Timeout),
         Error::Internal(InternalError::PayloadTooLarge),
+        Error::Internal(InternalError::UriTooLong),
         Error::Internal(InternalError::Unhandled),
     ]
 }
@@ -91,6 +93,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("filter.invalid_value", StatusCode::BAD_REQUEST),
         // Spec §7.bis.5: filter value list exceeds the configured cap is 413.
         ("filter.too_many_values", StatusCode::PAYLOAD_TOO_LARGE),
+        ("filter.too_many_filters", StatusCode::BAD_REQUEST),
         ("filter.invalid_range", StatusCode::BAD_REQUEST),
         ("filter.limit_out_of_range", StatusCode::BAD_REQUEST),
         ("schema.unknown_dataset", StatusCode::NOT_FOUND),
@@ -138,6 +141,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("config.duplicate_id", StatusCode::INTERNAL_SERVER_ERROR),
         ("internal.timeout", StatusCode::GATEWAY_TIMEOUT),
         ("internal.payload_too_large", StatusCode::PAYLOAD_TOO_LARGE),
+        ("internal.uri_too_long", StatusCode::URI_TOO_LONG),
         ("internal.unhandled", StatusCode::INTERNAL_SERVER_ERROR),
     ]
 }
