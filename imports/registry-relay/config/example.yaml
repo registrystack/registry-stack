@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Canonical Wave 0 example. Do not drift this file from Spec.md Section 4.
+# Canonical V1 example. Do not drift this file from Spec.md Section 4.
 # Any change here must be matched by a Spec.md edit in the same commit.
 
 server:
@@ -34,6 +34,11 @@ auth:
         - social_registry:aggregate
         - social_registry:rows
 
+    - id: identity_verification_service
+      hash_env: VERIFICATION_SERVICE_API_KEY_HASH
+      scopes:
+        - social_registry:verify
+
 datasets:
   - id: social_registry
     title: Social Registry
@@ -50,76 +55,143 @@ datasets:
     source:
       type: file
       path: ./data/social_registry.xlsx
-      # optional, for messy spreadsheets
-      header_row: 1
-      data_range: A2:E100000
 
     refresh:
       mode: mtime         # mtime | interval | manual
       interval: 1h        # used when mode == interval
 
-    resources:
-      - id: beneficiaries
-        sheet: Beneficiaries
-        primary_key: beneficiary_id
-
+    tables:
+      - id: households_table
+        format:
+          xlsx:
+            sheet: Households
+        primary_key: household_id
         schema:
           strict: true
           fields:
-            - name: beneficiary_id
-              type: string
-              nullable: false
-              concept_uri: psc:properties/personIdentifier
             - name: household_id
               type: string
               nullable: false
-              concept_uri: psc:properties/householdIdentifier
-            - name: municipality_code
+            - name: region_code
               type: string
               nullable: true
-              concept_uri: m8g:Location
-              codelist: https://www.insee.fr/codes/cog   # optional codelist URI
             - name: enrollment_date
               type: date
               nullable: true
-              concept_uri: psc:properties/enrollmentDate
+
+      - id: individuals_table
+        format:
+          xlsx:
+            sheet: Individuals
+        primary_key: individual_id
+        schema:
+          strict: true
+          fields:
+            - name: individual_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: municipality_code
+              type: string
+              nullable: true
+              codelist: https://www.insee.fr/codes/cog
             - name: payment_amount
               type: number
               nullable: true
-              concept_uri: psc:properties/paymentAmount
               unit: EUR
 
+    entities:
+      - name: household
+        title: Household
+        description: A household participating in Program X
+        table: households_table
+        concept_uri: psc:concepts/Household
+        fields:
+          - name: id
+            from: household_id
+            concept_uri: psc:properties/householdIdentifier
+          - name: region
+            from: region_code
+            concept_uri: m8g:Location
+          - name: enrolled_on
+            from: enrollment_date
+            concept_uri: psc:properties/enrollmentDate
+        relationships:
+          - name: members
+            kind: has_many
+            target: individual
+            foreign_key: household_id
         access:
-          metadata_scope: social_registry:metadata
-          aggregate_scope: social_registry:aggregate
-          row_scope: social_registry:rows
+          metadata_scope:    social_registry:metadata
+          aggregate_scope:   social_registry:aggregate
+          read_scope:        social_registry:rows
+          verify_scope:      social_registry:verify
+          bulk_export_scope: social_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: region
+              ops: [eq, in]
+          allowed_expansions: [members]
 
+      - name: individual
+        title: Individual
+        description: A person enrolled in Program X
+        table: individuals_table
+        concept_uri: psc:concepts/Person
+        fields:
+          - name: id
+            from: individual_id
+            concept_uri: psc:properties/personIdentifier
+          - name: household_id
+            from: household_id
+            concept_uri: psc:properties/householdIdentifier
+          - name: municipality_code
+            from: municipality_code
+            concept_uri: m8g:Location
+          - name: payment_amount
+            from: payment_amount
+            concept_uri: psc:properties/paymentAmount
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope:    social_registry:metadata
+          aggregate_scope:   social_registry:aggregate
+          read_scope:        social_registry:rows
+          verify_scope:      social_registry:verify
+          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
           require_purpose_header: true
           allowed_filters:
-            - field: beneficiary_id
+            - field: id
               ops: [eq, in]
             - field: household_id
               ops: [eq, in]
             - field: municipality_code
               ops: [eq, in]
-            - field: enrollment_date
-              ops: [eq, gte, lte, between]
-
+          allowed_expansions: [household]
         aggregates:
-          - id: beneficiaries_by_municipality
-            description: Number of beneficiaries by municipality
+          - id: by_municipality
+            description: Number of individuals by municipality
             group_by:
               - municipality_code
             measures:
-              - name: beneficiary_count
+              - name: individual_count
                 function: count
-                column: beneficiary_id
+                column: id
             disclosure_control:
               min_group_size: 5
-              suppression: omit   # omit | mask
+              suppression: omit
 
           - id: payments_by_municipality
             description: Total and average payments by municipality
@@ -135,6 +207,20 @@ datasets:
             disclosure_control:
               min_group_size: 5
               suppression: mask
+
+          - id: by_household_region
+            description: Number of individuals by household region
+            joins:
+              - relationship: household
+            group_by:
+              - household.region
+            measures:
+              - name: individual_count
+                function: count
+                column: id
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
 
 audit:
   sink: stdout            # stdout | file | syslog

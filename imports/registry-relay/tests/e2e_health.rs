@@ -34,10 +34,13 @@ use axum::http::StatusCode;
 use axum_test::TestServer;
 use data_gate::audit::{AuditSink, InMemorySink};
 use data_gate::auth::api_key::ApiKeyAuth;
-use data_gate::config::Config;
-use data_gate::server::{build_admin_app, build_app};
+use data_gate::config::{Config, DatasetId, ResourceId};
+use data_gate::ingest::ReadinessSnapshot;
+use data_gate::server::{build_admin_app, build_app, build_app_with_readiness};
 use serde_json::Value;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
+use ulid::Ulid;
 
 /// Load the canonical Wave 0 example config from the repo. The config
 /// loader runs cross-field validation; we set the required `hash_env`
@@ -57,6 +60,7 @@ fn load_example_config() -> Config {
     unsafe {
         std::env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
         std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
+        std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", phc);
     }
     data_gate::config::load(&path).expect("example config loads")
 }
@@ -78,6 +82,18 @@ fn build_test_app_with_health_audit(sink: Arc<dyn AuditSink>) -> axum::Router {
 fn build_test_app_with_config(config: Arc<Config>, sink: Arc<dyn AuditSink>) -> axum::Router {
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     build_app(config, auth, sink)
+}
+
+fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
+    serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
+}
+
+fn build_test_app_with_readiness(snapshot: ReadinessSnapshot) -> axum::Router {
+    let config = Arc::new(load_example_config());
+    let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    build_app_with_readiness(config, auth, sink, rx)
 }
 
 #[tokio::test]
@@ -125,6 +141,54 @@ async fn ready_returns_200_in_wave_0() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_eq!(body["status"], "ok");
+}
+
+#[tokio::test]
+async fn ready_returns_200_when_all_resources_registered() {
+    let dataset: DatasetId = id("social_registry");
+    let resource: ResourceId = id("beneficiaries");
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot.ready.insert(
+        (dataset, resource),
+        Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
+    );
+
+    let server = TestServer::new(build_test_app_with_readiness(snapshot));
+    let resp = server.get("/ready").await;
+    resp.assert_status(StatusCode::OK);
+
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["resources"][0]["dataset_id"], "social_registry");
+    assert_eq!(body["resources"][0]["resource_id"], "beneficiaries");
+    assert_eq!(
+        body["resources"][0]["ingest_ulid"],
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    );
+}
+
+#[tokio::test]
+async fn ready_503_lists_failed_resources() {
+    let dataset: DatasetId = id("social_registry");
+    let resource: ResourceId = id("beneficiaries");
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot
+        .failed
+        .insert((dataset, resource), "ingest.schema_mismatch");
+
+    let server = TestServer::new(build_test_app_with_readiness(snapshot));
+    let resp = server.get("/ready").await;
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.header("content-type"), "application/problem+json");
+
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "schema.resource_unavailable");
+    assert_eq!(body["failed_resources"][0]["dataset_id"], "social_registry");
+    assert_eq!(body["failed_resources"][0]["resource_id"], "beneficiaries");
+    assert_eq!(
+        body["failed_resources"][0]["code"],
+        "ingest.schema_mismatch"
+    );
 }
 
 #[tokio::test]

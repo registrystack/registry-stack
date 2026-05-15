@@ -14,8 +14,8 @@ use std::net::IpAddr;
 use crate::error::{ConfigError, Error};
 
 use super::{
-    AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, FieldConfig, ResourceConfig,
-    SourceConfig,
+    AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
+    EntityRelationshipConfig, FieldConfig, RelationshipKind, ResourceConfig, SourceConfig,
 };
 
 /// Prefix for the special `admin` scope. Spec.md Section 8.
@@ -107,7 +107,7 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
         }
 
         let mut resource_ids: HashSet<&str> = HashSet::new();
-        for resource in &dataset.resources {
+        for resource in dataset.table_configs() {
             if !is_valid_id(resource.id.as_str()) {
                 tracing::error!(
                     code = "config.validation_error",
@@ -151,6 +151,28 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
                 }
             }
         }
+
+        let mut entity_names: HashSet<&str> = HashSet::new();
+        for entity in &dataset.entities {
+            if !is_valid_id(&entity.name) || is_reserved_entity_segment(&entity.name) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    "entity name is invalid or reserved"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if !entity_names.insert(&entity.name) {
+                tracing::error!(
+                    code = "config.duplicate_id",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    "duplicate entity name within dataset"
+                );
+                return Err(ConfigError::DuplicateId);
+            }
+        }
     }
     Ok(())
 }
@@ -187,19 +209,19 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows>'"
+            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|bulk_export>'"
         );
         ConfigError::ValidationError
     })?;
 
     match level {
-        "metadata" | "aggregate" | "rows" => {}
+        "metadata" | "aggregate" | "rows" | "verify" | "bulk_export" => {}
         _ => {
             tracing::error!(
                 code = "config.validation_error",
                 api_key_id = %api_key_id,
                 scope = %scope,
-                "unknown scope level (allowed: metadata, aggregate, rows)"
+                "unknown scope level (allowed: metadata, aggregate, rows, verify, bulk_export)"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -275,12 +297,35 @@ fn validate_resources(config: &Config) -> Result<(), ConfigError> {
     for dataset in &config.datasets {
         validate_dataset_uris(&config.vocabularies, dataset)?;
         validate_source(dataset)?;
-        for resource in &dataset.resources {
+        validate_format_overrides(dataset)?;
+        for resource in dataset.table_configs() {
             validate_schema_uris(&config.vocabularies, dataset, resource)?;
             validate_allowed_filters(dataset, resource)?;
             for aggregate in &resource.aggregates {
                 validate_aggregate(dataset, resource, aggregate)?;
             }
+        }
+        validate_entities(&config.vocabularies, dataset)?;
+    }
+    Ok(())
+}
+
+fn validate_format_overrides(dataset: &DatasetConfig) -> Result<(), ConfigError> {
+    for resource in dataset.table_configs() {
+        let Some(format) = &resource.format else {
+            continue;
+        };
+        let count = usize::from(format.csv.is_some())
+            + usize::from(format.xlsx.is_some())
+            + usize::from(format.parquet.is_some());
+        if count != 1 {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                resource_id = %resource.id,
+                "resource.format must declare exactly one of csv, xlsx, parquet"
+            );
+            return Err(ConfigError::ValidationError);
         }
     }
     Ok(())
@@ -439,6 +484,423 @@ fn validate_aggregate(
         }
     }
     Ok(())
+}
+
+fn validate_entities(
+    registry: &BTreeMap<String, String>,
+    dataset: &DatasetConfig,
+) -> Result<(), ConfigError> {
+    if dataset.entities.is_empty() {
+        return Ok(());
+    }
+
+    let tables: BTreeMap<&str, &ResourceConfig> = dataset
+        .table_configs()
+        .map(|table| (table.id.as_str(), table))
+        .collect();
+    let entities: BTreeMap<&str, &EntityConfig> = dataset
+        .entities
+        .iter()
+        .map(|entity| (entity.name.as_str(), entity))
+        .collect();
+
+    for entity in &dataset.entities {
+        validate_entity_uris(registry, dataset, entity)?;
+        let table = tables.get(entity.table.as_str()).ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                table_id = %entity.table,
+                "entity references an unknown backing table"
+            );
+            ConfigError::ValidationError
+        })?;
+
+        let exposed_fields = exposed_entity_fields(entity, table)?;
+        validate_entity_primary_key(dataset, entity, table, &exposed_fields)?;
+        validate_entity_filters(dataset, entity, &exposed_fields)?;
+        validate_entity_aggregates(dataset, entity, &exposed_fields)?;
+        validate_entity_relationships(dataset, entity, table, &tables, &entities)?;
+    }
+
+    Ok(())
+}
+
+fn validate_entity_uris(
+    registry: &BTreeMap<String, String>,
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+) -> Result<(), ConfigError> {
+    if let Some(uri) = &entity.concept_uri {
+        if super::vocabularies::expand(uri, registry).is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                uri = %uri,
+                "entity concept_uri uses an unregistered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    for field in &entity.fields {
+        if let Some(uri) = &field.concept_uri {
+            if super::vocabularies::expand(uri, registry).is_none() {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    field = %field.name,
+                    uri = %uri,
+                    "entity field concept_uri uses an unregistered vocabulary prefix"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn exposed_entity_fields(
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+) -> Result<BTreeMap<String, String>, ConfigError> {
+    let table_fields = field_names_of(table);
+    if entity.fields.is_empty() {
+        return Ok(table
+            .schema
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field.name.clone()))
+            .collect());
+    }
+
+    let mut exposed = BTreeMap::new();
+    for field in &entity.fields {
+        if !is_valid_id(&field.name) {
+            tracing::error!(
+                code = "config.validation_error",
+                entity = %entity.name,
+                field = %field.name,
+                "entity field name is not a valid lower-snake id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        let source = field.from.as_deref().unwrap_or(&field.name);
+        if !table_fields.contains(source) {
+            tracing::error!(
+                code = "config.validation_error",
+                entity = %entity.name,
+                field = %field.name,
+                from = %source,
+                table_id = %table.id,
+                "entity field projection references a missing table column"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if exposed
+            .insert(field.name.clone(), source.to_string())
+            .is_some()
+        {
+            tracing::error!(
+                code = "config.duplicate_id",
+                entity = %entity.name,
+                field = %field.name,
+                "duplicate entity field"
+            );
+            return Err(ConfigError::DuplicateId);
+        }
+    }
+    Ok(exposed)
+}
+
+fn validate_entity_primary_key(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    let Some(primary_key) = table.primary_key.as_deref() else {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            table_id = %table.id,
+            "entity backing table must declare primary_key"
+        );
+        return Err(ConfigError::ValidationError);
+    };
+    let pk_exposures = exposed_fields
+        .values()
+        .filter(|from| from.as_str() == primary_key)
+        .count();
+    if pk_exposures != 1 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            table_id = %table.id,
+            primary_key = %primary_key,
+            exposures = pk_exposures,
+            "exactly one entity field must expose the backing table primary key"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+fn validate_entity_filters(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    exposed_fields: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    for filter in &entity.api.allowed_filters {
+        if !exposed_fields.contains_key(&filter.field) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %filter.field,
+                "entity allowed_filters references a non-exposed field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if filter.ops.is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %filter.field,
+                "entity allowed_filters entry must declare at least one op"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
+fn validate_entity_aggregates(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    exposed_fields: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    for aggregate in &entity.aggregates {
+        let join_names: HashSet<&str> = aggregate
+            .joins
+            .iter()
+            .map(|join| join.relationship.as_str())
+            .collect();
+        for join in &aggregate.joins {
+            if !entity
+                .relationships
+                .iter()
+                .any(|rel| rel.name == join.relationship)
+            {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    aggregate_id = %aggregate.id,
+                    relationship = %join.relationship,
+                    "entity aggregate join references an unknown relationship"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        if aggregate.disclosure_control.min_group_size < 1 {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                aggregate_id = %aggregate.id,
+                "entity aggregate min_group_size must be >= 1"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        for field in &aggregate.group_by {
+            if let Some((relationship, related_field)) = field.split_once('.') {
+                if !join_names.contains(relationship) || related_field.is_empty() {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        aggregate_id = %aggregate.id,
+                        field = %field,
+                        "relationship-prefixed aggregate group_by must reference a declared aggregate join"
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+            } else if !exposed_fields.contains_key(field) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    aggregate_id = %aggregate.id,
+                    field = %field,
+                    "entity aggregate group_by references a non-exposed field"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        for measure in &aggregate.measures {
+            if !exposed_fields.contains_key(&measure.column) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    aggregate_id = %aggregate.id,
+                    column = %measure.column,
+                    "entity aggregate measure references a non-exposed field"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_entity_relationships(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    tables: &BTreeMap<&str, &ResourceConfig>,
+    entities: &BTreeMap<&str, &EntityConfig>,
+) -> Result<(), ConfigError> {
+    let mut names = HashSet::new();
+    for relationship in &entity.relationships {
+        if !is_valid_id(&relationship.name)
+            || is_reserved_relationship_segment(&relationship.name)
+            || !names.insert(relationship.name.as_str())
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                relationship = %relationship.name,
+                "relationship name is invalid, reserved, or duplicated"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        let target = entities.get(relationship.target.as_str()).ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                relationship = %relationship.name,
+                target = %relationship.target,
+                "relationship target entity does not exist"
+            );
+            ConfigError::ValidationError
+        })?;
+        let target_table = tables
+            .get(target.table.as_str())
+            .expect("target entity table was validated earlier or will be validated in same pass");
+        validate_relationship_fk(dataset, entity, table, relationship, target, target_table)?;
+        if !entity.api.allowed_expansions.is_empty()
+            && !entity
+                .api
+                .allowed_expansions
+                .iter()
+                .all(|name| entity.relationships.iter().any(|rel| &rel.name == name))
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                "allowed_expansions references an unknown relationship"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
+fn validate_relationship_fk(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    relationship: &EntityRelationshipConfig,
+    target: &EntityConfig,
+    target_table: &ResourceConfig,
+) -> Result<(), ConfigError> {
+    let (fk_table, pk_table) = match relationship.kind {
+        RelationshipKind::BelongsTo => (table, target_table),
+        RelationshipKind::HasMany | RelationshipKind::HasOne => (target_table, table),
+    };
+    let Some(fk_field) = field_by_name(fk_table, &relationship.foreign_key) else {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            relationship = %relationship.name,
+            foreign_key = %relationship.foreign_key,
+            "relationship foreign_key is missing on the expected table"
+        );
+        return Err(ConfigError::ValidationError);
+    };
+    let Some(pk_name) = pk_table.primary_key.as_deref() else {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            relationship = %relationship.name,
+            target = %target.name,
+            "relationship target/source table lacks primary_key"
+        );
+        return Err(ConfigError::ValidationError);
+    };
+    let Some(pk_field) = field_by_name(pk_table, pk_name) else {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            relationship = %relationship.name,
+            primary_key = %pk_name,
+            "relationship primary key column is missing"
+        );
+        return Err(ConfigError::ValidationError);
+    };
+    if fk_field.r#type != pk_field.r#type {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            relationship = %relationship.name,
+            foreign_key = %relationship.foreign_key,
+            "relationship foreign_key type does not match primary key type"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if relationship.kind == RelationshipKind::HasOne {
+        tracing::warn!(
+            code = "config.validation_warning",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            relationship = %relationship.name,
+            "has_one uniqueness cannot be statically proven from config"
+        );
+    }
+    Ok(())
+}
+
+fn field_by_name<'a>(resource: &'a ResourceConfig, name: &str) -> Option<&'a FieldConfig> {
+    resource
+        .schema
+        .fields
+        .iter()
+        .find(|field| field.name == name)
+}
+
+fn is_reserved_entity_segment(name: &str) -> bool {
+    matches!(
+        name,
+        "catalog" | "admin" | "health" | "ready" | "openapi.json"
+    )
+}
+
+fn is_reserved_relationship_segment(name: &str) -> bool {
+    matches!(name, "aggregates" | "schema" | "verify" | "exports")
 }
 
 #[cfg(test)]

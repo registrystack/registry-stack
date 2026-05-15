@@ -50,6 +50,10 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     #[serde(default)]
     pub admin_bind: Option<SocketAddr>,
+    #[serde(default = "default_cache_dir")]
+    pub cache_dir: PathBuf,
+    #[serde(default = "default_xlsx_max_file_bytes")]
+    pub xlsx_max_file_bytes: u64,
     #[serde(default)]
     pub trust_proxy: TrustProxyConfig,
     #[serde(default)]
@@ -60,6 +64,14 @@ pub struct ServerConfig {
 
 fn default_request_timeout() -> Duration {
     Duration::from_secs(30)
+}
+
+fn default_cache_dir() -> PathBuf {
+    PathBuf::from("./cache")
+}
+
+fn default_xlsx_max_file_bytes() -> u64 {
+    256 * 1024 * 1024
 }
 
 /// `X-Forwarded-For` policy. Until the `ipnet` crate lands in deps we
@@ -206,7 +218,19 @@ pub struct DatasetConfig {
     pub source: SourceConfig,
     pub refresh: RefreshConfig,
     #[serde(default)]
+    pub tables: Vec<ResourceConfig>,
+    #[serde(default)]
     pub resources: Vec<ResourceConfig>,
+    #[serde(default)]
+    pub entities: Vec<EntityConfig>,
+}
+
+impl DatasetConfig {
+    /// Storage-layer tables, accepting `resources` as the pre-entity
+    /// Wave 1 alias until all fixtures and deployments migrate.
+    pub fn table_configs(&self) -> impl Iterator<Item = &ResourceConfig> {
+        self.tables.iter().chain(self.resources.iter())
+    }
 }
 
 /// Source plugin selection. Tagged on `type:` so HTTP / S3 variants
@@ -254,14 +278,167 @@ fn default_mtime_interval() -> Duration {
 pub struct ResourceConfig {
     pub id: ResourceId,
     #[serde(default)]
+    pub format: Option<ResourceFormatConfig>,
+    #[serde(default)]
     pub sheet: Option<String>,
     #[serde(default)]
     pub primary_key: Option<String>,
     pub schema: SchemaConfig,
+    #[serde(default)]
     pub access: ResourceAccessConfig,
+    #[serde(default)]
     pub api: ResourceApiConfig,
     #[serde(default)]
     pub aggregates: Vec<AggregateConfig>,
+}
+
+/// Storage table format override. If omitted, Wave 1 infers the format
+/// from the source file extension.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceFormatConfig {
+    #[serde(default)]
+    pub csv: Option<CsvFormatConfig>,
+    #[serde(default)]
+    pub xlsx: Option<XlsxFormatConfig>,
+    #[serde(default)]
+    pub parquet: Option<ParquetFormatConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CsvFormatConfig {
+    #[serde(default)]
+    pub delimiter: Option<u8>,
+    #[serde(default)]
+    pub quote: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct XlsxFormatConfig {
+    #[serde(default)]
+    pub sheet: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParquetFormatConfig {}
+
+impl ResourceConfig {
+    pub fn format_name(&self) -> Option<&'static str> {
+        let format = self.format.as_ref()?;
+        if format.csv.is_some() {
+            Some("csv")
+        } else if format.xlsx.is_some() {
+            Some("xlsx")
+        } else if format.parquet.is_some() {
+            Some("parquet")
+        } else {
+            None
+        }
+    }
+
+    pub fn xlsx_sheet(&self) -> Option<String> {
+        self.format
+            .as_ref()
+            .and_then(|format| format.xlsx.as_ref())
+            .and_then(|xlsx| xlsx.sheet.clone())
+            .or_else(|| self.sheet.clone())
+    }
+
+    pub fn csv_delimiter(&self) -> Option<u8> {
+        self.format
+            .as_ref()
+            .and_then(|format| format.csv.as_ref())
+            .and_then(|csv| csv.delimiter)
+    }
+
+    pub fn csv_quote(&self) -> Option<u8> {
+        self.format
+            .as_ref()
+            .and_then(|format| format.csv.as_ref())
+            .and_then(|csv| csv.quote)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityConfig {
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub table: ResourceId,
+    #[serde(default)]
+    pub concept_uri: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<EntityFieldConfig>,
+    #[serde(default)]
+    pub relationships: Vec<EntityRelationshipConfig>,
+    pub access: EntityAccessConfig,
+    pub api: EntityApiConfig,
+    #[serde(default)]
+    pub aggregates: Vec<AggregateConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityFieldConfig {
+    pub name: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub concept_uri: Option<String>,
+    #[serde(default)]
+    pub codelist: Option<String>,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityRelationshipConfig {
+    pub name: String,
+    pub kind: RelationshipKind,
+    pub target: String,
+    pub foreign_key: String,
+    #[serde(default)]
+    pub concept_uri: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationshipKind {
+    BelongsTo,
+    HasMany,
+    HasOne,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityAccessConfig {
+    pub metadata_scope: String,
+    pub aggregate_scope: String,
+    pub read_scope: String,
+    pub verify_scope: String,
+    pub bulk_export_scope: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityApiConfig {
+    pub default_limit: u32,
+    pub max_limit: u32,
+    #[serde(default)]
+    pub require_purpose_header: bool,
+    #[serde(default)]
+    pub allowed_filters: Vec<AllowedFilter>,
+    #[serde(default)]
+    pub allowed_expansions: Vec<String>,
 }
 
 /// Declared resource schema. `strict` is the spec's `strict_schema`
@@ -308,7 +485,7 @@ pub enum FieldType {
 
 /// Resource-level scope assignments. Each resource opts in to which
 /// scopes gate metadata / aggregate / row access.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceAccessConfig {
     pub metadata_scope: String,
@@ -327,6 +504,17 @@ pub struct ResourceApiConfig {
     pub require_purpose_header: bool,
     #[serde(default)]
     pub allowed_filters: Vec<AllowedFilter>,
+}
+
+impl Default for ResourceApiConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: 100,
+            max_limit: 1000,
+            require_purpose_header: false,
+            allowed_filters: Vec::new(),
+        }
+    }
 }
 
 /// A single allowed filter: field name + permitted operators.
@@ -355,9 +543,17 @@ pub enum FilterOp {
 pub struct AggregateConfig {
     pub id: AggregateId,
     pub description: String,
+    #[serde(default)]
+    pub joins: Vec<AggregateJoinConfig>,
     pub group_by: Vec<String>,
     pub measures: Vec<AggregateMeasure>,
     pub disclosure_control: DisclosureControlConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateJoinConfig {
+    pub relationship: String,
 }
 
 /// One measure inside an aggregate.
@@ -454,17 +650,17 @@ pub enum UpdateFrequency {
 // ---------------------------------------------------------------------
 
 /// Dataset identifier. Lower-snake, starts with a letter.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct DatasetId(String);
 
 /// Resource identifier within a dataset.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct ResourceId(String);
 
 /// Aggregate identifier within a resource.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct AggregateId(String);
 
@@ -509,6 +705,16 @@ mod tests {
     #[test]
     fn default_request_timeout_is_30s() {
         assert_eq!(default_request_timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn default_cache_dir_is_cache() {
+        assert_eq!(default_cache_dir(), PathBuf::from("./cache"));
+    }
+
+    #[test]
+    fn default_xlsx_max_file_bytes_is_256_mib() {
+        assert_eq!(default_xlsx_max_file_bytes(), 256 * 1024 * 1024);
     }
 
     #[test]

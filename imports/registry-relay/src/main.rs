@@ -37,8 +37,14 @@ use data_gate::audit::{AuditSink, StdoutSink};
 use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use data_gate::auth::ScopeSet;
 use data_gate::config::{self, ApiKeyConfig, AuditSinkConfig, Config};
+use data_gate::entity::EntityRegistry;
 use data_gate::error::{ConfigError, Error};
+use data_gate::format::FormatRegistry;
+use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
+use data_gate::query::{AggregateQueryEngine, EntityQueryEngine};
+use datafusion::execution::context::SessionContext;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -77,13 +83,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind: SocketAddr = config.server.bind;
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
     let audit_kind = audit_sink_kind(&config);
+    let df_ctx = Arc::new(SessionContext::new());
+    let formats = Arc::new(FormatRegistry::with_v1_defaults());
+    let cache_root = Arc::from(config.server.cache_dir.as_path());
+    let ingest = Arc::new(IngestRegistry::from_config(
+        &config,
+        formats,
+        cache_root,
+        Arc::clone(&df_ctx),
+    )?);
+    let entity_registry = Arc::new(EntityRegistry::from_config(&config)?);
+    let query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&df_ctx),
+        Arc::clone(&entity_registry),
+    ));
+    let aggregate_query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&df_ctx),
+        Arc::clone(&entity_registry),
+        Arc::clone(&config),
+    ));
+    let initial_snapshot = ingest.snapshot();
+    let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(initial_snapshot);
+
+    ingest.run_initial_ingest(readiness_tx.clone()).await;
+    let (mut refresh_tasks, refresh_shutdown) =
+        Arc::clone(&ingest).spawn_refresh_tasks_with_config(&config, readiness_tx);
 
     let dataset_count = config.datasets.len();
     let keyring_size = auth.len();
-    let app = data_gate::server::build_app(
+    let app = data_gate::server::build_app_with_entity_query(
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&audit_sink),
+        readiness_rx,
+        entity_registry,
+        query,
+        aggregate_query,
     );
 
     let listener = TcpListener::bind(bind).await.map_err(|err| {
@@ -132,6 +167,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // listener tripped the shutdown.
     if let Err(err) = audit_sink.flush().await {
         warn!(error = %err, "audit flush on shutdown failed");
+    }
+
+    refresh_shutdown.cancel();
+    while let Some(joined) = refresh_tasks.join_next().await {
+        if let Err(err) = joined {
+            warn!(error = %err, "refresh task failed during shutdown");
+        }
     }
 
     result

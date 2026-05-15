@@ -54,6 +54,7 @@ use axum::body::Body;
 use axum::http::{HeaderName, HeaderValue, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
+use axum::Extension;
 use axum::Router;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -68,7 +69,10 @@ use crate::api;
 use crate::audit::{self, AuditSettings, AuditSink};
 use crate::auth::{middleware::auth_layer, AuthProvider};
 use crate::config::{Config, CorsConfig};
+use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
+use crate::ingest::ReadinessSnapshot;
+use crate::query::{AggregateQueryEngine, EntityQueryEngine};
 
 /// Defensive cap on request body size (1 MiB). V1 endpoints are GET only;
 /// the limit exists so a misbehaving client cannot exhaust memory by
@@ -109,7 +113,11 @@ where
 
     // Data-plane sub-router. Empty in Wave 0; Waves 1-4 land routes
     // here and the auth layer gates them.
-    let protected: Router<()> = Router::new();
+    let protected: Router<()> = Router::new()
+        .merge(api::datasets_router())
+        .merge(api::entity_router())
+        .merge(api::aggregates_router())
+        .merge(api::catalog_router());
     let protected = auth_layer(protected, auth);
 
     // Merge public + protected; everything above this point is inside
@@ -117,7 +125,44 @@ where
     // layers installed below.
     let merged: Router<()> = Router::new().merge(public).merge(protected);
 
-    apply_cross_cutting_layers(merged, &config, audit_sink)
+    apply_cross_cutting_layers(merged, &config, audit_sink).layer(Extension(config))
+}
+
+/// Assemble the main application with a Wave 1 ingest readiness watch.
+///
+/// This is the production path once ingestion is enabled. [`build_app`]
+/// remains as a tiny compatibility wrapper for tests that only need the
+/// Wave 0 HTTP shell.
+pub fn build_app_with_readiness<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+) -> Router
+where
+    P: AuthProvider,
+{
+    build_app(config, auth, audit_sink).layer(Extension(readiness))
+}
+
+/// Assemble the main app with Wave 1 readiness plus Wave 2 entity/query
+/// state installed for entity-shaped API routes.
+pub fn build_app_with_entity_query<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    entity_registry: Arc<EntityRegistry>,
+    query: Arc<EntityQueryEngine>,
+    aggregate_query: Arc<AggregateQueryEngine>,
+) -> Router
+where
+    P: AuthProvider,
+{
+    build_app_with_readiness(config, auth, audit_sink, readiness)
+        .layer(Extension(aggregate_query))
+        .layer(Extension(query))
+        .layer(Extension(entity_registry))
 }
 
 /// Assemble the admin HTTP application for `config.server.admin_bind`.
@@ -248,6 +293,7 @@ mod tests {
         unsafe {
             std::env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
             std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
+            std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", phc);
         }
         crate::config::load(&path).expect("example config loads")
     }

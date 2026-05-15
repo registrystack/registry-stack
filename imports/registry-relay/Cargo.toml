@@ -34,6 +34,14 @@ tower-http = { version = "0.6", features = [
 datafusion = { version = "53.1" }
 calamine = { version = "0.35" }
 csv = { version = "1" }
+# Used by Source/Format trait surfaces (BoxStream); also a transitive
+# of datafusion but pinned here so the public surface compiles without
+# relying on a re-export path.
+futures = { version = "0.3" }
+# Atomic state swap for IngestPlan readiness (single-writer, many-reader).
+arc-swap = { version = "1" }
+# CancellationToken for refresh-loop shutdown.
+tokio-util = { version = "0.7" }
 
 # ─── serialization / config ──────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }

@@ -88,10 +88,12 @@ fn example_config_loads_and_validates() {
     // Both keys in the example point at env vars; provide valid PHCs.
     let key_a = make_phc(b"statistics-office-secret");
     let key_b = make_phc(b"program-system-secret");
+    let key_c = make_phc(b"verification-service-secret");
 
     // Safe to set: env name is unique to the example.
     env::set_var("STATS_OFFICE_API_KEY_HASH", key_a);
     env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", key_b);
+    env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", key_c);
 
     let config = config::load(&example_path()).expect("example config must load");
 
@@ -102,7 +104,7 @@ fn example_config_loads_and_validates() {
     assert_eq!(config.catalog.publisher, "Ministry of Digital Government");
 
     assert!(matches!(config.auth.mode, AuthMode::ApiKey));
-    assert_eq!(config.auth.api_keys.len(), 2);
+    assert_eq!(config.auth.api_keys.len(), 3);
     assert_eq!(config.auth.api_keys[0].id, "statistics_office");
     assert_eq!(
         config.auth.api_keys[0].hash_env,
@@ -125,8 +127,8 @@ fn example_config_loads_and_validates() {
             data_range,
         } => {
             assert_eq!(path.to_string_lossy(), "./data/social_registry.xlsx");
-            assert_eq!(*header_row, Some(1));
-            assert_eq!(data_range.as_deref(), Some("A2:E100000"));
+            assert_eq!(*header_row, None);
+            assert_eq!(data_range.as_deref(), None);
         }
         other => panic!("expected source type file, got {other:?}"),
     }
@@ -138,41 +140,54 @@ fn example_config_loads_and_validates() {
         other => panic!("expected refresh mode mtime, got {other:?}"),
     }
 
-    assert_eq!(dataset.resources.len(), 1);
-    let resource = &dataset.resources[0];
-    assert_eq!(resource.id.as_ref(), "beneficiaries");
-    assert_eq!(resource.sheet.as_deref(), Some("Beneficiaries"));
-    assert_eq!(resource.primary_key.as_deref(), Some("beneficiary_id"));
-    assert!(resource.schema.strict);
-    assert_eq!(resource.schema.fields.len(), 5);
+    assert!(dataset.resources.is_empty());
+    assert_eq!(dataset.tables.len(), 2);
+    let table = &dataset.tables[1];
+    assert_eq!(table.id.as_ref(), "individuals_table");
+    assert_eq!(table.format_name(), Some("xlsx"));
+    assert_eq!(table.xlsx_sheet().as_deref(), Some("Individuals"));
+    assert_eq!(table.primary_key.as_deref(), Some("individual_id"));
+    assert!(table.schema.strict);
+    assert_eq!(table.schema.fields.len(), 4);
 
-    let payment = resource
+    let payment = table
         .schema
         .fields
         .iter()
         .find(|f| f.name == "payment_amount")
         .expect("payment_amount field present");
     assert!(matches!(payment.r#type, FieldType::Number));
-    assert_eq!(
-        payment.concept_uri.as_deref(),
-        Some("psc:properties/paymentAmount")
-    );
     assert_eq!(payment.unit.as_deref(), Some("EUR"));
 
-    assert_eq!(resource.api.default_limit, 100);
-    assert_eq!(resource.api.max_limit, 1000);
-    assert!(resource.api.require_purpose_header);
-    assert_eq!(resource.api.allowed_filters.len(), 4);
-    let date_filter = resource
+    assert_eq!(dataset.entities.len(), 2);
+    let individual = &dataset.entities[1];
+    assert_eq!(individual.name, "individual");
+    assert_eq!(individual.table.as_ref(), "individuals_table");
+    assert_eq!(individual.fields.len(), 4);
+    let payment_field = individual
+        .fields
+        .iter()
+        .find(|f| f.name == "payment_amount")
+        .expect("entity payment field present");
+    assert_eq!(
+        payment_field.concept_uri.as_deref(),
+        Some("psc:properties/paymentAmount")
+    );
+    assert_eq!(individual.relationships.len(), 1);
+    assert_eq!(individual.api.default_limit, 100);
+    assert_eq!(individual.api.max_limit, 1000);
+    assert!(individual.api.require_purpose_header);
+    assert_eq!(individual.api.allowed_filters.len(), 3);
+    let household_filter = individual
         .api
         .allowed_filters
         .iter()
-        .find(|f| f.field == "enrollment_date")
-        .expect("enrollment_date filter present");
-    assert!(date_filter.ops.contains(&FilterOp::Between));
+        .find(|f| f.field == "household_id")
+        .expect("household_id filter present");
+    assert!(household_filter.ops.contains(&FilterOp::Eq));
 
-    assert_eq!(resource.aggregates.len(), 2);
-    let pay_agg = &resource.aggregates[1];
+    assert_eq!(individual.aggregates.len(), 3);
+    let pay_agg = &individual.aggregates[1];
     assert_eq!(pay_agg.id.as_ref(), "payments_by_municipality");
     assert_eq!(pay_agg.measures.len(), 2);
     assert!(matches!(
