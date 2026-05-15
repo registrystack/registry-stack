@@ -1050,12 +1050,15 @@ audit:
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
+    let signer = Arc::new(CursorSigner::new_random());
+
     TestServer::new(
         entity_router::<()>()
             .layer(Extension(query))
             .layer(Extension(registry))
             .layer(Extension(cfg))
             .layer(Extension(readiness))
+            .layer(Extension(signer))
             .layer(Extension(principal(&[
                 "test_dataset:metadata",
                 "test_dataset:rows",
