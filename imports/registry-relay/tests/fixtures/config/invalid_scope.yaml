@@ -1,0 +1,32 @@
+# Tests config.validation_error: scope references a non-existent dataset.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: k1
+      hash_env: TEST_KEY_HASH_SCOPE
+      scopes:
+        - nonexistent_dataset:rows
+audit:
+  sink: stdout
+datasets:
+  - id: ds_one
+    title: T
+    description: D
+    owner: O
+    sensitivity: public
+    access_rights: public
+    update_frequency: monthly
+    conforms_to: []
+    source:
+      type: file
+      path: ./data/x.xlsx
+    refresh:
+      mode: manual
+    resources: []

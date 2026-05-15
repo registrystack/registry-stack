@@ -1,0 +1,18 @@
+# Tests config.missing_secret: hash_env names an unset env var.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: k1
+      hash_env: TEST_KEY_HASH_MISSING_NOPE
+      scopes:
+        - admin
+audit:
+  sink: stdout
+datasets: []

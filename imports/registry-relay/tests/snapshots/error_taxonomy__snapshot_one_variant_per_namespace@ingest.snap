@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "ingest.schema_mismatch",
+  "detail": "declared schema does not match observed columns or types",
+  "status": 500,
+  "title": "Schema mismatch",
+  "type": "https://data.example.gov/problems/ingest/schema_mismatch"
+}

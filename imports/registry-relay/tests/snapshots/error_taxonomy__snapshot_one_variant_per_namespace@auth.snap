@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "auth.scope_denied",
+  "detail": "required scope: social_registry:rows",
+  "status": 403,
+  "title": "Scope denied",
+  "type": "https://data.example.gov/problems/auth/scope_denied"
+}

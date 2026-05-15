@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Authentication trait, [`Principal`], and mode tags.
+//!
+//! The trait shape, [`Principal`] fields, and the V1/V2 forward
+//! compatibility story are pinned in `decisions/wave-0.md` Section 3.1.
+//! In V1 the only implementation is [`api_key::ApiKeyAuth`], which
+//! verifies `Authorization: Bearer <token>` or `X-Api-Key: <token>`
+//! against Argon2id PHC strings loaded from environment variables.
+//!
+//! ## Trait method asynchrony
+//!
+//! [`AuthProvider::authenticate`] is `async` so future JWT, JWKS
+//! lookup, and dataspace round-trips fit without a breaking signature
+//! change. V1's API-key implementation does not perform I/O during
+//! verification; the async signature is purely future-proofing.
+//!
+//! ## Confidentiality
+//!
+//! Implementations MUST NOT log, format, or otherwise surface the raw
+//! credential. The error returned from [`AuthProvider::authenticate`]
+//! is mapped to a Problem Details response that carries only the
+//! stable taxonomy code, never the token bytes.
+
+use std::net::IpAddr;
+
+use crate::error::AuthError;
+
+pub mod api_key;
+pub mod middleware;
+pub mod scopes;
+
+pub use scopes::ScopeSet;
+
+/// Authentication mode tag. Carried on every authenticated
+/// [`Principal`]; surfaced into audit records as `auth_mode`.
+///
+/// `#[non_exhaustive]` so JWT/dataspace variants can land additively
+/// without breaking exhaustive match sites; the small handful of sites
+/// that exhaustively match (audit serialisation, scope checks) get a
+/// compile-time nudge when V2 lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthMode {
+    /// V1: shared-secret API key verified against a stored Argon2id
+    /// hash. The mirror of `config::AuthMode::ApiKey`.
+    ApiKey,
+}
+
+/// Result of successful authentication. Inserted into request
+/// extensions by [`middleware::auth_layer`] and read by audit and
+/// downstream handlers.
+///
+/// Field shape mirrors `decisions/wave-0.md` Section 3.1; the
+/// `extensions` typed-map slot called out in that section is deferred
+/// to V2 (no V1 consumer reads it, and adding it now would be dead
+/// weight). When V2 lands the new field will be added as
+/// `#[non_exhaustive]` or via an opaque sub-struct so existing
+/// construction sites keep compiling.
+#[derive(Debug, Clone)]
+pub struct Principal {
+    /// Stable identifier from `auth.api_keys[].id`. Never the secret,
+    /// never the hash; safe to log and surface in audit records.
+    pub api_key_id: String,
+
+    /// Resolved scopes; gates authorisation in handlers via
+    /// [`scopes::require_scope`].
+    pub scopes: ScopeSet,
+
+    /// Which auth provider produced this principal.
+    pub auth_mode: AuthMode,
+}
+
+/// Authenticates inbound requests.
+///
+/// V1 implementation: [`api_key::ApiKeyAuth`], reading
+/// `Authorization: Bearer <key>` or `X-Api-Key: <key>` and verifying
+/// it against Argon2id PHC strings loaded from the env vars named by
+/// `auth.api_keys[].hash_env`. V2 will add JWT and dataspace
+/// implementations; the trait surface does not change.
+///
+/// ## Implementation contract
+///
+/// * Never log, format, or surface the raw credential. The error path
+///   maps to a Problem Details response that carries only the stable
+///   taxonomy code.
+/// * Constant-time verification on the credential bytes. Argon2id's
+///   verifier is constant-time by construction; do not short-circuit
+///   it.
+/// * Return the appropriate [`AuthError`] variant per the taxonomy in
+///   `decisions/wave-0.md` Section 4. The HTTP-status mapping is owned
+///   by `crate::error`; this trait does not pick statuses.
+pub trait AuthProvider: Send + Sync + 'static {
+    /// Authenticate a request from its headers and peer address.
+    ///
+    /// Returns `Ok(Principal)` on success and `Err(AuthError)`
+    /// otherwise. The `remote_addr` is passed for future
+    /// implementations that gate by source IP (e.g. dataspace
+    /// connectors); V1 ignores it but logs it via audit downstream.
+    ///
+    /// Uses the explicit `Future` return type rather than `async fn`
+    /// so the trait stays straightforwardly dyn-compatible if a
+    /// future caller needs `dyn AuthProvider`; today the middleware
+    /// is generic.
+    fn authenticate<'a>(
+        &'a self,
+        headers: &'a axum::http::HeaderMap,
+        remote_addr: IpAddr,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Principal, AuthError>> + Send + 'a>,
+    >;
+}

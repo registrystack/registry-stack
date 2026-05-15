@@ -1,0 +1,643 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Audit core: trait, record schema, JSONL envelope, and helpers.
+//!
+//! The canonical record schema lives in `decisions/wave-0.md` Section 5.
+//! Wave 0 ships only the in-process trait, the `AuditRecord` struct, the
+//! `StdoutSink` implementation, and the request-scoped middleware.
+//!
+//! Forward compatibility:
+//! - `FileSink` and `SyslogSink` land in Wave 4 alongside chained-hash
+//!   tamper-evidence; their module slots are reserved in this file
+//!   header for visibility but are not implemented in Wave 0.
+//! - The `ChainingSink<S: AuditSink>` wrapper introduced in Wave 4 will
+//!   inject `prev_hash` / `record_hash` envelope fields onto an
+//!   `AuditEnvelope` before delegating to the inner sink. The
+//!   `AuditRecord` itself stays stable.
+//!
+//! Integration:
+//! - The middleware reads `Principal` from request extensions (Wave 0
+//!   Track 4 auth middleware) when present and projects its identity
+//!   into `api_key_id`, `auth_mode`, and `scopes_used`.
+//! - The error module attaches a stable error code on failure
+//!   responses via the `ErrorCodeExt` response extension defined in
+//!   this module; the audit middleware reads it and records it.
+
+use std::collections::BTreeMap;
+use std::net::IpAddr;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use axum::body::Body;
+use axum::extract::{ConnectInfo, Extension};
+use axum::http::{HeaderMap, Request};
+use axum::middleware::Next;
+use axum::response::Response;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use time::format_description::FormatItem;
+use time::macros::format_description;
+use time::OffsetDateTime;
+use tracing::error;
+use ulid::Ulid;
+
+pub mod middleware;
+pub mod stdout;
+
+pub use stdout::StdoutSink;
+
+/// Response extension carrying the stable error code emitted by failing
+/// handlers (typically `crate::error::Error::into_response`). The audit
+/// middleware reads this on the way out and records it as
+/// `AuditRecord::error_code`. Wave 0 defines the marker here so other
+/// modules can attach a code without depending on audit internals; Wave
+/// 4 may relocate it to the error module without breaking the
+/// contract (the type name and field layout stay stable).
+#[derive(Debug, Clone)]
+pub struct ErrorCodeExt(pub String);
+
+/// Runtime knobs used by the audit middleware. Production installs this
+/// from `Config`; unit tests may omit it and get secure defaults.
+#[derive(Debug, Clone, Default)]
+pub struct AuditSettings {
+    pub include_health: bool,
+    pub trust_proxy_enabled: bool,
+    pub trusted_proxies: Vec<String>,
+}
+
+/// Endpoint family for an audit record. Mirrors Spec.md Section 13.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointKind {
+    Health,
+    Ready,
+    Catalog,
+    Dataset,
+    Schema,
+    Rows,
+    AggregateList,
+    Aggregate,
+    Admin,
+    Openapi,
+    /// Catch-all for routes that don't match a documented family.
+    /// Wave 0 default for handler-less requests during scaffolding.
+    Other,
+}
+
+/// Outcome classification for a request, derived from the HTTP status.
+/// Distinct from `error_code`: this is the high-level bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditOutcome {
+    Ok,
+    Denied,
+    Error,
+}
+
+impl AuditOutcome {
+    /// 2xx/3xx -> `Ok`, 401/403 -> `Denied`, everything else -> `Error`.
+    #[must_use]
+    pub fn from_status(status: u16) -> Self {
+        match status {
+            200..=399 => AuditOutcome::Ok,
+            401 | 403 => AuditOutcome::Denied,
+            _ => AuditOutcome::Error,
+        }
+    }
+}
+
+/// One audit record. Schema is the canonical contract from
+/// `decisions/wave-0.md` Section 5. Field order in this struct matches
+/// the table for ease of cross-reference; JSON output preserves
+/// declaration order via serde defaults.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditRecord {
+    /// ISO-8601 UTC with millisecond precision and trailing `Z`.
+    pub ts: String,
+    /// ULID, 26 chars Crockford Base32; identical to `X-Request-Id`.
+    pub request_id: String,
+    /// `null` only when auth failed before identification.
+    pub api_key_id: Option<String>,
+    /// `api_key` in V1; future `jwt`, `dataspace`. `None` matches
+    /// `api_key_id = None` to preserve null-coupling.
+    pub auth_mode: Option<String>,
+    /// Client IP textual form (post-proxy when the trust policy resolves).
+    pub remote_addr: String,
+    /// HTTP method.
+    pub method: String,
+    /// Path only; query string lives in `query_params`.
+    pub path: String,
+    /// Family for grouping and noise gating.
+    pub endpoint_kind: EndpointKind,
+    /// Set on dataset/schema/rows/aggregate_list/aggregate.
+    pub dataset_id: Option<String>,
+    /// Set when path includes a resource.
+    pub resource_id: Option<String>,
+    /// Set on aggregate only.
+    pub aggregate_id: Option<String>,
+    /// Scopes actually checked on this request, in declaration order.
+    pub scopes_used: Vec<String>,
+    /// Redacted parameter inventory (names + ops, never values).
+    pub query_params: Value,
+    /// Verbatim `X-Data-Purpose` header value when present.
+    pub purpose: Option<String>,
+    /// HTTP status returned.
+    pub status_code: u16,
+    /// Rows on `rows`, group count on `aggregate`.
+    pub row_count: Option<u64>,
+    /// Groups removed/masked by disclosure control.
+    pub suppressed_groups: Option<u64>,
+    /// Server-side handling time, milliseconds.
+    pub duration_ms: u64,
+    /// Stable taxonomy code on 4xx/5xx; `null` on 2xx/3xx.
+    pub error_code: Option<String>,
+}
+
+/// JSONL envelope handed to a sink. Wave 0 keeps it isomorphic to
+/// `AuditRecord`; Wave 4's chaining wrapper attaches `prev_hash` /
+/// `record_hash` here before serialising, so the inner record schema
+/// never changes.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEnvelope {
+    #[serde(flatten)]
+    pub record: AuditRecord,
+}
+
+impl From<AuditRecord> for AuditEnvelope {
+    fn from(record: AuditRecord) -> Self {
+        Self { record }
+    }
+}
+
+impl AuditEnvelope {
+    /// Serialise as a single JSON line terminated by `\n`. Returns
+    /// `Err` only if serialisation fails; callers should log and
+    /// continue per Wave 0 audit-failure policy.
+    pub fn to_jsonl(&self) -> Result<String, AuditError> {
+        let mut s = serde_json::to_string(self).map_err(AuditError::Serialize)?;
+        s.push('\n');
+        Ok(s)
+    }
+}
+
+/// Errors surfaced by sinks. The middleware logs and swallows these;
+/// the request path must not fail because of audit-write failures.
+#[derive(Debug, thiserror::Error)]
+pub enum AuditError {
+    #[error("audit record serialization failed: {0}")]
+    Serialize(#[source] serde_json::Error),
+    #[error("audit sink I/O failure: {0}")]
+    Io(#[source] std::io::Error),
+}
+
+/// Future returned by [`AuditSink::write`] / [`AuditSink::flush`].
+/// Manually typed so the trait stays dyn-compatible without depending
+/// on `async-trait` (which is a transitive, not a direct, dep).
+pub type AuditFuture<'a> =
+    Pin<Box<dyn std::future::Future<Output = Result<(), AuditError>> + Send + 'a>>;
+
+/// Destination for audit records. Errors from `write` MUST never break
+/// the request path: the caller logs the failure and continues serving.
+///
+/// V1 impls: [`StdoutSink`] (Wave 0). [`FileSink`], [`SyslogSink`], and
+/// the chaining wrapper arrive in Wave 4.
+pub trait AuditSink: Send + Sync + 'static {
+    /// Write a single envelope. Implementations should be non-blocking
+    /// on the request path; long I/O belongs behind an internal channel.
+    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a>;
+
+    /// Best-effort flush on graceful shutdown. Idempotent.
+    fn flush<'a>(&'a self) -> AuditFuture<'a>;
+}
+
+// ---------------------------------------------------------------------------
+// Time helpers
+// ---------------------------------------------------------------------------
+
+/// ISO-8601 with explicit millisecond precision and `Z` suffix.
+/// Example: `2026-05-15T10:00:00.123Z`.
+const ISO8601_MS: &[FormatItem<'_>] =
+    format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+
+/// Format the current UTC instant per the Section 5 contract. The
+/// helper is public so the middleware and tests share the same path.
+#[must_use]
+pub fn now_iso8601_millis() -> String {
+    let now = OffsetDateTime::now_utc();
+    // `format_description` `subsecond digits:3` truncates rather than
+    // panicking, and the format string above does not contain any
+    // tokens that can fail at formatting time. We still propagate via
+    // a fallback rather than `unwrap()` to obey the project's no-panic
+    // rule in non-test code.
+    match now.format(ISO8601_MS) {
+        Ok(s) => s,
+        Err(e) => {
+            error!(error = %e, "audit timestamp formatting failed; substituting epoch");
+            "1970-01-01T00:00:00.000Z".to_string()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query redaction
+// ---------------------------------------------------------------------------
+
+/// Parameter names whose values are redacted unconditionally. The
+/// denylist is intentionally short and conservative; per-field hashed
+/// redaction lands in Wave 4 driven by config.
+const SENSITIVE_PARAM_NAMES: &[&str] = &[
+    "token",
+    "key",
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "authorization",
+    "auth",
+];
+
+/// Redact a URL-encoded query string into the canonical
+/// `query_params` JSON shape: `{ "<name>": { "op": "<op>" } }`. Values
+/// are never copied; only the operator (always `eq` in Wave 0, since
+/// the filter parser arrives in Wave 2) and the special `redacted`
+/// marker for denylisted names appear in output.
+#[must_use]
+pub fn redact_query(query: &str) -> Value {
+    if query.is_empty() {
+        return json!({});
+    }
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (raw_name, _value) = pair.split_once('=').unwrap_or((pair, ""));
+        // Strip any percent-encoded tail in the name itself by taking
+        // up to the first '='; values are never logged so they don't
+        // need decoding here.
+        let name = raw_name.to_string();
+        let entry = if is_sensitive_param(&name) {
+            json!({ "op": "redacted" })
+        } else {
+            json!({ "op": "eq" })
+        };
+        out.insert(name, entry);
+    }
+    serde_json::to_value(out).unwrap_or_else(|e| {
+        error!(error = %e, "query redaction serialization failed; returning empty object");
+        json!({})
+    })
+}
+
+fn is_sensitive_param(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SENSITIVE_PARAM_NAMES.iter().any(|s| *s == lower)
+}
+
+// ---------------------------------------------------------------------------
+// In-memory sink (test/diagnostic helper)
+// ---------------------------------------------------------------------------
+
+/// Thread-safe in-memory sink. Useful in tests and in admin
+/// diagnostics. Not intended for production use: it grows without
+/// bound.
+#[derive(Debug, Default, Clone)]
+pub struct InMemorySink {
+    inner: Arc<Mutex<Vec<String>>>,
+}
+
+impl InMemorySink {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return a copy of all captured lines so far.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<String> {
+        match self.inner.lock() {
+            Ok(g) => g.clone(),
+            Err(p) => p.into_inner().clone(),
+        }
+    }
+}
+
+impl AuditSink for InMemorySink {
+    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
+        Box::pin(async move {
+            let line = envelope.to_jsonl()?;
+            match self.inner.lock() {
+                Ok(mut g) => g.push(line),
+                Err(p) => p.into_inner().push(line),
+            }
+            Ok(())
+        })
+    }
+
+    fn flush<'a>(&'a self) -> AuditFuture<'a> {
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Middleware
+// ---------------------------------------------------------------------------
+
+/// Axum `from_fn_with_state` handler that captures request metadata,
+/// awaits the inner service, and emits one audit record to the
+/// configured sink. Errors writing the audit record are logged via
+/// `tracing::error!` and do not affect the response.
+///
+/// State is `Arc<dyn AuditSink>` so the same layer factory works with
+/// any sink choice (stdout, file, tee, chain).
+pub async fn audit_layer(
+    Extension(sink): Extension<Arc<dyn AuditSink>>,
+    settings: Option<Extension<AuditSettings>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let settings = settings.map(|Extension(s)| s).unwrap_or_default();
+    let start = Instant::now();
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+    let query = request.uri().query().unwrap_or("").to_string();
+    let headers = request.headers().clone();
+    let purpose = extract_purpose(&headers);
+    // `ConnectInfo` is propagated by axum when the server is started with
+    // `into_make_service_with_connect_info`. In unit tests using
+    // `oneshot`, no such extension is present, so we fall back to
+    // unspecified. When trust-proxy support is enabled, a trusted socket
+    // peer may project the first `X-Forwarded-For` address into audit.
+    let remote_addr = resolve_remote_addr(
+        &headers,
+        request
+            .extensions()
+            .get::<ConnectInfo<std::net::SocketAddr>>(),
+        &settings,
+    )
+    .to_string();
+
+    // Adopt the upstream `x-request-id` when present so the audit
+    // record's `request_id`, `tower-http`'s tracing spans, and the
+    // response header propagated by `PropagateRequestIdLayer` all carry
+    // the same value. Falls back to a freshly minted ULID when no
+    // upstream layer set the header (e.g. unit-test `oneshot` calls).
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Ulid::new().to_string());
+
+    // Make the id available to downstream handlers via request
+    // extensions, and ensure the request header carries it for the rest
+    // of the chain (covers the fallback-mint case where no upstream set
+    // the header). Response-header propagation is owned by
+    // `PropagateRequestIdLayer` in `crate::server`; the audit middleware
+    // does not write `x-request-id` on the way out.
+    let mut request = request;
+    request
+        .extensions_mut()
+        .insert(RequestIdExt(request_id.clone()));
+    if let Ok(value) = request_id.parse() {
+        request.headers_mut().insert("x-request-id", value);
+    }
+
+    // Capture any principal that an outer layer may have attached to
+    // the request. In the production stack (`crate::server`) audit
+    // sits OUTSIDE auth, so this is `None` for protected routes and
+    // the canonical read happens post-`next.run` from the response
+    // extensions below. The request-side read remains as a fallback
+    // for unit tests that inject a principal via an outer-to-audit
+    // middleware.
+    let principal_on_req = request
+        .extensions()
+        .get::<crate::auth::Principal>()
+        .cloned();
+
+    let response = next.run(request).await;
+    let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let status_code = response.status().as_u16();
+    let error_code = response
+        .extensions()
+        .get::<ErrorCodeExt>()
+        .map(|c| c.0.clone());
+
+    // Auth middleware (inner) attaches `Principal` to the response on
+    // success after the handler returns. Prefer that as the canonical
+    // source; fall back to the request-side read above. Wave 0 only
+    // knows API-key auth, so when a principal is present we record
+    // `auth_mode = "api_key"`; Wave 4's multi-mode auth will source
+    // the literal from `Principal`.
+    let principal = response
+        .extensions()
+        .get::<crate::auth::Principal>()
+        .cloned()
+        .or(principal_on_req);
+    let api_key_id = principal.as_ref().map(|p| p.api_key_id.clone());
+    let auth_mode = principal
+        .as_ref()
+        .map(|p| auth_mode_label(p.auth_mode).to_string());
+    let scopes_used: Vec<String> = principal
+        .as_ref()
+        .map(|p| p.scopes.iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+
+    let endpoint_kind = classify_endpoint(&path);
+    if matches!(endpoint_kind, EndpointKind::Health | EndpointKind::Ready)
+        && !settings.include_health
+    {
+        return response;
+    }
+
+    let record = AuditRecord {
+        ts: now_iso8601_millis(),
+        request_id,
+        api_key_id,
+        auth_mode,
+        remote_addr,
+        method,
+        path,
+        endpoint_kind,
+        dataset_id: None,
+        resource_id: None,
+        aggregate_id: None,
+        scopes_used,
+        query_params: redact_query(&query),
+        purpose,
+        status_code,
+        row_count: None,
+        suppressed_groups: None,
+        duration_ms,
+        error_code,
+    };
+
+    // Fire and await the write; the sink is responsible for making
+    // this cheap. We do NOT wrap in `tokio::spawn` so that ordering
+    // is preserved within a single client's traffic.
+    if let Err(e) = sink.write(AuditEnvelope::from(record)).await {
+        // Audit failures never fail the request: log and continue.
+        error!(error = %e, "audit.write_failed");
+    }
+
+    response
+}
+
+/// Marker attached to request extensions so downstream handlers (and
+/// future audit-aware code paths) can read the request id without
+/// reaching into the response header map.
+#[derive(Debug, Clone)]
+pub struct RequestIdExt(pub String);
+
+fn extract_purpose(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-data-purpose")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn resolve_remote_addr(
+    headers: &HeaderMap,
+    connect_info: Option<&ConnectInfo<std::net::SocketAddr>>,
+    settings: &AuditSettings,
+) -> IpAddr {
+    let peer = connect_info
+        .map(|ConnectInfo(addr)| addr.ip())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+
+    if !settings.trust_proxy_enabled || !trusted_proxy_contains(peer, &settings.trusted_proxies) {
+        return peer;
+    }
+
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .and_then(|v| v.parse::<IpAddr>().ok())
+        .unwrap_or(peer)
+}
+
+fn trusted_proxy_contains(peer: IpAddr, trusted_proxies: &[String]) -> bool {
+    trusted_proxies
+        .iter()
+        .any(|spec| trusted_proxy_spec_matches(peer, spec))
+}
+
+fn trusted_proxy_spec_matches(peer: IpAddr, spec: &str) -> bool {
+    let trimmed = spec.trim();
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        return ip == peer;
+    }
+    let Some((addr, prefix)) = trimmed.split_once('/') else {
+        return false;
+    };
+    let Ok(network) = addr.parse::<IpAddr>() else {
+        return false;
+    };
+    let Ok(prefix) = prefix.parse::<u8>() else {
+        return false;
+    };
+    match (peer, network) {
+        (IpAddr::V4(peer), IpAddr::V4(network)) if prefix <= 32 => {
+            let peer = u32::from(peer);
+            let network = u32::from(network);
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            (peer & mask) == (network & mask)
+        }
+        (IpAddr::V6(peer), IpAddr::V6(network)) if prefix <= 128 => {
+            let peer = u128::from(peer);
+            let network = u128::from(network);
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            (peer & mask) == (network & mask)
+        }
+        _ => false,
+    }
+}
+
+fn auth_mode_label(mode: crate::auth::AuthMode) -> &'static str {
+    match mode {
+        crate::auth::AuthMode::ApiKey => "api_key",
+    }
+}
+
+fn classify_endpoint(path: &str) -> EndpointKind {
+    // Cheap prefix-based classification; the routing layer will refine
+    // this as endpoints land in Waves 1-3.
+    if path == "/health" {
+        EndpointKind::Health
+    } else if path == "/ready" {
+        EndpointKind::Ready
+    } else if path == "/datasets" || path == "/catalog" {
+        EndpointKind::Catalog
+    } else if path.starts_with("/admin") {
+        EndpointKind::Admin
+    } else if path == "/openapi.json" || path.starts_with("/openapi") {
+        EndpointKind::Openapi
+    } else if path.starts_with("/datasets/") {
+        // Refinement (rows / aggregate) is left to the data plane in
+        // Wave 1 where the router has structured params. For Wave 0 we
+        // collapse to `dataset`.
+        EndpointKind::Dataset
+    } else {
+        EndpointKind::Other
+    }
+}
+
+// Re-export the middleware helper at this module level for tests and
+// for the server scaffold to consume without reaching into submodules.
+pub use self::audit_layer as audit_middleware;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_helper_emits_24_chars_ending_in_z() {
+        let s = now_iso8601_millis();
+        assert_eq!(s.len(), 24, "got {s:?}");
+        assert!(s.ends_with('Z'));
+    }
+
+    #[test]
+    fn sensitive_names_are_case_insensitive() {
+        assert!(is_sensitive_param("Token"));
+        assert!(is_sensitive_param("API_KEY"));
+        assert!(!is_sensitive_param("limit"));
+    }
+
+    #[test]
+    fn classify_endpoint_buckets() {
+        assert_eq!(classify_endpoint("/health"), EndpointKind::Health);
+        assert_eq!(classify_endpoint("/ready"), EndpointKind::Ready);
+        assert_eq!(classify_endpoint("/datasets"), EndpointKind::Catalog);
+        assert_eq!(classify_endpoint("/admin/reload"), EndpointKind::Admin);
+        assert_eq!(classify_endpoint("/datasets/x/rows"), EndpointKind::Dataset);
+        assert_eq!(classify_endpoint("/anything-else"), EndpointKind::Other);
+    }
+
+    #[test]
+    fn trusted_proxy_cidr_matching_supports_v4_and_v6() {
+        assert!(trusted_proxy_spec_matches(
+            "10.1.2.3".parse().unwrap(),
+            "10.0.0.0/8"
+        ));
+        assert!(!trusted_proxy_spec_matches(
+            "11.1.2.3".parse().unwrap(),
+            "10.0.0.0/8"
+        ));
+        assert!(trusted_proxy_spec_matches(
+            "2001:db8::1".parse().unwrap(),
+            "2001:db8::/32"
+        ));
+    }
+}

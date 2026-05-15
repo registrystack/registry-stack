@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "internal.timeout",
+  "detail": "request exceeded the configured timeout",
+  "status": 504,
+  "title": "Request timed out",
+  "type": "https://data.example.gov/problems/internal/timeout"
+}

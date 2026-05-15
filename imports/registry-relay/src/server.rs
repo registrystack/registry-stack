@@ -1,0 +1,360 @@
+// SPDX-License-Identifier: Apache-2.0
+//! HTTP server composition.
+//!
+//! [`build_app`] is the single seam Wave 0's binary entry point uses to
+//! turn a parsed [`Config`], an [`AuthProvider`], and an [`AuditSink`]
+//! into an axum [`Router`]. Layering order follows
+//! `decisions/wave-0.md` Section 6 (file ownership) and Section 7
+//! (integration points), matched against Spec.md Section 12 (audit
+//! headers like `X-Request-ID`) and Section 14 (Wave 0 non-goals: only
+//! `/health` + `/ready`).
+//!
+//! ## Layer order (outer to inner)
+//!
+//! 1. `SetRequestIdLayer` + `PropagateRequestIdLayer` (ULID-shaped
+//!    `x-request-id` header). The propagate layer copies the request
+//!    id onto the response so clients can correlate without parsing
+//!    the audit log.
+//! 2. Audit middleware: emits one record per request to the configured
+//!    sink, with health/ready gated by `audit.include_health`.
+//! 3. `TraceLayer`: structured request/response spans for operational
+//!    logs. The audit log is the load-bearing observability surface
+//!    (architect decision #9); this layer only adds debugging context.
+//! 4. `CorsLayer`: built from `config.server.cors.allowed_origins`.
+//!    Empty allowlist (the default) means no `Access-Control-Allow-*`
+//!    headers go out, matching architect decision #7's "default-deny".
+//! 5. Internal error normalizer: maps timeout/body-limit responses into
+//!    RFC 7807 Problem Details before audit records them.
+//! 6. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
+//! 7. `TimeoutLayer`: built from `config.server.request_timeout`.
+//! 8. Auth middleware on a *sub-router* that mounts data-plane routes
+//!    only. The health sub-router is merged separately so `/health`
+//!    and `/ready` stay unauthenticated.
+//!
+//! ## Admin listener
+//!
+//! [`build_admin_app`] mirrors [`build_app`] for the optional admin
+//! listener (`config.server.admin_bind`). Wave 0 has no `/admin/*`
+//! handlers yet; the admin router carries `/health` so operators can
+//! probe the second port and the binary has a real second listener,
+//! satisfying `decisions/wave-0.md` Section 8's two-listener exit
+//! criterion. Wave 4 lands `/admin/reload` and friends on this router.
+//!
+//! ## What lives elsewhere
+//!
+//! * Middleware *factories* (auth, audit) live in their owning modules.
+//!   This file composes; it does not author middleware.
+//! * Route handlers live in `crate::api`. The data-plane sub-router is
+//!   intentionally *not* assembled here in Wave 0; the integration
+//!   points land in Wave 2-4 as their tracks register routes.
+
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{HeaderName, HeaderValue, Request, StatusCode};
+use axum::middleware::{from_fn, Next};
+use axum::response::{IntoResponse, Response};
+use axum::Router;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::request_id::{
+    MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
+use ulid::Ulid;
+
+use crate::api;
+use crate::audit::{self, AuditSettings, AuditSink};
+use crate::auth::{middleware::auth_layer, AuthProvider};
+use crate::config::{Config, CorsConfig};
+use crate::error::{ConfigError, Error, InternalError};
+
+/// Defensive cap on request body size (1 MiB). V1 endpoints are GET only;
+/// the limit exists so a misbehaving client cannot exhaust memory by
+/// streaming a body the server will discard anyway.
+const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
+/// `MakeRequestId` impl that mints fresh ULIDs. Generic over header
+/// name so the same shape is reusable if we ever change `x-request-id`
+/// to something else.
+#[derive(Debug, Clone, Default)]
+struct UlidMakeRequestId;
+
+impl MakeRequestId for UlidMakeRequestId {
+    fn make_request_id<B>(&mut self, _request: &axum::http::Request<B>) -> Option<RequestId> {
+        // ULIDs are 26 ASCII chars from Crockford Base32; always a
+        // valid HTTP header value. Fall back to `None` only if parsing
+        // ever fails so the request continues without an id rather
+        // than panicking.
+        Ulid::new().to_string().parse().ok().map(RequestId::new)
+    }
+}
+
+/// Assemble the full HTTP application for the main listener.
+///
+/// The function is generic over the [`AuthProvider`] type so the
+/// middleware compiles to a single monomorphisation per binary, no
+/// `dyn` dispatch on the hot path. The audit sink is held as
+/// `Arc<dyn AuditSink>` because Wave 4 will swap sinks based on
+/// config and we don't want to force the whole router to be generic on
+/// that choice.
+pub fn build_app<P>(config: Arc<Config>, auth: Arc<P>, audit_sink: Arc<dyn AuditSink>) -> Router
+where
+    P: AuthProvider,
+{
+    // Health/ready routes: unauthenticated sub-router. Merged onto the
+    // top-level router *outside* the auth layer.
+    let public = api::health_router();
+
+    // Data-plane sub-router. Empty in Wave 0; Waves 1-4 land routes
+    // here and the auth layer gates them.
+    let protected: Router<()> = Router::new();
+    let protected = auth_layer(protected, auth);
+
+    // Merge public + protected; everything above this point is inside
+    // the audit, tracing, request-id, CORS, body-limit, and timeout
+    // layers installed below.
+    let merged: Router<()> = Router::new().merge(public).merge(protected);
+
+    apply_cross_cutting_layers(merged, &config, audit_sink)
+}
+
+/// Assemble the admin HTTP application for `config.server.admin_bind`.
+///
+/// Wave 0 mounts the same `/health` route as the main listener so
+/// operators can probe the second port without authentication. Wave 4
+/// will add `/admin/reload` and `/admin/datasets/{id}/reload` here
+/// behind a scope check.
+pub fn build_admin_app(config: Arc<Config>, audit_sink: Arc<dyn AuditSink>) -> Router {
+    let public = api::health_router();
+    let merged: Router<()> = Router::new().merge(public);
+    apply_cross_cutting_layers(merged, &config, audit_sink)
+}
+
+/// Install the cross-cutting tower layers (audit, request-id, CORS,
+/// body limit, timeout) on a composed sub-router. Shared between
+/// [`build_app`] and [`build_admin_app`] so layer order stays in lock
+/// step across both listeners.
+fn apply_cross_cutting_layers(
+    router: Router,
+    config: &Config,
+    audit_sink: Arc<dyn AuditSink>,
+) -> Router {
+    let x_request_id: HeaderName = HeaderName::from_static("x-request-id");
+    let cors = build_cors_layer(&config.server.cors);
+    let audit_settings = AuditSettings {
+        include_health: config.audit.include_health,
+        trust_proxy_enabled: config.server.trust_proxy.enabled,
+        trusted_proxies: config.server.trust_proxy.trusted_proxies.clone(),
+    };
+
+    let with_operational_layers = router
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            config.server.request_timeout,
+        ))
+        .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT_BYTES))
+        .layer(from_fn(normalize_internal_error_response))
+        .layer(cors)
+        .layer(TraceLayer::new_for_http());
+
+    let with_audit = audit::middleware::install_with_settings(
+        with_operational_layers,
+        audit_sink,
+        audit_settings,
+    );
+
+    with_audit
+        // Request-id layers stay outermost so audit can adopt their
+        // `x-request-id` value and the client receives the same id.
+        .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
+        .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
+}
+
+async fn normalize_internal_error_response(request: Request<Body>, next: Next) -> Response {
+    let response = next.run(request).await;
+    if response
+        .extensions()
+        .get::<crate::audit::ErrorCodeExt>()
+        .is_some()
+    {
+        return response;
+    }
+    match response.status() {
+        StatusCode::REQUEST_TIMEOUT => Error::from(InternalError::Timeout).into_response(),
+        StatusCode::PAYLOAD_TOO_LARGE => {
+            Error::from(InternalError::PayloadTooLarge).into_response()
+        }
+        _ => response,
+    }
+}
+
+/// Build a `CorsLayer` from configuration.
+///
+/// Wave 0 follows architect decision #7: default-deny. When
+/// `allowed_origins` is empty, `CorsLayer::new()` is returned (no
+/// origin gets `Access-Control-Allow-Origin`, which is the deny case).
+/// When non-empty, each origin is parsed as a [`HeaderValue`] and the
+/// list installed via [`AllowOrigin::list`]. A malformed origin is
+/// treated as a startup-time mis-config; the parse failure is logged
+/// and the layer falls back to deny-all so the gateway still starts.
+fn build_cors_layer(cors: &CorsConfig) -> CorsLayer {
+    if cors.allowed_origins.is_empty() {
+        return CorsLayer::new();
+    }
+    let mut parsed = Vec::with_capacity(cors.allowed_origins.len());
+    for origin in &cors.allowed_origins {
+        match HeaderValue::from_str(origin) {
+            Ok(value) => parsed.push(value),
+            Err(_) => {
+                // `decisions/wave-0.md` Section 7 says server consumes
+                // `Config.server` for CORS. The config validator does
+                // not currently re-check origin syntax (it is parsed
+                // as a plain `String`), so we degrade gracefully here
+                // rather than panic at startup.
+                tracing::error!(
+                    code = %Error::from(ConfigError::ValidationError).code(),
+                    origin = %origin,
+                    "cors allowed_origins entry is not a valid header value; dropping it"
+                );
+            }
+        }
+    }
+    if parsed.is_empty() {
+        return CorsLayer::new();
+    }
+    CorsLayer::new().allow_origin(AllowOrigin::list(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::audit::{AuditSink, InMemorySink};
+    use axum::body::Body;
+    use axum::routing::get;
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    fn load_example_config() -> Config {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
+        let phc = "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHRkZ3RmaXh0dXJl$\
+                   EFMrkqK4dXMTH8DBlEvNN3wL/qmRvDjCwIAt7BqDpUw";
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
+            std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
+        }
+        crate::config::load(&path).expect("example config loads")
+    }
+    use crate::config::CorsConfig;
+
+    #[test]
+    fn build_cors_layer_empty_returns_deny_default() {
+        // We cannot inspect the layer's internal state directly, but
+        // we can prove the empty-config path does not panic and
+        // returns a real layer. The behaviour test lives in
+        // `tests/e2e_health.rs`.
+        let _ = build_cors_layer(&CorsConfig::default());
+    }
+
+    #[test]
+    fn build_cors_layer_with_valid_origin_constructs() {
+        let cors = CorsConfig {
+            allowed_origins: vec!["https://allowed.example.gov".to_string()],
+        };
+        let _ = build_cors_layer(&cors);
+    }
+
+    #[test]
+    fn build_cors_layer_drops_malformed_origins() {
+        // A header value cannot contain control characters. We expect
+        // the layer to be constructed (degraded to deny-all) without
+        // panicking.
+        let cors = CorsConfig {
+            allowed_origins: vec!["https://bad\norigin".to_string()],
+        };
+        let _ = build_cors_layer(&cors);
+    }
+
+    #[tokio::test]
+    async fn timeout_layer_returns_problem_details_and_audit_code() {
+        let mut config = load_example_config();
+        config.server.request_timeout = Duration::from_millis(1);
+        let config = Arc::new(config);
+        let inmem = InMemorySink::new();
+        let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+        let router = Router::new().route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                StatusCode::OK
+            }),
+        );
+        let app = apply_cross_cutting_layers(router, &config, sink);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/slow")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("problem JSON");
+        assert_eq!(body["code"], "internal.timeout");
+
+        let records = inmem.snapshot();
+        assert_eq!(records.len(), 1);
+        let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
+        assert_eq!(record["error_code"], "internal.timeout");
+        assert_eq!(record["status_code"], 504);
+    }
+
+    #[tokio::test]
+    async fn body_limit_layer_returns_problem_details_and_audit_code() {
+        let config = Arc::new(load_example_config());
+        let inmem = InMemorySink::new();
+        let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+        let router = Router::new().route(
+            "/echo",
+            axum::routing::post(|_body: String| async { StatusCode::OK }),
+        );
+        let app = apply_cross_cutting_layers(router, &config, sink);
+        let body = vec![b'x'; REQUEST_BODY_LIMIT_BYTES + 1];
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/echo")
+                    .body(Body::from(body))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("problem JSON");
+        assert_eq!(body["code"], "internal.payload_too_large");
+
+        let records = inmem.snapshot();
+        assert_eq!(records.len(), 1);
+        let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
+        assert_eq!(record["error_code"], "internal.payload_too_large");
+        assert_eq!(record["status_code"], 413);
+    }
+}

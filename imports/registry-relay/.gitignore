@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+
+# Do NOT ignore Cargo.lock: this is a binary crate.
+
+# Environment / secrets
+.env
+.envrc
+
+# macOS
+.DS_Store
+
+# Editor swap files
+*.swp
+
+# IDE directories
+.idea/
+.vscode/
