@@ -170,7 +170,7 @@ async fn ready_returns_200_when_all_resources_registered() {
 }
 
 #[tokio::test]
-async fn ready_503_lists_failed_resources() {
+async fn ready_503_reports_failed_count_without_names() {
     let dataset: DatasetId = id("social_registry");
     let resource: ResourceId = id("beneficiaries");
     let mut snapshot = ReadinessSnapshot::default();
@@ -185,16 +185,20 @@ async fn ready_503_lists_failed_resources() {
 
     let body: Value = resp.json();
     assert_eq!(body["code"], "schema.resource_unavailable");
-    assert_eq!(body["failed_resources"][0]["dataset_id"], "social_registry");
-    assert_eq!(body["failed_resources"][0]["resource_id"], "beneficiaries");
-    assert_eq!(
-        body["failed_resources"][0]["code"],
-        "ingest.schema_mismatch"
+    // Count-only: no dataset or resource names exposed.
+    assert_eq!(body["failed_count"], 1);
+    assert!(
+        body.get("failed_resources").is_none(),
+        "dataset names must not appear in 503 body"
+    );
+    assert!(
+        !body.to_string().contains("social_registry"),
+        "dataset id must not leak in 503 body"
     );
 }
 
 #[tokio::test]
-async fn ready_503_lists_unresolved_entities_separately() {
+async fn ready_503_reports_unresolved_count_without_names() {
     let dataset: DatasetId = id("social_registry");
     let mut snapshot = ReadinessSnapshot::default();
     snapshot
@@ -207,15 +211,19 @@ async fn ready_503_lists_unresolved_entities_separately() {
 
     let body: Value = resp.json();
     assert_eq!(body["code"], "schema.resource_unavailable");
-    assert_eq!(
-        body["unresolved_entities"][0]["dataset_id"],
-        "social_registry"
+    assert_eq!(body["unresolved_count"], 1);
+    assert!(
+        body.get("unresolved_entities").is_none(),
+        "entity names must not appear in 503 body"
     );
-    assert_eq!(body["unresolved_entities"][0]["entity"], "individual");
-    assert!(body["failed_resources"]
-        .as_array()
-        .expect("failed resources")
-        .is_empty());
+    assert!(
+        !body.to_string().contains("individual"),
+        "entity name must not leak in 503 body"
+    );
+    assert!(
+        !body.to_string().contains("social_registry"),
+        "dataset id must not leak in 503 body"
+    );
 }
 
 #[tokio::test]

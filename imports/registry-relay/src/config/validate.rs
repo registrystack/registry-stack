@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::net::IpAddr;
 
+use argon2::password_hash::PasswordHash;
+use argon2::Params as Argon2Params;
+
 use crate::error::{ConfigError, Error};
 
 use super::{
@@ -60,7 +63,44 @@ fn validate_server(config: &Config) -> Result<(), ConfigError> {
             return Err(ConfigError::ValidationError);
         }
     }
+    for origin in &config.server.cors.allowed_origins {
+        if !is_valid_cors_origin(origin) {
+            tracing::error!(
+                code = "config.validation_error",
+                "cors allowed_origins entry must be scheme://host[:port] with no path or query; wildcard '*' is not permitted"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     Ok(())
+}
+
+/// Validate a CORS origin entry.
+///
+/// Accepts `scheme://host` or `scheme://host:port`. Rejects `*`,
+/// origins with a path component, query strings, or missing scheme.
+fn is_valid_cors_origin(s: &str) -> bool {
+    // Reject the wildcard explicitly; it would allow any origin.
+    if s == "*" {
+        return false;
+    }
+    // Must start with a scheme followed by "://".
+    let after_scheme = match s.split_once("://") {
+        Some((scheme, rest)) if !scheme.is_empty() => rest,
+        _ => return false,
+    };
+    if after_scheme.is_empty() {
+        return false;
+    }
+    // No path or query allowed after the host[:port] portion.
+    if after_scheme.contains('/') || after_scheme.contains('?') || after_scheme.contains('#') {
+        return false;
+    }
+    // The host portion must be non-empty (port after ':' is optional).
+    let host = after_scheme
+        .split_once(':')
+        .map_or(after_scheme, |(h, _)| h);
+    !host.is_empty()
 }
 
 fn is_trusted_proxy_spec(s: &str) -> bool {
@@ -265,12 +305,13 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
                 return Err(ConfigError::MissingSecret);
             }
         };
-        if !is_argon2id_phc(&value) {
+        if let Err(reason) = validate_argon2id_phc(&value) {
             tracing::error!(
                 code = "config.validation_error",
                 api_key_id = %key.id,
                 hash_env = %key.hash_env,
-                "hash_env value is not an Argon2id PHC string"
+                reason = %reason,
+                "hash_env value failed Argon2id PHC validation"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -278,19 +319,31 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Cheap structural check for an Argon2id PHC string. We deliberately
-/// avoid pulling Argon2 verification into config validation: that is
-/// done at request time by the auth layer. Here we only confirm the
-/// value *looks like* a PHC string for the right algorithm.
-fn is_argon2id_phc(s: &str) -> bool {
-    // PHC format: `$argon2id$v=...$m=...,t=...,p=...$<salt>$<hash>`.
-    // Five `$`-separated segments after the leading `$`. We accept any
-    // value that starts with the algorithm marker and has at least
-    // four further segments; the auth layer parses it strictly.
+/// OWASP-recommended Argon2id minimums (2023 cheat sheet).
+/// m_cost: 19 MiB (19456 KiB), t_cost: 2 iterations.
+const ARGON2_MIN_M_COST: u32 = 19_456;
+const ARGON2_MIN_T_COST: u32 = 2;
+
+/// Validate an Argon2id PHC string: structural check plus parameter
+/// floor enforcement.
+///
+/// Returns `Ok(())` when the string is a well-formed `argon2id` PHC
+/// hash whose `m` and `t` parameters meet OWASP minimums. Returns
+/// `Err` with a human-readable reason string otherwise.
+fn validate_argon2id_phc(s: &str) -> Result<(), &'static str> {
     if !s.starts_with("$argon2id$") {
-        return false;
+        return Err("not an Argon2id PHC string");
     }
-    s.split('$').filter(|seg| !seg.is_empty()).count() >= 5
+    let parsed = PasswordHash::new(s).map_err(|_| "PHC string failed to parse")?;
+    let params =
+        Argon2Params::try_from(&parsed).map_err(|_| "could not extract Argon2 params from PHC")?;
+    if params.m_cost() < ARGON2_MIN_M_COST {
+        return Err("Argon2id m_cost is below the minimum (19456 KiB / 19 MiB)");
+    }
+    if params.t_cost() < ARGON2_MIN_T_COST {
+        return Err("Argon2id t_cost is below the minimum (2 iterations)");
+    }
+    Ok(())
 }
 
 fn validate_resources(config: &Config) -> Result<(), ConfigError> {
@@ -941,14 +994,52 @@ mod tests {
     #[test]
     fn argon_phc_check_accepts_canonical_shape() {
         let sample = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHkxc2FsdA$Pv5b/uIqg+Z3KCJ7eqlEYUx8j7Rq3oKZxV/JTM6oRiE";
-        assert!(is_argon2id_phc(sample));
+        assert!(
+            validate_argon2id_phc(sample).is_ok(),
+            "canonical shape should pass"
+        );
     }
 
     #[test]
     fn argon_phc_check_rejects_other_algos_and_plain_text() {
-        assert!(!is_argon2id_phc("not_an_argon_phc"));
-        assert!(!is_argon2id_phc("$argon2i$..."));
-        assert!(!is_argon2id_phc(""));
+        assert!(validate_argon2id_phc("not_an_argon_phc").is_err());
+        assert!(validate_argon2id_phc("$argon2i$...").is_err());
+        assert!(validate_argon2id_phc("").is_err());
+    }
+
+    #[test]
+    fn argon_phc_check_rejects_weak_m_cost() {
+        // m=8192 is below the OWASP-recommended 19456 minimum but
+        // above argon2's own structural floor (8 * p_cost), so the
+        // params parse successfully and our minimum enforcement fires.
+        let weak = "$argon2id$v=19$m=8192,t=2,p=1$c2FsdHkxc2FsdA$Pv5b/uIqg+Z3KCJ7eqlEYUx8j7Rq3oKZxV/JTM6oRiE";
+        let err = validate_argon2id_phc(weak).expect_err("weak m_cost should be rejected");
+        assert!(err.contains("m_cost"), "error mentions m_cost: {err}");
+    }
+
+    #[test]
+    fn argon_phc_check_rejects_weak_t_cost() {
+        // t=1 is below the minimum of 2; use a sufficient m_cost.
+        let weak = "$argon2id$v=19$m=19456,t=1,p=1$c2FsdHkxc2FsdA$Pv5b/uIqg+Z3KCJ7eqlEYUx8j7Rq3oKZxV/JTM6oRiE";
+        let err = validate_argon2id_phc(weak).expect_err("weak t_cost should be rejected");
+        assert!(err.contains("t_cost"), "error mentions t_cost: {err}");
+    }
+
+    #[test]
+    fn cors_origin_accepts_scheme_host() {
+        assert!(is_valid_cors_origin("https://allowed.example.gov"));
+        assert!(is_valid_cors_origin("https://allowed.example.gov:8443"));
+        assert!(is_valid_cors_origin("http://localhost:3000"));
+    }
+
+    #[test]
+    fn cors_origin_rejects_wildcard_and_paths() {
+        assert!(!is_valid_cors_origin("*"));
+        assert!(!is_valid_cors_origin("https://example.gov/path"));
+        assert!(!is_valid_cors_origin("https://example.gov?q=1"));
+        assert!(!is_valid_cors_origin("https://example.gov#anchor"));
+        assert!(!is_valid_cors_origin("example.gov"));
+        assert!(!is_valid_cors_origin("://example.gov"));
     }
 
     #[test]

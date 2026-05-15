@@ -68,37 +68,9 @@ async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>)
         .into_response();
     }
 
-    let failed_resources = snapshot
-        .failed
-        .iter()
-        .map(|((dataset_id, resource_id), code)| {
-            json!({
-                "dataset_id": dataset_id.as_str(),
-                "resource_id": resource_id.as_str(),
-                "code": code,
-            })
-        })
-        .collect::<Vec<_>>();
-    let not_ready_resources = snapshot
-        .not_ready
-        .iter()
-        .map(|(dataset_id, resource_id)| {
-            json!({
-                "dataset_id": dataset_id.as_str(),
-                "resource_id": resource_id.as_str(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let unresolved_entities = snapshot
-        .unresolved_entities
-        .iter()
-        .map(|(dataset_id, entity_name)| {
-            json!({
-                "dataset_id": dataset_id.as_str(),
-                "entity": entity_name,
-            })
-        })
-        .collect::<Vec<_>>();
+    let failed_count = snapshot.failed.len();
+    let not_ready_count = snapshot.not_ready.len();
+    let unresolved_count = snapshot.unresolved_entities.len();
 
     let body = Json(json!({
         "type": "https://data.example.gov/problems/schema/resource_unavailable",
@@ -106,9 +78,9 @@ async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>)
         "status": 503,
         "detail": "one or more configured resources failed ingest, are not ready, or have unresolved entity mappings",
         "code": "schema.resource_unavailable",
-        "failed_resources": failed_resources,
-        "not_ready_resources": not_ready_resources,
-        "unresolved_entities": unresolved_entities,
+        "failed_count": failed_count,
+        "not_ready_count": not_ready_count,
+        "unresolved_count": unresolved_count,
     }));
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     response.headers_mut().insert(
