@@ -25,6 +25,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
+use crate::config::capabilities::source_capabilities;
 use crate::config::{
     Config, DatasetId, MaterializationMode, RefreshConfig, ResourceConfig, ResourceId,
     SchemaConfig, SourceConfig,
@@ -531,6 +532,22 @@ impl IngestRegistry {
                 let source_cfg = resource
                     .effective_source(dataset)
                     .ok_or(IngestError::SourceNotFound)?;
+                let materialization = resource.effective_materialization(dataset);
+                let capabilities = source_capabilities(source_cfg, materialization);
+                tracing::info!(
+                    event = "ingest.datasource_capabilities",
+                    dataset_id = %dataset.id,
+                    resource_id = %resource.id,
+                    source = source_kind_label(source_cfg),
+                    materialization = materialization_label(materialization),
+                    filter_pushdown = capabilities.filter_pushdown.as_str(),
+                    projection_pushdown = capabilities.projection_pushdown.as_str(),
+                    limit_pushdown = capabilities.limit_pushdown.as_str(),
+                    strong_validators = capabilities.strong_validators,
+                    snapshot_provenance = capabilities.snapshot_provenance,
+                    live_query_source = capabilities.live_query_source,
+                    mtime_refresh = capabilities.mtime_refresh,
+                );
                 let declared = Arc::new(DeclaredSchema::from(&resource.schema));
                 let connector: Arc<dyn TableConnector> = match source_cfg {
                     SourceConfig::File { .. } => {
@@ -594,7 +611,7 @@ impl IngestRegistry {
                     dataset.id.clone(),
                     resource.id.clone(),
                     connector,
-                    resource.effective_materialization(dataset),
+                    materialization,
                     resource.schema.clone(),
                     resource.primary_key.clone(),
                     Arc::clone(&cache_root),
@@ -785,6 +802,20 @@ impl ReadinessSnapshot {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn source_kind_label(source: &SourceConfig) -> &'static str {
+    match source {
+        SourceConfig::File { .. } => "file",
+        SourceConfig::Postgres { .. } => "postgres",
+    }
+}
+
+fn materialization_label(materialization: MaterializationMode) -> &'static str {
+    match materialization {
+        MaterializationMode::Snapshot => "snapshot",
+        MaterializationMode::Live => "live",
+    }
+}
 
 /// Build a sample `RecordBatch` from the first `n` rows across batches.
 fn build_sample(batches: &[RecordBatch], n: usize, schema: &SchemaRef) -> Option<RecordBatch> {

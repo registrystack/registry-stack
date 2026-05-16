@@ -232,7 +232,43 @@ source:
 
 Snapshot ingest reads Postgres through `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`, then applies the same declared-schema coercion and validation as CSV files. The exported snapshot is bounded by `server.max_source_file_bytes`. For `table` sources, Registry Relay projects the declared schema fields from the table and casts them to CSV-friendly values. Extra database columns are ignored. For `query` sources, write a single `SELECT` or `WITH` statement without semicolons; public request input is never interpolated into SQL.
 
-Live materialization is supported for structured `table` sources only. Each DataFusion scan opens a read-only Postgres session, exports the declared columns from the configured table, and lets DataFusion apply query filters and projection locally. This keeps the live path bounded and safe, but it does not yet push predicates, projections, joins, or limits into Postgres. Live row responses do not advertise snapshot-style strong validators or cursor version tokens, because upstream rows can change between requests without a Registry Relay ingest event. Live exports are also bounded by `server.max_source_file_bytes`. Use `connect_timeout`, `query_timeout`, and `live_max_connections` to bound upstream behavior:
+Live materialization is supported for structured `table` sources only. Each DataFusion scan opens a read-only Postgres session and exports data from the configured table. Simple column projection is pushed into the generated `COPY` query only when the scan has no filters; filtered scans, joins, and limits remain gateway-side. This keeps the live path bounded and safe without accepting caller-controlled SQL. Live row responses do not advertise snapshot-style strong validators or cursor version tokens, because upstream rows can change between requests without a Registry Relay ingest event. Live exports are also bounded by `server.max_source_file_bytes`. Use `connect_timeout`, `query_timeout`, and `live_max_connections` to bound upstream behavior.
+
+For production live sources, keep the contract deliberately narrow:
+
+```yaml
+tables:
+  - id: individuals_table
+    materialization: live
+    primary_key: individual_id
+    refresh:
+      mode: manual
+    schema:
+      strict: true
+      fields:
+        - name: individual_id
+          type: string
+          nullable: false
+        - name: household_id
+          type: string
+          nullable: false
+        - name: updated_at
+          type: timestamp
+          nullable: true
+    source:
+      type: postgres
+      connection_env: SOCIAL_REGISTRY_DATABASE_URL
+      table:
+        schema: public
+        name: individuals
+      connect_timeout: 5s
+      query_timeout: 30s
+      live_max_connections: 8
+```
+
+The connection string should point to a read-only database role that can `SELECT` only the configured table or view. Do not use `query` sources, `change_token_sql`, or `refresh.mode: mtime` with live materialization; those are snapshot-only controls. Declared schema fields are the exported contract, and extra database columns are ignored unless an entity query needs a full local scan to evaluate filters.
+
+Minimal source-only form:
 
 ```yaml
 source:
@@ -311,6 +347,20 @@ tables:
 Supported formats are `csv`, `xlsx`, and `parquet`. If `format` is omitted, the loader infers from the source file extension where possible.
 
 `materialization` may be `snapshot` or `live`. File sources support `snapshot`. Postgres sources support `snapshot`; Postgres structured table sources also support `live`.
+
+### Datasource Capability Matrix
+
+Registry Relay derives datasource capabilities from `source.type` and `materialization`. Operators do not configure these flags directly.
+
+| Source | Materialization | Filters | Projection | Limit | Validators and cursors | Provenance |
+| --- | --- | --- | --- | --- | --- | --- |
+| `file` | `snapshot` | gateway-side | gateway-side | gateway-side | strong snapshot tokens | snapshot-backed |
+| `postgres` `table` or `query` | `snapshot` | gateway-side | gateway-side | gateway-side | strong snapshot tokens | snapshot-backed |
+| `postgres` `table` | `live` | gateway-side | Postgres column pushdown for filter-free scans, otherwise gateway-side | gateway-side | no strong snapshot tokens | not snapshot-backed |
+
+Unsupported combinations are rejected at config load: file `live`, Postgres `live` with a configured `query`, and `live` with `mtime` refresh. Postgres `query` sources stay snapshot-only so operator SQL is executed only during controlled ingest or refresh, never per public request. Future datasource connectors should follow the same convention: only generated SQL over structured table metadata may receive pushdown, and unsupported operations must fall back to gateway-side execution or be rejected explicitly.
+
+At startup, Registry Relay logs one `ingest.datasource_capabilities` event per configured table. For Postgres live scans, the admin listener's `/metrics` route also exports low-cardinality live scan metrics for scan duration, concurrency wait time, exported rows, and exported bytes. These metrics intentionally do not include dataset ids, table names, SQL, env vars, request ids, or row values.
 
 Field types:
 
@@ -421,3 +471,4 @@ See [provenance.md](provenance.md) for the full signer, DID, schema, context, an
 - Row and verify routes that need purpose tracking set `require_purpose_header: true`.
 - Sensitive identifier fields are marked `sensitive: true` where audit redaction is required.
 - Audit sink and retention match the deployment's governance requirements.
+- For Postgres live tables, scrape `/metrics` from the admin listener and alert on live scan timeout/error growth, exported bytes, and concurrency wait time.

@@ -1,17 +1,17 @@
 # Registry Relay
 
-Registry Relay is a config-driven Rust service that turns sensitive government tabular files into protected, read-only, domain-oriented APIs.
+Registry Relay is a config-driven Rust service that turns sensitive government tabular files and selected database tables into protected, read-only, domain-oriented APIs.
 
 V1 is built around two layers:
 
-- Storage tables read local CSV, XLSX, or Parquet files into Arrow/DataFusion. Table ids are private implementation detail.
+- Storage tables read local CSV, XLSX, Parquet, or PostgreSQL sources into Arrow/DataFusion. Table ids are private implementation detail.
 - Entities expose domain resources such as `household` or `individual`, with field projection, relationships, scopes, configured aggregates, semantic metadata, and audit records.
 
 This is not an open-data portal and not a spreadsheet wrapper. It publishes restricted consultation APIs for authorized systems.
 
 ## Current Status
 
-0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, and Parquet sources. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD includes DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
+0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD includes DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
 
 - `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable` on the admin listener when `server.admin_bind` is configured.
 - Bulk export endpoints are contract-locked for V1.x and are not implemented.

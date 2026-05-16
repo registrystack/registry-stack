@@ -135,12 +135,13 @@ CREATE SCHEMA "{schema_name}";
 CREATE TABLE "{schema_name}".beneficiaries (
   beneficiary_id integer primary key,
   program text,
-  amount numeric
+  amount numeric,
+  unsafe_number text
 );
 INSERT INTO "{schema_name}".beneficiaries
-  (beneficiary_id, program, amount)
+  (beneficiary_id, program, amount, unsafe_number)
 VALUES
-  (1, 'cash', 12.50);
+  (1, 'cash', 12.50, 'not_an_integer');
 "#
         ))
         .await?;
@@ -349,6 +350,9 @@ datasets:
             - name: amount
               type: number
               nullable: false
+            - name: unsafe_number
+              type: integer
+              nullable: true
     entities: []
 
 audit:
@@ -393,8 +397,8 @@ audit:
         .execute(
             &format!(
                 r#"INSERT INTO "{schema_name}".beneficiaries
-                   (beneficiary_id, program, amount)
-                   VALUES (2, 'food', 8.25)"#
+                   (beneficiary_id, program, amount, unsafe_number)
+                   VALUES (2, 'food', 8.25, 'still_not_an_integer')"#
             ),
             &[],
         )
@@ -436,6 +440,50 @@ audit:
             .expect("amount array")
             .value(1),
         8.25
+    );
+
+    let projected = ctx
+        .sql(&format!("select program from {table} order by program"))
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].num_columns(), 1);
+    assert_eq!(projected[0].num_rows(), 2);
+    let programs = projected[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("projected program array");
+    assert_eq!(programs.value(0), "cash");
+    assert_eq!(programs.value(1), "food");
+
+    let reordered = ctx
+        .sql(&format!(
+            "select program, beneficiary_id from {table} order by beneficiary_id"
+        ))
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(reordered.len(), 1);
+    assert_eq!(reordered[0].num_columns(), 2);
+    assert_eq!(
+        reordered[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("reordered program array")
+            .value(1),
+        "food"
+    );
+    assert_eq!(
+        reordered[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("reordered id array")
+            .values(),
+        &[1, 2]
     );
 
     Ok(())

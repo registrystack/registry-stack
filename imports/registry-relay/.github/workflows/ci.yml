@@ -75,6 +75,39 @@ jobs:
           command: check
           arguments: licenses advisories bans sources
 
+  # ── Postgres-backed datasource integration ───────────────────────────────
+  postgres-integration:
+    name: postgres-integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres-integration
+
+      - name: Run Postgres datasource integration tests
+        env:
+          DATA_GATE_POSTGRES_TEST_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: cargo test --test postgres_snapshot -- --ignored --nocapture
+
   # ── Container image build ────────────────────────────────────────────────
   docker-build:
     name: docker-build

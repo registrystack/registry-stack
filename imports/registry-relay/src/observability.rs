@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 use axum::body::Body;
@@ -45,6 +45,64 @@ struct RequestSeries {
     duration_buckets: [u64; HISTOGRAM_BUCKETS.len()],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LiveScanLabels {
+    datasource: &'static str,
+    status: &'static str,
+    projection_pushdown: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct LiveScanSeries {
+    count: u64,
+    rows_total: u64,
+    bytes_total: u64,
+    duration_sum_seconds: f64,
+    duration_buckets: [u64; HISTOGRAM_BUCKETS.len()],
+    wait_sum_seconds: f64,
+    wait_buckets: [u64; HISTOGRAM_BUCKETS.len()],
+}
+
+impl Default for LiveScanSeries {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            rows_total: 0,
+            bytes_total: 0,
+            duration_sum_seconds: 0.0,
+            duration_buckets: [0; HISTOGRAM_BUCKETS.len()],
+            wait_sum_seconds: 0.0,
+            wait_buckets: [0; HISTOGRAM_BUCKETS.len()],
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct LiveScanMetrics {
+    series: Mutex<BTreeMap<LiveScanLabels, LiveScanSeries>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LiveScanObservation {
+    pub datasource: &'static str,
+    pub status: &'static str,
+    pub projection_pushdown: bool,
+    pub duration_seconds: f64,
+    pub wait_seconds: f64,
+    pub rows: u64,
+    pub bytes: u64,
+}
+
+static LIVE_SCAN_METRICS: OnceLock<LiveScanMetrics> = OnceLock::new();
+
+pub fn observe_live_datasource_scan(observation: LiveScanObservation) {
+    live_scan_metrics().observe(observation);
+}
+
+fn live_scan_metrics() -> &'static LiveScanMetrics {
+    LIVE_SCAN_METRICS.get_or_init(LiveScanMetrics::default)
+}
+
 impl Default for RequestSeries {
     fn default() -> Self {
         Self {
@@ -52,6 +110,90 @@ impl Default for RequestSeries {
             duration_sum_seconds: 0.0,
             duration_buckets: [0; HISTOGRAM_BUCKETS.len()],
         }
+    }
+}
+
+impl LiveScanMetrics {
+    fn observe(&self, observation: LiveScanObservation) {
+        let mut series = lock_or_recover(&self.series);
+        let entry = series
+            .entry(LiveScanLabels {
+                datasource: observation.datasource,
+                status: observation.status,
+                projection_pushdown: if observation.projection_pushdown {
+                    "yes"
+                } else {
+                    "no"
+                },
+            })
+            .or_default();
+        entry.count = entry.count.saturating_add(1);
+        entry.rows_total = entry.rows_total.saturating_add(observation.rows);
+        entry.bytes_total = entry.bytes_total.saturating_add(observation.bytes);
+        entry.duration_sum_seconds += observation.duration_seconds;
+        entry.wait_sum_seconds += observation.wait_seconds;
+        for (index, bucket) in HISTOGRAM_BUCKETS.iter().enumerate() {
+            if observation.duration_seconds <= *bucket {
+                entry.duration_buckets[index] = entry.duration_buckets[index].saturating_add(1);
+            }
+            if observation.wait_seconds <= *bucket {
+                entry.wait_buckets[index] = entry.wait_buckets[index].saturating_add(1);
+            }
+        }
+    }
+
+    fn render(&self, out: &mut String) {
+        let series = lock_or_recover(&self.series).clone();
+
+        out.push_str("# HELP registry_relay_datasource_live_scans_total Live datasource scans by bounded connector labels.\n");
+        out.push_str("# TYPE registry_relay_datasource_live_scans_total counter\n");
+        for (labels, values) in &series {
+            write_live_scan_counter(
+                out,
+                "registry_relay_datasource_live_scans_total",
+                labels,
+                values.count,
+            );
+        }
+
+        out.push_str("# HELP registry_relay_datasource_live_scan_rows_total Rows exported by live datasource scans.\n");
+        out.push_str("# TYPE registry_relay_datasource_live_scan_rows_total counter\n");
+        for (labels, values) in &series {
+            write_live_scan_counter(
+                out,
+                "registry_relay_datasource_live_scan_rows_total",
+                labels,
+                values.rows_total,
+            );
+        }
+
+        out.push_str("# HELP registry_relay_datasource_live_scan_bytes_total Bytes exported by live datasource scans before decoding.\n");
+        out.push_str("# TYPE registry_relay_datasource_live_scan_bytes_total counter\n");
+        for (labels, values) in &series {
+            write_live_scan_counter(
+                out,
+                "registry_relay_datasource_live_scan_bytes_total",
+                labels,
+                values.bytes_total,
+            );
+        }
+
+        render_live_scan_histogram(
+            out,
+            "registry_relay_datasource_live_scan_duration_seconds",
+            "Live datasource scan duration from concurrency wait through DataFusion plan creation.",
+            &series,
+            |values| values.duration_sum_seconds,
+            |values| &values.duration_buckets,
+        );
+        render_live_scan_histogram(
+            out,
+            "registry_relay_datasource_live_scan_wait_seconds",
+            "Live datasource scan time spent waiting for connector concurrency.",
+            &series,
+            |values| values.wait_sum_seconds,
+            |values| &values.wait_buckets,
+        );
     }
 }
 
@@ -151,6 +293,7 @@ impl RequestMetrics {
             .expect("write to String cannot fail");
         }
 
+        live_scan_metrics().render(&mut out);
         render_readiness(readiness, &mut out);
         out
     }
@@ -262,6 +405,72 @@ fn render_readiness(readiness: Option<&ReadinessSnapshot>, out: &mut String) {
         ready, not_ready, failed, unresolved, fully_ready
     )
     .expect("write to String cannot fail");
+}
+
+fn write_live_scan_counter(out: &mut String, metric: &str, labels: &LiveScanLabels, value: u64) {
+    writeln!(
+        out,
+        "{metric}{{datasource=\"{}\",status=\"{}\",projection_pushdown=\"{}\"}} {}",
+        escape_label(labels.datasource),
+        escape_label(labels.status),
+        escape_label(labels.projection_pushdown),
+        value
+    )
+    .expect("write to String cannot fail");
+}
+
+fn render_live_scan_histogram(
+    out: &mut String,
+    metric: &str,
+    help: &str,
+    series: &BTreeMap<LiveScanLabels, LiveScanSeries>,
+    sum: impl Fn(&LiveScanSeries) -> f64,
+    buckets: impl Fn(&LiveScanSeries) -> &[u64; HISTOGRAM_BUCKETS.len()],
+) {
+    writeln!(out, "# HELP {metric} {help}").expect("write to String cannot fail");
+    writeln!(out, "# TYPE {metric} histogram").expect("write to String cannot fail");
+    for (labels, values) in series {
+        let buckets = buckets(values);
+        for (index, bucket) in HISTOGRAM_BUCKETS.iter().enumerate() {
+            writeln!(
+                out,
+                "{metric}_bucket{{datasource=\"{}\",status=\"{}\",projection_pushdown=\"{}\",le=\"{:.3}\"}} {}",
+                escape_label(labels.datasource),
+                escape_label(labels.status),
+                escape_label(labels.projection_pushdown),
+                bucket,
+                buckets[index]
+            )
+            .expect("write to String cannot fail");
+        }
+        writeln!(
+            out,
+            "{metric}_bucket{{datasource=\"{}\",status=\"{}\",projection_pushdown=\"{}\",le=\"+Inf\"}} {}",
+            escape_label(labels.datasource),
+            escape_label(labels.status),
+            escape_label(labels.projection_pushdown),
+            values.count
+        )
+        .expect("write to String cannot fail");
+        writeln!(
+            out,
+            "{metric}_sum{{datasource=\"{}\",status=\"{}\",projection_pushdown=\"{}\"}} {:.6}",
+            escape_label(labels.datasource),
+            escape_label(labels.status),
+            escape_label(labels.projection_pushdown),
+            sum(values)
+        )
+        .expect("write to String cannot fail");
+        writeln!(
+            out,
+            "{metric}_count{{datasource=\"{}\",status=\"{}\",projection_pushdown=\"{}\"}} {}",
+            escape_label(labels.datasource),
+            escape_label(labels.status),
+            escape_label(labels.projection_pushdown),
+            values.count
+        )
+        .expect("write to String cannot fail");
+    }
 }
 
 fn method_label(method: &str) -> &'static str {

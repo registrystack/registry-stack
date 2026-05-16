@@ -53,6 +53,17 @@ impl DeclaredSchema {
         self.fields.iter().find(|f| f.name == name)
     }
 
+    pub(crate) fn project(&self, projection: &[usize]) -> Option<Arc<Self>> {
+        let fields = projection
+            .iter()
+            .map(|index| self.fields.get(*index).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(Arc::new(Self {
+            strict: self.strict,
+            fields,
+        }))
+    }
+
     /// Arrow schema that the declared types correspond to. Order is
     /// preserved (Arrow schemas are position-sensitive). Used by the
     /// validator's `ProjectionPlan` to know the target column order and

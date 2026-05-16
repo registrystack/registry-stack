@@ -140,6 +140,40 @@ Both scripts are part of the committed performance harness and are documented th
 
 ---
 
+## Quick Postgres Live Comparison
+
+Postgres live reads are freshness-first, not the high-throughput path. For a
+quick local comparison, use the same machine and dataset shape for all runs:
+
+1. Run the env-gated Postgres integration smoke to verify the live connector:
+
+   ```bash
+   DATA_GATE_POSTGRES_TEST_URL='postgres://localhost:55432/postgres?sslmode=disable' \
+     cargo test --test postgres_snapshot -- --ignored --nocapture
+   ```
+
+2. Compare three query shapes from application logs and `/metrics`:
+
+   - snapshot table query over a cached DataFusion table
+   - Postgres live query selecting all declared columns
+   - Postgres live query selecting only the entity fields needed by the request
+
+3. Scrape the admin listener's `/metrics` after the live runs and compare:
+
+   ```text
+   registry_relay_datasource_live_scan_duration_seconds
+   registry_relay_datasource_live_scan_wait_seconds
+   registry_relay_datasource_live_scan_rows_total
+   registry_relay_datasource_live_scan_bytes_total
+   ```
+
+The expected shape is simple: snapshot should be fastest for repeated reads,
+Postgres live full export should be slowest, and Postgres live projection should
+reduce exported bytes when callers request narrow fields. Treat live as the
+correct choice only when freshness is worth the upstream database round trip.
+
+---
+
 ## Environment Variables
 
 | Variable                    | Default                    | Description                                      |

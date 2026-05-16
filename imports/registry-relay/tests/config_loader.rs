@@ -783,6 +783,46 @@ fn postgres_live_max_connections_must_be_nonzero() {
 }
 
 #[test]
+fn postgres_live_mtime_refresh_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: live
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+          change_token_sql: "select max(updated_at)::text from public.records"
+        refresh:
+          mode: mtime
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.validation_error");
+}
+
+#[test]
 fn postgres_mtime_requires_change_token_sql() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(

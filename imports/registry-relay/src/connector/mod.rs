@@ -10,7 +10,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -31,6 +31,7 @@ use crate::config::{FieldType, PostgresTableConfig};
 use crate::format::csv::CsvFormat;
 use crate::format::{Format, FormatError, FormatHints};
 use crate::ingest::declared_schema::DeclaredSchema;
+use crate::observability::{observe_live_datasource_scan, LiveScanObservation};
 use crate::source::{Source, SourceError, SourceMetadata};
 
 /// A table-level datasource connector.
@@ -361,10 +362,9 @@ impl PostgresConnector {
         query.trim_end_matches(';').trim().to_string()
     }
 
-    fn projected_select_sql(&self) -> String {
+    fn projected_select_sql_for(&self, declared: &DeclaredSchema) -> String {
         let base = self.base_select_sql();
-        let projections = self
-            .declared
+        let projections = declared
             .fields
             .iter()
             .map(|field| {
@@ -379,16 +379,34 @@ impl PostgresConnector {
         format!("SELECT {projections} FROM ({base}) AS data_gate_source")
     }
 
-    fn copy_sql(&self) -> String {
+    fn copy_sql_for(&self, declared: &DeclaredSchema) -> String {
         format!(
             "COPY ({}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)",
-            self.projected_select_sql()
+            self.projected_select_sql_for(declared)
         )
     }
 
-    async fn copy_decoded(&self, client: &Client) -> Result<SnapshotTable, ConnectorError> {
+    fn declared_for_projection(
+        &self,
+        projection: Option<&[usize]>,
+    ) -> Result<Arc<DeclaredSchema>, ConnectorError> {
+        match projection {
+            Some(indices) => self.declared.project(indices).ok_or_else(|| {
+                ConnectorError::SourceUnreadable(
+                    "postgres projection references an unknown declared column".into(),
+                )
+            }),
+            None => Ok(Arc::clone(&self.declared)),
+        }
+    }
+
+    async fn copy_decoded_for(
+        &self,
+        client: &Client,
+        declared: Arc<DeclaredSchema>,
+    ) -> Result<SnapshotTable, ConnectorError> {
         let copy_stream = client
-            .copy_out(&self.copy_sql())
+            .copy_out(&self.copy_sql_for(&declared))
             .await
             .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
         futures::pin_mut!(copy_stream);
@@ -404,6 +422,7 @@ impl PostgresConnector {
             }
             bytes.extend_from_slice(&chunk);
         }
+        let exported_bytes = bytes.len() as u64;
         let reader = std::io::Cursor::new(bytes);
         let hints = FormatHints {
             sheet: None,
@@ -411,7 +430,7 @@ impl PostgresConnector {
             data_range: None,
             delimiter: None,
             quote: None,
-            declared: Arc::clone(&self.declared),
+            declared,
         };
         let decoded = CsvFormat::new()
             .decode(Box::pin(reader), hints)
@@ -423,12 +442,26 @@ impl PostgresConnector {
                 .batches
                 .map(|result| result.map_err(ConnectorError::from))
                 .boxed(),
-            metadata: SourceMetadata::default(),
+            metadata: SourceMetadata {
+                mtime: None,
+                size_bytes: Some(exported_bytes),
+                etag: None,
+                content_type: Some("text/csv".to_string()),
+            },
         })
     }
 
     async fn timed_copy_decoded(&self, client: &Client) -> Result<SnapshotTable, ConnectorError> {
-        self.with_query_timeout("postgres export", self.copy_decoded(client))
+        self.timed_copy_decoded_projected(client, None).await
+    }
+
+    async fn timed_copy_decoded_projected(
+        &self,
+        client: &Client,
+        projection: Option<&[usize]>,
+    ) -> Result<SnapshotTable, ConnectorError> {
+        let declared = self.declared_for_projection(projection)?;
+        self.with_query_timeout("postgres export", self.copy_decoded_for(client, declared))
             .await
     }
 
@@ -544,29 +577,102 @@ impl TableProvider for PostgresLiveTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let _permit = self
+        let started = Instant::now();
+        let remote_projection = if filters.is_empty() {
+            projection
+                .map(Vec::as_slice)
+                .filter(|indices| is_pushdown_safe_projection(indices))
+        } else {
+            None
+        };
+        let projection_pushdown = remote_projection.is_some();
+        let wait_started = Instant::now();
+        let _permit = match self.connector.acquire_live_permit().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                observe_postgres_live_scan_error(
+                    started,
+                    wait_started.elapsed().as_secs_f64(),
+                    projection_pushdown,
+                );
+                return Err(postgres_to_datafusion_error(error));
+            }
+        };
+        let wait_seconds = wait_started.elapsed().as_secs_f64();
+        let client = match self.connector.connect().await {
+            Ok(client) => client,
+            Err(error) => {
+                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
+                return Err(postgres_to_datafusion_error(error));
+            }
+        };
+        let snapshot = match self
             .connector
-            .acquire_live_permit()
+            .timed_copy_decoded_projected(&client, remote_projection)
             .await
-            .map_err(postgres_to_datafusion_error)?;
-        let client = self
-            .connector
-            .connect()
-            .await
-            .map_err(postgres_to_datafusion_error)?;
-        let snapshot = self
-            .connector
-            .timed_copy_decoded(&client)
-            .await
-            .map_err(postgres_to_datafusion_error)?;
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
+                return Err(postgres_to_datafusion_error(error));
+            }
+        };
+        let exported_bytes = snapshot.metadata.size_bytes.unwrap_or(0);
         let mut stream = snapshot.batches;
         let mut batches = Vec::new();
+        let mut rows: u64 = 0;
         while let Some(result) = stream.next().await {
-            batches.push(result.map_err(postgres_to_datafusion_error)?);
+            let batch = match result {
+                Ok(batch) => batch,
+                Err(error) => {
+                    observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
+                    return Err(postgres_to_datafusion_error(error));
+                }
+            };
+            rows = rows.saturating_add(batch.num_rows() as u64);
+            batches.push(batch);
         }
 
-        let table = MemTable::try_new(snapshot.observed_schema, vec![batches])?;
-        table.scan(state, projection, filters, limit).await
+        let table = match MemTable::try_new(snapshot.observed_schema, vec![batches]) {
+            Ok(table) => table,
+            Err(error) => {
+                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
+                return Err(error);
+            }
+        };
+        let local_projection = if remote_projection.is_some() {
+            None
+        } else {
+            projection
+        };
+        match table.scan(state, local_projection, filters, limit).await {
+            Ok(plan) => {
+                observe_live_datasource_scan(LiveScanObservation {
+                    datasource: "postgres",
+                    status: "success",
+                    projection_pushdown,
+                    duration_seconds: started.elapsed().as_secs_f64(),
+                    wait_seconds,
+                    rows,
+                    bytes: exported_bytes,
+                });
+                tracing::info!(
+                    event = "connector.postgres_live_scan",
+                    datasource = "postgres",
+                    status = "success",
+                    projection_pushdown,
+                    rows,
+                    bytes = exported_bytes,
+                    duration_ms = started.elapsed().as_millis(),
+                    wait_ms = (wait_seconds * 1000.0) as u64,
+                );
+                Ok(plan)
+            }
+            Err(error) => {
+                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
+                Err(error)
+            }
+        }
     }
 
     fn supports_filters_pushdown(
@@ -586,6 +692,38 @@ impl TableProvider for PostgresLiveTableProvider {
 
 fn postgres_to_datafusion_error(error: ConnectorError) -> DataFusionError {
     DataFusionError::Execution(error.to_string())
+}
+
+fn observe_postgres_live_scan_error(
+    started: Instant,
+    wait_seconds: f64,
+    projection_pushdown: bool,
+) {
+    observe_live_datasource_scan(LiveScanObservation {
+        datasource: "postgres",
+        status: "error",
+        projection_pushdown,
+        duration_seconds: started.elapsed().as_secs_f64(),
+        wait_seconds,
+        rows: 0,
+        bytes: 0,
+    });
+    tracing::warn!(
+        event = "connector.postgres_live_scan",
+        datasource = "postgres",
+        status = "error",
+        projection_pushdown,
+        duration_ms = started.elapsed().as_millis(),
+        wait_ms = (wait_seconds * 1000.0) as u64,
+    );
+}
+
+fn is_pushdown_safe_projection(projection: &[usize]) -> bool {
+    !projection.is_empty()
+        && projection
+            .iter()
+            .enumerate()
+            .all(|(offset, index)| !projection[..offset].contains(index))
 }
 
 fn quote_ident(identifier: &str) -> String {
@@ -653,13 +791,75 @@ mod tests {
             8,
         );
 
-        let sql = connector.copy_sql();
+        let sql = connector.copy_sql_for(&connector.declared);
         assert!(sql.contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source"#));
         assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
         assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
         assert!(sql.contains(r#"to_char(data_gate_source."updated_at"::timestamptz"#));
         assert!(sql.starts_with("COPY (SELECT "));
         assert!(sql.ends_with(") TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"));
+    }
+
+    #[test]
+    fn postgres_copy_sql_can_project_declared_column_subset() {
+        let connector = PostgresConnector::new(
+            "DATABASE_URL".to_string(),
+            Some(PostgresTableConfig {
+                schema: "public".to_string(),
+                name: "people".to_string(),
+            }),
+            None,
+            None,
+            declared(vec![
+                ("id", FieldType::Integer),
+                ("name", FieldType::String),
+                ("active", FieldType::Boolean),
+            ]),
+            256 * 1024 * 1024,
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            8,
+        );
+        let projected = connector
+            .declared_for_projection(Some(&[2, 0]))
+            .expect("projection is valid");
+
+        let sql = connector.copy_sql_for(&projected);
+
+        assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
+        assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
+        assert!(!sql.contains(r#"data_gate_source."name"::text AS "name""#));
+        assert!(
+            sql.find(r#""active""#).expect("active appears")
+                < sql.find(r#""id""#).expect("id appears")
+        );
+    }
+
+    #[test]
+    fn postgres_declared_projection_rejects_unknown_index() {
+        let connector = PostgresConnector::new(
+            "DATABASE_URL".to_string(),
+            Some(PostgresTableConfig {
+                schema: "public".to_string(),
+                name: "people".to_string(),
+            }),
+            None,
+            None,
+            declared(vec![("id", FieldType::Integer)]),
+            256 * 1024 * 1024,
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            8,
+        );
+
+        assert!(connector.declared_for_projection(Some(&[1])).is_err());
+    }
+
+    #[test]
+    fn postgres_live_projection_pushdown_requires_non_empty_unique_indices() {
+        assert!(!is_pushdown_safe_projection(&[]));
+        assert!(!is_pushdown_safe_projection(&[0, 0]));
+        assert!(is_pushdown_safe_projection(&[2, 0]));
     }
 
     #[test]
