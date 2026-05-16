@@ -23,6 +23,8 @@ pub mod health;
 pub mod openapi;
 pub(crate) mod provenance_issuance;
 pub mod schemas;
+#[cfg(feature = "spdci-api-standards")]
+pub mod spdci;
 
 pub use admin::router as admin_router;
 pub use aggregates::router as aggregates_router;
@@ -36,3 +38,5 @@ pub use entity::CursorSigner;
 pub use health::router as health_router;
 pub use openapi::router as openapi_router;
 pub use schemas::router as schemas_router;
+#[cfg(feature = "spdci-api-standards")]
+pub use spdci::router as spdci_router;

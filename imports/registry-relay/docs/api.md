@@ -1,6 +1,6 @@
 # registry-relay API Guide
 
-This guide describes the V1 HTTP contract from a client and operator point of view. The product contract remains [Spec.md](../Spec.md); this file is the practical reference for calling a running gateway.
+This guide describes the V1 HTTP contract from a client and operator point of view. It is the practical reference for calling a running gateway.
 
 ## Listeners And Surfaces
 

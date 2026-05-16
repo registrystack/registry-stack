@@ -185,6 +185,7 @@ where
         .merge(api::aggregates_router())
         .merge(api::catalog_router())
         .merge(api::openapi_router());
+    let protected = merge_spdci_routes(protected);
     let protected = auth_layer(protected, auth);
 
     // Merge public + protected; everything above this point is inside
@@ -203,6 +204,16 @@ where
     if let Some(state) = provenance {
         router = router.layer(Extension(state));
     }
+    router
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn merge_spdci_routes(router: Router) -> Router {
+    router.merge(api::spdci_router())
+}
+
+#[cfg(not(feature = "spdci-api-standards"))]
+fn merge_spdci_routes(router: Router) -> Router {
     router
 }
 

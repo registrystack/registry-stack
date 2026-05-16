@@ -136,7 +136,7 @@ running a named k6 scenario, and stopping the server cleanly.
 `perf/scripts/report.py` reads k6 JSON output and the manifest to produce a
 structured performance report.
 
-Both scripts are written by a separate agent and documented there.
+Both scripts are part of the committed performance harness and are documented there.
 
 ---
 

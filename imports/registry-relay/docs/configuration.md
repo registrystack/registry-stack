@@ -6,7 +6,7 @@
 2. `REGISTRY_RELAY_CONFIG`
 3. `./config/example.yaml`
 
-The canonical sample is [config/example.yaml](../config/example.yaml). Keep examples aligned with [Spec.md](../Spec.md).
+The canonical sample is [config/example.yaml](../config/example.yaml). Keep examples aligned with this guide and the API and operations documentation.
 
 ## Root Shape
 
@@ -18,6 +18,7 @@ auth: {}
 datasets: []
 audit: {}
 provenance: {} # optional
+standards: {}  # optional, feature-gated adapters
 ```
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
@@ -61,6 +62,36 @@ vocabularies:
 `base_url` is used in generated catalog links, OpenAPI servers, and provenance subject URIs. `participant_id` is optional and defaults from the catalog base URL when omitted.
 
 Vocabulary prefixes let entity fields and dataset metadata use compact semantic references such as `psc:concepts/Person`.
+
+## Optional SPD CI Sync Adapter
+
+Build with `--features spdci-api-standards` to enable the optional SPD CI Disability Registry sync adapter. Without that feature, any `standards.spdci` config is rejected with `spdci.config.feature_disabled`.
+
+The adapter does not add new storage semantics. Configure a normal Registry Relay entity, often backed by an XLSX worksheet, then bind the SPD CI sync routes to it:
+
+```yaml
+standards:
+  spdci:
+    disability_registry:
+      dataset: disability_registry
+      entity: disabled_person
+      query_key: member.member_identifier
+      query_field: id
+      disabled_status_field: disability_status
+      disabled_positive_values: [approved, yes]
+```
+
+When enabled and configured, Registry Relay serves these SPD CI sync endpoints on the protected data-plane listener:
+
+```text
+POST /registry/sync/disabled
+POST /registry/sync/get-disability-details
+POST /registry/sync/get-disability-support
+```
+
+`query_key` is read from `message.disabled_criteria.query` in the SPD CI request envelope. It may be represented as a literal dotted JSON key (`"member.member_identifier"`) or as nested objects (`{"member": {"member_identifier": ...}}`). `query_field` must be an allowed entity filter because the adapter delegates reads to the normal entity query engine.
+
+For `/registry/sync/disabled`, the caller needs the configured entity `verify_scope`; details and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer.
 
 ## API Keys
 

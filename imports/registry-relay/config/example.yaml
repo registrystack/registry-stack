@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Canonical V1 example. Do not drift this file from Spec.md Section 4.
-# Any change here must be matched by a Spec.md edit in the same commit.
+# Canonical V1 example. Keep this file aligned with docs/configuration.md,
+# docs/api.md, and docs/ops.md.
 
 server:
   bind: 0.0.0.0:8080

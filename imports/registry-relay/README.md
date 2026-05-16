@@ -16,11 +16,10 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 - `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable` on the admin listener when `server.admin_bind` is configured.
 - Bulk export endpoints are contract-locked for V1.x and are not implemented.
 
-Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat deferred surfaces as unavailable until their owning follow-up lands.
+Keep deployment docs and examples aligned with the operator and API guides, and treat deferred surfaces as unavailable until their owning follow-up lands.
 
 ## Repository Map
 
-- [Spec.md](Spec.md): V1 product and architecture contract.
 - [config/example.yaml](config/example.yaml): canonical example config.
 - [docs/configuration.md](docs/configuration.md): operator-facing configuration reference.
 - [docs/api.md](docs/api.md): authentication, endpoint, filtering, pagination, and error contract.

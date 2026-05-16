@@ -9,7 +9,7 @@ Use this skill to review `registry-relay` V1 configs before deployment or when `
 
 ## Bundled Contract
 
-This skill is self-contained. Do not assume access to the `registry-relay` repository, `Spec.md`, or Rust source code.
+This skill is self-contained. Do not assume access to the `registry-relay` repository or Rust source code.
 
 Before reviewing a config, read:
 

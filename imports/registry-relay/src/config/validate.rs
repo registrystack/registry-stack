@@ -41,6 +41,137 @@ pub fn run(config: &Config) -> Result<(), Error> {
         validate_provenance(provenance).map_err(Error::from)?;
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
+    validate_spdci_feature(config).map_err(Error::from)?;
+    Ok(())
+}
+
+fn validate_spdci_feature(config: &Config) -> Result<(), ConfigError> {
+    let Some(spdci) = &config.standards.spdci else {
+        return Ok(());
+    };
+    validate_spdci_config(config, spdci)
+}
+
+#[cfg(not(feature = "spdci-api-standards"))]
+fn validate_spdci_config(
+    _config: &Config,
+    _spdci: &super::SpdciStandardsConfig,
+) -> Result<(), ConfigError> {
+    tracing::error!(
+        code = "spdci.config.feature_disabled",
+        "standards.spdci is configured but binary was built without the spdci-api-standards feature",
+    );
+    Err(ConfigError::SpdciFeatureDisabled)
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn validate_spdci_config(
+    config: &Config,
+    spdci: &super::SpdciStandardsConfig,
+) -> Result<(), ConfigError> {
+    let Some(disability) = &spdci.disability_registry else {
+        tracing::error!(
+            code = "config.validation_error",
+            "standards.spdci must declare at least one adapter"
+        );
+        return Err(ConfigError::ValidationError);
+    };
+    validate_spdci_disability_registry(config, disability)
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn validate_spdci_disability_registry(
+    config: &Config,
+    disability: &super::SpdciDisabilityRegistryConfig,
+) -> Result<(), ConfigError> {
+    if disability.entity.trim().is_empty()
+        || disability.query_key.trim().is_empty()
+        || disability.query_field.trim().is_empty()
+        || disability.disabled_status_field.trim().is_empty()
+        || disability.disabled_positive_values.is_empty()
+        || disability
+            .disabled_positive_values
+            .iter()
+            .any(|value| value.trim().is_empty())
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %disability.dataset,
+            entity = %disability.entity,
+            "standards.spdci.disability_registry fields must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let dataset = config
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == disability.dataset)
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %disability.dataset,
+                "standards.spdci.disability_registry references an unknown dataset"
+            );
+            ConfigError::ValidationError
+        })?;
+    let entity = dataset
+        .entities
+        .iter()
+        .find(|entity| entity.name == disability.entity)
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %disability.dataset,
+                entity = %disability.entity,
+                "standards.spdci.disability_registry references an unknown entity"
+            );
+            ConfigError::ValidationError
+        })?;
+    let table = dataset
+        .table_configs()
+        .find(|table| table.id == entity.table)
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %disability.dataset,
+                entity = %disability.entity,
+                table_id = %entity.table,
+                "standards.spdci.disability_registry entity references an unknown table"
+            );
+            ConfigError::ValidationError
+        })?;
+    let fields = exposed_entity_fields(entity, table)?;
+    for required in [
+        disability.query_field.as_str(),
+        disability.disabled_status_field.as_str(),
+    ] {
+        if !fields.contains_key(required) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %disability.dataset,
+                entity = %disability.entity,
+                field = %required,
+                "standards.spdci.disability_registry references an unknown entity field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    if !entity
+        .api
+        .allowed_filters
+        .iter()
+        .any(|filter| filter.field == disability.query_field)
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %disability.dataset,
+            entity = %disability.entity,
+            field = %disability.query_field,
+            "standards.spdci.disability_registry query_field must be allowed as an entity filter"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 

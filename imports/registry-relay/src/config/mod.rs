@@ -52,6 +52,67 @@ pub struct Config {
     /// deployments without this block load unchanged.
     #[serde(default)]
     pub provenance: Option<ProvenanceConfig>,
+    /// Optional external standards adapters. The config model is parsed
+    /// in every build so feature-disabled binaries can reject it with a
+    /// stable taxonomy code.
+    #[serde(default)]
+    pub standards: StandardsConfig,
+}
+
+/// External standards adapters layered over configured entities.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandardsConfig {
+    #[serde(default)]
+    pub spdci: Option<SpdciStandardsConfig>,
+}
+
+/// Digital Convergence Initiative / SPD CI adapter configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpdciStandardsConfig {
+    #[serde(default)]
+    pub disability_registry: Option<SpdciDisabilityRegistryConfig>,
+}
+
+/// Runtime binding from SPD CI Disability Registry sync APIs to one
+/// configured Registry Relay entity.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpdciDisabilityRegistryConfig {
+    pub dataset: DatasetId,
+    pub entity: String,
+    /// Query key accepted from SPD CI `disabled_criteria.query`.
+    #[serde(default = "default_spdci_disability_query_key")]
+    pub query_key: String,
+    /// Entity field filtered when the SPD CI query key is present.
+    #[serde(default = "default_spdci_disability_query_field")]
+    pub query_field: String,
+    /// Entity field whose value determines `/registry/sync/disabled`.
+    #[serde(default = "default_spdci_disabled_status_field")]
+    pub disabled_status_field: String,
+    /// Case-insensitive values interpreted as disabled.
+    #[serde(default = "default_spdci_disabled_positive_values")]
+    pub disabled_positive_values: Vec<String>,
+}
+
+fn default_spdci_disability_query_key() -> String {
+    "member.member_identifier".to_string()
+}
+
+fn default_spdci_disability_query_field() -> String {
+    "id".to_string()
+}
+
+fn default_spdci_disabled_status_field() -> String {
+    "disability_status".to_string()
+}
+
+fn default_spdci_disabled_positive_values() -> Vec<String> {
+    ["approved", "yes", "true", "disabled"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 /// HTTP listener and adjacent server-wide knobs.

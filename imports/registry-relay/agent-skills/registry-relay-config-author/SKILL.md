@@ -9,7 +9,7 @@ Use this skill to turn a user's CSV, XLSX, or Parquet file into a `registry-rela
 
 ## Bundled Contract
 
-This skill is self-contained. Do not assume access to the `registry-relay` repository, `Spec.md`, or Rust source code.
+This skill is self-contained. Do not assume access to the `registry-relay` repository or Rust source code.
 
 Before drafting a non-trivial config, read:
 
