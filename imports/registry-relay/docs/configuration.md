@@ -141,29 +141,59 @@ datasets:
     update_frequency: monthly
     conforms_to:
       - psc:concepts/Person
-    source:
-      type: file
-      path: ./data/social_registry.xlsx
-    refresh:
-      mode: mtime
-      interval: 60s
+    defaults:
+      materialization: snapshot
     tables: []
     entities: []
 ```
 
 `sensitivity`, `access_rights`, and `update_frequency` are catalog metadata. They also make review conversations concrete; do not leave them vague in production configs.
 
+`defaults` is optional. It may provide `materialization` and `refresh` defaults for tables in the same dataset. Source configuration stays table-level.
+
 ### Sources
 
-V1 supports local file sources:
+Sources are configured on each private table. File sources read CSV, XLSX, or Parquet data:
 
 ```yaml
 source:
   type: file
   path: ./data/social_registry.xlsx
+  format:
+    xlsx:
+      sheet: Individuals
+      header_row: 1
+      data_range: A1:E100000
 ```
 
-For XLSX files, `header_row` and `data_range` can be used when a worksheet has notes or title rows around the rectangular table.
+For XLSX files, `header_row` and `data_range` can be used when a worksheet has notes or title rows around the rectangular table. Existing configs with dataset-level `source` and table-level `format` are still accepted during the datasource refactor, but new configs should use `tables[].source.format`.
+
+Postgres snapshot sources are supported. Credentials are never stored in YAML:
+
+```yaml
+source:
+  type: postgres
+  connection_env: SOCIAL_REGISTRY_DATABASE_URL
+  table:
+    schema: public
+    name: individuals
+  change_token_sql: "select max(updated_at)::text from public.individuals"
+```
+
+`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. Use read-only database credentials. Registry Relay also marks Postgres connector sessions as read-only, but credentials should enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
+
+Snapshot ingest reads Postgres through `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`, then applies the same declared-schema coercion and validation as CSV files. The exported snapshot is bounded by `server.max_source_file_bytes`. For `table` sources, Registry Relay projects the declared schema fields from the table and casts them to CSV-friendly values. Extra database columns are ignored. For `query` sources, write a single `SELECT` or `WITH` statement without semicolons; public request input is never interpolated into SQL.
+
+Supported Postgres snapshot field mappings are:
+
+```text
+string -> text
+integer -> bigint
+number -> double precision
+boolean -> boolean
+date -> date
+timestamp -> timestamptz rendered as RFC 3339 UTC text
+```
 
 ### Refresh
 
@@ -184,7 +214,7 @@ refresh:
   mode: manual
 ```
 
-`mtime` reloads when the source file modification token changes. `interval` reloads on every interval. `manual` reloads only through the admin listener's table reload route.
+`mtime` reloads when the source change token changes. It is supported for file sources and for Postgres snapshot sources only when `change_token_sql` is configured. `interval` reloads on every interval. `manual` reloads only through the admin listener's table reload route.
 
 ## Tables
 
@@ -193,9 +223,16 @@ Tables are private storage resources. Their ids do not appear in public URLs.
 ```yaml
 tables:
   - id: individuals_table
-    format:
-      xlsx:
-        sheet: Individuals
+    materialization: snapshot
+    source:
+      type: file
+      path: ./data/social_registry.xlsx
+      format:
+        xlsx:
+          sheet: Individuals
+    refresh:
+      mode: mtime
+      interval: 1h
     primary_key: individual_id
     schema:
       strict: true
@@ -210,6 +247,8 @@ tables:
 ```
 
 Supported formats are `csv`, `xlsx`, and `parquet`. If `format` is omitted, the loader infers from the source file extension where possible.
+
+`materialization` may be `snapshot` or `live`. File and Postgres sources support `snapshot`. Live materialization is reserved for future database providers and currently validates only the config shape.
 
 Field types:
 

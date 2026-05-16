@@ -17,6 +17,7 @@ use crate::config::{
 };
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{AggregateError, Error, FilterError, SchemaError};
+use crate::table_provider::table_snapshot;
 
 use super::{batches_to_json_rows, table_name_str};
 
@@ -224,10 +225,8 @@ impl AggregatePlan {
             base_select
                 .push(col(table_column.as_str()).alias(base_field_alias(entity, &table_column)));
         }
-        let mut df = ctx
-            .table(base_table.as_str())
-            .await
-            .map_err(|err| table_unavailable(dataset_id, &entity.name, &base_table, err))?
+        let mut df = snapshot_table(ctx, dataset_id, &entity.name, &base_table)
+            .await?
             .select(base_select)
             .map_err(aggregate_execution_failed)?;
 
@@ -300,10 +299,8 @@ impl AggregatePlan {
                 );
             }
 
-            let target_df = ctx
-                .table(target_table.as_str())
-                .await
-                .map_err(|err| table_unavailable(dataset_id, &target.name, &target_table, err))?
+            let target_df = snapshot_table(ctx, dataset_id, &target.name, &target_table)
+                .await?
                 .select(target_select)
                 .map_err(aggregate_execution_failed)?;
             df = df
@@ -495,6 +492,19 @@ fn related_field_alias(relationship: &str, field: &str) -> String {
     format!("__dg_rel_{relationship}_{field}")
 }
 
+async fn snapshot_table(
+    ctx: &SessionContext,
+    dataset_id: &str,
+    entity: &str,
+    table: &str,
+) -> Result<datafusion::prelude::DataFrame, Error> {
+    let snapshot = table_snapshot(ctx, table)
+        .await
+        .map_err(|err| table_unavailable(dataset_id, entity, table, err))?;
+    ctx.read_table(Arc::clone(&snapshot.provider))
+        .map_err(aggregate_execution_failed)
+}
+
 fn table_unavailable(
     dataset_id: &str,
     entity: &str,
@@ -517,4 +527,168 @@ fn aggregate_execution_failed(err: impl std::fmt::Display) -> Error {
         error = %err,
     );
     AggregateError::ExecutionFailed.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::StringArray;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::MemTable;
+    use tempfile::TempDir;
+    use ulid::Ulid;
+
+    use crate::config::{self, DatasetId, ResourceId};
+    use crate::entity::EntityRegistry;
+    use crate::table_provider::{register_or_replace_versioned_table, table_name};
+
+    fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
+        serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
+    }
+
+    fn mem_table(group: &str) -> Arc<MemTable> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("item_id", DataType::Utf8, false),
+            Field::new("group_code", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["item-1"])),
+                Arc::new(StringArray::from(vec![group])),
+            ],
+        )
+        .expect("record batch");
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).expect("mem table"))
+    }
+
+    fn aggregate_config() -> Arc<Config> {
+        let tmp = TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("aggregate_snapshot.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+server:
+  bind: 127.0.0.1:0
+
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+
+vocabularies: {}
+
+auth:
+  mode: api_key
+  api_keys: []
+
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    source:
+      type: file
+      path: fixtures/social_registry.csv
+    refresh:
+      mode: manual
+    tables:
+      - id: items_table
+        primary_key: item_id
+        schema:
+          strict: true
+          fields:
+            - name: item_id
+              type: string
+              nullable: false
+            - name: group_code
+              type: string
+              nullable: true
+    entities:
+      - name: item
+        table: items_table
+        fields:
+          - name: id
+            from: item_id
+          - name: group
+            from: group_code
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+          verify_scope: social_registry:verify
+          bulk_export_scope: social_registry:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+        aggregates:
+          - id: by_group
+            description: Number of items by group
+            group_by:
+              - group
+            measures:
+              - name: item_count
+                function: count
+                column: id
+            disclosure_control:
+              min_group_size: 1
+              suppression: omit
+
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+        )
+        .expect("write config");
+        Arc::new(config::load(&config_path).expect("config loads"))
+    }
+
+    #[tokio::test]
+    async fn aggregate_plan_uses_captured_table_snapshot_after_provider_swap() {
+        let cfg = aggregate_config();
+        let registry = EntityRegistry::from_config(&cfg).expect("registry");
+        let entity = registry
+            .dataset("social_registry")
+            .expect("dataset")
+            .entity("item")
+            .expect("entity");
+        let aggregate = cfg.datasets[0].entities[0]
+            .aggregates
+            .iter()
+            .find(|aggregate| aggregate.id.as_str() == "by_group")
+            .expect("aggregate");
+
+        let ctx = SessionContext::new();
+        let dataset: DatasetId = id("social_registry");
+        let resource: ResourceId = id("items_table");
+        let table_name = table_name(&dataset, &resource);
+        register_or_replace_versioned_table(&ctx, &table_name, Ulid::new(), mem_table("old"))
+            .await
+            .expect("register old table");
+
+        let plan =
+            AggregatePlan::build("social_registry", entity, aggregate, &registry, &ctx).await;
+        let plan = plan.expect("aggregate plan");
+
+        register_or_replace_versioned_table(&ctx, &table_name, Ulid::new(), mem_table("new"))
+            .await
+            .expect("swap table");
+
+        let rows = plan.execute(aggregate).await.expect("execute aggregate");
+
+        assert_eq!(
+            rows.rows,
+            vec![serde_json::json!({
+                "group": "old",
+                "item_count": 1
+            })]
+        );
+    }
 }

@@ -5,24 +5,18 @@
 //! DataFusion tables: source open, format decode, schema validation,
 //! Parquet cache write, table registration, refresh, and readiness.
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Result as DataFusionResult, Statistics};
+use datafusion::catalog::TableProvider;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_plan::ExecutionPlan;
 use futures::stream;
 use futures::StreamExt as _;
 use time::OffsetDateTime;
@@ -32,7 +26,11 @@ use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use crate::config::{
-    Config, DatasetId, RefreshConfig, ResourceConfig, ResourceId, SchemaConfig, SourceConfig,
+    Config, DatasetId, MaterializationMode, RefreshConfig, ResourceConfig, ResourceId,
+    SchemaConfig, SourceConfig,
+};
+use crate::connector::{
+    ConnectorError, ConnectorMetadata, FileConnector, PostgresConnector, TableConnector,
 };
 use crate::error::IngestError;
 use crate::format::{Format, FormatHints, FormatRegistry};
@@ -40,7 +38,10 @@ use crate::ingest::cache::CacheLayout;
 use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
 use crate::ingest::validation::validate;
-use crate::source::{Source, SourceError};
+use crate::source::Source;
+use crate::table_provider::register_or_replace_versioned_table;
+
+pub use crate::table_provider::{register_versioned_table, table_name};
 
 pub mod cache;
 pub mod declared_schema;
@@ -64,13 +65,10 @@ const DEFAULT_MAX_SOURCE_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub struct IngestPlan {
     dataset_id: DatasetId,
     resource_id: ResourceId,
-    source: Arc<dyn Source>,
-    format: Arc<dyn Format>,
+    connector: Arc<dyn TableConnector>,
+    materialization: MaterializationMode,
     declared: Arc<DeclaredSchema>,
     primary_key: Option<String>,
-    hints: FormatHints,
-    xlsx_max_file_bytes: u64,
-    max_source_file_bytes: u64,
     cache_layout: Arc<CacheLayout>,
     df_ctx: Arc<SessionContext>,
     readiness: Arc<ArcSwap<ResourceReadiness>>,
@@ -98,49 +96,44 @@ impl IngestPlan {
             quote: None,
             declared: Arc::clone(&declared),
         };
-        Self {
-            dataset_id,
-            resource_id,
+        let connector = Arc::new(FileConnector::new(
             source,
             format,
-            declared,
-            primary_key: None,
             hints,
-            xlsx_max_file_bytes: DEFAULT_XLSX_MAX_FILE_BYTES,
-            max_source_file_bytes: DEFAULT_MAX_SOURCE_FILE_BYTES,
-            cache_layout: Arc::new(CacheLayout::new(cache_root)),
+            DEFAULT_XLSX_MAX_FILE_BYTES,
+            DEFAULT_MAX_SOURCE_FILE_BYTES,
+        ));
+        Self::new_with_connector(
+            dataset_id,
+            resource_id,
+            connector,
+            MaterializationMode::Snapshot,
+            schema,
+            None,
+            cache_root,
             df_ctx,
-            readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
-            refresh_lock: Mutex::new(()),
-        }
+        )
     }
 
-    /// Constructor with full resource-level config (primary key, hints).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_resource_config(
+    pub fn new_with_connector(
         dataset_id: DatasetId,
         resource_id: ResourceId,
-        source: Arc<dyn Source>,
-        format: Arc<dyn Format>,
-        resource_cfg: &ResourceConfig,
-        dataset_source: &SourceConfig,
+        connector: Arc<dyn TableConnector>,
+        materialization: MaterializationMode,
+        schema: SchemaConfig,
+        primary_key: Option<String>,
         cache_root: Arc<Path>,
         df_ctx: Arc<SessionContext>,
-        xlsx_max_file_bytes: u64,
-        max_source_file_bytes: u64,
     ) -> Self {
-        let declared = Arc::new(DeclaredSchema::from(&resource_cfg.schema));
-        let hints = hints_from_config(Arc::clone(&declared), resource_cfg, dataset_source);
+        let declared = Arc::new(DeclaredSchema::from(&schema));
         Self {
             dataset_id,
             resource_id,
-            source,
-            format,
+            connector,
+            materialization,
             declared,
-            primary_key: resource_cfg.primary_key.clone(),
-            hints,
-            xlsx_max_file_bytes,
-            max_source_file_bytes,
+            primary_key,
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
@@ -211,94 +204,52 @@ impl IngestPlan {
         &self.resource_id
     }
 
-    /// Sample source metadata for mtime-policy polling.
-    pub(crate) async fn source_metadata(
-        &self,
-    ) -> Result<crate::source::SourceMetadata, SourceError> {
-        self.source.metadata().await
+    /// Sample connector metadata for mtime-policy polling.
+    pub(crate) async fn connector_metadata(&self) -> Result<ConnectorMetadata, ConnectorError> {
+        self.connector.metadata().await
     }
 
     // ── Inner pipeline ────────────────────────────────────────────────────────
 
     async fn run_pipeline(&self) -> Result<(), IngestError> {
+        match self.materialization {
+            MaterializationMode::Snapshot => self.run_snapshot_pipeline().await,
+            MaterializationMode::Live => self.run_live_registration().await,
+        }
+    }
+
+    async fn run_snapshot_pipeline(&self) -> Result<(), IngestError> {
         let dataset_id = &self.dataset_id;
         let resource_id = &self.resource_id;
 
-        // Step 1: open source.
-        let opened = self.source.open().await.map_err(|e| {
-            let code = match &e {
-                SourceError::NotFound => "ingest.source_not_found",
-                _ => "ingest.source_unreadable",
-            };
+        // Step 1: get a connector snapshot.
+        let snapshot = self.connector.snapshot().await.map_err(|e| {
+            let code = connector_error_code(&e);
             tracing::error!(
                 event = code,
                 dataset_id = %dataset_id,
                 resource_id = %resource_id,
                 error = %e,
             );
-            match e {
-                SourceError::NotFound => IngestError::SourceNotFound,
-                _ => IngestError::SourceUnreadable,
-            }
+            ingest_error_from_connector(e)
         })?;
 
-        if let Some(size_bytes) = opened.metadata.size_bytes {
-            if size_bytes > self.max_source_file_bytes {
-                tracing::error!(
-                    event = "ingest.source_unreadable",
-                    dataset_id = %dataset_id,
-                    resource_id = %resource_id,
-                    format = self.format.name(),
-                    size_bytes,
-                    max_file_bytes = self.max_source_file_bytes,
-                    "source exceeds configured maximum before decode",
-                );
-                return Err(IngestError::SourceUnreadable);
-            }
-
-            if self.format.name() == "xlsx" && size_bytes > self.xlsx_max_file_bytes {
-                tracing::error!(
-                    event = "ingest.source_unreadable",
-                    dataset_id = %dataset_id,
-                    resource_id = %resource_id,
-                    size_bytes,
-                    max_file_bytes = self.xlsx_max_file_bytes,
-                    "XLSX source exceeds configured maximum before decode",
-                );
-                return Err(IngestError::SourceUnreadable);
-            }
-        }
-
-        // Step 2: decode.
-        let decoded = self
-            .format
-            .decode(opened.reader, self.hints.clone())
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    event = "ingest.source_unreadable",
-                    dataset_id = %dataset_id,
-                    resource_id = %resource_id,
-                    error = %e,
-                );
-                IngestError::SourceUnreadable
-            })?;
-
-        // Step 3: materialise all batches and build a sample.
+        // Step 2: materialise all batches and build a sample.
         // Current implementation: full materialisation in memory.
         // Streaming ingest can replace this path later.
-        let observed_schema = decoded.observed_schema;
+        let observed_schema = snapshot.observed_schema;
         let mut all_batches: Vec<RecordBatch> = Vec::new();
-        let mut batch_stream = decoded.batches;
+        let mut batch_stream = snapshot.batches;
         while let Some(result) = batch_stream.next().await {
             let batch = result.map_err(|e| {
+                let code = connector_error_code(&e);
                 tracing::error!(
-                    event = "ingest.source_unreadable",
+                    event = code,
                     dataset_id = %dataset_id,
                     resource_id = %resource_id,
                     error = %e,
                 );
-                IngestError::SourceUnreadable
+                ingest_error_from_connector(e)
             })?;
             all_batches.push(batch);
         }
@@ -306,7 +257,7 @@ impl IngestPlan {
         // Build the sample batch for validation (concatenate first N rows).
         let sample = build_sample(&all_batches, DEFAULT_SAMPLE_ROWS, &observed_schema);
 
-        // Step 4: validate schema and build projection plan.
+        // Step 3: validate schema and build projection plan.
         let projection_plan = validate(
             dataset_id,
             resource_id,
@@ -318,17 +269,17 @@ impl IngestPlan {
 
         let output_schema = projection_plan.output_schema();
 
-        // Step 5: project every batch.
+        // Step 4: project every batch.
         let projected: Result<Vec<RecordBatch>, IngestError> = all_batches
             .iter()
             .map(|b| projection_plan.apply(b))
             .collect();
         let projected = projected?;
 
-        // Step 6: mint ULID for this ingest.
+        // Step 5: mint ULID for this ingest.
         let ingest_ulid = Ulid::new();
 
-        // Step 7: write to cache atomically.
+        // Step 6: write to cache atomically.
         let batch_stream = stream::iter(projected.into_iter().map(Ok::<RecordBatch, IngestError>));
         let final_path = cache::write_atomic(
             &self.cache_layout,
@@ -340,7 +291,7 @@ impl IngestPlan {
         )
         .await?;
 
-        // Step 8: register (or replace) the DataFusion table.
+        // Step 7: register (or replace) the DataFusion table.
         let table_name = table_name(dataset_id, resource_id);
         self.register_table(
             &table_name,
@@ -350,7 +301,7 @@ impl IngestPlan {
         )
         .await?;
 
-        // Step 9: rotate readiness and GC stale files.
+        // Step 8: rotate readiness and GC stale files.
         self.readiness.store(Arc::new(ResourceReadiness::Ready {
             ingest_ulid,
             schema: output_schema,
@@ -365,6 +316,77 @@ impl IngestPlan {
             resource_id = %resource_id,
             ingest_ulid = %ingest_ulid,
             path = %final_path.display(),
+        );
+
+        Ok(())
+    }
+
+    async fn run_live_registration(&self) -> Result<(), IngestError> {
+        let dataset_id = &self.dataset_id;
+        let resource_id = &self.resource_id;
+
+        let provider = self
+            .connector
+            .live_provider()
+            .await
+            .map_err(|e| {
+                let code = connector_error_code(&e);
+                tracing::error!(
+                    event = code,
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    error = %e,
+                );
+                ingest_error_from_connector(e)
+            })?
+            .ok_or_else(|| {
+                tracing::error!(
+                    event = "ingest.source_unreadable",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    "connector does not support live materialization",
+                );
+                IngestError::SourceUnreadable
+            })?;
+
+        let observed_schema = provider.schema();
+        let projection_plan = validate(
+            dataset_id,
+            resource_id,
+            &self.declared,
+            &observed_schema,
+            self.primary_key.as_deref(),
+            None,
+        )?;
+        let output_schema = projection_plan.output_schema();
+
+        if output_schema.as_ref() != observed_schema.as_ref() {
+            tracing::error!(
+                event = "ingest.schema_mismatch",
+                dataset_id = %dataset_id,
+                resource_id = %resource_id,
+                "live connector output must already match declared schema",
+            );
+            return Err(IngestError::SchemaMismatch);
+        }
+
+        let ingest_ulid = Ulid::new();
+        let table_name = table_name(dataset_id, resource_id);
+        self.register_provider(&table_name, provider, ingest_ulid)
+            .await?;
+
+        self.readiness.store(Arc::new(ResourceReadiness::Ready {
+            ingest_ulid,
+            schema: output_schema,
+            registered_at: OffsetDateTime::now_utc(),
+        }));
+
+        tracing::info!(
+            event = "ingest.complete",
+            dataset_id = %dataset_id,
+            resource_id = %resource_id,
+            ingest_ulid = %ingest_ulid,
+            materialization = "live",
         );
 
         Ok(())
@@ -419,37 +441,18 @@ impl IngestPlan {
             IngestError::RegistrationFailed
         })?;
 
-        let table: Arc<dyn TableProvider> = Arc::new(table);
+        self.register_provider(table_name, Arc::new(table), ingest_ulid)
+            .await
+    }
 
-        if self.df_ctx.table_exist(table_name).map_err(|e| {
-            tracing::error!(
-                event = "ingest.registration_failed",
-                dataset_id = %self.dataset_id,
-                resource_id = %self.resource_id,
-                error = %e,
-            );
-            IngestError::RegistrationFailed
-        })? {
-            let existing = self.df_ctx.table_provider(table_name).await.map_err(|e| {
-                tracing::error!(
-                    event = "ingest.registration_failed",
-                    dataset_id = %self.dataset_id,
-                    resource_id = %self.resource_id,
-                    error = %e,
-                );
-                IngestError::RegistrationFailed
-            })?;
-            if let Some(swappable) = existing.as_any().downcast_ref::<SwappableTableProvider>() {
-                swappable.replace(ingest_ulid, table);
-                return Ok(());
-            }
-        }
-
-        self.df_ctx
-            .register_table(
-                table_name,
-                Arc::new(SwappableTableProvider::new(ingest_ulid, table)),
-            )
+    async fn register_provider(
+        &self,
+        table_name: &str,
+        table: Arc<dyn TableProvider>,
+        ingest_ulid: Ulid,
+    ) -> Result<(), IngestError> {
+        register_or_replace_versioned_table(&self.df_ctx, table_name, ingest_ulid, table)
+            .await
             .map_err(|e| {
                 tracing::error!(
                     event = "ingest.registration_failed",
@@ -461,116 +464,6 @@ impl IngestPlan {
             })?;
 
         Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct TableSnapshot {
-    pub(crate) ingest_ulid: Option<Ulid>,
-    pub(crate) provider: Arc<dyn TableProvider>,
-}
-
-pub(crate) async fn table_snapshot(
-    ctx: &SessionContext,
-    table_name: &str,
-) -> DataFusionResult<TableSnapshot> {
-    let provider = ctx.table_provider(table_name).await?;
-    if let Some(swappable) = provider.as_any().downcast_ref::<SwappableTableProvider>() {
-        return Ok(swappable.snapshot());
-    }
-    Ok(TableSnapshot {
-        ingest_ulid: None,
-        provider,
-    })
-}
-
-pub fn register_versioned_table(
-    ctx: &SessionContext,
-    table_name: String,
-    ingest_ulid: Ulid,
-    provider: Arc<dyn TableProvider>,
-) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
-    ctx.register_table(
-        table_name,
-        Arc::new(SwappableTableProvider::new(ingest_ulid, provider)),
-    )
-}
-
-#[derive(Clone)]
-struct VersionedTableProvider {
-    ingest_ulid: Ulid,
-    inner: Arc<dyn TableProvider>,
-}
-
-struct SwappableTableProvider {
-    inner: RwLock<VersionedTableProvider>,
-}
-
-impl SwappableTableProvider {
-    fn new(ingest_ulid: Ulid, inner: Arc<dyn TableProvider>) -> Self {
-        Self {
-            inner: RwLock::new(VersionedTableProvider { ingest_ulid, inner }),
-        }
-    }
-
-    fn replace(&self, ingest_ulid: Ulid, inner: Arc<dyn TableProvider>) {
-        *self.inner.write().expect("table provider lock poisoned") =
-            VersionedTableProvider { ingest_ulid, inner };
-    }
-
-    fn snapshot(&self) -> TableSnapshot {
-        let inner = self.inner.read().expect("table provider lock poisoned");
-        TableSnapshot {
-            ingest_ulid: Some(inner.ingest_ulid),
-            provider: Arc::clone(&inner.inner),
-        }
-    }
-
-    fn inner(&self) -> Arc<dyn TableProvider> {
-        self.snapshot().provider
-    }
-}
-
-impl fmt::Debug for SwappableTableProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SwappableTableProvider")
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl TableProvider for SwappableTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.inner().schema()
-    }
-
-    fn table_type(&self) -> TableType {
-        self.inner().table_type()
-    }
-
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        self.inner().scan(state, projection, filters, limit).await
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        filters: &[&Expr],
-    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        self.inner().supports_filters_pushdown(filters)
-    }
-
-    fn statistics(&self) -> Option<Statistics> {
-        self.inner().statistics()
     }
 }
 
@@ -616,43 +509,71 @@ impl IngestRegistry {
 
         for dataset in &config.datasets {
             for resource in dataset.table_configs() {
-                let source = build_source(&dataset.source).map_err(|e| {
-                    tracing::error!(
-                        event = "ingest.source_not_found",
-                        dataset_id = %dataset.id,
-                        resource_id = %resource.id,
-                        error = %e,
-                    );
-                    IngestError::SourceNotFound
-                })?;
+                let source_cfg = resource
+                    .effective_source(dataset)
+                    .ok_or(IngestError::SourceNotFound)?;
+                let declared = Arc::new(DeclaredSchema::from(&resource.schema));
+                let connector: Arc<dyn TableConnector> = match source_cfg {
+                    SourceConfig::File { .. } => {
+                        let source = build_source(source_cfg).map_err(|e| {
+                            tracing::error!(
+                                event = "ingest.source_not_found",
+                                dataset_id = %dataset.id,
+                                resource_id = %resource.id,
+                                error = %e,
+                            );
+                            IngestError::SourceNotFound
+                        })?;
 
-                // Derive format name from file extension when not explicit.
-                // V1 resources don't have a `format` field; infer from path.
-                let format_name = resource
-                    .format_name()
-                    .unwrap_or_else(|| infer_format(&dataset.source));
-                let format = formats.get(format_name).ok_or_else(|| {
-                    tracing::error!(
-                        event = "ingest.source_unreadable",
-                        dataset_id = %dataset.id,
-                        resource_id = %resource.id,
-                        format = format_name,
-                        "unknown format",
-                    );
-                    IngestError::SourceUnreadable
-                })?;
+                        // Derive format name from resource/source config, then file extension.
+                        let format_name = resource
+                            .format_name()
+                            .or_else(|| format_name_from_source(source_cfg))
+                            .unwrap_or_else(|| infer_format(source_cfg));
+                        let format = formats.get(format_name).ok_or_else(|| {
+                            tracing::error!(
+                                event = "ingest.source_unreadable",
+                                dataset_id = %dataset.id,
+                                resource_id = %resource.id,
+                                format = format_name,
+                                "unknown format",
+                            );
+                            IngestError::SourceUnreadable
+                        })?;
 
-                let plan = IngestPlan::from_resource_config(
+                        let hints = hints_from_config(Arc::clone(&declared), resource, source_cfg);
+                        Arc::new(FileConnector::new(
+                            source,
+                            format,
+                            hints,
+                            config.server.xlsx_max_file_bytes,
+                            config.server.max_source_file_bytes,
+                        ))
+                    }
+                    SourceConfig::Postgres {
+                        connection_env,
+                        table,
+                        query,
+                        change_token_sql,
+                    } => Arc::new(PostgresConnector::new(
+                        connection_env.clone(),
+                        table.clone(),
+                        query.clone(),
+                        change_token_sql.clone(),
+                        Arc::clone(&declared),
+                        config.server.max_source_file_bytes,
+                    )),
+                };
+
+                let plan = IngestPlan::new_with_connector(
                     dataset.id.clone(),
                     resource.id.clone(),
-                    source,
-                    format,
-                    resource,
-                    &dataset.source,
+                    connector,
+                    resource.effective_materialization(dataset),
+                    resource.schema.clone(),
+                    resource.primary_key.clone(),
                     Arc::clone(&cache_root),
                     Arc::clone(&df_ctx),
-                    config.server.xlsx_max_file_bytes,
-                    config.server.max_source_file_bytes,
                 );
 
                 plans.insert((dataset.id.clone(), resource.id.clone()), Arc::new(plan));
@@ -705,7 +626,7 @@ impl IngestRegistry {
         self: Arc<Self>,
         readiness_tx: watch::Sender<ReadinessSnapshot>,
     ) -> (JoinSet<()>, CancellationToken) {
-        self.spawn_refresh_tasks_with_policy(|_| RefreshPolicy::Manual, readiness_tx)
+        self.spawn_refresh_tasks_with_policy(|_, _| RefreshPolicy::Manual, readiness_tx)
     }
 
     /// Spawn refresh tasks using the provided config for policy lookup.
@@ -717,10 +638,15 @@ impl IngestRegistry {
         let ds_configs: BTreeMap<&DatasetId, &crate::config::DatasetConfig> =
             config.datasets.iter().map(|d| (&d.id, d)).collect();
         self.spawn_refresh_tasks_with_policy(
-            |ds_id| {
+            |ds_id, rs_id| {
                 ds_configs
                     .get(ds_id)
-                    .map(|d| refresh_policy_from_config(&d.refresh))
+                    .and_then(|d| {
+                        d.table_configs()
+                            .find(|resource| &resource.id == rs_id)
+                            .and_then(|resource| resource.effective_refresh(d))
+                    })
+                    .map(refresh_policy_from_config)
                     .unwrap_or(RefreshPolicy::Manual)
             },
             readiness_tx,
@@ -729,7 +655,7 @@ impl IngestRegistry {
 
     fn spawn_refresh_tasks_with_policy(
         self: Arc<Self>,
-        policy_for_dataset: impl Fn(&DatasetId) -> RefreshPolicy,
+        policy_for_resource: impl Fn(&DatasetId, &ResourceId) -> RefreshPolicy,
         readiness_tx: watch::Sender<ReadinessSnapshot>,
     ) -> (JoinSet<()>, CancellationToken) {
         let mut set: JoinSet<()> = JoinSet::new();
@@ -740,7 +666,7 @@ impl IngestRegistry {
             let tx = readiness_tx.clone();
             let registry = Arc::clone(&self);
             let shutdown_clone = shutdown.clone();
-            let policy = policy_for_dataset(ds_id);
+            let policy = policy_for_resource(ds_id, rs_id);
 
             set.spawn(async move {
                 let publish_registry = Arc::clone(&registry);
@@ -835,11 +761,6 @@ impl ReadinessSnapshot {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// DataFusion table name for a resource.
-pub fn table_name(dataset: &DatasetId, resource: &ResourceId) -> String {
-    format!("{}__{}", dataset.as_str(), resource.as_str())
-}
-
 /// Build a sample `RecordBatch` from the first `n` rows across batches.
 fn build_sample(batches: &[RecordBatch], n: usize, schema: &SchemaRef) -> Option<RecordBatch> {
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -871,7 +792,7 @@ fn build_sample(batches: &[RecordBatch], n: usize, schema: &SchemaRef) -> Option
     concat_batches(schema, &slices).ok()
 }
 
-/// Build a `Source` from a `SourceConfig`. Only `File` is supported in V1.
+/// Build a byte-oriented `Source` from a `SourceConfig`.
 fn build_source(source_cfg: &SourceConfig) -> Result<Arc<dyn Source>, std::io::Error> {
     match source_cfg {
         SourceConfig::File { path, .. } => {
@@ -879,6 +800,10 @@ fn build_source(source_cfg: &SourceConfig) -> Result<Arc<dyn Source>, std::io::E
             let src = LocalFileSource::new(path)?;
             Ok(Arc::new(src))
         }
+        SourceConfig::Postgres { .. } => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "postgres sources are table connectors, not byte sources",
+        )),
     }
 }
 
@@ -893,6 +818,20 @@ fn infer_format(source_cfg: &SourceConfig) -> &'static str {
                 _ => "csv", // Safe default for unknown extensions.
             }
         }
+        SourceConfig::Postgres { .. } => "parquet",
+    }
+}
+
+fn format_name_from_source(source_cfg: &SourceConfig) -> Option<&'static str> {
+    let format = source_cfg.format()?;
+    if format.csv.is_some() {
+        Some("csv")
+    } else if format.xlsx.is_some() {
+        Some("xlsx")
+    } else if format.parquet.is_some() {
+        Some("parquet")
+    } else {
+        None
     }
 }
 
@@ -902,17 +841,18 @@ fn hints_from_config(
     resource_cfg: &ResourceConfig,
     dataset_source: &SourceConfig,
 ) -> FormatHints {
-    let (header_row, data_range) = match dataset_source {
+    let (dataset_header_row, dataset_data_range) = match dataset_source {
         SourceConfig::File {
             header_row,
             data_range,
             ..
         } => (*header_row, data_range.clone()),
+        SourceConfig::Postgres { .. } => (None, None),
     };
     FormatHints {
         sheet: resource_cfg.xlsx_sheet(),
-        header_row,
-        data_range,
+        header_row: resource_cfg.xlsx_header_row().or(dataset_header_row),
+        data_range: resource_cfg.xlsx_data_range().or(dataset_data_range),
         delimiter: resource_cfg.csv_delimiter(),
         quote: resource_cfg.csv_quote(),
         declared,
@@ -928,6 +868,24 @@ fn ingest_error_code(e: &IngestError) -> &'static str {
         IngestError::StrictExtraColumn => "ingest.strict_extra_column",
         IngestError::CacheWriteFailed => "ingest.cache_write_failed",
         IngestError::RegistrationFailed => "ingest.registration_failed",
+    }
+}
+
+fn connector_error_code(e: &ConnectorError) -> &'static str {
+    match e {
+        ConnectorError::SourceNotFound => "ingest.source_not_found",
+        ConnectorError::SourceUnreadable(_) | ConnectorError::LiveUnsupported => {
+            "ingest.source_unreadable"
+        }
+    }
+}
+
+fn ingest_error_from_connector(e: ConnectorError) -> IngestError {
+    match e {
+        ConnectorError::SourceNotFound => IngestError::SourceNotFound,
+        ConnectorError::SourceUnreadable(_) | ConnectorError::LiveUnsupported => {
+            IngestError::SourceUnreadable
+        }
     }
 }
 

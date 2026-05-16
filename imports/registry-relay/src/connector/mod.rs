@@ -1,0 +1,518 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Table-level datasource connectors.
+//!
+//! Connectors are the boundary between configured private tables and
+//! DataFusion. File sources produce snapshot batches through the
+//! existing source/format stack. Future database connectors can either
+//! produce snapshot batches or a live `TableProvider`.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::TableProvider;
+use futures::stream::BoxStream;
+use futures::StreamExt as _;
+use postgres_native_tls::MakeTlsConnector;
+use time::OffsetDateTime;
+use tokio_postgres::Client;
+
+use crate::config::{FieldType, PostgresTableConfig};
+use crate::format::csv::CsvFormat;
+use crate::format::{Format, FormatError, FormatHints};
+use crate::ingest::declared_schema::DeclaredSchema;
+use crate::source::{Source, SourceError, SourceMetadata};
+
+/// A table-level datasource connector.
+pub trait TableConnector: Send + Sync + 'static {
+    fn descriptor(&self) -> ConnectorDescriptor;
+    fn inspect<'a>(&'a self) -> ConnectorFuture<'a, ObservedTable>;
+    fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable>;
+    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>>;
+    fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata>;
+}
+
+/// Stable, secret-free connector identity for logs and audit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectorDescriptor {
+    pub kind: &'static str,
+    pub target: String,
+}
+
+/// Cheap connector-level change metadata used by refresh policies.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectorMetadata {
+    pub change_token: Option<String>,
+    pub observed_at: Option<OffsetDateTime>,
+}
+
+/// Lightweight source observation.
+#[derive(Clone)]
+pub struct ObservedTable {
+    pub schema: SchemaRef,
+    pub change_token: Option<String>,
+    pub observed_at: OffsetDateTime,
+}
+
+/// Snapshot table data for ingest validation and materialization.
+pub struct SnapshotTable {
+    pub observed_schema: SchemaRef,
+    pub batches: BoxStream<'static, Result<RecordBatch, ConnectorError>>,
+    pub metadata: SourceMetadata,
+}
+
+/// Boxed connector future following the project's existing trait style.
+pub type ConnectorFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, ConnectorError>> + Send + 'a>>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectorError {
+    #[error("source not found")]
+    SourceNotFound,
+    #[error("source unreadable: {0}")]
+    SourceUnreadable(String),
+    #[error("live provider unsupported")]
+    LiveUnsupported,
+}
+
+impl ConnectorError {
+    pub fn source_unreadable(err: impl std::fmt::Display) -> Self {
+        Self::SourceUnreadable(err.to_string())
+    }
+}
+
+impl From<SourceError> for ConnectorError {
+    fn from(value: SourceError) -> Self {
+        match value {
+            SourceError::NotFound => Self::SourceNotFound,
+            SourceError::Unreadable(err) => Self::SourceUnreadable(err),
+            SourceError::Io(err) => Self::SourceUnreadable(err.to_string()),
+        }
+    }
+}
+
+impl From<FormatError> for ConnectorError {
+    fn from(value: FormatError) -> Self {
+        Self::SourceUnreadable(value.to_string())
+    }
+}
+
+/// Connector for byte-oriented file sources.
+pub struct FileConnector {
+    source: Arc<dyn Source>,
+    format: Arc<dyn Format>,
+    hints: FormatHints,
+    format_name: &'static str,
+    xlsx_max_file_bytes: u64,
+    max_source_file_bytes: u64,
+}
+
+impl FileConnector {
+    pub fn new(
+        source: Arc<dyn Source>,
+        format: Arc<dyn Format>,
+        hints: FormatHints,
+        xlsx_max_file_bytes: u64,
+        max_source_file_bytes: u64,
+    ) -> Self {
+        let format_name = format.name();
+        Self {
+            source,
+            format,
+            hints,
+            format_name,
+            xlsx_max_file_bytes,
+            max_source_file_bytes,
+        }
+    }
+
+    fn enforce_size_limits(&self, metadata: &SourceMetadata) -> Result<(), ConnectorError> {
+        let Some(size_bytes) = metadata.size_bytes else {
+            return Ok(());
+        };
+        if size_bytes > self.max_source_file_bytes {
+            return Err(ConnectorError::SourceUnreadable(format!(
+                "source exceeds configured maximum: {size_bytes} > {}",
+                self.max_source_file_bytes
+            )));
+        }
+        if self.format_name == "xlsx" && size_bytes > self.xlsx_max_file_bytes {
+            return Err(ConnectorError::SourceUnreadable(format!(
+                "xlsx source exceeds configured maximum: {size_bytes} > {}",
+                self.xlsx_max_file_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    fn change_token(metadata: &SourceMetadata) -> Option<String> {
+        metadata
+            .etag
+            .clone()
+            .or_else(|| metadata.mtime.map(|mtime| mtime.to_string()))
+    }
+}
+
+impl TableConnector for FileConnector {
+    fn descriptor(&self) -> ConnectorDescriptor {
+        let descriptor = self.source.descriptor();
+        ConnectorDescriptor {
+            kind: descriptor.scheme,
+            target: descriptor.target,
+        }
+    }
+
+    fn inspect<'a>(&'a self) -> ConnectorFuture<'a, ObservedTable> {
+        Box::pin(async move {
+            let snapshot = self.snapshot().await?;
+            let change_token = Self::change_token(&snapshot.metadata);
+            Ok(ObservedTable {
+                schema: snapshot.observed_schema,
+                change_token,
+                observed_at: OffsetDateTime::now_utc(),
+            })
+        })
+    }
+
+    fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable> {
+        Box::pin(async move {
+            let opened = self.source.open().await.map_err(ConnectorError::from)?;
+            self.enforce_size_limits(&opened.metadata)?;
+            let decoded = self
+                .format
+                .decode(opened.reader, self.hints.clone())
+                .await
+                .map_err(ConnectorError::from)?;
+            let batches = decoded
+                .batches
+                .map(|result| result.map_err(ConnectorError::from))
+                .boxed();
+            Ok(SnapshotTable {
+                observed_schema: decoded.observed_schema,
+                batches,
+                metadata: opened.metadata,
+            })
+        })
+    }
+
+    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata> {
+        Box::pin(async move {
+            let metadata = self.source.metadata().await.map_err(ConnectorError::from)?;
+            Ok(ConnectorMetadata {
+                change_token: Self::change_token(&metadata),
+                observed_at: metadata.mtime,
+            })
+        })
+    }
+}
+
+/// Snapshot connector for PostgreSQL sources.
+///
+/// The connector uses PostgreSQL `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`
+/// and then feeds the bytes through the existing CSV decoder. This keeps
+/// declared-schema coercion, projection, validation, and cache registration on
+/// the same path as file ingest.
+pub struct PostgresConnector {
+    connection_env: String,
+    table: Option<PostgresTableConfig>,
+    query: Option<String>,
+    change_token_sql: Option<String>,
+    declared: Arc<DeclaredSchema>,
+    max_source_bytes: u64,
+}
+
+impl PostgresConnector {
+    pub fn new(
+        connection_env: String,
+        table: Option<PostgresTableConfig>,
+        query: Option<String>,
+        change_token_sql: Option<String>,
+        declared: Arc<DeclaredSchema>,
+        max_source_bytes: u64,
+    ) -> Self {
+        Self {
+            connection_env,
+            table,
+            query,
+            change_token_sql,
+            declared,
+            max_source_bytes,
+        }
+    }
+
+    async fn connect(&self) -> Result<Client, ConnectorError> {
+        let url = std::env::var(&self.connection_env).map_err(|_| {
+            ConnectorError::SourceUnreadable(format!(
+                "postgres connection environment variable {} is not set",
+                self.connection_env
+            ))
+        })?;
+        let tls = native_tls::TlsConnector::builder()
+            .build()
+            .map_err(|_| ConnectorError::SourceUnreadable("postgres TLS setup failed".into()))?;
+        let connector = MakeTlsConnector::new(tls);
+        let (client, connection) = tokio_postgres::connect(&url, connector)
+            .await
+            .map_err(|_| ConnectorError::SourceUnreadable("postgres connection failed".into()))?;
+
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::warn!(
+                    event = "connector.postgres_connection_closed",
+                    error = %error,
+                );
+            }
+        });
+
+        client
+            .batch_execute(
+                "SET TIME ZONE 'UTC'; \
+                 SET default_transaction_read_only = on",
+            )
+            .await
+            .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
+
+        Ok(client)
+    }
+
+    async fn read_change_token(
+        &self,
+        client: &Client,
+    ) -> Result<(Option<String>, OffsetDateTime), ConnectorError> {
+        let observed_at = OffsetDateTime::now_utc();
+        let Some(sql) = self.change_token_sql.as_deref() else {
+            return Ok((None, observed_at));
+        };
+        let row = client
+            .query_one(sql, &[])
+            .await
+            .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
+        let token = row.try_get::<_, Option<String>>(0).map_err(|_| {
+            ConnectorError::SourceUnreadable(
+                "postgres change_token_sql must return a nullable text value".into(),
+            )
+        })?;
+        Ok((token, observed_at))
+    }
+
+    fn base_select_sql(&self) -> String {
+        if let Some(table) = &self.table {
+            return format!(
+                "SELECT * FROM {}.{}",
+                quote_ident(&table.schema),
+                quote_ident(&table.name)
+            );
+        }
+
+        let query = self
+            .query
+            .as_deref()
+            .expect("config validation requires postgres table or query")
+            .trim();
+        query.trim_end_matches(';').trim().to_string()
+    }
+
+    fn projected_select_sql(&self) -> String {
+        let base = self.base_select_sql();
+        let projections = self
+            .declared
+            .fields
+            .iter()
+            .map(|field| {
+                postgres_projection_expr(
+                    &format!("data_gate_source.{}", quote_ident(&field.name)),
+                    &quote_ident(&field.name),
+                    field.ty,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("SELECT {projections} FROM ({base}) AS data_gate_source")
+    }
+
+    fn copy_sql(&self) -> String {
+        format!(
+            "COPY ({}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)",
+            self.projected_select_sql()
+        )
+    }
+
+    async fn copy_decoded(&self, client: &Client) -> Result<SnapshotTable, ConnectorError> {
+        let copy_stream = client
+            .copy_out(&self.copy_sql())
+            .await
+            .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
+        futures::pin_mut!(copy_stream);
+        let mut bytes = Vec::new();
+        while let Some(chunk) = copy_stream.next().await {
+            let chunk = chunk.map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
+            let next_len = bytes.len().saturating_add(chunk.len());
+            if next_len > self.max_source_bytes as usize {
+                return Err(ConnectorError::SourceUnreadable(format!(
+                    "postgres snapshot exceeds configured maximum: {next_len} > {}",
+                    self.max_source_bytes
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let reader = std::io::Cursor::new(bytes);
+        let hints = FormatHints {
+            sheet: None,
+            header_row: Some(1),
+            data_range: None,
+            delimiter: None,
+            quote: None,
+            declared: Arc::clone(&self.declared),
+        };
+        let decoded = CsvFormat::new()
+            .decode(Box::pin(reader), hints)
+            .await
+            .map_err(ConnectorError::from)?;
+        Ok(SnapshotTable {
+            observed_schema: decoded.observed_schema,
+            batches: decoded
+                .batches
+                .map(|result| result.map_err(ConnectorError::from))
+                .boxed(),
+            metadata: SourceMetadata::default(),
+        })
+    }
+}
+
+impl TableConnector for PostgresConnector {
+    fn descriptor(&self) -> ConnectorDescriptor {
+        ConnectorDescriptor {
+            kind: "postgres",
+            target: self
+                .table
+                .as_ref()
+                .map(|table| format!("{}.{}", table.schema, table.name))
+                .unwrap_or_else(|| "configured query".to_string()),
+        }
+    }
+
+    fn inspect<'a>(&'a self) -> ConnectorFuture<'a, ObservedTable> {
+        Box::pin(async move {
+            let client = self.connect().await?;
+            let (change_token, observed_at) = self.read_change_token(&client).await?;
+            Ok(ObservedTable {
+                schema: self.declared.to_arrow_schema(),
+                change_token,
+                observed_at,
+            })
+        })
+    }
+
+    fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable> {
+        Box::pin(async move {
+            let client = self.connect().await?;
+            let (change_token, observed_at) = self.read_change_token(&client).await?;
+            let mut snapshot = self.copy_decoded(&client).await?;
+            snapshot.metadata = SourceMetadata {
+                mtime: Some(observed_at),
+                size_bytes: None,
+                etag: change_token,
+                content_type: Some("text/csv".to_string()),
+            };
+            Ok(snapshot)
+        })
+    }
+
+    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>> {
+        Box::pin(async { Err(ConnectorError::LiveUnsupported) })
+    }
+
+    fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata> {
+        Box::pin(async move {
+            let client = self.connect().await?;
+            let (change_token, observed_at) = self.read_change_token(&client).await?;
+            Ok(ConnectorMetadata {
+                change_token,
+                observed_at: Some(observed_at),
+            })
+        })
+    }
+}
+
+fn quote_ident(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn postgres_projection_expr(source: &str, alias: &str, ty: FieldType) -> String {
+    match ty {
+        FieldType::String => format!("{source}::text AS {alias}"),
+        FieldType::Integer => format!("{source}::bigint AS {alias}"),
+        FieldType::Number => format!("{source}::double precision AS {alias}"),
+        FieldType::Boolean => format!("{source}::boolean AS {alias}"),
+        FieldType::Date => format!("{source}::date AS {alias}"),
+        FieldType::Timestamp => format!(
+            "to_char({source}::timestamptz AT TIME ZONE 'UTC', \
+             'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS {alias}"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::config::{FieldConfig, FieldType, SchemaConfig};
+
+    fn declared(fields: Vec<(&str, FieldType)>) -> Arc<DeclaredSchema> {
+        Arc::new(DeclaredSchema::from(&SchemaConfig {
+            strict: true,
+            fields: fields
+                .into_iter()
+                .map(|(name, ty)| FieldConfig {
+                    name: name.to_string(),
+                    r#type: ty,
+                    nullable: true,
+                    sensitive: false,
+                    concept_uri: None,
+                    codelist: None,
+                    unit: None,
+                    language: None,
+                })
+                .collect(),
+        }))
+    }
+
+    #[test]
+    fn postgres_copy_sql_projects_declared_columns_through_csv_friendly_casts() {
+        let connector = PostgresConnector::new(
+            "DATABASE_URL".to_string(),
+            Some(PostgresTableConfig {
+                schema: "public".to_string(),
+                name: "people".to_string(),
+            }),
+            None,
+            None,
+            declared(vec![
+                ("id", FieldType::Integer),
+                ("active", FieldType::Boolean),
+                ("updated_at", FieldType::Timestamp),
+            ]),
+            256 * 1024 * 1024,
+        );
+
+        let sql = connector.copy_sql();
+        assert!(sql.contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source"#));
+        assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
+        assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
+        assert!(sql.contains(r#"to_char(data_gate_source."updated_at"::timestamptz"#));
+        assert!(sql.starts_with("COPY (SELECT "));
+        assert!(sql.ends_with(") TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"));
+    }
+
+    #[test]
+    fn quote_ident_escapes_double_quotes() {
+        assert_eq!(quote_ident("a\"b"), r#""a""b""#);
+    }
+}

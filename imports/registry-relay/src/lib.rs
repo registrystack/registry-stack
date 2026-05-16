@@ -10,8 +10,8 @@
 //! The main runtime path is:
 //!
 //! 1. [`config`] loads and validates the operator YAML.
-//! 2. [`source`] and [`format`] read local files into Arrow/DataFusion tables.
-//! 3. [`ingest`] registers versioned table snapshots and readiness state.
+//! 2. [`connector`] turns configured private tables into Arrow/DataFusion data.
+//! 3. [`ingest`] registers versioned table materializations and readiness state.
 //! 4. [`entity`] and [`query`] expose configured domain resources.
 //! 5. [`server`] wires HTTP routes, auth, audit, limits, and observability.
 
@@ -19,6 +19,7 @@ pub mod api;
 pub mod audit;
 pub mod auth;
 pub mod config;
+pub mod connector;
 pub mod entity;
 pub mod error;
 pub mod format;
@@ -29,3 +30,4 @@ pub mod provenance;
 pub mod query;
 pub mod server;
 pub mod source;
+pub mod table_provider;

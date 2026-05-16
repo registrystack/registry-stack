@@ -16,10 +16,12 @@ use std::path::{Path, PathBuf};
 use registry_relay::config::vocabularies;
 use registry_relay::config::{
     self, AccessRights, AggregateFunction, AuditFormat, AuditSinkConfig, AuthMode, FieldType,
-    FilterOp, RefreshConfig, Sensitivity, SourceConfig, Suppression, UpdateFrequency,
+    FilterOp, MaterializationMode, RefreshConfig, Sensitivity, SourceConfig, Suppression,
+    UpdateFrequency,
 };
 use registry_relay::error::{ConfigError, Error};
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
 fn make_fingerprint(plaintext: &[u8]) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
@@ -45,6 +47,34 @@ fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/config")
         .join(name)
+}
+
+fn write_config(tmp: &TempDir, body: &str) -> PathBuf {
+    let path = tmp.path().join("config.yaml");
+    std::fs::write(&path, body).expect("write config");
+    path
+}
+
+fn minimal_config(dataset_body: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+{dataset_body}
+audit:
+  sink: stdout
+  format: jsonl
+"#
+    )
 }
 
 /// Assert that `result` is a `ConfigError` carrying the requested
@@ -107,30 +137,41 @@ fn example_config_loads_and_validates() {
     assert!(matches!(dataset.update_frequency, UpdateFrequency::Monthly));
     assert_eq!(dataset.conforms_to.len(), 3);
 
-    match &dataset.source {
-        SourceConfig::File {
-            path,
-            header_row,
-            data_range,
-        } => {
+    assert!(dataset.source.is_none());
+    assert!(dataset.refresh.is_none());
+
+    assert!(dataset.resources.is_empty());
+    assert_eq!(dataset.tables.len(), 2);
+    let first_table = &dataset.tables[0];
+    assert_eq!(first_table.id.as_ref(), "households_table");
+    assert!(matches!(
+        first_table.materialization,
+        Some(MaterializationMode::Snapshot)
+    ));
+    match first_table.source.as_ref().expect("table source") {
+        SourceConfig::File { path, format, .. } => {
             assert_eq!(path.to_string_lossy(), "./data/social_registry.xlsx");
-            assert_eq!(*header_row, None);
-            assert_eq!(data_range.as_deref(), None);
+            let xlsx = format
+                .as_ref()
+                .and_then(|format| format.xlsx.as_ref())
+                .expect("xlsx format");
+            assert_eq!(xlsx.sheet.as_deref(), Some("Households"));
         }
         other => panic!("expected source type file, got {other:?}"),
     }
-
-    match &dataset.refresh {
+    match first_table.refresh.as_ref().expect("table refresh") {
         RefreshConfig::Mtime { interval } => {
             assert_eq!(interval.as_secs(), 3600);
         }
         other => panic!("expected refresh mode mtime, got {other:?}"),
     }
 
-    assert!(dataset.resources.is_empty());
-    assert_eq!(dataset.tables.len(), 2);
     let table = &dataset.tables[1];
     assert_eq!(table.id.as_ref(), "individuals_table");
+    assert!(matches!(
+        table.materialization,
+        Some(MaterializationMode::Snapshot)
+    ));
     assert_eq!(table.format_name(), Some("xlsx"));
     assert_eq!(table.xlsx_sheet().as_deref(), Some("Individuals"));
     assert_eq!(table.primary_key.as_deref(), Some("individual_id"));
@@ -281,13 +322,418 @@ fn humantime_parses_interval() {
     env::set_var("TEST_KEY_HASH_INTERVAL", make_fingerprint(b"interval-test"));
     let config = config::load(&fixture_path("interval_refresh.yaml"))
         .expect("interval_refresh fixture must load");
-    let refresh = &config.datasets[0].refresh;
+    let refresh = config.datasets[0]
+        .refresh
+        .as_ref()
+        .expect("legacy dataset refresh");
     match refresh {
         RefreshConfig::Interval { interval } => {
             assert_eq!(interval.as_secs(), 3600);
         }
         other => panic!("expected interval refresh, got {other:?}"),
     }
+}
+
+#[test]
+fn table_level_file_source_and_defaults_load() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    defaults:
+      refresh:
+        mode: manual
+      materialization: snapshot
+    tables:
+      - id: records_table
+        source:
+          type: file
+          path: ./data/records.csv
+          format:
+            csv:
+              delimiter: 44
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+    entities: []
+"#,
+        ),
+    );
+
+    let config = config::load(&config_path).expect("config loads");
+    let dataset = &config.datasets[0];
+    let table = &dataset.tables[0];
+    assert!(matches!(
+        table.effective_materialization(dataset),
+        MaterializationMode::Snapshot
+    ));
+    assert!(matches!(
+        table.effective_refresh(dataset),
+        Some(RefreshConfig::Manual {})
+    ));
+    assert_eq!(table.format_name(), Some("csv"));
+    assert_eq!(table.csv_delimiter(), Some(44));
+}
+
+#[test]
+fn dataset_level_source_format_must_choose_exactly_one_format() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    source:
+      type: file
+      path: ./data/records.xlsx
+      format:
+        csv: {}
+        xlsx: {}
+    refresh:
+      mode: manual
+    tables:
+      - id: records_table
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.validation_error");
+}
+
+#[test]
+fn postgres_table_source_descriptor_loads_without_reading_secret() {
+    let tmp = TempDir::new().expect("tempdir");
+    env::remove_var("SOCIAL_REGISTRY_DATABASE_URL");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+          change_token_sql: "select max(updated_at)::text from public.records"
+        refresh:
+          mode: mtime
+          interval: 5m
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+    entities: []
+"#,
+        ),
+    );
+
+    let config = config::load(&config_path).expect("postgres descriptor loads");
+    let source = config.datasets[0].tables[0]
+        .source
+        .as_ref()
+        .expect("source");
+    match source {
+        SourceConfig::Postgres {
+            connection_env,
+            table,
+            query,
+            change_token_sql,
+        } => {
+            assert_eq!(connection_env, "SOCIAL_REGISTRY_DATABASE_URL");
+            let table = table.as_ref().expect("table descriptor");
+            assert_eq!(table.schema, "public");
+            assert_eq!(table.name, "records");
+            assert!(query.is_none());
+            assert!(change_token_sql.is_some());
+        }
+        other => panic!("expected postgres source, got {other:?}"),
+    }
+}
+
+#[test]
+fn postgres_query_source_descriptor_loads() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          query: "select record_id from public.records"
+        refresh:
+          mode: interval
+          interval: 5m
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+    entities: []
+"#,
+        ),
+    );
+
+    let config = config::load(&config_path).expect("postgres query descriptor loads");
+    match config.datasets[0].tables[0]
+        .source
+        .as_ref()
+        .expect("source")
+    {
+        SourceConfig::Postgres { table, query, .. } => {
+            assert!(table.is_none());
+            assert_eq!(
+                query.as_deref(),
+                Some("select record_id from public.records")
+            );
+        }
+        other => panic!("expected postgres source, got {other:?}"),
+    }
+}
+
+#[test]
+fn postgres_table_and_query_are_mutually_exclusive() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+          query: "select * from public.records"
+        refresh:
+          mode: interval
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(!msg.contains("select *"), "query leaked in error: {msg}");
+}
+
+#[test]
+fn postgres_configured_sql_rejects_semicolons() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          query: "select record_id from public.records; select 1"
+        refresh:
+          mode: interval
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(
+        !msg.contains("select record_id"),
+        "query leaked in error: {msg}"
+    );
+}
+
+#[test]
+fn file_source_live_materialization_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: live
+        source:
+          type: file
+          path: ./data/records.csv
+        refresh:
+          mode: manual
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.validation_error");
+}
+
+#[test]
+fn postgres_live_materialization_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: live
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+        refresh:
+          mode: manual
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.validation_error");
+}
+
+#[test]
+fn postgres_mtime_requires_change_token_sql() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: snapshot
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+        refresh:
+          mode: mtime
+          interval: 5m
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.validation_error");
 }
 
 #[test]

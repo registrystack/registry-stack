@@ -53,19 +53,18 @@ datasets:
       - psc:concepts/Enrollment
       - m8g:CorePerson
 
-    source:
-      type: file
-      path: ./data/social_registry.xlsx
-
-    refresh:
-      mode: mtime         # mtime | interval | manual
-      interval: 1h        # used when mode == interval
-
     tables:
       - id: households_table
-        format:
-          xlsx:
-            sheet: Households
+        materialization: snapshot
+        source:
+          type: file
+          path: ./data/social_registry.xlsx
+          format:
+            xlsx:
+              sheet: Households
+        refresh:
+          mode: mtime         # mtime | interval | manual
+          interval: 1h
         primary_key: household_id
         schema:
           strict: true
@@ -81,9 +80,16 @@ datasets:
               nullable: true
 
       - id: individuals_table
-        format:
-          xlsx:
-            sheet: Individuals
+        materialization: snapshot
+        source:
+          type: file
+          path: ./data/social_registry.xlsx
+          format:
+            xlsx:
+              sheet: Individuals
+        refresh:
+          mode: mtime
+          interval: 1h
         primary_key: individual_id
         schema:
           strict: true
