@@ -717,6 +717,9 @@ fn validate_source_config(
             table,
             query,
             change_token_sql,
+            connect_timeout,
+            query_timeout,
+            live_max_connections,
         } => {
             if !is_valid_env_var_name(connection_env) {
                 tracing::error!(
@@ -784,6 +787,17 @@ fn validate_source_config(
             if let Some(sql) = change_token_sql.as_deref() {
                 validate_configured_postgres_query(dataset, resource, connection_env, sql)?;
             }
+
+            if connect_timeout.is_zero() || query_timeout.is_zero() || *live_max_connections == 0 {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+                    connection_env = %connection_env,
+                    "postgres timeouts must be non-zero and live_max_connections must be greater than zero"
+                );
+                return Err(ConfigError::ValidationError);
+            }
         }
     }
     Ok(())
@@ -843,14 +857,18 @@ fn validate_materialization_refresh(
         return Err(ConfigError::ValidationError);
     }
 
-    if materialization == MaterializationMode::Live
-        && matches!(source, SourceConfig::Postgres { .. })
-    {
+    if matches!(
+        (materialization, source),
+        (
+            MaterializationMode::Live,
+            SourceConfig::Postgres { query: Some(_), .. }
+        )
+    ) {
         tracing::error!(
             code = "config.validation_error",
             dataset_id = %dataset.id,
             resource_id = %resource.id,
-            "postgres sources support only snapshot materialization"
+            "postgres live materialization supports table sources only"
         );
         return Err(ConfigError::ValidationError);
     }

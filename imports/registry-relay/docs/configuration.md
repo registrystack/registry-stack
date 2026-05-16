@@ -168,7 +168,7 @@ source:
 
 For XLSX files, `header_row` and `data_range` can be used when a worksheet has notes or title rows around the rectangular table. Existing configs with dataset-level `source` and table-level `format` are still accepted during the datasource refactor, but new configs should use `tables[].source.format`.
 
-Postgres snapshot sources are supported. Credentials are never stored in YAML:
+Postgres snapshot and live table sources are supported. Credentials are never stored in YAML:
 
 ```yaml
 source:
@@ -184,7 +184,21 @@ source:
 
 Snapshot ingest reads Postgres through `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`, then applies the same declared-schema coercion and validation as CSV files. The exported snapshot is bounded by `server.max_source_file_bytes`. For `table` sources, Registry Relay projects the declared schema fields from the table and casts them to CSV-friendly values. Extra database columns are ignored. For `query` sources, write a single `SELECT` or `WITH` statement without semicolons; public request input is never interpolated into SQL.
 
-Supported Postgres snapshot field mappings are:
+Live materialization is supported for structured `table` sources only. Each DataFusion scan opens a read-only Postgres session, exports the declared columns from the configured table, and lets DataFusion apply query filters and projection locally. This keeps the live path bounded and safe, but it does not yet push predicates, projections, joins, or limits into Postgres. Live row responses do not advertise snapshot-style strong validators or cursor version tokens, because upstream rows can change between requests without a Registry Relay ingest event. Live exports are also bounded by `server.max_source_file_bytes`. Use `connect_timeout`, `query_timeout`, and `live_max_connections` to bound upstream behavior:
+
+```yaml
+source:
+  type: postgres
+  connection_env: SOCIAL_REGISTRY_DATABASE_URL
+  table:
+    schema: public
+    name: individuals
+  connect_timeout: 5s
+  query_timeout: 30s
+  live_max_connections: 8
+```
+
+Supported Postgres field mappings are:
 
 ```text
 string -> text
@@ -248,7 +262,7 @@ tables:
 
 Supported formats are `csv`, `xlsx`, and `parquet`. If `format` is omitted, the loader infers from the source file extension where possible.
 
-`materialization` may be `snapshot` or `live`. File and Postgres sources support `snapshot`. Live materialization is reserved for future database providers and currently validates only the config shape.
+`materialization` may be `snapshot` or `live`. File sources support `snapshot`. Postgres sources support `snapshot`; Postgres structured table sources also support `live`.
 
 Field types:
 

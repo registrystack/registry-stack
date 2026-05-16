@@ -6,17 +6,25 @@
 //! existing source/format stack. Future database connectors can either
 //! produce snapshot batches or a live `TableProvider`.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
+use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, Statistics};
+use datafusion::datasource::MemTable;
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::physical_plan::ExecutionPlan;
 use futures::stream::BoxStream;
 use futures::StreamExt as _;
 use postgres_native_tls::MakeTlsConnector;
 use time::OffsetDateTime;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_postgres::Client;
 
 use crate::config::{FieldType, PostgresTableConfig};
@@ -212,12 +220,13 @@ impl TableConnector for FileConnector {
     }
 }
 
-/// Snapshot connector for PostgreSQL sources.
+/// Connector for PostgreSQL sources.
 ///
 /// The connector uses PostgreSQL `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`
 /// and then feeds the bytes through the existing CSV decoder. This keeps
 /// declared-schema coercion, projection, validation, and cache registration on
 /// the same path as file ingest.
+#[derive(Clone)]
 pub struct PostgresConnector {
     connection_env: String,
     table: Option<PostgresTableConfig>,
@@ -225,9 +234,13 @@ pub struct PostgresConnector {
     change_token_sql: Option<String>,
     declared: Arc<DeclaredSchema>,
     max_source_bytes: u64,
+    connect_timeout: Duration,
+    query_timeout: Duration,
+    live_semaphore: Arc<Semaphore>,
 }
 
 impl PostgresConnector {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         connection_env: String,
         table: Option<PostgresTableConfig>,
@@ -235,6 +248,9 @@ impl PostgresConnector {
         change_token_sql: Option<String>,
         declared: Arc<DeclaredSchema>,
         max_source_bytes: u64,
+        connect_timeout: Duration,
+        query_timeout: Duration,
+        live_max_connections: usize,
     ) -> Self {
         Self {
             connection_env,
@@ -243,6 +259,9 @@ impl PostgresConnector {
             change_token_sql,
             declared,
             max_source_bytes,
+            connect_timeout,
+            query_timeout,
+            live_semaphore: Arc::new(Semaphore::new(live_max_connections)),
         }
     }
 
@@ -257,9 +276,13 @@ impl PostgresConnector {
             .build()
             .map_err(|_| ConnectorError::SourceUnreadable("postgres TLS setup failed".into()))?;
         let connector = MakeTlsConnector::new(tls);
-        let (client, connection) = tokio_postgres::connect(&url, connector)
-            .await
-            .map_err(|_| ConnectorError::SourceUnreadable("postgres connection failed".into()))?;
+        let (client, connection) = tokio::time::timeout(
+            self.connect_timeout,
+            tokio_postgres::connect(&url, connector),
+        )
+        .await
+        .map_err(|_| ConnectorError::SourceUnreadable("postgres connection timed out".into()))?
+        .map_err(|_| ConnectorError::SourceUnreadable("postgres connection failed".into()))?;
 
         tokio::spawn(async move {
             if let Err(error) = connection.await {
@@ -270,15 +293,31 @@ impl PostgresConnector {
             }
         });
 
-        client
-            .batch_execute(
-                "SET TIME ZONE 'UTC'; \
-                 SET default_transaction_read_only = on",
-            )
-            .await
-            .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
+        let statement_timeout_ms = self.query_timeout.as_millis().clamp(1, i32::MAX as u128);
+        let session_setup = format!(
+            "SET TIME ZONE 'UTC'; \
+             SET default_transaction_read_only = on; \
+             SET statement_timeout = {statement_timeout_ms}"
+        );
+        self.with_query_timeout("postgres session setup", async {
+            client
+                .batch_execute(&session_setup)
+                .await
+                .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))
+        })
+        .await?;
 
         Ok(client)
+    }
+
+    async fn with_query_timeout<T>(
+        &self,
+        operation: &'static str,
+        future: impl Future<Output = Result<T, ConnectorError>>,
+    ) -> Result<T, ConnectorError> {
+        tokio::time::timeout(self.query_timeout, future)
+            .await
+            .map_err(|_| ConnectorError::SourceUnreadable(format!("{operation} timed out")))?
     }
 
     async fn read_change_token(
@@ -289,10 +328,14 @@ impl PostgresConnector {
         let Some(sql) = self.change_token_sql.as_deref() else {
             return Ok((None, observed_at));
         };
-        let row = client
-            .query_one(sql, &[])
-            .await
-            .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
+        let row = self
+            .with_query_timeout("postgres change token query", async {
+                client
+                    .query_one(sql, &[])
+                    .await
+                    .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))
+            })
+            .await?;
         let token = row.try_get::<_, Option<String>>(0).map_err(|_| {
             ConnectorError::SourceUnreadable(
                 "postgres change_token_sql must return a nullable text value".into(),
@@ -355,7 +398,7 @@ impl PostgresConnector {
             let next_len = bytes.len().saturating_add(chunk.len());
             if next_len > self.max_source_bytes as usize {
                 return Err(ConnectorError::SourceUnreadable(format!(
-                    "postgres snapshot exceeds configured maximum: {next_len} > {}",
+                    "postgres export exceeds configured maximum: {next_len} > {}",
                     self.max_source_bytes
                 )));
             }
@@ -382,6 +425,24 @@ impl PostgresConnector {
                 .boxed(),
             metadata: SourceMetadata::default(),
         })
+    }
+
+    async fn timed_copy_decoded(&self, client: &Client) -> Result<SnapshotTable, ConnectorError> {
+        self.with_query_timeout("postgres export", self.copy_decoded(client))
+            .await
+    }
+
+    async fn acquire_live_permit(&self) -> Result<OwnedSemaphorePermit, ConnectorError> {
+        self.with_query_timeout("postgres live concurrency wait", async {
+            self.live_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| {
+                    ConnectorError::SourceUnreadable("postgres live concurrency gate closed".into())
+                })
+        })
+        .await
     }
 }
 
@@ -413,7 +474,7 @@ impl TableConnector for PostgresConnector {
         Box::pin(async move {
             let client = self.connect().await?;
             let (change_token, observed_at) = self.read_change_token(&client).await?;
-            let mut snapshot = self.copy_decoded(&client).await?;
+            let mut snapshot = self.timed_copy_decoded(&client).await?;
             snapshot.metadata = SourceMetadata {
                 mtime: Some(observed_at),
                 size_bytes: None,
@@ -425,7 +486,16 @@ impl TableConnector for PostgresConnector {
     }
 
     fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>> {
-        Box::pin(async { Err(ConnectorError::LiveUnsupported) })
+        Box::pin(async move {
+            if self.table.is_none() {
+                return Err(ConnectorError::LiveUnsupported);
+            }
+            let provider: Arc<dyn TableProvider> = Arc::new(PostgresLiveTableProvider {
+                connector: self.clone(),
+                schema: self.declared.to_arrow_schema(),
+            });
+            Ok(Some(provider))
+        })
     }
 
     fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata> {
@@ -438,6 +508,84 @@ impl TableConnector for PostgresConnector {
             })
         })
     }
+}
+
+struct PostgresLiveTableProvider {
+    connector: PostgresConnector,
+    schema: SchemaRef,
+}
+
+impl fmt::Debug for PostgresLiveTableProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PostgresLiveTableProvider")
+            .field("descriptor", &self.connector.descriptor())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl TableProvider for PostgresLiveTableProvider {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let _permit = self
+            .connector
+            .acquire_live_permit()
+            .await
+            .map_err(postgres_to_datafusion_error)?;
+        let client = self
+            .connector
+            .connect()
+            .await
+            .map_err(postgres_to_datafusion_error)?;
+        let snapshot = self
+            .connector
+            .timed_copy_decoded(&client)
+            .await
+            .map_err(postgres_to_datafusion_error)?;
+        let mut stream = snapshot.batches;
+        let mut batches = Vec::new();
+        while let Some(result) = stream.next().await {
+            batches.push(result.map_err(postgres_to_datafusion_error)?);
+        }
+
+        let table = MemTable::try_new(snapshot.observed_schema, vec![batches])?;
+        table.scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        None
+    }
+}
+
+fn postgres_to_datafusion_error(error: ConnectorError) -> DataFusionError {
+    DataFusionError::Execution(error.to_string())
 }
 
 fn quote_ident(identifier: &str) -> String {
@@ -500,6 +648,9 @@ mod tests {
                 ("updated_at", FieldType::Timestamp),
             ]),
             256 * 1024 * 1024,
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            8,
         );
 
         let sql = connector.copy_sql();

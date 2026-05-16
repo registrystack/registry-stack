@@ -289,6 +289,12 @@ pub enum SourceConfig {
         query: Option<String>,
         #[serde(default)]
         change_token_sql: Option<String>,
+        #[serde(default = "default_postgres_connect_timeout", with = "humantime_serde")]
+        connect_timeout: Duration,
+        #[serde(default = "default_postgres_query_timeout", with = "humantime_serde")]
+        query_timeout: Duration,
+        #[serde(default = "default_postgres_live_max_connections")]
+        live_max_connections: usize,
     },
 }
 
@@ -308,6 +314,18 @@ impl SourceConfig {
 pub struct PostgresTableConfig {
     pub schema: String,
     pub name: String,
+}
+
+fn default_postgres_connect_timeout() -> Duration {
+    Duration::from_secs(5)
+}
+
+fn default_postgres_query_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_postgres_live_max_connections() -> usize {
+    8
 }
 
 /// Refresh policy. Tagged on `mode:`.

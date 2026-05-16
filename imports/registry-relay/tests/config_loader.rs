@@ -477,6 +477,9 @@ fn postgres_table_source_descriptor_loads_without_reading_secret() {
             table,
             query,
             change_token_sql,
+            connect_timeout,
+            query_timeout,
+            live_max_connections,
         } => {
             assert_eq!(connection_env, "SOCIAL_REGISTRY_DATABASE_URL");
             let table = table.as_ref().expect("table descriptor");
@@ -484,6 +487,9 @@ fn postgres_table_source_descriptor_loads_without_reading_secret() {
             assert_eq!(table.name, "records");
             assert!(query.is_none());
             assert!(change_token_sql.is_some());
+            assert_eq!(*connect_timeout, std::time::Duration::from_secs(5));
+            assert_eq!(*query_timeout, std::time::Duration::from_secs(30));
+            assert_eq!(*live_max_connections, 8);
         }
         other => panic!("expected postgres source, got {other:?}"),
     }
@@ -660,7 +666,7 @@ fn file_source_live_materialization_is_rejected() {
 }
 
 #[test]
-fn postgres_live_materialization_is_rejected() {
+fn postgres_live_table_source_descriptor_loads() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(
         &tmp,
@@ -682,6 +688,85 @@ fn postgres_live_materialization_is_rejected() {
           table:
             schema: public
             name: records
+        refresh:
+          mode: manual
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    config::load(&config_path).expect("postgres live table descriptor loads");
+}
+
+#[test]
+fn postgres_live_query_materialization_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: live
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          query: "select record_id from public.records"
+        refresh:
+          mode: manual
+        schema:
+          strict: false
+          fields:
+            - name: record_id
+              type: string
+    entities: []
+"#,
+        ),
+    );
+
+    let msg = assert_config_code(config::load(&config_path), "config.validation_error");
+    assert!(
+        !msg.contains("select record_id"),
+        "query leaked in error: {msg}"
+    );
+}
+
+#[test]
+fn postgres_live_max_connections_must_be_nonzero() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        materialization: live
+        source:
+          type: postgres
+          connection_env: SOCIAL_REGISTRY_DATABASE_URL
+          table:
+            schema: public
+            name: records
+          live_max_connections: 0
         refresh:
           mode: manual
         schema:

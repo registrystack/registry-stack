@@ -49,14 +49,14 @@ pub fn register_versioned_table(
 ) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
     ctx.register_table(
         table_name,
-        Arc::new(SwappableTableProvider::new(ingest_ulid, provider)),
+        Arc::new(SwappableTableProvider::new(Some(ingest_ulid), provider)),
     )
 }
 
 pub(crate) async fn register_or_replace_versioned_table(
     ctx: &SessionContext,
     table_name: &str,
-    ingest_ulid: Ulid,
+    ingest_ulid: Option<Ulid>,
     provider: Arc<dyn TableProvider>,
 ) -> DataFusionResult<()> {
     if ctx.table_exist(table_name)? {
@@ -67,13 +67,16 @@ pub(crate) async fn register_or_replace_versioned_table(
         }
     }
 
-    register_versioned_table(ctx, table_name.to_string(), ingest_ulid, provider)?;
+    ctx.register_table(
+        table_name.to_string(),
+        Arc::new(SwappableTableProvider::new(ingest_ulid, provider)),
+    )?;
     Ok(())
 }
 
 #[derive(Clone)]
 struct VersionedTableProvider {
-    ingest_ulid: Ulid,
+    ingest_ulid: Option<Ulid>,
     inner: Arc<dyn TableProvider>,
 }
 
@@ -82,13 +85,13 @@ pub(crate) struct SwappableTableProvider {
 }
 
 impl SwappableTableProvider {
-    fn new(ingest_ulid: Ulid, inner: Arc<dyn TableProvider>) -> Self {
+    fn new(ingest_ulid: Option<Ulid>, inner: Arc<dyn TableProvider>) -> Self {
         Self {
             inner: RwLock::new(VersionedTableProvider { ingest_ulid, inner }),
         }
     }
 
-    fn replace(&self, ingest_ulid: Ulid, inner: Arc<dyn TableProvider>) {
+    fn replace(&self, ingest_ulid: Option<Ulid>, inner: Arc<dyn TableProvider>) {
         *self.inner.write().expect("table provider lock poisoned") =
             VersionedTableProvider { ingest_ulid, inner };
     }
@@ -96,7 +99,7 @@ impl SwappableTableProvider {
     fn snapshot(&self) -> TableSnapshot {
         let inner = self.inner.read().expect("table provider lock poisoned");
         TableSnapshot {
-            ingest_ulid: Some(inner.ingest_ulid),
+            ingest_ulid: inner.ingest_ulid,
             provider: Arc::clone(&inner.inner),
         }
     }

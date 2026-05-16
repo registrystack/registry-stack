@@ -372,8 +372,7 @@ impl IngestPlan {
 
         let ingest_ulid = Ulid::new();
         let table_name = table_name(dataset_id, resource_id);
-        self.register_provider(&table_name, provider, ingest_ulid)
-            .await?;
+        self.register_live_provider(&table_name, provider).await?;
 
         self.readiness.store(Arc::new(ResourceReadiness::Ready {
             ingest_ulid,
@@ -451,7 +450,27 @@ impl IngestPlan {
         table: Arc<dyn TableProvider>,
         ingest_ulid: Ulid,
     ) -> Result<(), IngestError> {
-        register_or_replace_versioned_table(&self.df_ctx, table_name, ingest_ulid, table)
+        register_or_replace_versioned_table(&self.df_ctx, table_name, Some(ingest_ulid), table)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    event = "ingest.registration_failed",
+                    dataset_id = %self.dataset_id,
+                    resource_id = %self.resource_id,
+                    error = %e,
+                );
+                IngestError::RegistrationFailed
+            })?;
+
+        Ok(())
+    }
+
+    async fn register_live_provider(
+        &self,
+        table_name: &str,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<(), IngestError> {
+        register_or_replace_versioned_table(&self.df_ctx, table_name, None, table)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -555,6 +574,9 @@ impl IngestRegistry {
                         table,
                         query,
                         change_token_sql,
+                        connect_timeout,
+                        query_timeout,
+                        live_max_connections,
                     } => Arc::new(PostgresConnector::new(
                         connection_env.clone(),
                         table.clone(),
@@ -562,6 +584,9 @@ impl IngestRegistry {
                         change_token_sql.clone(),
                         Arc::clone(&declared),
                         config.server.max_source_file_bytes,
+                        *connect_timeout,
+                        *query_timeout,
+                        *live_max_connections,
                     )),
                 };
 

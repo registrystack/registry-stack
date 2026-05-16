@@ -669,7 +669,7 @@ audit:
         let dataset: DatasetId = id("social_registry");
         let resource: ResourceId = id("items_table");
         let table_name = table_name(&dataset, &resource);
-        register_or_replace_versioned_table(&ctx, &table_name, Ulid::new(), mem_table("old"))
+        register_or_replace_versioned_table(&ctx, &table_name, Some(Ulid::new()), mem_table("old"))
             .await
             .expect("register old table");
 
@@ -677,7 +677,7 @@ audit:
             AggregatePlan::build("social_registry", entity, aggregate, &registry, &ctx).await;
         let plan = plan.expect("aggregate plan");
 
-        register_or_replace_versioned_table(&ctx, &table_name, Ulid::new(), mem_table("new"))
+        register_or_replace_versioned_table(&ctx, &table_name, Some(Ulid::new()), mem_table("new"))
             .await
             .expect("swap table");
 

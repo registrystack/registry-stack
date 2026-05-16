@@ -222,7 +222,7 @@ async fn entity_collection(
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
-    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
     let audit_context = registry
@@ -299,35 +299,13 @@ async fn entity_collection(
     if cursor.is_none() && query_params.query.expansions.is_empty() {
         if let Some(Extension(registry)) = registry.as_ref() {
             if let Some(dataset) = registry.dataset(&path.dataset_id) {
-                if let Some(entity) = dataset.entity(&path.entity) {
+                if dataset.entity(&path.entity).is_some() {
                     if let Err(error) = query.validate_collection_query(
                         &path.dataset_id,
                         &path.entity,
                         &query_params.query,
                     ) {
                         return error.into_response();
-                    }
-                    let ingest_version = ingest_version_for_entity(
-                        readiness.as_ref().map(|Extension(readiness)| readiness),
-                        &path.dataset_id,
-                        entity,
-                    )
-                    .map(|ingest_version| format!("{}={ingest_version}", entity.table_id));
-                    let etag = entity_etag(
-                        "collection",
-                        &path.dataset_id,
-                        &path.entity,
-                        ingest_version.as_deref(),
-                        &validator,
-                    );
-                    if let Some(etag) = etag.as_deref() {
-                        if if_none_match_matches(&headers, etag) {
-                            let mut response = not_modified_response(etag);
-                            if let Some(context) = audit_context.clone() {
-                                response = with_audit_context(response, context);
-                            }
-                            return response;
-                        }
                     }
                 }
             }
