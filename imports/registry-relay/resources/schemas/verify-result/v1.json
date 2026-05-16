@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.data-gate.org/verify-result/v1.json",
+  "title": "VerifyResult v1",
+  "description": "Structural schema for the `credentialSubject` of a VerifyResult VC (Wave 3, decisions/wave-3-data-provenance.md §8).",
+  "type": "object",
+  "required": ["dataset", "entity", "subjectId", "predicate", "value", "asOf"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Canonical entity URL (D9). Optional; the JWT `sub` carries the same value."
+    },
+    "dataset": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entity": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "predicate": {
+      "type": "string",
+      "minLength": 1
+    },
+    "value": {
+      "description": "Boolean, string, number, or null per spec §8.",
+      "type": ["boolean", "string", "number", "null"]
+    },
+    "asOf": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

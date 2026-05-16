@@ -1,0 +1,264 @@
+// SPDX-License-Identifier: Apache-2.0
+//! HTTP-layer issuance helper: Accept negotiation + VC issuance.
+//!
+//! Wave 3 wires three protected handlers into the issuance orchestrator
+//! (`/verify`, `/aggregates/{id}`, `/{entity}/{id}`). The shape is the
+//! same in all three places:
+//!
+//! 1. Build the wave-2 plain-JSON response.
+//! 2. Ask [`crate::provenance::negotiate`] whether the caller opted in
+//!    with `Accept: application/vc+jwt`.
+//! 3. If yes (and provenance is enabled), build the typed claim subject
+//!    via the matching `crate::provenance::claim` builder, hand it to
+//!    [`crate::provenance::ProvenanceState::issue`], and return a 200
+//!    response with `Content-Type: application/vc+jwt` and the compact
+//!    JWS as the body. Attach [`crate::audit::ProvenanceIssuanceExt`] so
+//!    the audit middleware emits a `provenance.vc.issued` event.
+//! 4. If no (no opt-in, or provenance disabled / absent), return the
+//!    plain-JSON response unchanged. This keeps the byte-for-byte
+//!    wave-2 contract intact for callers that don't ask for a VC.
+//!
+//! The helper is `pub(crate)` because it is an implementation detail of
+//! the api module; nothing outside `src/api` should call it directly.
+
+use std::sync::Arc;
+
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::{IntoResponse, Response};
+use serde_json::Value;
+use time::OffsetDateTime;
+
+use crate::audit::ProvenanceIssuanceExt;
+use crate::config::Config;
+use crate::error::{Error, ProvenanceError};
+use crate::provenance::claim::{
+    aggregate_result_subject, entity_record_subject, verify_result_subject, AggregateResultInput,
+    EntityRecordInput, VerifyResultInput,
+};
+use crate::provenance::{
+    negotiate, ClaimType, IssuanceContext, IssueError, NegotiationOutcome, ProvenanceState,
+};
+
+/// Media type emitted on a signed VC response. The audit / observability
+/// layer uses this as the only signal that a response carried a VC.
+const VC_JWT_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("application/vc+jwt");
+
+/// Decide whether the caller asked for a signed VC and the gateway is
+/// allowed to issue one (provenance present + enabled + accepted media
+/// type listed). Returns the live [`ProvenanceState`] handle when all
+/// conditions hold; `None` when the wave-2 plain-JSON path should run
+/// instead.
+pub(crate) fn signed_vc_requested<'a>(
+    state: Option<&'a Arc<ProvenanceState>>,
+    headers: &HeaderMap,
+) -> Option<&'a Arc<ProvenanceState>> {
+    let state = state?;
+    if !state.is_enabled() {
+        return None;
+    }
+    match negotiate(headers, &state.config().accepted_media_types) {
+        NegotiationOutcome::SignedVc => Some(state),
+        NegotiationOutcome::PlainJson => None,
+    }
+}
+
+/// Build the canonical subject URI for an entity row, used as both the
+/// VC `credentialSubject.id` and JWT `sub`. Mirrors decision D9
+/// (`<catalog.base_url>/datasets/<dataset>/<entity>/<id>`).
+pub(crate) fn entity_subject_uri(config: &Config, dataset: &str, entity: &str, id: &str) -> String {
+    let base = config.catalog.base_url.trim_end_matches('/');
+    format!("{base}/datasets/{dataset}/{entity}/{id}")
+}
+
+/// Build the canonical subject URI for an aggregate result, used as the
+/// VC `credentialSubject.id`. Per decision D9 the aggregate's URL is
+/// the public route the gateway exposes.
+pub(crate) fn aggregate_subject_uri(
+    config: &Config,
+    dataset: &str,
+    entity: &str,
+    aggregate_id: &str,
+) -> String {
+    let base = config.catalog.base_url.trim_end_matches('/');
+    format!("{base}/datasets/{dataset}/{entity}/aggregates/{aggregate_id}")
+}
+
+/// Common path: hand a built `credentialSubject` to the orchestrator,
+/// wrap the resulting compact JWS in an HTTP response, and attach the
+/// `ProvenanceIssuanceExt` so audit picks it up.
+fn issue_response(
+    state: &ProvenanceState,
+    claim_type: ClaimType,
+    subject_uri: String,
+    credential_subject: Value,
+) -> Response {
+    let issued_at = OffsetDateTime::now_utc();
+    let signed = match state.issue(IssuanceContext {
+        claim_type,
+        subject_uri: subject_uri.clone(),
+        credential_subject,
+        issued_at,
+    }) {
+        Ok(signed) => signed,
+        Err(err) => return issue_error_to_response(err),
+    };
+    let mut response = signed.compact_jws.clone().into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, VC_JWT_CONTENT_TYPE);
+    response.extensions_mut().insert(ProvenanceIssuanceExt {
+        iss: signed.issuer_did,
+        kid: signed.verification_method_id,
+        jti: signed.jti,
+        claim_type: claim_type_label(claim_type).to_string(),
+        subject: subject_uri,
+        iat: signed.iat,
+        nbf: signed.nbf,
+        exp: signed.exp,
+    });
+    response
+}
+
+fn claim_type_label(claim_type: ClaimType) -> &'static str {
+    // Audit `claim_type` mirrors the `type[1]` array entry from the
+    // VC payload, so consumers can correlate the audit event with the
+    // emitted JWS without re-parsing the JWS body.
+    claim_type.type_tag()
+}
+
+fn issue_error_to_response(err: IssueError) -> Response {
+    let error = match err {
+        IssueError::SignerUnavailable => Error::from(ProvenanceError::SignerUnavailable),
+        IssueError::IssuanceFailed => Error::from(ProvenanceError::IssuanceFailed),
+    };
+    error.into_response()
+}
+
+/// Issue a `VerifyResult` VC. Returns the signed-VC response when the
+/// caller opted in and provenance is live; otherwise returns
+/// `plain_response` untouched.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn maybe_issue_verify_result(
+    state: Option<&Arc<ProvenanceState>>,
+    config: Option<&Arc<Config>>,
+    headers: &HeaderMap,
+    plain_response: Response,
+    dataset: &str,
+    entity: &str,
+    subject_id: &str,
+    predicate: &str,
+    value: Value,
+    as_of_rfc3339: String,
+) -> Response {
+    let Some(state) = signed_vc_requested(state, headers) else {
+        return plain_response;
+    };
+    let Some(config) = config else {
+        return plain_response;
+    };
+    let subject_uri = entity_subject_uri(config, dataset, entity, subject_id);
+    let subject = verify_result_subject(&VerifyResultInput {
+        subject_uri: subject_uri.clone(),
+        dataset: dataset.to_string(),
+        entity: entity.to_string(),
+        subject_id: subject_id.to_string(),
+        predicate: predicate.to_string(),
+        value,
+        as_of_rfc3339,
+    });
+    issue_response(state, ClaimType::VerifyResult, subject_uri, subject)
+}
+
+/// Inputs for [`maybe_issue_aggregate_result`]. Carrying them in a
+/// struct keeps the helper signature short and lets the handler build
+/// the values once before deciding on the negotiation outcome.
+#[derive(Debug, Clone)]
+pub(crate) struct AggregateIssuanceArgs<'a> {
+    pub dataset: &'a str,
+    pub entity: &'a str,
+    pub aggregate_id: &'a str,
+    pub group_by: Vec<String>,
+    pub measures: Vec<String>,
+    pub rows: Vec<Value>,
+    pub suppressed_groups: u64,
+    pub min_group_size: u64,
+    pub computed_at_rfc3339: String,
+    pub as_of_rfc3339: String,
+}
+
+/// Issue an `AggregateResult` VC. Same opt-in contract as
+/// [`maybe_issue_verify_result`].
+pub(crate) fn maybe_issue_aggregate_result(
+    state: Option<&Arc<ProvenanceState>>,
+    config: Option<&Arc<Config>>,
+    headers: &HeaderMap,
+    plain_response: Response,
+    args: AggregateIssuanceArgs<'_>,
+) -> Response {
+    let Some(state) = signed_vc_requested(state, headers) else {
+        return plain_response;
+    };
+    let Some(config) = config else {
+        return plain_response;
+    };
+    let subject_uri = aggregate_subject_uri(config, args.dataset, args.entity, args.aggregate_id);
+    let subject = aggregate_result_subject(&AggregateResultInput {
+        subject_uri: subject_uri.clone(),
+        dataset: args.dataset.to_string(),
+        entity: args.entity.to_string(),
+        aggregate_id: args.aggregate_id.to_string(),
+        aggregate_url: subject_uri.clone(),
+        group_by: args.group_by,
+        measures: args.measures,
+        rows: args.rows,
+        suppressed_groups: args.suppressed_groups,
+        min_group_size: args.min_group_size,
+        computed_at_rfc3339: args.computed_at_rfc3339,
+        as_of_rfc3339: args.as_of_rfc3339,
+    });
+    issue_response(state, ClaimType::AggregateResult, subject_uri, subject)
+}
+
+/// Issue an `EntityRecord` VC. Same opt-in contract as
+/// [`maybe_issue_verify_result`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn maybe_issue_entity_record(
+    state: Option<&Arc<ProvenanceState>>,
+    config: Option<&Arc<Config>>,
+    headers: &HeaderMap,
+    plain_response: Response,
+    dataset: &str,
+    entity: &str,
+    subject_id: &str,
+    record: Value,
+    expansions: Vec<String>,
+    as_of_rfc3339: String,
+) -> Response {
+    let Some(state) = signed_vc_requested(state, headers) else {
+        return plain_response;
+    };
+    let Some(config) = config else {
+        return plain_response;
+    };
+    let subject_uri = entity_subject_uri(config, dataset, entity, subject_id);
+    let subject = entity_record_subject(&EntityRecordInput {
+        subject_uri: subject_uri.clone(),
+        dataset: dataset.to_string(),
+        entity: entity.to_string(),
+        subject_id: subject_id.to_string(),
+        record,
+        expansions,
+        as_of_rfc3339,
+    });
+    issue_response(state, ClaimType::EntityRecord, subject_uri, subject)
+}
+
+/// Build an RFC 3339 string for "now" in UTC. Helper kept here so the
+/// callers don't need to import `time::format_description` themselves.
+#[must_use]
+pub(crate) fn now_rfc3339() -> String {
+    use time::format_description::well_known::Rfc3339;
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| String::new())
+}

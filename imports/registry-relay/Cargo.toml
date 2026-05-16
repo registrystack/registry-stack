@@ -62,6 +62,24 @@ hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 subtle = { version = "2" }
 zeroize = { version = "1" }
+# Wave 3: JWS compact serialization and EdDSA / ES256 signing primitives.
+# We build the VC-JWT payload by hand to control the VCDM 2.0 envelope
+# shape; jsonwebtoken provides the signing/verification primitives only.
+jsonwebtoken = { version = "9" }
+# Wave 3: urn:uuid:* identifiers for VC jti / id.
+uuid = { version = "1", features = ["v4"] }
+# Wave 3: robust Accept media-type parsing for provenance content
+# negotiation. Already a transitive dep of axum, pinned here so the
+# public surface compiles without depending on a re-export path.
+mime = { version = "0.3" }
+# Wave 3: base64url encoding used by the VC-JWT compact serialization.
+base64 = { version = "0.22" }
+# Wave 3: derives the Ed25519 public key from a raw seed so the mock KMS
+# signer's `public_jwk()` carries a usable `x`. `jsonwebtoken` only
+# exposes signing primitives and PKCS#8 envelopes; it does not expose the
+# raw `seed -> public point` scalar multiplication we need here. Kept
+# minimal: no random number generator features in the runtime build.
+ed25519-dalek = { version = "2" }
 
 # ─── time / ids ──────────────────────────────────────────────────────────────
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
@@ -93,3 +111,16 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 # package version matches the one calamine 0.35 pulls transitively so we
 # don't multiply build-time copies.
 zip = { version = "7", default-features = false, features = ["deflate"] }
+# Wave 3: validates credentialSubject payloads against the JSON Schemas
+# we publish at /schemas/...
+jsonschema = { version = "0.18" }
+# Wave 3: Ed25519 key generation for tests. The runtime depends on
+# ed25519-dalek directly (see `[dependencies]`) for deriving public keys
+# from a seed; this entry layers on the `pkcs8` and `rand_core` features
+# so tests can mint fresh keypairs deterministically and convert them
+# to/from JWK without shelling out to openssl.
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+# Wave 3: rand for ed25519-dalek key generation in tests.
+rand_core = { version = "0.6", features = ["std"] }
+# Wave 3: parsing `resources/MANIFEST.toml` in the resource pinning test.
+toml = { version = "0.8" }

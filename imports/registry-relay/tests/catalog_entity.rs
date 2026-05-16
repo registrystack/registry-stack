@@ -25,6 +25,7 @@ catalog:
   title: Program Data Catalog
   base_url: https://data.example.test/
   publisher: Ministry of Delivery
+  participant_id: did:web:data.example.test
 
 vocabularies:
   psc: https://publicschema.org/
@@ -234,8 +235,19 @@ fn entity<'a>(body: &'a Value, name: &str) -> &'a Value {
 fn assert_structural_dcat_shacl(body: &Value) {
     assert_eq!(body["@type"], "dcat:Catalog");
     assert_eq!(body["@context"]["dcat"], "http://www.w3.org/ns/dcat#");
+    assert_eq!(body["@context"]["dct"], "http://purl.org/dc/terms/");
     assert_eq!(body["@context"]["dcterms"], "http://purl.org/dc/terms/");
+    assert_eq!(
+        body["@context"]["dspace"],
+        "https://w3id.org/dspace/2025/1/"
+    );
+    assert_eq!(body["@context"]["odrl"], "http://www.w3.org/ns/odrl/2/");
     assert_eq!(body["@context"]["sh"], "http://www.w3.org/ns/shacl#");
+    assert_eq!(body["@context"]["dcat:accessService"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:endpointURL"]["@type"], "@id");
+    assert_eq!(body["@context"]["dct:format"]["@type"], "@id");
+    assert_eq!(body["@context"]["odrl:action"]["@type"], "@id");
+    assert_eq!(body["@context"]["odrl:hasPolicy"]["@type"], "@id");
     assert_eq!(body["@context"]["sh:path"]["@type"], "@id");
     assert_eq!(body["@context"]["sh:targetClass"]["@type"], "@id");
     assert_eq!(body["@context"]["dcat:accessURL"]["@type"], "@id");
@@ -247,6 +259,7 @@ fn assert_structural_dcat_shacl(body: &Value) {
             dataset["@type"] == "dcat:Dataset"
                 && dataset["@id"].is_string()
                 && dataset["dcterms:title"].is_string()
+                && dataset["odrl:hasPolicy"]["@type"] == "odrl:Offer"
                 && dataset["dcat:distribution"].is_array()
         }));
     assert!(body["sh:shapesGraph"]
@@ -352,6 +365,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(resp.header("content-type"), "application/ld+json");
     let body: Value = resp.json();
     assert_eq!(body["@type"], "dcat:Catalog");
+    assert_eq!(body["dspace:participantId"], "did:web:data.example.test");
     assert_structural_dcat_shacl(&body);
     assert_eq!(body["@context"]["foaf"], "http://xmlns.com/foaf/0.1/");
     assert_eq!(body["dcterms:publisher"]["@type"], "foaf:Agent");
@@ -361,6 +375,18 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     );
     assert_eq!(body["dcat:dataset"][0]["@type"], "dcat:Dataset");
     assert_eq!(body["dcat:dataset"].as_array().expect("datasets").len(), 1);
+    assert_eq!(
+        body["dcat:dataset"][0]["odrl:hasPolicy"]["@id"],
+        "https://data.example.test/datasets/social_registry#offer"
+    );
+    assert_eq!(
+        body["dcat:dataset"][0]["odrl:hasPolicy"]["odrl:permission"][0]["odrl:action"]["@id"],
+        "odrl:use"
+    );
+    assert!(
+        body["dcat:dataset"][0]["odrl:hasPolicy"]["target"].is_null(),
+        "DSP dataset offers must not carry an explicit target"
+    );
     assert_eq!(
         body["dcat:dataset"][0]["dcterms:publisher"]["@type"],
         "foaf:Agent"
@@ -372,6 +398,20 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(
         body["dcat:dataset"][0]["dcterms:accrualPeriodicity"],
         "http://publications.europa.eu/resource/authority/frequency/MONTHLY"
+    );
+    let distribution = &body["dcat:dataset"][0]["dcat:distribution"][0];
+    assert_eq!(distribution["dct:format"]["@id"], "data_gate:HttpData-PULL");
+    assert_eq!(
+        distribution["dcat:accessService"]["@type"],
+        "dcat:DataService"
+    );
+    assert_eq!(
+        distribution["dcat:accessService"]["dspace:dataServiceType"],
+        "data_gate:entity-rest"
+    );
+    assert_eq!(
+        distribution["dcat:accessService"]["dcat:endpointURL"],
+        "https://data.example.test/datasets/social_registry/household"
     );
 
     let shapes = body["sh:shapesGraph"].as_array().expect("shapes graph");

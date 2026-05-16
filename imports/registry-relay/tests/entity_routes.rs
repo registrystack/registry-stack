@@ -8,7 +8,7 @@ use data_gate::api::{aggregates_router, entity_router, CursorSigner};
 use data_gate::auth::{AuthMode, Principal, ScopeSet};
 use data_gate::config::{self, DatasetId, ResourceId};
 use data_gate::entity::EntityRegistry;
-use data_gate::ingest::{register_versioned_table, table_name, ReadinessSnapshot};
+use data_gate::ingest::{register_versioned_table, table_name, ReadinessSnapshot, ReadyResource};
 use data_gate::query::EntityQueryEngine;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -260,11 +260,17 @@ audit:
     let mut snapshot = ReadinessSnapshot::default();
     snapshot.ready.insert(
         (id("social_registry"), id("households_table")),
-        readiness_ingest_version,
+        ReadyResource {
+            ingest_ulid: readiness_ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
     );
     snapshot.ready.insert(
         (id("social_registry"), id("individuals_table")),
-        readiness_ingest_version,
+        ReadyResource {
+            ingest_ulid: readiness_ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
@@ -1041,12 +1047,19 @@ audit:
 
     let query = Arc::new(EntityQueryEngine::new(ctx, Arc::clone(&registry)));
     let mut snapshot = ReadinessSnapshot::default();
-    snapshot
-        .ready
-        .insert((id("test_dataset"), id("items_table")), ingest_version);
+    snapshot.ready.insert(
+        (id("test_dataset"), id("items_table")),
+        ReadyResource {
+            ingest_ulid: ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
+    );
     snapshot.ready.insert(
         (id("test_dataset"), id("unrestricted_table")),
-        ingest_version,
+        ReadyResource {
+            ingest_ulid: ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
     );
     let (_tx, readiness) = watch::channel(snapshot);
 

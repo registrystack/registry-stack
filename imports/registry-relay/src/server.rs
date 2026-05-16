@@ -111,9 +111,42 @@ pub fn build_app<P>(config: Arc<Config>, auth: Arc<P>, audit_sink: Arc<dyn Audit
 where
     P: AuthProvider,
 {
+    build_app_with_provenance(config, auth, audit_sink, None)
+}
+
+/// Same as [`build_app`] but lets a caller install a pre-built
+/// [`ProvenanceState`]. Wave 3 wiring (Phase C) takes this path; tests
+/// that don't exercise provenance keep the older [`build_app`] entry.
+pub fn build_app_with_provenance<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
+) -> Router
+where
+    P: AuthProvider,
+{
     // Health/ready routes: unauthenticated sub-router. Merged onto the
     // top-level router *outside* the auth layer.
-    let public = api::health_router();
+    let mut public = api::health_router();
+
+    // Wave 3 provenance: when configured AND enabled, the gateway
+    // exposes the JSON Schemas, JSON-LD contexts, and (gateway-mode
+    // only) the `/.well-known/did.json` document on the public,
+    // unauthenticated surface. These routes share the same audit +
+    // tracing pipeline as `/health` and `/ready`.
+    //
+    // A `ProvenanceState` whose `is_enabled()` returns `false` is
+    // still installed as an extension below so internal wiring stays
+    // identical; the *public* surface, however, must be byte-for-byte
+    // invisible. This preserves the wave-2 contract for deployments
+    // that load a config with `provenance.enabled: false`.
+    if provenance.as_ref().is_some_and(|state| state.is_enabled()) {
+        public = public
+            .merge(api::schemas_router())
+            .merge(api::contexts_router())
+            .merge(api::did_router());
+    }
 
     // Data-plane sub-router. All protected public API routes are merged
     // here so the auth layer gates them as one surface.
@@ -135,9 +168,13 @@ where
     // for opaque pagination tokens.
     let cursor_signer = Arc::new(CursorSigner::new_random());
 
-    apply_cross_cutting_layers(merged, &config, audit_sink)
+    let mut router = apply_cross_cutting_layers(merged, &config, audit_sink)
         .layer(Extension(cursor_signer))
-        .layer(Extension(config))
+        .layer(Extension(config));
+    if let Some(state) = provenance {
+        router = router.layer(Extension(state));
+    }
+    router
 }
 
 /// Assemble the main application with an ingest readiness watch.
@@ -171,6 +208,31 @@ where
     P: AuthProvider,
 {
     build_app_with_readiness(config, auth, audit_sink, readiness)
+        .layer(Extension(aggregate_query))
+        .layer(Extension(query))
+        .layer(Extension(entity_registry))
+}
+
+/// Production assembly: wave-2 state (readiness + entity/query) plus
+/// Wave 3 [`ProvenanceState`]. Used by `main.rs` once the orchestrator
+/// has been built from the parsed config; tests that need provenance
+/// + query call this directly with their own state handles.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_with_entity_query_and_provenance<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    entity_registry: Arc<EntityRegistry>,
+    query: Arc<EntityQueryEngine>,
+    aggregate_query: Arc<AggregateQueryEngine>,
+    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
+) -> Router
+where
+    P: AuthProvider,
+{
+    build_app_with_provenance(config, auth, audit_sink, provenance)
+        .layer(Extension(readiness))
         .layer(Extension(aggregate_query))
         .layer(Extension(query))
         .layer(Extension(entity_registry))

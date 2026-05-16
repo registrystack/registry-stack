@@ -777,8 +777,18 @@ impl IngestRegistry {
         let mut snapshot = ReadinessSnapshot::default();
         for ((ds, rs), plan) in &self.plans {
             match plan.readiness() {
-                ResourceReadiness::Ready { ingest_ulid, .. } => {
-                    snapshot.ready.insert((ds.clone(), rs.clone()), ingest_ulid);
+                ResourceReadiness::Ready {
+                    ingest_ulid,
+                    registered_at,
+                    ..
+                } => {
+                    snapshot.ready.insert(
+                        (ds.clone(), rs.clone()),
+                        ReadyResource {
+                            ingest_ulid,
+                            registered_at,
+                        },
+                    );
                 }
                 ResourceReadiness::NotReady => {
                     snapshot.not_ready.insert((ds.clone(), rs.clone()));
@@ -794,11 +804,24 @@ impl IngestRegistry {
 
 // ── ReadinessSnapshot ─────────────────────────────────────────────────────────
 
+/// One row of [`ReadinessSnapshot::ready`]. Carries enough to identify
+/// the current ingest (the `ingest_ulid`) and to derive an `as_of`
+/// timestamp for downstream consumers like the wave-3 aggregate VC
+/// builder.
+#[derive(Clone, Debug)]
+pub struct ReadyResource {
+    pub ingest_ulid: Ulid,
+    /// Wall-clock time at which the underlying DataFusion table was
+    /// registered with the session context. The `/ready` and aggregate
+    /// handlers treat this as the resource's `as_of`.
+    pub registered_at: OffsetDateTime,
+}
+
 /// Aggregate readiness across every resource. The `/ready` handler
 /// returns 200 iff `failed.is_empty() && not_ready.is_empty()`.
 #[derive(Clone, Debug, Default)]
 pub struct ReadinessSnapshot {
-    pub ready: BTreeMap<(DatasetId, ResourceId), Ulid>,
+    pub ready: BTreeMap<(DatasetId, ResourceId), ReadyResource>,
     pub not_ready: BTreeSet<(DatasetId, ResourceId)>,
     pub failed: BTreeMap<(DatasetId, ResourceId), &'static str>,
     pub unresolved_entities: BTreeSet<(DatasetId, String)>,

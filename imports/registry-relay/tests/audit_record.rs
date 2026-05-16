@@ -48,6 +48,7 @@ fn sample_record() -> AuditRecord {
         suppressed_groups: None,
         duration_ms: 7,
         error_code: None,
+        provenance: None,
     }
 }
 

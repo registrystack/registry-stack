@@ -102,6 +102,10 @@ fn example_config_loads_and_validates() {
     assert_eq!(config.catalog.title, "Internal Government Data Gateway");
     assert_eq!(config.catalog.base_url, "https://data.example.gov");
     assert_eq!(config.catalog.publisher, "Ministry of Digital Government");
+    assert_eq!(
+        config.catalog.participant_id.as_deref(),
+        Some("did:web:data.example.gov")
+    );
 
     assert!(matches!(config.auth.mode, AuthMode::ApiKey));
     assert_eq!(config.auth.api_keys.len(), 3);

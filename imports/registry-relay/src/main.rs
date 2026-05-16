@@ -40,6 +40,9 @@ use data_gate::entity::EntityRegistry;
 use data_gate::error::{ConfigError, Error};
 use data_gate::format::FormatRegistry;
 use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
+use data_gate::provenance::{
+    build_resolved_provenance_config, ProvenanceState, ResolvedProvenanceConfig,
+};
 use data_gate::query::{AggregateQueryEngine, EntityQueryEngine};
 use datafusion::execution::context::SessionContext;
 use tokio::net::TcpListener;
@@ -110,7 +113,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let dataset_count = config.datasets.len();
     let keyring_size = auth.len();
-    let app = data_gate::server::build_app_with_entity_query(
+    // Wave 3 provenance: build the orchestrator state from the parsed
+    // config. `build_resolved_provenance_config` returns:
+    //   * `Ok(None)` when the operator omitted the `provenance:` block
+    //     (wave-2 deployments), leaving the binary byte-for-byte
+    //     identical to its pre-wave-3 surface.
+    //   * `Ok(Some(_))` when present, even with `enabled = false`. The
+    //     state is still installed so internal wiring stays uniform;
+    //     `build_app_with_provenance` then keeps the public schemas /
+    //     contexts / DID routes invisible until `enabled = true`.
+    let provenance_state: Option<Arc<ProvenanceState>> =
+        build_resolved_provenance_config(config.provenance.as_ref())?
+            .map(|resolved: ResolvedProvenanceConfig| Arc::new(ProvenanceState::new(resolved)));
+    let provenance_state_for_log = provenance_state.as_ref().map(|state| {
+        let cfg = state.config();
+        (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
+    });
+    let app = data_gate::server::build_app_with_entity_query_and_provenance(
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&audit_sink),
@@ -118,6 +137,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         entity_registry,
         query,
         aggregate_query,
+        provenance_state.clone(),
     );
 
     let listener = TcpListener::bind(bind).await.map_err(|err| {
@@ -125,14 +145,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         err
     })?;
 
-    info!(
-        bind = %bind,
-        admin_bind = ?admin_bind,
-        datasets = dataset_count,
-        api_keys = keyring_size,
-        audit_sink = audit_kind,
-        "data_gate listening"
-    );
+    match provenance_state_for_log.as_ref() {
+        Some((enabled, mode, issuer_did)) => {
+            info!(
+                bind = %bind,
+                admin_bind = ?admin_bind,
+                datasets = dataset_count,
+                api_keys = keyring_size,
+                audit_sink = audit_kind,
+                provenance_enabled = *enabled,
+                provenance_mode = ?mode,
+                provenance_issuer_did = %issuer_did,
+                "data_gate listening"
+            );
+        }
+        None => {
+            info!(
+                bind = %bind,
+                admin_bind = ?admin_bind,
+                datasets = dataset_count,
+                api_keys = keyring_size,
+                audit_sink = audit_kind,
+                provenance_enabled = false,
+                "data_gate listening"
+            );
+        }
+    }
 
     let admin_listener = match admin_bind {
         Some(addr) => Some(TcpListener::bind(addr).await.map_err(|err| {

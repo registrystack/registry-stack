@@ -71,6 +71,9 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("{0}")]
     Internal(#[from] InternalError),
+    /// Wave 3 provenance runtime errors.
+    #[error("{0}")]
+    Provenance(#[from] ProvenanceError),
 }
 
 /// `entity.*` codes.
@@ -188,6 +191,55 @@ pub enum ConfigError {
     MissingSecret,
     #[error("duplicate identifier in config")]
     DuplicateId,
+    /// Wave 3 provenance: enabled but no issuer block resolved.
+    #[error("provenance issuer missing")]
+    ProvenanceMissingIssuer,
+    /// Wave 3 provenance: gateway DID does not match the deployment host.
+    #[error("provenance issuer did mismatch")]
+    ProvenanceIssuerDidMismatch,
+    /// Wave 3 provenance: signer kind is not one of `software` | `kms`.
+    #[error("provenance signer kind invalid")]
+    ProvenanceSignerKindInvalid,
+    /// Wave 3 provenance: software signer's `jwk_env` is unset or empty.
+    #[error("provenance jwk_env missing")]
+    ProvenanceJwkEnvMissing,
+    /// Wave 3 provenance: `signing_algorithm` is not EdDSA or ES256.
+    #[error("provenance signing algorithm unsupported")]
+    ProvenanceAlgorithmUnsupported,
+    /// Wave 3 provenance: claim validity is below 1 minute or above 365 days.
+    #[error("provenance claim validity out of range")]
+    ProvenanceClaimValidityOutOfRange,
+    /// Wave 3 provenance: `context_base_url` is not a valid http(s) URL.
+    #[error("provenance context base url invalid")]
+    ProvenanceContextBaseUrlInvalid,
+    /// Wave 3 provenance: `schema_base_url` is not a valid http(s) URL.
+    #[error("provenance schema base url invalid")]
+    ProvenanceSchemaBaseUrlInvalid,
+    /// Wave 3 provenance: `verification_method_id` does not start with the
+    /// configured issuer DID plus a fragment.
+    #[error("provenance verification method mismatch")]
+    ProvenanceVerificationMethodMismatch,
+}
+
+/// `provenance.*` runtime codes. Wave 3.
+#[derive(Debug, Error)]
+pub enum ProvenanceError {
+    /// The signer is configured but unavailable at request time (e.g.
+    /// KMS outage). Surfaces as `503` when `Accept` requested only a
+    /// provenance media type.
+    #[error("provenance signer unavailable")]
+    SignerUnavailable,
+    /// Building the VC payload or compact JWS failed for an internal
+    /// reason. Generic 500 with a stable code; details land in logs.
+    #[error("provenance issuance failed")]
+    IssuanceFailed,
+    /// Requested claim type or version is not registered (used by
+    /// `/schemas/{type}/{version}.json` and contexts route).
+    #[error("provenance unknown claim type or version")]
+    UnknownResource,
+    /// `/.well-known/did.json` is not served in delegated mode.
+    #[error("provenance did document unavailable")]
+    DidDocumentUnavailable,
 }
 
 /// `internal.*` codes.
@@ -218,6 +270,7 @@ impl Error {
             Error::Admin(e) => e.code(),
             Error::Config(e) => e.code(),
             Error::Internal(e) => e.code(),
+            Error::Provenance(e) => e.code(),
         }
     }
 
@@ -239,6 +292,7 @@ impl Error {
             Error::Admin(e) => e.http_status(),
             Error::Config(e) => e.http_status(),
             Error::Internal(e) => e.http_status(),
+            Error::Provenance(e) => e.http_status(),
         }
     }
 
@@ -256,6 +310,7 @@ impl Error {
             Error::Admin(e) => e.title(),
             Error::Config(e) => e.title(),
             Error::Internal(e) => e.title(),
+            Error::Provenance(e) => e.title(),
         }
     }
 
@@ -275,6 +330,7 @@ impl Error {
             Error::Admin(e) => e.detail().to_string(),
             Error::Config(e) => e.detail().to_string(),
             Error::Internal(e) => e.detail().to_string(),
+            Error::Provenance(e) => e.detail().to_string(),
         }
     }
 
@@ -601,6 +657,25 @@ impl ConfigError {
             ConfigError::ValidationError => "config.validation_error",
             ConfigError::MissingSecret => "config.missing_secret",
             ConfigError::DuplicateId => "config.duplicate_id",
+            ConfigError::ProvenanceMissingIssuer => "provenance.config.missing_issuer",
+            ConfigError::ProvenanceIssuerDidMismatch => "provenance.config.issuer_did_mismatch",
+            ConfigError::ProvenanceSignerKindInvalid => "provenance.config.signer_kind_invalid",
+            ConfigError::ProvenanceJwkEnvMissing => "provenance.config.jwk_env_missing",
+            ConfigError::ProvenanceAlgorithmUnsupported => {
+                "provenance.config.algorithm_unsupported"
+            }
+            ConfigError::ProvenanceClaimValidityOutOfRange => {
+                "provenance.config.claim_validity_out_of_range"
+            }
+            ConfigError::ProvenanceContextBaseUrlInvalid => {
+                "provenance.config.context_base_url_invalid"
+            }
+            ConfigError::ProvenanceSchemaBaseUrlInvalid => {
+                "provenance.config.schema_base_url_invalid"
+            }
+            ConfigError::ProvenanceVerificationMethodMismatch => {
+                "provenance.config.verification_method_mismatch"
+            }
         }
     }
 
@@ -617,6 +692,17 @@ impl ConfigError {
             // strings; the stable taxonomy code retains it.
             ConfigError::MissingSecret => "Missing credential hash",
             ConfigError::DuplicateId => "Duplicate identifier",
+            ConfigError::ProvenanceMissingIssuer => "Provenance issuer missing",
+            ConfigError::ProvenanceIssuerDidMismatch => "Provenance issuer DID mismatch",
+            ConfigError::ProvenanceSignerKindInvalid => "Provenance signer kind invalid",
+            ConfigError::ProvenanceJwkEnvMissing => "Provenance signing key unavailable",
+            ConfigError::ProvenanceAlgorithmUnsupported => "Provenance algorithm unsupported",
+            ConfigError::ProvenanceClaimValidityOutOfRange => "Provenance claim validity invalid",
+            ConfigError::ProvenanceContextBaseUrlInvalid => "Provenance context base URL invalid",
+            ConfigError::ProvenanceSchemaBaseUrlInvalid => "Provenance schema base URL invalid",
+            ConfigError::ProvenanceVerificationMethodMismatch => {
+                "Provenance verification method mismatch"
+            }
         }
     }
 
@@ -628,6 +714,80 @@ impl ConfigError {
             ConfigError::ValidationError => "configuration failed cross-field validation",
             ConfigError::MissingSecret => "a required hash environment variable is unset",
             ConfigError::DuplicateId => "two configured ids collide",
+            ConfigError::ProvenanceMissingIssuer => {
+                "provenance is enabled but no issuer block resolved"
+            }
+            ConfigError::ProvenanceIssuerDidMismatch => {
+                "configured issuer DID does not match the deployment host"
+            }
+            ConfigError::ProvenanceSignerKindInvalid => {
+                "signer kind must be one of software or kms"
+            }
+            ConfigError::ProvenanceJwkEnvMissing => {
+                "the signing JWK environment variable is unset or empty"
+            }
+            ConfigError::ProvenanceAlgorithmUnsupported => {
+                "signing_algorithm must be EdDSA or ES256"
+            }
+            ConfigError::ProvenanceClaimValidityOutOfRange => {
+                "claim validity must be between 1 minute and 365 days"
+            }
+            ConfigError::ProvenanceContextBaseUrlInvalid => {
+                "context_base_url must be a syntactically valid http(s) URL"
+            }
+            ConfigError::ProvenanceSchemaBaseUrlInvalid => {
+                "schema_base_url must be a syntactically valid http(s) URL"
+            }
+            ConfigError::ProvenanceVerificationMethodMismatch => {
+                "verification_method_id must be a fragment of the issuer DID"
+            }
+        }
+    }
+}
+
+impl ProvenanceError {
+    fn code(&self) -> &'static str {
+        match self {
+            ProvenanceError::SignerUnavailable => "provenance.signer_unavailable",
+            ProvenanceError::IssuanceFailed => "provenance.issuance_failed",
+            ProvenanceError::UnknownResource => "provenance.unknown_resource",
+            ProvenanceError::DidDocumentUnavailable => "provenance.did_document_unavailable",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            ProvenanceError::SignerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ProvenanceError::IssuanceFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            ProvenanceError::UnknownResource | ProvenanceError::DidDocumentUnavailable => {
+                StatusCode::NOT_FOUND
+            }
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            ProvenanceError::SignerUnavailable => "Signer unavailable",
+            ProvenanceError::IssuanceFailed => "Provenance issuance failed",
+            ProvenanceError::UnknownResource => "Unknown provenance resource",
+            ProvenanceError::DidDocumentUnavailable => "DID document unavailable",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            ProvenanceError::SignerUnavailable => {
+                "the configured signing backend is not currently available"
+            }
+            ProvenanceError::IssuanceFailed => {
+                "the request could not be served as a verifiable credential"
+            }
+            ProvenanceError::UnknownResource => {
+                "no resource is registered for the requested claim type or version"
+            }
+            ProvenanceError::DidDocumentUnavailable => {
+                "this deployment does not host a did:web document"
+            }
         }
     }
 }

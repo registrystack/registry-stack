@@ -11,7 +11,7 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 ## Current Status
 
-V1.0 is release-ready for protected consultation APIs over local CSV, XLSX, and Parquet sources. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
+V1.0 is release-ready for protected consultation APIs over local CSV, XLSX, and Parquet sources. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD includes DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
 
 - `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable` on the admin listener when `server.admin_bind` is configured.
 - Bulk export endpoints are contract-locked for V1.x and are not implemented.
@@ -23,6 +23,7 @@ Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat def
 - [Spec.md](Spec.md): V1 product and architecture contract.
 - [config/example.yaml](config/example.yaml): canonical example config.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
+- [docs/provenance.md](docs/provenance.md): Wave 3 signed Verifiable Credentials guide.
 - [fixtures/](fixtures/): small local files for development and demos.
 - [src/](src/): gateway implementation.
 - [tests/](tests/): focused integration and unit tests.
@@ -183,6 +184,18 @@ docker run --rm -p 8080:8080 \
 ```
 
 For production, mount a deployment-specific config, mount source data read-only, provide API-key hashes through the platform secret store, and choose the audit sink that matches the platform logging model.
+
+## Signed Verifiable Credentials (Wave 3, Opt-In)
+
+The gateway can return W3C Verifiable Credentials (compact JWS) for verify, aggregate, and entity-record responses. The feature is off by default; enable it by adding a `provenance:` block to the config (see [config/example.yaml](config/example.yaml) for the template). Callers opt in per request with:
+
+```http
+Accept: application/vc+jwt
+```
+
+When either side opts out, responses stay byte-for-byte identical to a wave-2 build. Issued VCs carry a `provenance.vc.issued` audit event alongside the regular audit record.
+
+See [docs/provenance.md](docs/provenance.md) for the full wire shape, issuer modes (`gateway`, `delegated`), supporting endpoints (`/.well-known/did.json`, `/schemas/*`, `/contexts/*`), key rotation procedure, and external verification recipe.
 
 ## Operations
 

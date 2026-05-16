@@ -39,7 +39,158 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
+    if let Some(provenance) = &config.provenance {
+        validate_provenance(provenance).map_err(Error::from)?;
+    }
     Ok(())
+}
+
+/// Cross-field validation for Wave 3 provenance configuration.
+///
+/// Mirrors `decisions/wave-3-data-provenance.md` Section 5 verbatim.
+/// When `enabled = false` the block still validates its shape so
+/// operators get fast feedback when they enable it.
+fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), ConfigError> {
+    use super::provenance::{IssuerConfig, SignerConfig};
+
+    // Claim validity windows: 1 minute lower bound, 365 days upper.
+    let min = std::time::Duration::from_secs(60);
+    let max = std::time::Duration::from_secs(60 * 60 * 24 * 365);
+    for (name, value) in [
+        ("verify_result", cfg.claim_validity.verify_result),
+        ("aggregate_result", cfg.claim_validity.aggregate_result),
+        ("entity_record", cfg.claim_validity.entity_record),
+    ] {
+        if value < min || value > max {
+            tracing::error!(
+                code = "provenance.config.claim_validity_out_of_range",
+                claim = %name,
+                "claim_validity.{name} must be between 1m and 365d",
+            );
+            return Err(ConfigError::ProvenanceClaimValidityOutOfRange);
+        }
+    }
+
+    if !is_http_url(&cfg.context_base_url) {
+        tracing::error!(
+            code = "provenance.config.context_base_url_invalid",
+            "context_base_url must be a syntactically valid http(s) URL",
+        );
+        return Err(ConfigError::ProvenanceContextBaseUrlInvalid);
+    }
+    if !is_http_url(&cfg.schema_base_url) {
+        tracing::error!(
+            code = "provenance.config.schema_base_url_invalid",
+            "schema_base_url must be a syntactically valid http(s) URL",
+        );
+        return Err(ConfigError::ProvenanceSchemaBaseUrlInvalid);
+    }
+
+    let (issuer_did, vm_id, signer, _retired) = match &cfg.issuer {
+        IssuerConfig::Gateway(g) => (
+            g.did.as_str(),
+            g.verification_method_id.as_str(),
+            &g.signer,
+            &g.retired_keys,
+        ),
+        IssuerConfig::Delegated(d) => (
+            d.ministry_did.as_str(),
+            d.verification_method_id.as_str(),
+            &d.signer,
+            &d.retired_keys,
+        ),
+    };
+
+    if issuer_did.is_empty() {
+        tracing::error!(
+            code = "provenance.config.missing_issuer",
+            "issuer DID is empty",
+        );
+        return Err(ConfigError::ProvenanceMissingIssuer);
+    }
+    // `verification_method_id` must start with `<did>#`.
+    let prefix = format!("{issuer_did}#");
+    if !vm_id.starts_with(&prefix) {
+        tracing::error!(
+            code = "provenance.config.verification_method_mismatch",
+            "verification_method_id must be a fragment of the issuer DID",
+        );
+        return Err(ConfigError::ProvenanceVerificationMethodMismatch);
+    }
+
+    // Signer-level validation.
+    match signer {
+        SignerConfig::Software(s) => {
+            if !matches!(
+                s.signing_algorithm,
+                super::provenance::ProvenanceAlgorithm::EdDSA
+                    | super::provenance::ProvenanceAlgorithm::ES256
+            ) {
+                tracing::error!(
+                    code = "provenance.config.algorithm_unsupported",
+                    "signing_algorithm must be EdDSA or ES256",
+                );
+                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
+            }
+            // The in-process software signer only ships the EdDSA path
+            // in V1; `SoftwareSigner::from_config` returns a `KeyLoad`
+            // error at sign-time for ES256. Reject the combination
+            // here so operators discover the gap at startup rather
+            // than on the first protected request.
+            if s.signing_algorithm == super::provenance::ProvenanceAlgorithm::ES256 {
+                tracing::error!(
+                    code = "provenance.config.algorithm_unsupported",
+                    "software signer does not yet support ES256; use EdDSA or a KMS-backed signer",
+                );
+                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
+            }
+            // Only require the env var to be present at validation time
+            // when provenance is enabled. With `enabled: false` the env
+            // var may legitimately be absent in non-production.
+            if cfg.enabled {
+                let present = env::var(&s.jwk_env)
+                    .ok()
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false);
+                if !present {
+                    tracing::error!(
+                        code = "provenance.config.jwk_env_missing",
+                        jwk_env = %s.jwk_env,
+                        "software signer jwk_env is unset or empty",
+                    );
+                    return Err(ConfigError::ProvenanceJwkEnvMissing);
+                }
+            }
+        }
+        SignerConfig::Kms(k) => {
+            if !matches!(
+                k.signing_algorithm,
+                super::provenance::ProvenanceAlgorithm::EdDSA
+                    | super::provenance::ProvenanceAlgorithm::ES256
+            ) {
+                tracing::error!(
+                    code = "provenance.config.algorithm_unsupported",
+                    "signing_algorithm must be EdDSA or ES256",
+                );
+                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
+            }
+            if k.key_id.is_empty() {
+                tracing::error!(
+                    code = "provenance.config.signer_kind_invalid",
+                    "kms signer key_id is empty",
+                );
+                return Err(ConfigError::ProvenanceSignerKindInvalid);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_http_url(s: &str) -> bool {
+    // Minimal scheme check. Full URL parsing is out of scope for V1
+    // (no `url` crate dependency).
+    s.starts_with("http://") || s.starts_with("https://")
 }
 
 /// Match `^[a-z][a-z0-9_]*$` without pulling in a regex crate.

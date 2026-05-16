@@ -58,10 +58,10 @@ async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>)
             "resources": snapshot
                 .ready
                 .iter()
-                .map(|((dataset_id, resource_id), ingest_ulid)| json!({
+                .map(|((dataset_id, resource_id), entry)| json!({
                     "dataset_id": dataset_id.as_str(),
                     "resource_id": resource_id.as_str(),
-                    "ingest_ulid": ingest_ulid.to_string(),
+                    "ingest_ulid": entry.ingest_ulid.to_string(),
                 }))
                 .collect::<Vec<_>>()
         }))

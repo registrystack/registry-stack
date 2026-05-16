@@ -59,6 +59,14 @@ pub struct AggregateResult {
     pub computed_at: String,
     pub min_group_size: u32,
     pub suppressed_groups: usize,
+    /// Group-by columns declared for this aggregate. Echoed verbatim
+    /// on the wire so consumers can validate row shape without a
+    /// second roundtrip; required input for the Wave 3
+    /// `AggregateResult` `credentialSubject` builder.
+    pub group_by: Vec<String>,
+    /// Measure names declared for this aggregate. Same rationale as
+    /// `group_by`.
+    pub measures: Vec<String>,
     pub rows: Vec<Value>,
 }
 
@@ -129,6 +137,12 @@ impl AggregateQueryEngine {
                 .map_err(|_| Error::from(AggregateError::ExecutionFailed))?,
             min_group_size: aggregate.disclosure_control.min_group_size,
             suppressed_groups: rows.suppressed_groups,
+            group_by: aggregate.group_by.clone(),
+            measures: aggregate
+                .measures
+                .iter()
+                .map(|measure| measure.name.clone())
+                .collect(),
             rows: rows.rows,
         })
     }

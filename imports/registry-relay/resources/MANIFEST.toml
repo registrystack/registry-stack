@@ -1,0 +1,33 @@
+# Wave 3 provenance resources manifest.
+#
+# Pinned SHA-256 of every shipped resource the gateway serves under the
+# unauthenticated `/contexts/...` and `/schemas/...` routes (and the
+# vendored W3C VC v2 context). The test suite re-hashes each file and
+# asserts equality, so any unreviewed edit fails CI before reaching
+# production. The hash space is `decisions/wave-3-data-provenance.md`
+# section §10 (resources).
+
+[[resource]]
+path = "jsonld/provenance/v1/context.jsonld"
+sha256 = "584822ba513147086ea8b9196c7dc799df806451b5b4aa4989971c7615956e5d"
+served_as = "context"
+
+[[resource]]
+path = "jsonld/vc/v2/credentials.jsonld"
+sha256 = "0f3f6806198ec8436cc9d6604ddf17e21890f158a91f55fe6d7e38bb7c2df549"
+served_as = "vendored"
+
+[[resource]]
+path = "schemas/verify-result/v1.json"
+sha256 = "6d8783eba90d07a7680a60393aed3131c6d22e919469d9cb71029f939661cbe7"
+served_as = "schema"
+
+[[resource]]
+path = "schemas/aggregate-result/v1.json"
+sha256 = "773ea71046d5d0f5bcd7ee6b493a0e19e6043fdae37a886705bc0a2640656d69"
+served_as = "schema"
+
+[[resource]]
+path = "schemas/entity-record/v1.json"
+sha256 = "f79d01f70b098b8972512cb8b6228aa8a6a78549c9100e6829bf7fa58c9d8932"
+served_as = "schema"

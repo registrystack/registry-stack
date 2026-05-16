@@ -91,6 +91,28 @@ Live keyring reload is not wired in V1. Treat key rotation as a rolling restart 
 
 Never log raw keys, PHC strings, or full environment dumps. In issue reports, include only key ids and scope names.
 
+## Provenance Signer Rotation
+
+The Wave 3 provenance feature (signed Verifiable Credentials, see [docs/provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
+
+The signing key never lives in YAML. It is injected through the env var named by `provenance.issuer.signer.jwk_env`, holding a JSON-encoded private JWK. The public half goes in the DID Document; the private half stays in the secret store.
+
+Rotation procedure (gateway mode):
+
+1. Mint a new keypair matching `signing_algorithm` (Ed25519 for `EdDSA`, P-256 for `ES256`). Store the new private JWK in the deployment secret store.
+2. Add the new public JWK to the DID Document under a new `verificationMethod` id (e.g. `did:web:data.example.gov#issuance-2026q3`).
+3. Move the currently active verification method to `provenance.issuer.retired_keys[]`, recording the `retired_after` RFC 3339 timestamp and the public JWK in its own env var.
+4. Update `verification_method_id` to the new id and point `signer.jwk_env` at the new env var.
+5. Roll the gateway. The keyring loads at process start, so rotation is a rolling-restart operation.
+6. Confirm the new VCs verify with the new public JWK and that previously issued VCs (still inside their validity window) verify against the retired entry.
+7. Once the longest applicable `claim_validity` window has elapsed since `retired_after`, drop the retired entry from config and remove the public JWK from the DID Document on the next deploy.
+
+Delegated mode follows the same steps, except the DID Document edits land on the ministry's side. Coordinate the cutover so the ministry publishes the new `verificationMethod` before the gateway starts signing with the corresponding private key.
+
+KMS-backed signing (`signer.kind: kms`) is a config-recognized stub in V1: the in-tree backend is a mock. Do not enable `provider: aws_kms` in production until the KMS wave lands; validation currently treats AWS KMS as a config error outside the test path.
+
+Never log the JWK, the env var value, or any full environment dump. The provenance audit block intentionally records only `iss`, `kid`, `jti`, `claim_type`, `subject`, and the `iat`/`nbf`/`exp` triple, not the signed body or any signing material.
+
 ## Audit Sink And Rotation
 
 Audit records are JSON Lines and are separate from operational logs. Operational logs go to stderr as structured JSON.
@@ -196,6 +218,13 @@ Audit records missing:
 - Confirm `audit.include_health` if expecting health and ready records.
 - For `audit.sink: file`, confirm the parent directory exists or can be created by the `data_gate` user.
 - For `audit.sink: syslog`, confirm the host exposes the expected Unix datagram socket (`/var/run/syslog` on macOS, `/dev/log` on other Unix platforms).
+
+Caller expected a signed VC but received plain JSON:
+
+- Confirm the request `Accept` header lists one of `provenance.accepted_media_types` (default `application/vc+jwt` or `application/jwt`).
+- Confirm `provenance.enabled: true` in the loaded config and that the process was restarted after the config change.
+- Confirm the env var named by `provenance.issuer.signer.jwk_env` is set and holds a valid JWK; a missing or malformed JWK fails the signer at startup, not at request time.
+- For `mode: delegated`, confirm the ministry's DID Document publishes the gateway's `verification_method_id`.
 
 Admin reload unavailable:
 

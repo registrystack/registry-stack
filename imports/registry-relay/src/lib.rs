@@ -17,6 +17,7 @@ pub mod error; // Wave 0 Track 3
 pub mod format; // Wave 1 Tracks 2-4 (CSV / XLSX / Parquet decoders)
 pub mod ingest; // Wave 1 Tracks 5-6 (validation, cache, refresh, registry)
 pub mod metadata; // Wave 3 entity-grain catalog / SHACL
+pub mod provenance; // Wave 3 data provenance (signed claims)
 pub mod query; // Wave 2 query layer
 pub mod server; // Wave 0 Track 6
 pub mod source; // Wave 1 Track 1 (byte producers)

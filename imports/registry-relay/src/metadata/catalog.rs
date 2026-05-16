@@ -17,6 +17,7 @@ pub struct CatalogDocument {
     pub title: String,
     pub publisher: String,
     pub base_url: String,
+    pub participant_id: String,
     pub links: CatalogLinks,
     pub datasets: Vec<DatasetMetadata>,
 }
@@ -146,6 +147,11 @@ fn catalog_document_with_entity_filter(
         title: config.catalog.title.clone(),
         publisher: config.catalog.publisher.clone(),
         base_url: base_url.clone(),
+        participant_id: config
+            .catalog
+            .participant_id
+            .clone()
+            .unwrap_or_else(|| base_url.clone()),
         links: CatalogLinks {
             self_url: format!("{base_url}/catalog"),
             dcat_ap: format!("{base_url}/catalog/dcat-ap.jsonld"),

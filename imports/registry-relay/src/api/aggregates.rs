@@ -4,18 +4,22 @@
 use std::sync::Arc;
 
 use axum::extract::Path;
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
 use serde::Deserialize;
 use serde_json::json;
 
+use tokio::sync::watch;
+
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
+use crate::config::Config;
 use crate::entity::{EntityModel, EntityRegistry};
 use crate::error::{AuthError, Error, SchemaError};
+use crate::ingest::ReadinessSnapshot;
 use crate::query::{AggregateQueryEngine, AggregateResult};
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
@@ -105,11 +109,16 @@ async fn list_aggregates(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_aggregate(
     Path(path): Path<AggregateRunPath>,
+    headers: HeaderMap,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    config: Option<Extension<Arc<Config>>>,
+    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
+    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
 ) -> Response {
     let audit_context = registry.as_ref().and_then(|Extension(registry)| {
         audit_context_for_aggregate(registry, &path.dataset_id, &path.entity, &path.aggregate_id)
@@ -140,7 +149,45 @@ async fn execute_aggregate(
         Ok(result) => {
             let row_count = result.rows.len() as u64;
             let suppressed_groups = result.suppressed_groups as u64;
-            let mut response = Json(aggregate_result_json(result)).into_response();
+            // `asOf` is the ingest-time freshness of the underlying
+            // resource: when the ready snapshot for this table became
+            // visible. `computedAt` is when the handler ran the query.
+            // The two values are produced at different points in time;
+            // collapsing them hides freshness information from VC
+            // consumers. We resolve `asOf` from the readiness watch
+            // (entity.table_id == ResourceId) and fall back to
+            // `computed_at` only when readiness is not installed (e.g.
+            // tests that exercise just the route, no ingest gate).
+            let registry_ref = registry.as_ref().map(|Extension(r)| r);
+            let readiness_ref = readiness.as_ref().map(|Extension(r)| r);
+            let as_of_rfc3339 = resolve_as_of_rfc3339(
+                registry_ref,
+                readiness_ref,
+                &path.dataset_id,
+                &path.entity,
+                &result.computed_at,
+            );
+            let plain_response = Json(aggregate_result_json(&result)).into_response();
+            let provenance_state = provenance.as_ref().map(|Extension(state)| state);
+            let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
+            let mut response = crate::api::provenance_issuance::maybe_issue_aggregate_result(
+                provenance_state,
+                config_ref,
+                &headers,
+                plain_response,
+                crate::api::provenance_issuance::AggregateIssuanceArgs {
+                    dataset: &path.dataset_id,
+                    entity: &path.entity,
+                    aggregate_id: &path.aggregate_id,
+                    group_by: result.group_by.clone(),
+                    measures: result.measures.clone(),
+                    rows: result.rows.clone(),
+                    suppressed_groups,
+                    min_group_size: u64::from(result.min_group_size),
+                    computed_at_rfc3339: result.computed_at.clone(),
+                    as_of_rfc3339,
+                },
+            );
             if let Some(mut context) = audit_context {
                 context.row_count = Some(row_count);
                 context.suppressed_groups = Some(suppressed_groups);
@@ -152,7 +199,55 @@ async fn execute_aggregate(
     }
 }
 
-fn aggregate_result_json(result: AggregateResult) -> serde_json::Value {
+/// Resolve the VC `asOf` claim from the ingest readiness snapshot for
+/// the resource that backs `(dataset, entity)`. When the readiness
+/// watch is not installed, when the entity is unknown, or when the
+/// resource has not yet shown up in the ready map, we fall back to the
+/// handler's `computed_at` so the issuer never serves an empty
+/// timestamp.
+fn resolve_as_of_rfc3339(
+    registry: Option<&Arc<EntityRegistry>>,
+    readiness: Option<&watch::Receiver<ReadinessSnapshot>>,
+    dataset_id: &str,
+    entity_name: &str,
+    fallback_rfc3339: &str,
+) -> String {
+    let Some(registry) = registry else {
+        return fallback_rfc3339.to_string();
+    };
+    let Some(readiness) = readiness else {
+        return fallback_rfc3339.to_string();
+    };
+    let Some(dataset) = registry.dataset(dataset_id) else {
+        return fallback_rfc3339.to_string();
+    };
+    let Some(entity) = dataset.entity(entity_name) else {
+        return fallback_rfc3339.to_string();
+    };
+    let Some(dataset_key) = id_from_str::<crate::config::DatasetId>(dataset_id) else {
+        return fallback_rfc3339.to_string();
+    };
+    let Some(resource_key) = id_from_str::<crate::config::ResourceId>(&entity.table_id) else {
+        return fallback_rfc3339.to_string();
+    };
+    let snapshot = readiness.borrow();
+    let Some(entry) = snapshot.ready.get(&(dataset_key, resource_key)) else {
+        return fallback_rfc3339.to_string();
+    };
+    entry
+        .registered_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| fallback_rfc3339.to_string())
+}
+
+fn id_from_str<T>(value: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(&format!(r#""{value}""#)).ok()
+}
+
+fn aggregate_result_json(result: &AggregateResult) -> serde_json::Value {
     json!({
         "dataset_id": result.dataset_id,
         "entity": result.entity,

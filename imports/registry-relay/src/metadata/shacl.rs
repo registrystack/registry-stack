@@ -61,6 +61,7 @@ fn dcat_ap_document_from_catalog(catalog: super::catalog::CatalogDocument) -> Va
         "@context": context(),
         "@id": catalog.links.dcat_ap,
         "@type": "dcat:Catalog",
+        "dspace:participantId": catalog.participant_id,
         "dcterms:title": catalog.title,
         "dcterms:publisher": publisher_agent(&catalog.publisher),
         "dcat:dataset": datasets,
@@ -119,11 +120,26 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
         .entities
         .iter()
         .map(|entity| {
+            let access_service = format!("{}#data-service", entity.links.collection);
             json!({
                 "@id": entity.links.collection,
                 "@type": "dcat:Distribution",
                 "dcterms:title": entity.title.as_deref().unwrap_or(entity.name.as_str()),
+                "dct:format": {
+                    "@id": "data_gate:HttpData-PULL",
+                },
                 "dcat:accessURL": entity.links.collection,
+                "dcat:accessService": {
+                    "@id": access_service,
+                    "@type": "dcat:DataService",
+                    "dcterms:title": format!(
+                        "{} REST access service",
+                        entity.title.as_deref().unwrap_or(entity.name.as_str())
+                    ),
+                    "dspace:dataServiceType": "data_gate:entity-rest",
+                    "dcat:endpointURL": entity.links.collection,
+                    "dcterms:conformsTo": entity.links.schema,
+                },
                 "dcterms:conformsTo": entity.links.schema,
             })
         })
@@ -140,7 +156,20 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
         "dcterms:accessRights": access_rights_uri(dataset.access_rights),
         "dcterms:accrualPeriodicity": frequency_uri(dataset.update_frequency),
         "dcterms:conformsTo": dataset.conforms_to,
+        "odrl:hasPolicy": dataset_offer(dataset),
         "dcat:distribution": distributions,
+    })
+}
+
+fn dataset_offer(dataset: &DatasetMetadata) -> Value {
+    json!({
+        "@id": format!("{}#offer", dataset.links.self_url),
+        "@type": "odrl:Offer",
+        "odrl:permission": [{
+            "odrl:action": {
+                "@id": "odrl:use",
+            },
+        }],
     })
 }
 
@@ -303,16 +332,24 @@ fn frequency_uri(frequency: &str) -> &'static str {
 fn context() -> Value {
     json!({
         "dcat": "http://www.w3.org/ns/dcat#",
+        "dct": "http://purl.org/dc/terms/",
         "dcterms": "http://purl.org/dc/terms/",
+        "dspace": "https://w3id.org/dspace/2025/1/",
         "foaf": "http://xmlns.com/foaf/0.1/",
+        "odrl": "http://www.w3.org/ns/odrl/2/",
         "sh": "http://www.w3.org/ns/shacl#",
         "data_gate": "https://data-gate.dev/ns#",
         "dcat:accessURL": { "@type": "@id" },
+        "dcat:accessService": { "@type": "@id" },
         "dcat:distribution": { "@type": "@id" },
+        "dcat:endpointURL": { "@type": "@id" },
+        "dct:format": { "@type": "@id" },
         "dcterms:accessRights": { "@type": "@id" },
         "dcterms:accrualPeriodicity": { "@type": "@id" },
         "dcterms:conformsTo": { "@type": "@id" },
         "dcterms:isPartOf": { "@type": "@id" },
+        "odrl:action": { "@type": "@id" },
+        "odrl:hasPolicy": { "@type": "@id" },
         "sh:class": { "@type": "@id" },
         "sh:path": { "@type": "@id" },
         "sh:targetClass": { "@type": "@id" },

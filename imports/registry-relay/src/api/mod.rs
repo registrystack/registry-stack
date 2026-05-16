@@ -14,16 +14,23 @@
 pub mod admin;
 pub mod aggregates;
 pub mod catalog;
+pub mod contexts;
 pub mod datasets;
+pub mod did;
 pub mod entity;
 pub mod health;
 pub mod openapi;
+pub(crate) mod provenance_issuance;
+pub mod schemas;
 
 pub use admin::router as admin_router;
 pub use aggregates::router as aggregates_router;
 pub use catalog::router as catalog_router;
+pub use contexts::router as contexts_router;
 pub use datasets::router as datasets_router;
+pub use did::router as did_router;
 pub use entity::router as entity_router;
 pub use entity::CursorSigner;
 pub use health::router as health_router;
 pub use openapi::router as openapi_router;
+pub use schemas::router as schemas_router;

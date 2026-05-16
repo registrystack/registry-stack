@@ -25,3 +25,9 @@ demo/var/
 # IDE directories
 .idea/
 .vscode/
+
+# Claude Code local state (worktrees, scratch)
+.claude/
+
+# Runtime dataset caches
+cache/

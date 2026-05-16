@@ -9,6 +9,7 @@ catalog:
   title: Internal Government Data Gateway
   base_url: https://data.example.gov
   publisher: Ministry of Digital Government
+  participant_id: did:web:data.example.gov
 
 vocabularies:
   # optional prefix registry, used to shorten URIs in the rest of the config
@@ -226,3 +227,41 @@ audit:
   sink: stdout            # stdout | file | syslog
   format: jsonl
   # path: /var/log/data_gate/audit.jsonl   # when sink == file
+
+# Wave 3: Data Provenance (signed Verifiable Credentials).
+#
+# When `enabled: false` (or the whole `provenance:` block is omitted),
+# wave-3 stays invisible: no Accept negotiation, no signing, no extra
+# audit events. Responses are byte-for-byte identical to a wave-2 build.
+#
+# Opting in requires a signer (`software` for dev, `kms` for production
+# once the KMS backend lands) and an issuer DID. Two issuer modes:
+#
+# * `gateway`: data_gate self-issues under its own DID and hosts
+#   `/.well-known/did.json`.
+# * `delegated`: data_gate signs under a ministry's DID. The ministry
+#   hosts its own DID Document including the gateway's `kid`. data_gate
+#   does NOT publish `/.well-known/did.json` in this mode.
+#
+# See `docs/provenance.md` for the full operational contract.
+#
+# provenance:
+#   enabled: false
+#   accepted_media_types:
+#     - application/vc+jwt
+#     - application/jwt
+#   schema_base_url: https://data.example.gov/schemas
+#   context_base_url: https://data.example.gov/contexts
+#   claim_validity:
+#     verify_result:    5m    # short, since callers re-verify cheaply
+#     aggregate_result: 1h    # tune to dataset refresh cadence
+#     entity_record:    24h   # tune to consumer caching window
+#   issuer:
+#     mode: gateway
+#     did: did:web:data.example.gov
+#     verification_method_id: did:web:data.example.gov#issuance
+#     signer:
+#       kind: software
+#       jwk_env: DATAGATE_PROVENANCE_JWK   # private JWK (JSON), never logged
+#       signing_algorithm: EdDSA           # EdDSA | ES256
+#     retired_keys: []                     # public JWKs of rotated-out keys

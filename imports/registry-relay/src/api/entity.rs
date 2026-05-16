@@ -362,6 +362,7 @@ async fn entity_collection(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn entity_verify(
     Path(path): Path<EntityPath>,
     RawQuery(raw_query): RawQuery,
@@ -370,6 +371,8 @@ async fn entity_verify(
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    config: Option<Extension<Arc<Config>>>,
+    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
 ) -> Response {
     let audit_context = registry
         .as_ref()
@@ -421,21 +424,41 @@ async fn entity_verify(
                 result.ingest_version.as_deref(),
                 &primary_key,
             );
-            let response = if let Some(etag) = etag.as_deref() {
+            let plain_response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
                 } else {
-                    with_etag(Json(body).into_response(), etag)
+                    with_etag(Json(&body).into_response(), etag)
                 }
             } else {
-                Json(body).into_response()
+                Json(&body).into_response()
             };
+            // Wave 3: opt-in signed VC. When the caller asked for one
+            // (and provenance is enabled), the helper replaces the
+            // plain-JSON response with a compact JWS body and attaches
+            // the audit extension. Otherwise the plain wave-2 response
+            // flows through byte-for-byte (D6 / D11).
+            let provenance_state = provenance.as_ref().map(|Extension(state)| state);
+            let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
+            let response = crate::api::provenance_issuance::maybe_issue_verify_result(
+                provenance_state,
+                config_ref,
+                &headers,
+                plain_response,
+                &path.dataset_id,
+                &path.entity,
+                &primary_key,
+                "exists",
+                json!(body.exists),
+                crate::api::provenance_issuance::now_rfc3339(),
+            );
             with_optional_audit_context(response, audit_context)
         }
         Err(error) => error.into_response(),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn entity_record(
     Path(path): Path<EntityRecordPath>,
     Query(params): Query<HashMap<String, String>>,
@@ -444,6 +467,8 @@ async fn entity_record(
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    config: Option<Extension<Arc<Config>>>,
+    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
 ) -> Response {
     let audit_context = registry.as_ref().and_then(|Extension(registry)| {
         audit_context_for_entity_record(registry, &path.dataset_id, &path.entity)
@@ -486,6 +511,10 @@ async fn entity_record(
         Ok(query_params) => query_params,
         Err(error) => return error.into_response(),
     };
+    // Preserve the expansion list locally so the provenance helper can
+    // partition the record into `{fields, expanded}` later. The wave-2
+    // path consumes `query_params.expansions` so we clone first.
+    let expansions_for_vc = query_params.expansions.clone();
     match query
         .read_record(
             &path.dataset_id,
@@ -504,15 +533,29 @@ async fn entity_record(
                 record.validator_ingest_version.as_deref(),
                 &validator,
             );
-            let mut response = if let Some(etag) = etag.as_deref() {
+            let plain_response = if let Some(etag) = etag.as_deref() {
                 if if_none_match_matches(&headers, etag) {
                     not_modified_response(etag)
                 } else {
-                    with_etag(Json(record.value).into_response(), etag)
+                    with_etag(Json(record.value.clone()).into_response(), etag)
                 }
             } else {
-                Json(record.value).into_response()
+                Json(record.value.clone()).into_response()
             };
+            let provenance_state = provenance.as_ref().map(|Extension(state)| state);
+            let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
+            let mut response = crate::api::provenance_issuance::maybe_issue_entity_record(
+                provenance_state,
+                config_ref,
+                &headers,
+                plain_response,
+                &path.dataset_id,
+                &path.entity,
+                &path.id,
+                record.value,
+                expansions_for_vc,
+                crate::api::provenance_issuance::now_rfc3339(),
+            );
             if let Some(mut context) = audit_context {
                 context.row_count = Some(1);
                 response = with_audit_context(response, context);
@@ -1288,7 +1331,7 @@ fn ingest_version_for_entity(
         .borrow()
         .ready
         .get(&(dataset, resource))
-        .map(ToString::to_string)
+        .map(|entry| entry.ingest_ulid.to_string())
 }
 
 fn id_from_str<T>(value: &str) -> Option<T>

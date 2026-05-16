@@ -25,10 +25,16 @@ use std::time::Duration;
 use serde::Deserialize;
 
 pub mod loader;
+pub mod provenance;
 pub mod validate;
 pub mod vocabularies;
 
 pub use loader::load;
+pub use provenance::{
+    ClaimValidity, DelegatedIssuerConfig, GatewayIssuerConfig, IssuerConfig, KmsProvider,
+    KmsSignerConfig, ProvenanceAlgorithm, ProvenanceConfig, RetiredKeyConfig, SignerConfig,
+    SoftwareSignerConfig,
+};
 
 /// Root configuration document. Parsed from YAML at startup.
 #[derive(Debug, Clone, Deserialize)]
@@ -41,6 +47,10 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub datasets: Vec<DatasetConfig>,
+    /// Wave 3 data-provenance configuration. Optional and disabled by
+    /// default: existing deployments load unchanged.
+    #[serde(default)]
+    pub provenance: Option<ProvenanceConfig>,
 }
 
 /// HTTP listener and adjacent server-wide knobs.
@@ -107,6 +117,8 @@ pub struct CatalogConfig {
     pub title: String,
     pub base_url: String,
     pub publisher: String,
+    #[serde(default)]
+    pub participant_id: Option<String>,
 }
 
 /// Authentication configuration. V1 supports api_key only.

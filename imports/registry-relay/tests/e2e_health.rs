@@ -36,7 +36,7 @@ use data_gate::audit::{AuditSink, InMemorySink};
 use data_gate::auth::api_key::ApiKeyAuth;
 use data_gate::config::{Config, DatasetId, ResourceId};
 use data_gate::format::FormatRegistry;
-use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
+use data_gate::ingest::{IngestRegistry, ReadinessSnapshot, ReadyResource};
 use data_gate::server::{build_admin_app, build_app, build_app_with_readiness};
 use datafusion::execution::context::SessionContext;
 use serde_json::Value;
@@ -171,7 +171,10 @@ async fn ready_returns_200_when_all_resources_registered() {
     let mut snapshot = ReadinessSnapshot::default();
     snapshot.ready.insert(
         (dataset, resource),
-        Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
+        ReadyResource {
+            ingest_ulid: Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
     );
 
     let server = TestServer::new(build_test_app_with_readiness(snapshot));

@@ -92,6 +92,7 @@ mod tests {
             suppressed_groups: None,
             duration_ms: 1,
             error_code: None,
+            provenance: None,
         }
     }
 

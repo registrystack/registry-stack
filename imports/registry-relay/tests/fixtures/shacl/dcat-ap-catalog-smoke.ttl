@@ -1,6 +1,8 @@
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix dspace: <https://w3id.org/dspace/2025/1/> .
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix odrl: <http://www.w3.org/ns/odrl/2/> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
 <https://data-gate.dev/shapes/DcatCatalogSmokeShape>
@@ -8,6 +10,11 @@
     sh:targetClass dcat:Catalog ;
     sh:property [
         sh:path dcterms:title ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path dspace:participantId ;
         sh:minCount 1 ;
         sh:nodeKind sh:Literal ;
     ] ;
@@ -54,6 +61,11 @@
         sh:path dcat:distribution ;
         sh:minCount 1 ;
         sh:class dcat:Distribution ;
+    ] ;
+    sh:property [
+        sh:path odrl:hasPolicy ;
+        sh:minCount 1 ;
+        sh:class odrl:Offer ;
     ] .
 
 <https://data-gate.dev/shapes/DcatDistributionSmokeShape>
@@ -65,14 +77,46 @@
         sh:nodeKind sh:Literal ;
     ] ;
     sh:property [
+        sh:path dcterms:format ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
         sh:path dcat:accessURL ;
         sh:minCount 1 ;
         sh:nodeKind sh:IRI ;
     ] ;
     sh:property [
+        sh:path dcat:accessService ;
+        sh:minCount 1 ;
+        sh:class dcat:DataService ;
+    ] ;
+    sh:property [
         sh:path dcterms:conformsTo ;
         sh:minCount 1 ;
         sh:nodeKind sh:IRI ;
+    ] .
+
+<https://data-gate.dev/shapes/DcatDataServiceSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:DataService ;
+    sh:property [
+        sh:path dcat:endpointURL ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path dspace:dataServiceType ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] .
+
+<https://data-gate.dev/shapes/OdrlOfferSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass odrl:Offer ;
+    sh:property [
+        sh:path odrl:permission ;
+        sh:minCount 1 ;
     ] .
 
 <https://data-gate.dev/shapes/EmbeddedNodeShapeSmokeShape>
