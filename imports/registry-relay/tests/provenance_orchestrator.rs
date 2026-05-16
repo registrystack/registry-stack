@@ -16,15 +16,15 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
-use data_gate::provenance::jwt_vc::ClaimType;
-use data_gate::provenance::signers::software::SoftwareSigner;
-use data_gate::provenance::{
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
+use rand_core::OsRng;
+use registry_relay::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
+use registry_relay::provenance::jwt_vc::ClaimType;
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{
     IssuanceContext, IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig,
     ResolvedUrls, Signer,
 };
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
-use rand_core::OsRng;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 

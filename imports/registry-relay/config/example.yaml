@@ -6,7 +6,7 @@ server:
   bind: 0.0.0.0:8080
 
 catalog:
-  title: Internal Government Data Gateway
+  title: Internal Government Registry Relay
   base_url: https://data.example.gov
   publisher: Ministry of Digital Government
   participant_id: did:web:data.example.gov
@@ -226,7 +226,7 @@ datasets:
 audit:
   sink: stdout            # stdout | file | syslog
   format: jsonl
-  # path: /var/log/data_gate/audit.jsonl   # when sink == file
+  # path: /var/log/registry-relay/audit.jsonl   # when sink == file
 
 # Data provenance (signed Verifiable Credentials).
 #
@@ -237,10 +237,10 @@ audit:
 # Opting in requires a signer (`software` for dev, `kms` for production
 # once the KMS backend lands) and an issuer DID. Two issuer modes:
 #
-# * `gateway`: data_gate self-issues under its own DID and hosts
+# * `gateway`: registry-relay self-issues under its own DID and hosts
 #   `/.well-known/did.json`.
-# * `delegated`: data_gate signs under a ministry's DID. The ministry
-#   hosts its own DID Document including the gateway's `kid`. data_gate
+# * `delegated`: registry-relay signs under a ministry's DID. The ministry
+#   hosts its own DID Document including the gateway's `kid`. registry-relay
 #   does NOT publish `/.well-known/did.json` in this mode.
 #
 # See `docs/provenance.md` for the full operational contract.
@@ -262,6 +262,6 @@ audit:
 #     verification_method_id: did:web:data.example.gov#issuance
 #     signer:
 #       kind: software
-#       jwk_env: DATAGATE_PROVENANCE_JWK   # private JWK (JSON), never logged
+#       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK   # private JWK (JSON), never logged
 #       signing_algorithm: EdDSA           # EdDSA | ES256
 #     retired_keys: []                     # public JWKs of rotated-out keys

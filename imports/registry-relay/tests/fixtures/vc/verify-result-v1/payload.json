@@ -1,0 +1,30 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://fixture.example/contexts/provenance/v1.jsonld"
+  ],
+  "type": ["VerifiableCredential", "VerifyResult"],
+  "id": "urn:uuid:11111111-1111-4111-8111-111111111111",
+  "issuer": "did:web:fixture.example",
+  "validFrom": "2026-05-16T09:30:00Z",
+  "validUntil": "2026-05-16T09:35:00Z",
+  "credentialSchema": {
+    "id": "https://fixture.example/schemas/verify-result/v1.json",
+    "type": "JsonSchema"
+  },
+  "credentialSubject": {
+    "id": "https://fixture.example/datasets/social_registry/individual/ind-1",
+    "dataset": "social_registry",
+    "entity": "individual",
+    "subjectId": "ind-1",
+    "predicate": "exists",
+    "value": true,
+    "asOf": "2026-05-16T09:30:00Z"
+  },
+  "iss": "did:web:fixture.example",
+  "sub": "https://fixture.example/datasets/social_registry/individual/ind-1",
+  "iat": 1778923800,
+  "nbf": 1778923800,
+  "exp": 1778924100,
+  "jti": "urn:uuid:11111111-1111-4111-8111-111111111111"
+}

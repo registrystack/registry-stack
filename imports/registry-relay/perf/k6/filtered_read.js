@@ -14,7 +14,7 @@
 //     - field: category,    ops: [eq, in]
 //
 // This scenario uses ?region_code=R001 (eq) as the primary filter.
-// DATA_GATE_FILTER_FIELD and DATA_GATE_FILTER_VALUE can override at runtime.
+// REGISTRY_RELAY_FILTER_FIELD and REGISTRY_RELAY_FILTER_VALUE can override at runtime.
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -29,8 +29,8 @@ import {
   logScenarioStart,
 } from './lib/common.js';
 
-const filterField = __ENV.DATA_GATE_FILTER_FIELD || 'region_code';
-const filterValue = __ENV.DATA_GATE_FILTER_VALUE || 'R001';
+const filterField = __ENV.REGISTRY_RELAY_FILTER_FIELD || 'region_code';
+const filterValue = __ENV.REGISTRY_RELAY_FILTER_VALUE || 'R001';
 
 export const options = commonOptions({
   scenario: 'filtered_read',

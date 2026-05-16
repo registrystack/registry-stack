@@ -8,8 +8,8 @@
 use axum::body::to_bytes;
 use axum::http::{self, StatusCode};
 use axum::response::IntoResponse;
-use data_gate::audit::ErrorCodeExt;
-use data_gate::error::{
+use registry_relay::audit::ErrorCodeExt;
+use registry_relay::error::{
     AdminError, AggregateError, AuthError, ConfigError, Error, FilterError, IngestError,
     InternalError, SchemaError,
 };

@@ -1,7 +1,0 @@
-interface:
-  display_name: "Data Gate Config Author"
-  short_description: "Author safe data_gate V1 YAML configs"
-  default_prompt: "Use $data-gate-config-author to configure a data_gate V1 dataset from my tabular source."
-
-policy:
-  allow_implicit_invocation: true

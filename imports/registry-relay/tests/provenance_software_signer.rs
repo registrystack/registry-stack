@@ -11,11 +11,11 @@ use std::env;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
-use data_gate::provenance::signers::software::SoftwareSigner;
-use data_gate::provenance::{Signer, SignerError, SigningAlgorithm};
 use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
+use registry_relay::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{Signer, SignerError, SigningAlgorithm};
 use serde_json::json;
 
 fn export_jwk(env_name: &str) -> (SigningKey, VerifyingKey) {

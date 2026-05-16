@@ -5,10 +5,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use data_gate::config::{self, DatasetId, ResourceId};
-use data_gate::format::FormatRegistry;
-use data_gate::ingest::{table_name, IngestRegistry, ReadinessSnapshot};
 use datafusion::execution::context::SessionContext;
+use registry_relay::config::{self, DatasetId, ResourceId};
+use registry_relay::format::FormatRegistry;
+use registry_relay::ingest::{table_name, IngestRegistry, ReadinessSnapshot};
 use tempfile::TempDir;
 use tokio::sync::watch;
 

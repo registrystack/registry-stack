@@ -23,9 +23,9 @@ use datafusion::parquet::arrow::AsyncArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use futures::TryStreamExt as _;
 
-use data_gate::format::parquet::ParquetFormat;
-use data_gate::format::{DecodedStream, Format, FormatError, FormatHints};
-use data_gate::ingest::declared_schema::DeclaredSchema;
+use registry_relay::format::parquet::ParquetFormat;
+use registry_relay::format::{DecodedStream, Format, FormatError, FormatHints};
+use registry_relay::ingest::declared_schema::DeclaredSchema;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.0 - 2026-05-15
+## 0.1.0 - 2026-05-16
 
-Initial V1 release of `data_gate`, a controlled, read-only data gateway for publishing protected, entity-shaped APIs over local CSV, XLSX, and Parquet sources.
+Initial V1 release of `registry-relay`, a controlled, read-only registry relay for publishing protected, entity-shaped APIs over local CSV, XLSX, and Parquet sources.
 
 ### Included
 
@@ -17,5 +17,5 @@ Initial V1 release of `data_gate`, a controlled, read-only data gateway for publ
 ### Deferred
 
 - Registry-wide `POST /admin/reload` remains reserved and returns `501 admin.reload_unavailable`.
-- Bulk export endpoints are contract-locked for V1.x and are not implemented in 1.0.0.
+- Bulk export endpoints are contract-locked for V1.x and are not implemented in 0.1.0.
 - Remaining hardening work is tracked through normal issues and release planning, not shipped review notes.

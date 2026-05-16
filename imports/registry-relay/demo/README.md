@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# data_gate demo pack
+# registry-relay demo pack
 
-Five synthetic government datasets that show `data_gate` as a controlled data
+Five synthetic government datasets that show `registry-relay` as a controlled data
 reuse gateway: per-persona scopes, purpose-tagged reads, disclosure-controlled
 aggregates, and cross-dataset composition that stays client-side and audited.
 
@@ -104,9 +104,9 @@ This writes two files in one go (both gitignored):
 - `demo/.env.local` with `export <PERSONA>_HASH` and `export <PERSONA>_RAW`
   lines per persona. The `_HASH` values feed each config's `hash_env:` fields;
   the `_RAW` values are what Bruno sends as `Bearer` tokens.
-- `bruno/data_gate_demo/.env` with one `<PERSONA>_RAW=<value>` per persona,
+- `bruno/registry-relay-demo/.env` with one `<PERSONA>_RAW=<value>` per persona,
   read by Bruno at collection load. The Bruno environment file at
-  `bruno/data_gate_demo/environments/local.bru` references these via
+  `bruno/registry-relay-demo/environments/local.bru` references these via
   `{{process.env.<NAME>}}`, so no raw keys are ever stored in the
   committed `local.bru` file.
 
@@ -126,7 +126,7 @@ broken output never reaches a config or environment file.
 After rotation, Bruno needs to re-read its collection `.env`. The simplest
 way is to close and reopen the collection in the Bruno UI (right-click the
 collection → close, then File → Open Collection → pick
-`bruno/data_gate_demo/`), or restart Bruno.
+`bruno/registry-relay-demo/`), or restart Bruno.
 
 ## Running a local server
 
@@ -147,7 +147,7 @@ cargo run -- --config demo/config/all_demos.yaml
 You can also point to a config via env var instead of `--config`:
 
 ```bash
-export DATAGATE_CONFIG=demo/config/all_demos.yaml
+export REGISTRY_RELAY_CONFIG=demo/config/all_demos.yaml
 cargo run
 ```
 
@@ -159,7 +159,7 @@ is gitignored.
 
 ## Bruno collection
 
-Open `bruno/data_gate_demo/` in Bruno, then pick the **local** environment.
+Open `bruno/registry-relay-demo/` in Bruno, then pick the **local** environment.
 The environment file pre-fills the cross-demo defaults the requests reference:
 
 | Variable | Default | Purpose |

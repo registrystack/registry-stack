@@ -5,7 +5,7 @@
 @prefix odrl: <http://www.w3.org/ns/odrl/2/> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
-<https://data-gate.dev/shapes/DcatCatalogSmokeShape>
+<https://registry-relay.dev/shapes/DcatCatalogSmokeShape>
     a sh:NodeShape ;
     sh:targetClass dcat:Catalog ;
     sh:property [
@@ -29,7 +29,7 @@
         sh:class dcat:Dataset ;
     ] .
 
-<https://data-gate.dev/shapes/DcatDatasetSmokeShape>
+<https://registry-relay.dev/shapes/DcatDatasetSmokeShape>
     a sh:NodeShape ;
     sh:targetClass dcat:Dataset ;
     sh:property [
@@ -68,7 +68,7 @@
         sh:class odrl:Offer ;
     ] .
 
-<https://data-gate.dev/shapes/DcatDistributionSmokeShape>
+<https://registry-relay.dev/shapes/DcatDistributionSmokeShape>
     a sh:NodeShape ;
     sh:targetClass dcat:Distribution ;
     sh:property [
@@ -97,7 +97,7 @@
         sh:nodeKind sh:IRI ;
     ] .
 
-<https://data-gate.dev/shapes/DcatDataServiceSmokeShape>
+<https://registry-relay.dev/shapes/DcatDataServiceSmokeShape>
     a sh:NodeShape ;
     sh:targetClass dcat:DataService ;
     sh:property [
@@ -111,7 +111,7 @@
         sh:nodeKind sh:Literal ;
     ] .
 
-<https://data-gate.dev/shapes/OdrlOfferSmokeShape>
+<https://registry-relay.dev/shapes/OdrlOfferSmokeShape>
     a sh:NodeShape ;
     sh:targetClass odrl:Offer ;
     sh:property [
@@ -119,7 +119,7 @@
         sh:minCount 1 ;
     ] .
 
-<https://data-gate.dev/shapes/EmbeddedNodeShapeSmokeShape>
+<https://registry-relay.dev/shapes/EmbeddedNodeShapeSmokeShape>
     a sh:NodeShape ;
     sh:targetClass sh:NodeShape ;
     sh:property [
@@ -133,7 +133,7 @@
         sh:class sh:PropertyShape ;
     ] .
 
-<https://data-gate.dev/shapes/EmbeddedPropertyShapeSmokeShape>
+<https://registry-relay.dev/shapes/EmbeddedPropertyShapeSmokeShape>
     a sh:NodeShape ;
     sh:targetClass sh:PropertyShape ;
     sh:property [

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! data_gate binary entry point.
+//! registry-relay binary entry point.
 //!
 //! Wires the V1 gateway into a runnable HTTP server:
 //! 1. Initialise structured JSON tracing on stderr.
 //! 2. Load and validate the YAML config from `--config <path>`, the
-//!    `DATAGATE_CONFIG` env var, or `./config/example.yaml` (in that
+//!    `REGISTRY_RELAY_CONFIG` env var, or `./config/example.yaml` (in that
 //!    order of precedence).
 //! 3. Build the `ApiKeyAuth` provider from `auth.api_keys[]`: read each
 //!    `hash_env` env var (validated for presence and fingerprint shape by the
@@ -32,27 +32,27 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use data_gate::audit::{AuditSink, ChainingSink, FileSink, StdoutSink, SyslogSink};
-use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
-use data_gate::auth::ScopeSet;
-use data_gate::config::{self, ApiKeyConfig, AuditSinkConfig, Config};
-use data_gate::entity::EntityRegistry;
-use data_gate::error::{ConfigError, Error};
-use data_gate::format::FormatRegistry;
-use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
-use data_gate::observability::RequestMetrics;
-use data_gate::provenance::{
+use datafusion::execution::context::SessionContext;
+use registry_relay::audit::{AuditSink, ChainingSink, FileSink, StdoutSink, SyslogSink};
+use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+use registry_relay::auth::ScopeSet;
+use registry_relay::config::{self, ApiKeyConfig, AuditSinkConfig, Config};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::error::{ConfigError, Error};
+use registry_relay::format::FormatRegistry;
+use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot};
+use registry_relay::observability::RequestMetrics;
+use registry_relay::provenance::{
     build_resolved_provenance_config, ProvenanceState, ResolvedProvenanceConfig,
 };
-use data_gate::query::{AggregateQueryEngine, EntityQueryEngine};
-use datafusion::execution::context::SessionContext;
+use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// CLI flag for the config path. Kept minimal: a single `--config
-/// <path>` positional plus the `DATAGATE_CONFIG` env var fallback.
+/// <path>` positional plus the `REGISTRY_RELAY_CONFIG` env var fallback.
 const CONFIG_FLAG: &str = "--config";
 
 /// Last-resort default config path.
@@ -68,7 +68,7 @@ async fn main() -> ExitCode {
             // site (config loader logs operator context; bind/serve
             // failures are logged here). The exit code is the only
             // surface left.
-            error!(error = %err, "data_gate exiting with failure");
+            error!(error = %err, "registry-relay exiting with failure");
             ExitCode::FAILURE
         }
     }
@@ -76,7 +76,7 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config_path = resolve_config_path();
-    info!(path = %config_path.display(), "loading data_gate config");
+    info!(path = %config_path.display(), "loading registry-relay config");
 
     let config = Arc::new(config::load(&config_path)?);
 
@@ -128,7 +128,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
     });
     let metrics = RequestMetrics::shared();
-    let app = data_gate::server::build_app_with_entity_query_and_provenance_and_metrics(
+    let app = registry_relay::server::build_app_with_entity_query_and_provenance_and_metrics(
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&audit_sink),
@@ -156,7 +156,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 provenance_enabled = *enabled,
                 provenance_mode = ?mode,
                 provenance_issuer_did = %issuer_did,
-                "data_gate listening"
+                "registry-relay listening"
             );
         }
         None => {
@@ -167,7 +167,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 api_keys = keyring_size,
                 audit_sink = audit_kind,
                 provenance_enabled = false,
-                "data_gate listening"
+                "registry-relay listening"
             );
         }
     }
@@ -191,7 +191,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // the other.
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
         if let Some(admin_listener) = admin_listener {
-            let admin_app = data_gate::server::build_admin_app_with_metrics(
+            let admin_app = registry_relay::server::build_admin_app_with_metrics(
                 Arc::clone(&config),
                 Arc::clone(&auth),
                 Arc::clone(&audit_sink),
@@ -230,7 +230,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 /// Resolve the config path from (in order):
 /// * the first non-flag positional after `--config`
-/// * the `DATAGATE_CONFIG` env var
+/// * the `REGISTRY_RELAY_CONFIG` env var
 /// * the project-relative default `./config/example.yaml`
 fn resolve_config_path() -> PathBuf {
     let mut args = env::args().skip(1);
@@ -243,7 +243,7 @@ fn resolve_config_path() -> PathBuf {
             return PathBuf::from(rest);
         }
     }
-    if let Ok(p) = env::var("DATAGATE_CONFIG") {
+    if let Ok(p) = env::var("REGISTRY_RELAY_CONFIG") {
         if !p.is_empty() {
             return PathBuf::from(p);
         }

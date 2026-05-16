@@ -125,14 +125,14 @@ impl ApiKeyAuth {
         let fingerprint = token_fingerprint(presented);
         if let Some(principal) = self.principals.get(&fingerprint).cloned() {
             tracing::debug!(
-                target: "data_gate::auth",
+                target: "registry_relay::auth",
                 api_key_id = %principal.api_key_id,
                 "api key verified",
             );
             return Ok(principal);
         }
         tracing::debug!(
-            target: "data_gate::auth",
+            target: "registry_relay::auth",
             "no api key matched the presented credential",
         );
         Err(AuthError::InvalidCredential)

@@ -7,7 +7,7 @@
 // serialize the full collection to decide the data is unchanged.
 //
 // Threshold key: cached_304_small (p95 < 10ms, p99 < 25ms at 20 VU / 100 RPS)
-// For the large profile, set DATA_GATE_PROFILE=large; the script uses
+// For the large profile, set REGISTRY_RELAY_PROFILE=large; the script uses
 // cached_304_large thresholds when that env var is set.
 
 import http from 'k6/http';
@@ -24,7 +24,7 @@ import {
   profile,
 } from './lib/common.js';
 
-const thresholdKey = (__ENV.DATA_GATE_PROFILE === 'large') ? 'cached_304_large' : 'cached_304_small';
+const thresholdKey = (__ENV.REGISTRY_RELAY_PROFILE === 'large') ? 'cached_304_large' : 'cached_304_small';
 
 export const options = commonOptions({
   scenario: 'cached_304',

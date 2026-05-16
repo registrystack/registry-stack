@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.data-gate.org/entity-record/v1.json",
+  "$id": "https://schemas.registry-relay.org/entity-record/v1.json",
   "title": "EntityRecord v1",
   "description": "Structural schema for the `credentialSubject` of an EntityRecord VC (Wave 3, decisions/wave-3-data-provenance.md §8). The schema validates the envelope shape; the per-dataset field set is not statically known.",
   "type": "object",

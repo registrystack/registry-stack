@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect CSV, XLSX, or Parquet files for data_gate config drafting.
+"""Inspect CSV, XLSX, or Parquet files for registry-relay config drafting.
 
 Outputs JSON with sheet/table names, headers, inferred lightweight types,
 null counts, and a small redacted sample. Dependencies are optional:

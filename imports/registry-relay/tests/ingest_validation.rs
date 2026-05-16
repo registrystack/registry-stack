@@ -11,10 +11,10 @@ use datafusion::arrow::array::{Float64Array, Int32Array, Int64Array, StringArray
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 
-use data_gate::config::{DatasetId, FieldType, ResourceId};
-use data_gate::error::IngestError;
-use data_gate::ingest::declared_schema::{DeclaredField, DeclaredSchema};
-use data_gate::ingest::validation::{validate, ProjectionPlan};
+use registry_relay::config::{DatasetId, FieldType, ResourceId};
+use registry_relay::error::IngestError;
+use registry_relay::ingest::declared_schema::{DeclaredField, DeclaredSchema};
+use registry_relay::ingest::validation::{validate, ProjectionPlan};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

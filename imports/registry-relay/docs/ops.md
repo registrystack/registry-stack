@@ -1,4 +1,4 @@
-# data_gate Operations Runbook
+# registry-relay Operations Runbook
 
 This runbook describes the intended V1 operating model and calls out current assumptions where runtime work is still landing.
 
@@ -6,21 +6,21 @@ This runbook describes the intended V1 operating model and calls out current ass
 
 Recommended production topology:
 
-- Run one `data_gate` process or container per deployment unit.
+- Run one `registry-relay` process or container per deployment unit.
 - Bind the data plane on `server.bind`, usually `0.0.0.0:8080` in a container.
 - Put TLS, WAF rules, and external auth policy at the ingress or service mesh layer.
 - Keep source files mounted read-only.
-- Keep `server.cache_dir` writable by the `data_gate` user.
+- Keep `server.cache_dir` writable by the `registry_relay` user.
 - Prefer stdout audit records in containers and let the platform log pipeline retain, rotate, and forward them.
 - When `server.admin_bind` is enabled, expose it only on an internal address or private network policy.
 
 Container defaults:
 
 ```text
-/etc/data_gate/config.yaml       default config path
-/var/lib/data_gate/data          recommended source-data mount
-/var/lib/data_gate/cache         default writable cache mount when configured
-/var/log/data_gate               audit file mount for VM-style deployments
+/etc/registry-relay/config.yaml       default config path
+/var/lib/registry-relay/data          recommended source-data mount
+/var/lib/registry-relay/cache         default writable cache mount when configured
+/var/log/registry-relay               audit file mount for VM-style deployments
 ```
 
 The binary exits non-zero if config parsing or validation fails, if required API-key hash environment variables are missing, or if listeners cannot bind.
@@ -36,23 +36,23 @@ just build
 Build a container image:
 
 ```sh
-docker build -t data_gate:<version> .
+docker build -t registry-relay:<version> .
 ```
 
 or:
 
 ```sh
-scripts/build-image.sh data_gate:<version>
+scripts/build-image.sh registry-relay:<version>
 ```
 
 Before promoting an image, inspect the effective config and verify that every referenced `hash_env` is supplied by the runtime environment. Do not bake API keys or API-key hashes into the image.
 
 ## Configure
 
-Set the config path with `--config <path>` or `DATAGATE_CONFIG`. The container image defaults to:
+Set the config path with `--config <path>` or `REGISTRY_RELAY_CONFIG`. The container image defaults to:
 
 ```sh
-data_gate --config /etc/data_gate/config.yaml
+registry-relay --config /etc/registry-relay/config.yaml
 ```
 
 Important configuration blocks:
@@ -130,7 +130,7 @@ File sink example:
 audit:
   sink: file
   format: jsonl
-  path: /var/log/data_gate/audit.jsonl
+  path: /var/log/registry-relay/audit.jsonl
   rotate:
     max_size_mb: 100
     max_files: 14
@@ -235,7 +235,7 @@ Audit records missing:
 
 - In containers, check stdout, not stderr.
 - Confirm `audit.include_health` if expecting health and ready records.
-- For `audit.sink: file`, confirm the parent directory exists or can be created by the `data_gate` user.
+- For `audit.sink: file`, confirm the parent directory exists or can be created by the `registry_relay` user.
 - For `audit.sink: syslog`, confirm the host exposes the expected Unix datagram socket (`/var/run/syslog` on macOS, `/dev/log` on other Unix platforms).
 
 Caller expected a signed VC but received plain JSON:

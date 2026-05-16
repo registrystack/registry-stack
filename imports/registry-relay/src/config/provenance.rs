@@ -58,7 +58,7 @@ pub enum IssuerConfig {
     Delegated(DelegatedIssuerConfig),
 }
 
-/// Gateway-mode issuer: data_gate hosts `/.well-known/did.json` and
+/// Gateway-mode issuer: registry-relay hosts `/.well-known/did.json` and
 /// signs every VC with its own key.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,7 +71,7 @@ pub struct GatewayIssuerConfig {
 }
 
 /// Delegated-mode issuer: signs under a ministry DID; the ministry
-/// hosts its own DID Document including the gateway's `kid`. data_gate
+/// hosts its own DID Document including the gateway's `kid`. registry-relay
 /// does NOT host `/.well-known/did.json` in this mode.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

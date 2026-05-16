@@ -3,7 +3,7 @@
 //!
 //! The goal of this test crate is to prove that a VC issued by the
 //! gateway can be verified by a verifier that does NOT depend on any
-//! of `data_gate`'s signing internals. If we can verify a VC using
+//! of `registry_relay`'s signing internals. If we can verify a VC using
 //! only:
 //!
 //! * the compact JWS body returned by the gateway, and
@@ -31,20 +31,6 @@ use axum::{Extension, Router};
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::api::CursorSigner;
-use data_gate::api::{did_router, entity_router};
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
-use data_gate::config::{
-    self, Config, DatasetId, ProvenanceAlgorithm, ResourceId, SoftwareSignerConfig,
-};
-use data_gate::entity::EntityRegistry;
-use data_gate::ingest::{register_versioned_table, table_name, ReadinessSnapshot, ReadyResource};
-use data_gate::provenance::signers::software::SoftwareSigner;
-use data_gate::provenance::{
-    IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig, ResolvedUrls,
-    Signer,
-};
-use data_gate::query::EntityQueryEngine;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -54,6 +40,22 @@ use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use jsonwebtoken::jwk::Jwk;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use rand_core::OsRng;
+use registry_relay::api::CursorSigner;
+use registry_relay::api::{did_router, entity_router};
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::config::{
+    self, Config, DatasetId, ProvenanceAlgorithm, ResourceId, SoftwareSignerConfig,
+};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::ingest::{
+    register_versioned_table, table_name, ReadinessSnapshot, ReadyResource,
+};
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{
+    IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig,
+    ResolvedRetiredKey, ResolvedUrls, Signer,
+};
+use registry_relay::query::EntityQueryEngine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -94,18 +96,48 @@ fn export_jwk(env_name: &str) -> VerifyingKey {
 }
 
 fn build_state(env_name: &str) -> (Arc<ProvenanceState>, VerifyingKey) {
+    build_state_with_issuer_mode_vm_and_retired(
+        env_name,
+        IssuerMode::Gateway,
+        ISSUER_DID,
+        VM_ID,
+        Vec::new(),
+    )
+}
+
+fn build_state_with_vm_and_retired(
+    env_name: &str,
+    vm_id: &str,
+    retired_keys: Vec<ResolvedRetiredKey>,
+) -> (Arc<ProvenanceState>, VerifyingKey) {
+    build_state_with_issuer_mode_vm_and_retired(
+        env_name,
+        IssuerMode::Gateway,
+        ISSUER_DID,
+        vm_id,
+        retired_keys,
+    )
+}
+
+fn build_state_with_issuer_mode_vm_and_retired(
+    env_name: &str,
+    mode: IssuerMode,
+    issuer_did: &str,
+    vm_id: &str,
+    retired_keys: Vec<ResolvedRetiredKey>,
+) -> (Arc<ProvenanceState>, VerifyingKey) {
     let vk = export_jwk(env_name);
     let cfg = SoftwareSignerConfig {
         jwk_env: env_name.to_string(),
         signing_algorithm: ProvenanceAlgorithm::EdDSA,
     };
     let signer: Arc<dyn Signer> =
-        Arc::new(SoftwareSigner::from_config(&cfg, VM_ID.to_string()).expect("signer builds"));
+        Arc::new(SoftwareSigner::from_config(&cfg, vm_id.to_string()).expect("signer builds"));
     let state = ProvenanceState::new(ResolvedProvenanceConfig {
         enabled: true,
-        mode: IssuerMode::Gateway,
-        issuer_did: ISSUER_DID.to_string(),
-        verification_method_id: VM_ID.to_string(),
+        mode,
+        issuer_did: issuer_did.to_string(),
+        verification_method_id: vm_id.to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
             verify_result: Duration::from_secs(300),
@@ -117,7 +149,7 @@ fn build_state(env_name: &str) -> (Arc<ProvenanceState>, VerifyingKey) {
             schema_base_url: "https://gw.example/schemas".to_string(),
         },
         signer,
-        retired_keys: Vec::new(),
+        retired_keys,
     });
     (Arc::new(state), vk)
 }
@@ -255,8 +287,8 @@ fn verify_with_node_crypto(jws: &str, public_jwk: &Value) {
     let script = r#"
 const crypto = require('node:crypto');
 
-const jws = process.env.DATAGATE_TEST_JWS;
-const jwk = JSON.parse(process.env.DATAGATE_TEST_JWK);
+const jws = process.env.REGISTRY_RELAY_TEST_JWS;
+const jwk = JSON.parse(process.env.REGISTRY_RELAY_TEST_JWK);
 const [headerB64, payloadB64, signatureB64] = jws.split('.');
 if (!headerB64 || !payloadB64 || !signatureB64) {
   throw new Error('compact JWS must have three segments');
@@ -286,9 +318,9 @@ if (!payload.jti || !payload.jti.startsWith('urn:uuid:')) {
     let output = Command::new("node")
         .arg("-e")
         .arg(script)
-        .env("DATAGATE_TEST_JWS", jws)
+        .env("REGISTRY_RELAY_TEST_JWS", jws)
         .env(
-            "DATAGATE_TEST_JWK",
+            "REGISTRY_RELAY_TEST_JWK",
             serde_json::to_string(public_jwk).expect("jwk serializes"),
         )
         .output()
@@ -379,7 +411,7 @@ async fn third_party_verifier_can_verify_vc_against_did_document_jwk() {
 
     // Step 3: verify the JWS using independent verifier code paths.
     // `jsonwebtoken` checks the Rust ecosystem path; the Node sidecar
-    // checks a JavaScript runtime without linking any data_gate code.
+    // checks a JavaScript runtime without linking any registry_relay code.
 
     //   3a) Build the decoding key from the JWK object itself
     //   (whatever fields the DID Document publishes). This is the
@@ -444,4 +476,185 @@ async fn third_party_verifier_can_verify_vc_against_did_document_jwk() {
             "verification against an unrelated key must fail",
         );
     }
+}
+
+#[tokio::test]
+async fn older_vc_verifies_against_retired_key_published_after_rotation() {
+    let old_vm_id = "did:web:gw.example#issuance-previous";
+    let current_vm_id = "did:web:gw.example#issuance-current";
+
+    let (old_state, old_vk) =
+        build_state_with_vm_and_retired("THIRD_PARTY_ROTATION_OLD_JWK", old_vm_id, Vec::new());
+    let tmp = TempDir::new().expect("tempdir");
+    let cfg = Arc::new(write_config(&tmp));
+    std::mem::forget(tmp);
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+    let ingest_version = Ulid::from_string("01J5K8M0000000000000000000").expect("ulid");
+    register_individuals(&ctx, ingest_version);
+    let query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+    ));
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot.ready.insert(
+        (id("social_registry"), id("individuals_table")),
+        ReadyResource {
+            ingest_ulid: ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
+    );
+    let (_old_tx, old_readiness) = watch::channel(snapshot.clone());
+
+    let old_app = build_app(
+        Arc::clone(&cfg),
+        old_state,
+        old_readiness,
+        Arc::clone(&query),
+        Arc::clone(&registry),
+    );
+    let old_server = TestServer::new(old_app);
+
+    let issue_resp = old_server
+        .get("/datasets/social_registry/individual/verify?id=ind-1")
+        .add_header("accept", "application/vc+jwt")
+        .await;
+    issue_resp.assert_status_ok();
+    let old_jws = String::from_utf8(issue_resp.as_bytes().to_vec()).expect("body utf8");
+
+    let retired_public_jwk = json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "alg": "EdDSA",
+        "kid": old_vm_id,
+        "x": URL_SAFE_NO_PAD.encode(old_vk.to_bytes()),
+    });
+    let retired = ResolvedRetiredKey {
+        verification_method_id: old_vm_id.to_string(),
+        public_jwk: retired_public_jwk.clone(),
+        retired_after: time::OffsetDateTime::now_utc(),
+    };
+    let (current_state, _) = build_state_with_vm_and_retired(
+        "THIRD_PARTY_ROTATION_CURRENT_JWK",
+        current_vm_id,
+        vec![retired],
+    );
+    let (_current_tx, current_readiness) = watch::channel(snapshot);
+    let current_app = build_app(cfg, current_state, current_readiness, query, registry);
+    let current_server = TestServer::new(current_app);
+
+    let did_resp = current_server.get("/.well-known/did.json").await;
+    did_resp.assert_status(StatusCode::OK);
+    let did_body: Value = did_resp.json();
+    let methods = did_body["verificationMethod"]
+        .as_array()
+        .expect("verificationMethod array");
+    let retired_method = methods
+        .iter()
+        .find(|entry| entry["id"] == old_vm_id)
+        .expect("retired verification method remains published");
+    assert_eq!(retired_method["publicKeyJwk"]["d"], Value::Null);
+    assert_eq!(retired_method["publicKeyJwk"], retired_public_jwk);
+
+    let jwk: Jwk =
+        serde_json::from_value(retired_method["publicKeyJwk"].clone()).expect("jwk parses");
+    let decoding_key = DecodingKey::from_jwk(&jwk).expect("decoding key from retired jwk");
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.set_issuer(&[ISSUER_DID]);
+    validation.set_required_spec_claims(&["iss", "sub", "iat", "nbf", "exp"]);
+    validation.validate_aud = false;
+    let token = jsonwebtoken::decode::<VcClaims>(&old_jws, &decoding_key, &validation)
+        .expect("old VC verifies with retired public key");
+    assert_eq!(token.header.kid.as_deref(), Some(old_vm_id));
+    assert_eq!(token.claims.iss, ISSUER_DID);
+    assert_eq!(
+        token.claims.sub,
+        "https://gw.example/datasets/social_registry/individual/ind-1"
+    );
+}
+
+#[tokio::test]
+async fn delegated_mode_vc_verifies_against_ministry_hosted_did_document() {
+    let ministry_did = "did:web:ministry.example";
+    let ministry_vm_id = "did:web:ministry.example#registry-relay-key";
+    let (state, verifying_key) = build_state_with_issuer_mode_vm_and_retired(
+        "THIRD_PARTY_DELEGATED_MODE_JWK",
+        IssuerMode::Delegated,
+        ministry_did,
+        ministry_vm_id,
+        Vec::new(),
+    );
+    let tmp = TempDir::new().expect("tempdir");
+    let cfg = Arc::new(write_config(&tmp));
+    std::mem::forget(tmp);
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+    let ingest_version = Ulid::from_string("01J5K8M0000000000000000000").expect("ulid");
+    register_individuals(&ctx, ingest_version);
+    let query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+    ));
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot.ready.insert(
+        (id("social_registry"), id("individuals_table")),
+        ReadyResource {
+            ingest_ulid: ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
+    );
+    let (_tx, readiness) = watch::channel(snapshot);
+    let app = build_app(cfg, state, readiness, query, registry);
+    let server = TestServer::new(app);
+
+    let did_resp = server.get("/.well-known/did.json").await;
+    did_resp.assert_status(StatusCode::NOT_FOUND);
+    let problem: Value = did_resp.json();
+    assert_eq!(
+        problem["code"], "provenance.did_document_unavailable",
+        "delegated mode must leave DID hosting to the ministry"
+    );
+
+    let issue_resp = server
+        .get("/datasets/social_registry/individual/verify?id=ind-1")
+        .add_header("accept", "application/vc+jwt")
+        .await;
+    issue_resp.assert_status_ok();
+    let jws = String::from_utf8(issue_resp.as_bytes().to_vec()).expect("body utf8");
+
+    let ministry_did_document = json!({
+        "@context": [
+            "https://www.w3.org/ns/did/v1",
+            "https://w3id.org/security/suites/jws-2020/v1"
+        ],
+        "id": ministry_did,
+        "verificationMethod": [{
+            "id": ministry_vm_id,
+            "type": "JsonWebKey2020",
+            "controller": ministry_did,
+            "publicKeyJwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "alg": "EdDSA",
+                "kid": ministry_vm_id,
+                "x": URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
+            },
+        }],
+        "assertionMethod": [ministry_vm_id],
+    });
+    let method = ministry_did_document["verificationMethod"][0]["publicKeyJwk"].clone();
+    let jwk: Jwk = serde_json::from_value(method).expect("ministry jwk parses");
+    let decoding_key = DecodingKey::from_jwk(&jwk).expect("decoding key from ministry jwk");
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.set_issuer(&[ministry_did]);
+    validation.set_required_spec_claims(&["iss", "sub", "iat", "nbf", "exp"]);
+    validation.validate_aud = false;
+    let token = jsonwebtoken::decode::<VcClaims>(&jws, &decoding_key, &validation)
+        .expect("delegated VC verifies against ministry DID document");
+    assert_eq!(token.header.kid.as_deref(), Some(ministry_vm_id));
+    assert_eq!(token.claims.iss, ministry_did);
+    assert_eq!(
+        token.claims.sub,
+        "https://gw.example/datasets/social_registry/individual/ind-1"
+    );
 }

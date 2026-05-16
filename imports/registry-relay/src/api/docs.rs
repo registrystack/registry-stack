@@ -58,7 +58,7 @@ const DOCS_HTML: &str = r#"<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>data_gate API</title>
+    <title>Registry Relay API</title>
     <style>
       body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
       #auth-bar {
@@ -105,7 +105,7 @@ const DOCS_HTML: &str = r#"<!doctype html>
       // Authorization header, then hand the parsed content to Scalar
       // via data-configuration.content and load the bundle dynamically.
       (function () {
-        var STORAGE_KEY = 'data_gate.api_key';
+        var STORAGE_KEY = 'registry-relay.api_key';
         var SPEC_URL = '/openapi.json';
         var BUNDLE_URL = '/docs/scalar.js';
         var input = document.getElementById('token');
@@ -236,7 +236,7 @@ mod tests {
         // bundle dynamically. The order check is structural: the
         // configuration write must appear before the bundle script is
         // appended to the DOM.
-        assert!(DOCS_HTML.contains("data_gate.api_key"));
+        assert!(DOCS_HTML.contains("registry-relay.api_key"));
         assert!(DOCS_HTML.contains("localStorage"));
         assert!(DOCS_HTML.contains("preferredSecurityScheme"));
         assert!(DOCS_HTML.contains("bearerAuth"));

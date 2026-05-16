@@ -12,7 +12,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use data_gate::config::{self, AuditSinkConfig};
+use registry_relay::config::{self, AuditSinkConfig};
 use sha2::{Digest, Sha256};
 
 fn make_fingerprint(plaintext: &[u8]) -> String {

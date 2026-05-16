@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Once;
 
-use data_gate::config;
+use registry_relay::config;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
@@ -321,9 +321,9 @@ fn enabled_config_yields_resolved_state_with_enabled_flag() {
     // invariant that proves the wiring is in place.
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
-    use data_gate::provenance::{build_resolved_provenance_config, ProvenanceState};
     use ed25519_dalek::SigningKey;
     use rand_core::OsRng;
+    use registry_relay::provenance::{build_resolved_provenance_config, ProvenanceState};
     use serde_json::json;
 
     ensure_persona_env();
@@ -389,8 +389,9 @@ fn disabled_config_yields_no_runtime_state_or_signer_load() {
     ));
     let path = write_yaml(&yaml);
     let cfg = config::load(&path).expect("config loads");
-    let resolved = data_gate::provenance::build_resolved_provenance_config(cfg.provenance.as_ref())
-        .expect("orchestrator state builds");
+    let resolved =
+        registry_relay::provenance::build_resolved_provenance_config(cfg.provenance.as_ref())
+            .expect("orchestrator state builds");
     assert!(
         resolved.is_none(),
         "disabled provenance must produce no runtime state and must not load jwk_env"
@@ -405,8 +406,9 @@ fn omitted_provenance_yields_no_state() {
     let yaml = base_yaml("").replace("provenance:\n", "");
     let path = write_yaml(&yaml);
     let cfg = config::load(&path).expect("config loads");
-    let resolved = data_gate::provenance::build_resolved_provenance_config(cfg.provenance.as_ref())
-        .expect("orchestrator state builds");
+    let resolved =
+        registry_relay::provenance::build_resolved_provenance_config(cfg.provenance.as_ref())
+            .expect("orchestrator state builds");
     assert!(
         resolved.is_none(),
         "omitting the provenance block must yield None"

@@ -15,10 +15,10 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use futures::StreamExt;
 use tokio::io::AsyncRead;
 
-use data_gate::config::FieldType;
-use data_gate::format::csv::CsvFormat;
-use data_gate::format::{Format, FormatHints};
-use data_gate::ingest::declared_schema::{DeclaredField, DeclaredSchema};
+use registry_relay::config::FieldType;
+use registry_relay::format::csv::CsvFormat;
+use registry_relay::format::{Format, FormatHints};
+use registry_relay::ingest::declared_schema::{DeclaredField, DeclaredSchema};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

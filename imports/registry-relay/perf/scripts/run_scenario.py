@@ -6,7 +6,7 @@
 # ]
 # ///
 """
-Orchestrator for a single data_gate perf run.
+Orchestrator for a single Registry Relay perf run.
 
 Optionally starts the release binary, waits for /ready, samples the server
 process (CPU, RSS, FDs, threads) while k6 runs the given scenario, writes a
@@ -236,7 +236,7 @@ def run_k6(scenario: Path, env_file: Path | None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run a k6 scenario against data_gate, sampling the server process "
+            "Run a k6 scenario against Registry Relay, sampling the server process "
             "and writing proc-stats to the output directory."
         )
     )
@@ -254,13 +254,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--server-pid",
         type=int,
         metavar="PID",
-        help="PID of an already-running data_gate process to sample.",
+        help="PID of an already-running Registry Relay process to sample.",
     )
     server_group.add_argument(
         "--start-server",
         action="store_true",
         help=(
-            "Start target/release/data_gate ourselves before the run. "
+            "Start the release binary ourselves before the run. "
             "Requires --config."
         ),
     )
@@ -335,7 +335,7 @@ def main() -> None:
     try:
         # Resolve the server process to sample.
         if args.start_server:
-            binary = Path("target/release/data_gate")
+            binary = Path("target/release/registry-relay")
             if not binary.exists():
                 print(
                     f"Error: release binary not found at {binary}. "
@@ -348,7 +348,7 @@ def main() -> None:
             # Pull BASE_URL from env file if set there.
             if args.env_file is not None:
                 env_vars = _load_env_file(args.env_file)
-                base_url = env_vars.get("DATA_GATE_BASE_URL") or base_url
+                base_url = env_vars.get("REGISTRY_RELAY_BASE_URL") or base_url
             print(f"Waiting for server at {base_url}/ready ...", flush=True)
             wait_for_ready(base_url)
             if server_proc.poll() is not None:

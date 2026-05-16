@@ -6,7 +6,7 @@
 // next_cursor is present when has_more is true; absent on the final page.
 //
 // This scenario is sequential by nature (each page depends on the previous
-// cursor) and runs single-VU by default. Cap at DATA_GATE_CURSOR_MAX_PAGES
+// cursor) and runs single-VU by default. Cap at REGISTRY_RELAY_CURSOR_MAX_PAGES
 // pages (default 50) to bound iteration time.
 //
 // Thresholds use hot_200_100kb as the baseline since each page is a bounded
@@ -26,8 +26,8 @@ import {
   logScenarioStart,
 } from './lib/common.js';
 
-const maxPages = parseInt(__ENV.DATA_GATE_CURSOR_MAX_PAGES || '50', 10);
-const pageSize = parseInt(__ENV.DATA_GATE_CURSOR_PAGE_SIZE || '100', 10);
+const maxPages = parseInt(__ENV.REGISTRY_RELAY_CURSOR_MAX_PAGES || '50', 10);
+const pageSize = parseInt(__ENV.REGISTRY_RELAY_CURSOR_PAGE_SIZE || '100', 10);
 
 // Per-page latency trend for reporting.
 const pageLatency = new Trend('cursor_page_latency_ms');

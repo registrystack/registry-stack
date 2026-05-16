@@ -3,15 +3,17 @@
 
 use std::sync::Arc;
 
-use data_gate::config::{self, DatasetId, ResourceId};
-use data_gate::entity::EntityRegistry;
-use data_gate::ingest::table_name;
-use data_gate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine};
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use registry_relay::config::{self, DatasetId, ResourceId};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::ingest::table_name;
+use registry_relay::query::{
+    EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -471,7 +473,7 @@ async fn has_many_relationship_endpoint_paginates_target_rows() {
             "household",
             json!("hh-1"),
             "members",
-            data_gate::query::RelationshipPageQuery::new(),
+            registry_relay::query::RelationshipPageQuery::new(),
         )
         .await
         .expect("read first relationship page");
@@ -490,7 +492,8 @@ async fn has_many_relationship_endpoint_paginates_target_rows() {
             "household",
             json!("hh-1"),
             "members",
-            data_gate::query::RelationshipPageQuery::new().with_after_primary_key(json!("p-1")),
+            registry_relay::query::RelationshipPageQuery::new()
+                .with_after_primary_key(json!("p-1")),
         )
         .await
         .expect("read second relationship page");

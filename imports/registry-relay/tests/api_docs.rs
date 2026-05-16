@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use data_gate::api::docs_router;
-use data_gate::audit::{AuditSink, InMemorySink};
-use data_gate::auth::api_key::ApiKeyAuth;
-use data_gate::server::build_app;
+use registry_relay::api::docs_router;
+use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::auth::api_key::ApiKeyAuth;
+use registry_relay::server::build_app;
 
 fn server() -> TestServer {
     TestServer::new(docs_router::<()>())
@@ -23,7 +23,7 @@ fn full_app_server() -> TestServer {
         env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
         env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
-    let config = Arc::new(data_gate::config::load(&path).expect("example config loads"));
+    let config = Arc::new(registry_relay::config::load(&path).expect("example config loads"));
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
     TestServer::new(build_app(config, auth, sink))
@@ -96,7 +96,7 @@ async fn docs_scalar_bundle_is_served_verbatim() {
     );
     assert_eq!(
         resp.as_bytes().as_ref(),
-        data_gate::api::docs::SCALAR_BUNDLE
+        registry_relay::api::docs::SCALAR_BUNDLE
     );
 }
 

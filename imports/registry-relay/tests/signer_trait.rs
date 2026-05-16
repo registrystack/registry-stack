@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Trait-surface tests for [`data_gate::provenance::Signer`].
+//! Trait-surface tests for [`registry_relay::provenance::Signer`].
 //!
 //! Drives the [`MockKmsSigner`] through the trait to confirm:
 //!
@@ -15,11 +15,11 @@ use std::env;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::config::{KmsProvider, KmsSignerConfig, ProvenanceAlgorithm};
-use data_gate::provenance::signers::kms::MockKmsSigner;
-use data_gate::provenance::{Signer, SignerError, SigningAlgorithm};
 use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
+use registry_relay::config::{KmsProvider, KmsSignerConfig, ProvenanceAlgorithm};
+use registry_relay::provenance::signers::kms::MockKmsSigner;
+use registry_relay::provenance::{Signer, SignerError, SigningAlgorithm};
 use serde_json::json;
 
 const MISMATCH_SEED_ENV: &str = "SIGNER_TRAIT_TEST_MOCK_SEED_MISMATCH";

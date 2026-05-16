@@ -1,4 +1,4 @@
-# data_gate task runner. Requires `just` (https://github.com/casey/just).
+# registry-relay task runner. Requires `just` (https://github.com/casey/just).
 
 # Install the Rust toolchain via mise and fetch all dependencies.
 setup:
@@ -71,25 +71,25 @@ perf-bench:
     cargo bench
 
 # Run one k6 scenario under perf/k6/, sampling the server process.
-# Requires: k6 on PATH, a running data_gate (or pass --start-server via extra).
+# Requires: k6 on PATH, a running registry-relay (or pass --start-server via extra).
 # Usage: just perf-run scenario=perf/k6/cached_304.js
 #        just perf-run scenario=perf/k6/hot_200.js extra="--server-pid 12345"
 perf-run scenario extra="--env-file target/perf/perf.env":
     uv run perf/scripts/run_scenario.py --scenario {{scenario}} {{extra}}
 
-# Start data_gate and run one named k6 scenario against a perf profile.
+# Start registry-relay and run one named k6 scenario against a perf profile.
 # Usage: just perf-scenario cached_304
 #        just perf-scenario large_304 large 10s
 #        just perf-scenario mixed_read medium 2m
 perf-scenario scenario profile="medium" duration="30s" env="target/perf/perf.env" out="target/perf/reports" sample_interval="5":
-    DATA_GATE_DURATION={{duration}} DATA_GATE_PROFILE={{profile}} uv run perf/scripts/run_scenario.py --scenario perf/k6/{{scenario}}.js --start-server --config perf/config/{{profile}}.yaml --env-file {{env}} --out-dir {{out}} --sample-interval {{sample_interval}}
+    REGISTRY_RELAY_DURATION={{duration}} REGISTRY_RELAY_PROFILE={{profile}} uv run perf/scripts/run_scenario.py --scenario perf/k6/{{scenario}}.js --start-server --config perf/config/{{profile}}.yaml --env-file {{env}} --out-dir {{out}} --sample-interval {{sample_interval}}
 
 # Long-running soak benchmark. Defaults to the overnight large-profile run.
 # Usage: just perf-soak
 #        just perf-soak large 30m
 #        just perf-soak medium 10m
 perf-soak profile="large" duration="60m" env="target/perf/perf.env" out="target/perf/reports" sample_interval="5":
-    DATA_GATE_DURATION={{duration}} DATA_GATE_PROFILE={{profile}} uv run perf/scripts/run_scenario.py --scenario perf/k6/soak.js --start-server --config perf/config/{{profile}}.yaml --env-file {{env}} --out-dir {{out}} --sample-interval {{sample_interval}}
+    REGISTRY_RELAY_DURATION={{duration}} REGISTRY_RELAY_PROFILE={{profile}} uv run perf/scripts/run_scenario.py --scenario perf/k6/soak.js --start-server --config perf/config/{{profile}}.yaml --env-file {{env}} --out-dir {{out}} --sample-interval {{sample_interval}}
 
 # Local CI-equivalent smoke: build release, generate the small fixture profile,
 # compile the benches, and node-check every k6 scenario. Does not start the

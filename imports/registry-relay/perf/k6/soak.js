@@ -15,13 +15,13 @@
 //     as a proxy for response size stability).
 //   - p95 and p99 do not rise over time (use the k6 JSON report trend graphs).
 //   - No 5xx during the full run.
-//   - Audit sink (DATA_GATE_AUDIT_SINK) is tagged in the report.
+//   - Audit sink (REGISTRY_RELAY_AUDIT_SINK) is tagged in the report.
 //
 // Memory growth measurement is done externally (ps / metrics endpoint). k6
 // cannot sample server-side RSS directly. The k6 report records bytes_received
 // which should remain stable at constant load.
 //
-// Duration default: 30m (DATA_GATE_DURATION overrides).
+// Duration default: 30m (REGISTRY_RELAY_DURATION overrides).
 
 import http from 'k6/http';
 import { check, group } from 'k6';

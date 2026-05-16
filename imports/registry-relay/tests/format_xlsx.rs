@@ -19,10 +19,10 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use futures::StreamExt;
 use tokio::io::AsyncRead;
 
-use data_gate::config::FieldType;
-use data_gate::format::xlsx::XlsxFormat;
-use data_gate::format::{Format, FormatError, FormatHints};
-use data_gate::ingest::declared_schema::{DeclaredField, DeclaredSchema};
+use registry_relay::config::FieldType;
+use registry_relay::format::xlsx::XlsxFormat;
+use registry_relay::format::{Format, FormatError, FormatHints};
+use registry_relay::ingest::declared_schema::{DeclaredField, DeclaredSchema};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

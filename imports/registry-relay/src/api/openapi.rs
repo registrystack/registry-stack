@@ -494,7 +494,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "info": {
             "title": catalog.title,
             "summary": INFO_SUMMARY,
-            "description": "Best-effort data_gate API document generated from visible metadata.",
+            "description": "Best-effort Registry Relay API document generated from visible metadata.",
             "version": env!("CARGO_PKG_VERSION"),
             "contact": { "name": catalog.publisher },
             "license": {
@@ -688,11 +688,11 @@ fn mark_public(paths: &mut Map<String, Value>, path: &str, method: &str) {
 
 fn code_samples_for_collection(dataset_id: &str, entity_name: &str) -> Vec<Value> {
     let curl = format!(
-        "curl -sS \\\n  -H 'Authorization: Bearer $DATA_GATE_TOKEN' \\\n  'http://localhost:4242/datasets/{dataset_id}/{entity_name}?limit=10'"
+        "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/{dataset_id}/{entity_name}?limit=10'"
     );
     let python = format!(
         "import os, httpx\n\n\
-         token = os.environ['DATA_GATE_TOKEN']\n\
+         token = os.environ['REGISTRY_RELAY_TOKEN']\n\
          resp = httpx.get(\n    \
          'http://localhost:4242/datasets/{dataset_id}/{entity_name}',\n    \
          params={{'limit': 10}},\n    \
@@ -712,11 +712,11 @@ fn code_samples_for_collection(dataset_id: &str, entity_name: &str) -> Vec<Value
 
 fn code_samples_for_record(dataset_id: &str, entity_name: &str) -> Vec<Value> {
     let curl = format!(
-        "curl -sS \\\n  -H 'Authorization: Bearer $DATA_GATE_TOKEN' \\\n  'http://localhost:4242/datasets/{dataset_id}/{entity_name}/$ID'"
+        "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/{dataset_id}/{entity_name}/$ID'"
     );
     let python = format!(
         "import os, httpx\n\n\
-         token = os.environ['DATA_GATE_TOKEN']\n\
+         token = os.environ['REGISTRY_RELAY_TOKEN']\n\
          record_id = '...'\n\
          resp = httpx.get(\n    \
          f'http://localhost:4242/datasets/{dataset_id}/{entity_name}/{{record_id}}',\n    \

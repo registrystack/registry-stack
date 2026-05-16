@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Public `/contexts/{vocab}/{version}` route coverage.
 //!
-//! Asserts that the in-tree JSON-LD contexts (the data_gate
+//! Asserts that the in-tree JSON-LD contexts (the registry_relay
 //! `provenance/v1.jsonld` document and the vendored W3C VC 2.0 context
 //! at `credentials/v2`) are served verbatim with `application/ld+json`
 //! plus `public, max-age=86400`, and that unknown `(vocab, version)`
@@ -15,18 +15,18 @@ use axum::http::StatusCode;
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::audit::{AuditSink, InMemorySink};
-use data_gate::auth::api_key::ApiKeyAuth;
-use data_gate::config::{Config, ProvenanceAlgorithm, SoftwareSignerConfig};
-use data_gate::provenance::resources;
-use data_gate::provenance::signers::software::SoftwareSigner;
-use data_gate::provenance::{
+use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
+use rand_core::OsRng;
+use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::auth::api_key::ApiKeyAuth;
+use registry_relay::config::{Config, ProvenanceAlgorithm, SoftwareSignerConfig};
+use registry_relay::provenance::resources;
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{
     IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig, ResolvedUrls,
     Signer,
 };
-use data_gate::server::build_app_with_provenance;
-use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
-use rand_core::OsRng;
+use registry_relay::server::build_app_with_provenance;
 use serde_json::{json, Value};
 
 fn load_example_config() -> Config {
@@ -37,7 +37,7 @@ fn load_example_config() -> Config {
         env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
         env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
-    data_gate::config::load(&path).expect("example config loads")
+    registry_relay::config::load(&path).expect("example config loads")
 }
 
 fn export_jwk(env_name: &str) {

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Registry Relay Config Author"
+  short_description: "Author safe registry-relay V1 YAML configs"
+  default_prompt: "Use $registry-relay-config-author to configure a registry-relay V1 dataset from my tabular source."
+
+policy:
+  allow_implicit_invocation: true

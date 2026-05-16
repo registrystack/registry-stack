@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn missing_file_returns_parse_error() {
-        let path = Path::new("/no/such/path/data_gate_unit_test.yaml");
+        let path = Path::new("/no/such/path/registry_relay_unit_test.yaml");
         let err = load(path).expect_err("missing path must fail");
         assert_eq!(err.code(), "config.parse_error");
     }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.data-gate.org/aggregate-result/v1.json",
+  "$id": "https://schemas.registry-relay.org/aggregate-result/v1.json",
   "title": "AggregateResult v1",
   "description": "Structural schema for the `credentialSubject` of an AggregateResult VC (Wave 3, decisions/wave-3-data-provenance.md §8).",
   "type": "object",

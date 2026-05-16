@@ -1,9 +1,9 @@
-# data_gate Configuration Guide
+# registry-relay Configuration Guide
 
-`data_gate` is configured by one YAML document. The binary chooses the first available source:
+`registry-relay` is configured by one YAML document. The binary chooses the first available source:
 
 1. `--config <path>`
-2. `DATAGATE_CONFIG`
+2. `REGISTRY_RELAY_CONFIG`
 3. `./config/example.yaml`
 
 The canonical sample is [config/example.yaml](../config/example.yaml). Keep examples aligned with [Spec.md](../Spec.md).
@@ -48,7 +48,7 @@ The default CORS policy is deny by omission. Add explicit trusted origins only.
 
 ```yaml
 catalog:
-  title: Internal Government Data Gateway
+  title: Internal Government Registry Relay
   base_url: https://data.example.gov
   publisher: Ministry of Digital Government
   participant_id: did:web:data.example.gov
@@ -112,7 +112,7 @@ audit:
 audit:
   sink: file
   format: jsonl
-  path: /var/log/data_gate/audit.jsonl
+  path: /var/log/registry-relay/audit.jsonl
   rotate:
     max_size_mb: 100
     max_files: 14

@@ -8,7 +8,7 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use data_gate::entity::EntityRegistry;
+use registry_relay::entity::EntityRegistry;
 
 // Minimal YAML config string. Inlined so the bench has no filesystem deps.
 const CONFIG_YAML: &str = r#"
@@ -84,7 +84,7 @@ audit:
 fn build_registry() -> EntityRegistry {
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     std::fs::write(tmp.path(), CONFIG_YAML).expect("write config");
-    let cfg = data_gate::config::load(tmp.path()).expect("config loads");
+    let cfg = registry_relay::config::load(tmp.path()).expect("config loads");
     EntityRegistry::from_config(&cfg).expect("registry compiles")
 }
 

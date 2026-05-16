@@ -23,11 +23,11 @@ use std::env;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
-use data_gate::provenance::jwt_vc::{self, ClaimType, VcEnvelopeInputs, VCDM_V2_CONTEXT};
-use data_gate::provenance::signers::software::SoftwareSigner;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
+use registry_relay::config::{ProvenanceAlgorithm, SoftwareSignerConfig};
+use registry_relay::provenance::jwt_vc::{self, ClaimType, VcEnvelopeInputs, VCDM_V2_CONTEXT};
+use registry_relay::provenance::signers::software::SoftwareSigner;
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;

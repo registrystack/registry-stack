@@ -1,9 +1,9 @@
 [package]
-name = "data_gate"
-version = "1.0.0"
+name = "registry-relay"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Controlled Data Gateway: config-driven, read-only APIs over sensitive tabular files."
+description = "Registry Relay: config-driven, read-only APIs over sensitive registry and tabular files."
 publish = false
 
 # ─── runtime ─────────────────────────────────────────────────────────────────
@@ -126,6 +126,7 @@ toml = { version = "0.8" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI only smoke-checks `cargo bench --no-run`.
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+cel-mapper-core = { path = "../cel-mapping/crates/cel-mapper-core" }
 
 [[bench]]
 name = "auth_bench"

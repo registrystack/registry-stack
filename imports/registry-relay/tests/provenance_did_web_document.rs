@@ -20,17 +20,17 @@ use axum::http::StatusCode;
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::audit::{AuditSink, InMemorySink};
-use data_gate::auth::api_key::ApiKeyAuth;
-use data_gate::config::{Config, ProvenanceAlgorithm, SoftwareSignerConfig};
-use data_gate::provenance::signers::software::SoftwareSigner;
-use data_gate::provenance::{
+use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
+use rand_core::OsRng;
+use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::auth::api_key::ApiKeyAuth;
+use registry_relay::config::{Config, ProvenanceAlgorithm, SoftwareSignerConfig};
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{
     IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig,
     ResolvedRetiredKey, ResolvedUrls, Signer,
 };
-use data_gate::server::build_app_with_provenance;
-use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
-use rand_core::OsRng;
+use registry_relay::server::build_app_with_provenance;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
@@ -45,7 +45,7 @@ fn load_example_config() -> Config {
         env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
         env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
-    data_gate::config::load(&path).expect("example config loads")
+    registry_relay::config::load(&path).expect("example config loads")
 }
 
 fn export_jwk(env_name: &str) -> VerifyingKey {

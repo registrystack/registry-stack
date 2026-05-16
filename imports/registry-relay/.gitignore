@@ -12,6 +12,7 @@ __pycache__/
 demo/.env.local
 bruno/**/.env
 bruno/data_gate_demo/environments/local.bru
+bruno/registry-relay-demo/environments/local.bru
 
 # Demo audit log sink (populated by demo/config/all_demos.yaml)
 demo/var/

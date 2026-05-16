@@ -4,7 +4,7 @@
 // Repeatedly GETs the entity collection endpoint without caching headers.
 // Measures latency for authenticated reads under moderate concurrency.
 //
-// Threshold key is selected from DATA_GATE_PROFILE:
+// Threshold key is selected from REGISTRY_RELAY_PROFILE:
 //   small / medium (default): hot_200_100kb  (p95 < 25ms, p99 < 75ms)
 //   large:                    hot_200_1mb    (p95 < 50ms, p99 < 150ms)
 //   large-wide:               hot_200_10mb   (p95 < 250ms, p99 < 750ms)

@@ -5,17 +5,17 @@ use std::sync::Arc;
 
 use axum::Extension;
 use axum_test::TestServer;
-use data_gate::api::aggregates_router;
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
-use data_gate::config::{self, DatasetId, ResourceId};
-use data_gate::entity::EntityRegistry;
-use data_gate::ingest::table_name;
-use data_gate::query::AggregateQueryEngine;
 use datafusion::arrow::array::{Float64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use registry_relay::api::aggregates_router;
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::config::{self, DatasetId, ResourceId};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::ingest::table_name;
+use registry_relay::query::AggregateQueryEngine;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 

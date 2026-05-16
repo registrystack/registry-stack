@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration tests for the audit core (`data_gate::audit`).
+//! Integration tests for the audit core (`registry_relay::audit`).
 //!
 //! These tests pin the audit wire contract: field set, key names, types,
 //! and ISO-8601 millisecond timestamp format.
@@ -17,11 +17,11 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Extension;
 use axum::Router;
-use data_gate::audit::{
+use registry_relay::audit::{
     audit_layer, redact_query, AuditContextExt, AuditEnvelope, AuditOutcome, AuditRecord,
     AuditSettings, AuditSink, EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
 };
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -125,7 +125,7 @@ fn record_field_types_match_contract() {
 #[test]
 fn timestamp_is_iso8601_with_millisecond_precision() {
     let record = AuditRecord {
-        ts: data_gate::audit::now_iso8601_millis(),
+        ts: registry_relay::audit::now_iso8601_millis(),
         ..sample_record()
     };
     let ts = record.ts;
@@ -518,8 +518,8 @@ async fn middleware_hashes_configured_sensitive_query_values() {
 /// "outer middleware injects on request" pattern.
 #[tokio::test]
 async fn middleware_projects_principal_when_auth_runs_inside_audit() {
-    use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
-    use data_gate::auth::middleware::auth_layer;
+    use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+    use registry_relay::auth::middleware::auth_layer;
     use sha2::{Digest, Sha256};
 
     const VALID_KEY: &str = "test-bearer-token-blk1";
@@ -593,8 +593,8 @@ fn hex_lower_local(bytes: &[u8]) -> String {
 /// `error_code` field carries the taxonomy code.
 #[tokio::test]
 async fn middleware_captures_error_code_from_auth_short_circuit() {
-    use data_gate::auth::api_key::ApiKeyAuth;
-    use data_gate::auth::middleware::auth_layer;
+    use registry_relay::auth::api_key::ApiKeyAuth;
+    use registry_relay::auth::middleware::auth_layer;
 
     let provider = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink = Arc::new(InMemorySink::new());

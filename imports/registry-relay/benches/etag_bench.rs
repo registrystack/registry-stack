@@ -11,7 +11,7 @@ use std::hint::black_box;
 
 use axum::http::{header, HeaderMap, HeaderValue};
 use criterion::{criterion_group, criterion_main, Criterion};
-use data_gate::api::entity::{entity_etag, if_none_match_matches, strong_etag};
+use registry_relay::api::entity::{entity_etag, if_none_match_matches, strong_etag};
 
 // ---------------------------------------------------------------------------
 // strong_etag benchmarks

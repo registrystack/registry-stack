@@ -4,7 +4,7 @@
 # dependencies = []
 # ///
 """
-Perf report generator for data_gate.
+Perf report generator for Registry Relay.
 
 Reads a k6 summary-export JSON and an optional proc-stats JSON from
 run_scenario.py, then writes a markdown report under target/perf/reports/

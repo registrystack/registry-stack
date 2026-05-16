@@ -1,8 +1,8 @@
-# data_gate Performance And Load Testing Spec
+# registry-relay Performance And Load Testing Spec
 
 ## Purpose
 
-Define a repeatable performance test program for `data_gate` that proves the server can serve protected, read-only dataset APIs with millisecond-scale latency under realistic request load and realistic data volume.
+Define a repeatable performance test program for `registry-relay` that proves the server can serve protected, read-only dataset APIs with millisecond-scale latency under realistic request load and realistic data volume.
 
 The tests must answer three questions:
 
@@ -513,7 +513,7 @@ Never print raw keys in logs or checked-in files. Perf scripts may create throwa
 When a secret runner is available, prefer running the server with an env-file wrapper instead of sourcing raw keys into the interactive shell. For example:
 
 ```sh
-op run --env-file=target/perf/perf.env -- target/release/data_gate --config perf/config/medium.yaml
+op run --env-file=target/perf/perf.env -- target/release/registry-relay --config perf/config/medium.yaml
 ```
 
 The fallback local flow is acceptable for throwaway keys when shell history and logs are controlled.
@@ -524,7 +524,7 @@ Suggested local flow:
 cargo build --release
 uv run perf/scripts/generate_perf_data.py --profile medium
 uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env
-op run --env-file=target/perf/perf.env -- target/release/data_gate --config perf/config/medium.yaml
+op run --env-file=target/perf/perf.env -- target/release/registry-relay --config perf/config/medium.yaml
 ```
 
 Then run scenarios in another shell:
@@ -672,7 +672,7 @@ Regression comparison may be manual at first, using the report fields above. If 
 The load testing system is complete when:
 
 - A developer can generate synthetic perf data from a documented command.
-- A developer can start `data_gate` with a perf config without editing committed files.
+- A developer can start `registry-relay` with a perf config without editing committed files.
 - k6 scenarios exist for cached `304`, hot `200`, mixed reads, large `200`, large `304`, and soak.
 - k6 scenarios exist for filtered reads, expanded reads, cursor walks, aggregates, DCAT-AP catalog generation, authorization-deny paths, and refresh-under-read-load.
 - At least one small profile can run in CI or as a documented local smoke test.

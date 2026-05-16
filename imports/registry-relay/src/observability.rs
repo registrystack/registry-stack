@@ -83,12 +83,12 @@ impl RequestMetrics {
         let series = lock_or_recover(&self.series).clone();
         let mut out = String::new();
 
-        out.push_str("# HELP data_gate_http_requests_total Total HTTP requests by safe route family labels.\n");
-        out.push_str("# TYPE data_gate_http_requests_total counter\n");
+        out.push_str("# HELP registry_relay_http_requests_total Total HTTP requests by safe route family labels.\n");
+        out.push_str("# TYPE registry_relay_http_requests_total counter\n");
         for (labels, values) in &series {
             writeln!(
                 out,
-                "data_gate_http_requests_total{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\"}} {}",
+                "registry_relay_http_requests_total{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\"}} {}",
                 labels.method,
                 labels.endpoint_kind,
                 labels.status_code,
@@ -99,13 +99,13 @@ impl RequestMetrics {
             .expect("write to String cannot fail");
         }
 
-        out.push_str("# HELP data_gate_http_request_duration_seconds HTTP request duration histogram by safe route family labels.\n");
-        out.push_str("# TYPE data_gate_http_request_duration_seconds histogram\n");
+        out.push_str("# HELP registry_relay_http_request_duration_seconds HTTP request duration histogram by safe route family labels.\n");
+        out.push_str("# TYPE registry_relay_http_request_duration_seconds histogram\n");
         for (labels, values) in &series {
             for (index, bucket) in HISTOGRAM_BUCKETS.iter().enumerate() {
                 writeln!(
                     out,
-                    "data_gate_http_request_duration_seconds_bucket{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\",le=\"{:.3}\"}} {}",
+                    "registry_relay_http_request_duration_seconds_bucket{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\",le=\"{:.3}\"}} {}",
                     labels.method,
                     labels.endpoint_kind,
                     labels.status_code,
@@ -118,7 +118,7 @@ impl RequestMetrics {
             }
             writeln!(
                 out,
-                "data_gate_http_request_duration_seconds_bucket{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\",le=\"+Inf\"}} {}",
+                "registry_relay_http_request_duration_seconds_bucket{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\",le=\"+Inf\"}} {}",
                 labels.method,
                 labels.endpoint_kind,
                 labels.status_code,
@@ -129,7 +129,7 @@ impl RequestMetrics {
             .expect("write to String cannot fail");
             writeln!(
                 out,
-                "data_gate_http_request_duration_seconds_sum{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\"}} {:.6}",
+                "registry_relay_http_request_duration_seconds_sum{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\"}} {:.6}",
                 labels.method,
                 labels.endpoint_kind,
                 labels.status_code,
@@ -140,7 +140,7 @@ impl RequestMetrics {
             .expect("write to String cannot fail");
             writeln!(
                 out,
-                "data_gate_http_request_duration_seconds_count{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\"}} {}",
+                "registry_relay_http_request_duration_seconds_count{{method=\"{}\",endpoint_kind=\"{}\",status_code=\"{}\",status_class=\"{}\",error_code=\"{}\"}} {}",
                 labels.method,
                 labels.endpoint_kind,
                 labels.status_code,
@@ -229,16 +229,18 @@ async fn record_request(
 }
 
 fn render_readiness(readiness: Option<&ReadinessSnapshot>, out: &mut String) {
-    out.push_str("# HELP data_gate_readiness_ready_resources Resources currently ready.\n");
-    out.push_str("# TYPE data_gate_readiness_ready_resources gauge\n");
-    out.push_str("# HELP data_gate_readiness_not_ready_resources Resources currently not ready.\n");
-    out.push_str("# TYPE data_gate_readiness_not_ready_resources gauge\n");
-    out.push_str("# HELP data_gate_readiness_failed_resources Resources currently failed.\n");
-    out.push_str("# TYPE data_gate_readiness_failed_resources gauge\n");
-    out.push_str("# HELP data_gate_readiness_unresolved_entities Entities without a resolved backing resource.\n");
-    out.push_str("# TYPE data_gate_readiness_unresolved_entities gauge\n");
-    out.push_str("# HELP data_gate_readiness_fully_ready Whether all resources are ready and all entities are resolved, as 0 or 1.\n");
-    out.push_str("# TYPE data_gate_readiness_fully_ready gauge\n");
+    out.push_str("# HELP registry_relay_readiness_ready_resources Resources currently ready.\n");
+    out.push_str("# TYPE registry_relay_readiness_ready_resources gauge\n");
+    out.push_str(
+        "# HELP registry_relay_readiness_not_ready_resources Resources currently not ready.\n",
+    );
+    out.push_str("# TYPE registry_relay_readiness_not_ready_resources gauge\n");
+    out.push_str("# HELP registry_relay_readiness_failed_resources Resources currently failed.\n");
+    out.push_str("# TYPE registry_relay_readiness_failed_resources gauge\n");
+    out.push_str("# HELP registry_relay_readiness_unresolved_entities Entities without a resolved backing resource.\n");
+    out.push_str("# TYPE registry_relay_readiness_unresolved_entities gauge\n");
+    out.push_str("# HELP registry_relay_readiness_fully_ready Whether all resources are ready and all entities are resolved, as 0 or 1.\n");
+    out.push_str("# TYPE registry_relay_readiness_fully_ready gauge\n");
 
     let (ready, not_ready, failed, unresolved, fully_ready) =
         readiness.map_or((0, 0, 0, 0, 0), |snapshot| {
@@ -252,11 +254,11 @@ fn render_readiness(readiness: Option<&ReadinessSnapshot>, out: &mut String) {
         });
     write!(
         out,
-        "data_gate_readiness_ready_resources {}\n\
-         data_gate_readiness_not_ready_resources {}\n\
-         data_gate_readiness_failed_resources {}\n\
-         data_gate_readiness_unresolved_entities {}\n\
-         data_gate_readiness_fully_ready {}\n",
+        "registry_relay_readiness_ready_resources {}\n\
+         registry_relay_readiness_not_ready_resources {}\n\
+         registry_relay_readiness_failed_resources {}\n\
+         registry_relay_readiness_unresolved_entities {}\n\
+         registry_relay_readiness_fully_ready {}\n",
         ready, not_ready, failed, unresolved, fully_ready
     )
     .expect("write to String cannot fail");

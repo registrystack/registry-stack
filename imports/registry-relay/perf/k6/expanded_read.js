@@ -10,7 +10,7 @@
 // verifies that the server returns a non-5xx error for an unsupported
 // expansion and documents the latency of that validation path.
 //
-// When a future config adds an expansion, set DATA_GATE_EXPAND to the
+// When a future config adds an expansion, set REGISTRY_RELAY_EXPAND to the
 // relationship name; the script will then expect 200 instead of 400.
 
 import http from 'k6/http';
@@ -27,8 +27,8 @@ import {
   logScenarioStart,
 } from './lib/common.js';
 
-// When a real expansion is configured, set DATA_GATE_EXPAND to its name.
-const expandParam = __ENV.DATA_GATE_EXPAND || '';
+// When a real expansion is configured, set REGISTRY_RELAY_EXPAND to its name.
+const expandParam = __ENV.REGISTRY_RELAY_EXPAND || '';
 const hasExpansion = expandParam !== '';
 
 export const options = commonOptions({
@@ -48,7 +48,7 @@ export function setup() {
   });
   if (!hasExpansion) {
     console.log(
-      'expanded_read: DATA_GATE_EXPAND not set. The perf config has no allowed_expansions. ' +
+      'expanded_read: REGISTRY_RELAY_EXPAND not set. The perf config has no allowed_expansions. ' +
       'Verifying that unsupported expand returns non-5xx.'
     );
   }

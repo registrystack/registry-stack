@@ -9,15 +9,15 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use data_gate::config::{DatasetId, ResourceId};
-use data_gate::entity::EntityRegistry;
-use data_gate::ingest::table_name;
-use data_gate::query::{EntityCollectionQuery, EntityQueryEngine};
 use datafusion::arrow::array::{Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use registry_relay::config::{DatasetId, ResourceId};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::ingest::table_name;
+use registry_relay::query::{EntityCollectionQuery, EntityQueryEngine};
 
 const CONFIG_YAML: &str = r#"
 server:
@@ -96,7 +96,7 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 async fn build_engine() -> EntityQueryEngine {
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     std::fs::write(tmp.path(), CONFIG_YAML).expect("write config");
-    let cfg = data_gate::config::load(tmp.path()).expect("config loads");
+    let cfg = registry_relay::config::load(tmp.path()).expect("config loads");
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
     let ctx = Arc::new(SessionContext::new());
 
@@ -163,7 +163,7 @@ fn benchmark_read_collection_default(c: &mut Criterion) {
 fn benchmark_read_collection_with_filter(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let engine = rt.block_on(build_engine());
-    use data_gate::query::{EntityFilter, EntityFilterOp};
+    use registry_relay::query::{EntityFilter, EntityFilterOp};
 
     c.bench_function("query/read_collection_filtered", |b| {
         b.to_async(&rt).iter(|| {

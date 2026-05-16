@@ -23,10 +23,10 @@ use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
-use data_gate::auth::middleware::auth_layer;
-use data_gate::auth::scopes::{require_scope, ScopeSet};
-use data_gate::auth::{AuthMode, AuthProvider, Principal};
+use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+use registry_relay::auth::middleware::auth_layer;
+use registry_relay::auth::scopes::{require_scope, ScopeSet};
+use registry_relay::auth::{AuthMode, AuthProvider, Principal};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -93,7 +93,7 @@ async fn whoami_handler(Extension(principal): Extension<Principal>) -> impl Into
 
 async fn needs_admin_handler(
     Extension(principal): Extension<Principal>,
-) -> Result<&'static str, data_gate::error::Error> {
+) -> Result<&'static str, registry_relay::error::Error> {
     require_scope(&principal, "admin")?;
     Ok("ok")
 }
@@ -365,7 +365,7 @@ async fn provider_rejects_unknown_bearer() {
         .await
         .expect_err("unknown bearer rejected");
     assert_eq!(
-        data_gate::error::Error::from(err).code(),
+        registry_relay::error::Error::from(err).code(),
         "auth.invalid_credential"
     );
 }

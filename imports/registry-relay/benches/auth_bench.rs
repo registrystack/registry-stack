@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderValue};
 use criterion::{criterion_group, criterion_main, Criterion};
-use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
-use data_gate::auth::{AuthProvider, ScopeSet};
+use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+use registry_relay::auth::{AuthProvider, ScopeSet};
 use sha2::{Digest, Sha256};
 
 const VALID_KEY: &str = "perf-bench-api-key-abcdef-0123456789-xyz";

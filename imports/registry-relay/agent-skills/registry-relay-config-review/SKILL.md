@@ -1,15 +1,15 @@
 ---
-name: data-gate-config-review
-description: Use when reviewing or troubleshooting data_gate V1 YAML configuration for spec compliance, security, disclosure control, schema/entity validation, scope isolation, relationships, aggregates, audit settings, or readiness failures.
+name: registry-relay-config-review
+description: Use when reviewing or troubleshooting registry-relay V1 YAML configuration for spec compliance, security, disclosure control, schema/entity validation, scope isolation, relationships, aggregates, audit settings, or readiness failures.
 ---
 
-# Data Gate Config Review
+# Registry Relay Config Review
 
-Use this skill to review `data_gate` V1 configs before deployment or when `/ready`, config loading, entity routing, or disclosure behavior is wrong.
+Use this skill to review `registry-relay` V1 configs before deployment or when `/ready`, config loading, entity routing, or disclosure behavior is wrong.
 
 ## Bundled Contract
 
-This skill is self-contained. Do not assume access to the `data_gate` repository, `Spec.md`, or Rust source code.
+This skill is self-contained. Do not assume access to the `registry-relay` repository, `Spec.md`, or Rust source code.
 
 Before reviewing a config, read:
 
@@ -82,7 +82,7 @@ Use that bundled reference as the source of truth for V1 syntax, constraints, ro
 
 Perform a structural review against `references/v1-config-contract.md`. Do not require repository access to complete the review.
 
-If the user supplies loader errors, readiness output, audit samples, or validation logs from a `data_gate` deployment, map them back to the bundled contract and include them in the findings. Never ask for production secrets or full environment dumps.
+If the user supplies loader errors, readiness output, audit samples, or validation logs from a `registry-relay` deployment, map them back to the bundled contract and include them in the findings. Never ask for production secrets or full environment dumps.
 
 ## Review Output
 

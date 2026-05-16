@@ -10,7 +10,7 @@
 
 [[resource]]
 path = "jsonld/provenance/v1/context.jsonld"
-sha256 = "584822ba513147086ea8b9196c7dc799df806451b5b4aa4989971c7615956e5d"
+sha256 = "6d458f116653b569f3538aec485779e6f8f46d943d4770970a13a65b1011fa6a"
 served_as = "context"
 
 [[resource]]
@@ -20,17 +20,17 @@ served_as = "vendored"
 
 [[resource]]
 path = "schemas/verify-result/v1.json"
-sha256 = "6d8783eba90d07a7680a60393aed3131c6d22e919469d9cb71029f939661cbe7"
+sha256 = "f3d07b30367f16f415bccb6ed51f2604824a10d11ca612b2f0359c6d6a2ae487"
 served_as = "schema"
 
 [[resource]]
 path = "schemas/aggregate-result/v1.json"
-sha256 = "773ea71046d5d0f5bcd7ee6b493a0e19e6043fdae37a886705bc0a2640656d69"
+sha256 = "d6c173e365da7c116b2a67c7900377624e7f20d32d8e3e0bb44f43aa86d38002"
 served_as = "schema"
 
 [[resource]]
 path = "schemas/entity-record/v1.json"
-sha256 = "f79d01f70b098b8972512cb8b6228aa8a6a78549c9100e6829bf7fa58c9d8932"
+sha256 = "4ec670064f4d9f4717b9870ec7ca87167359d239e113c875168f09288cb0b80c"
 served_as = "schema"
 
 # Scalar API Reference standalone bundle, @scalar/api-reference@1.57.1

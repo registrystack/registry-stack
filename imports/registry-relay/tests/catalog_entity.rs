@@ -6,10 +6,10 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
-use data_gate::api::{catalog_router, openapi_router};
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
-use data_gate::config;
-use data_gate::entity::EntityRegistry;
+use registry_relay::api::{catalog_router, openapi_router};
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::config;
+use registry_relay::entity::EntityRegistry;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -401,14 +401,17 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         "http://publications.europa.eu/resource/authority/frequency/MONTHLY"
     );
     let distribution = &body["dcat:dataset"][0]["dcat:distribution"][0];
-    assert_eq!(distribution["dct:format"]["@id"], "data_gate:HttpData-PULL");
+    assert_eq!(
+        distribution["dct:format"]["@id"],
+        "registry_relay:HttpData-PULL"
+    );
     assert_eq!(
         distribution["dcat:accessService"]["@type"],
         "dcat:DataService"
     );
     assert_eq!(
         distribution["dcat:accessService"]["dspace:dataServiceType"],
-        "data_gate:entity-rest"
+        "registry_relay:entity-rest"
     );
     assert_eq!(
         distribution["dcat:accessService"]["dcat:endpointURL"],
@@ -425,7 +428,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         household["sh:targetClass"],
         "https://publicschema.org/concepts/Household"
     );
-    assert_eq!(household["data_gate:primaryKey"], "id");
+    assert_eq!(household["registry_relay:primaryKey"], "id");
     assert!(household["sh:property"]
         .as_array()
         .expect("properties")
@@ -440,7 +443,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         .iter()
         .any(|property| {
             property["sh:path"] == "https://example.test/vocab/relationships/householdMember"
-                && property["data_gate:targetEntity"] == "individual"
+                && property["registry_relay:targetEntity"] == "individual"
         }));
 }
 
@@ -485,7 +488,7 @@ async fn dcat_ap_returns_etag_and_honors_if_none_match() {
 
 #[tokio::test]
 async fn generated_catalog_can_run_external_shacl_validation_when_enabled() {
-    if std::env::var("DATAGATE_RUN_EXTERNAL_SHACL").as_deref() != Ok("1") {
+    if std::env::var("REGISTRY_RELAY_RUN_EXTERNAL_SHACL").as_deref() != Ok("1") {
         return;
     }
 

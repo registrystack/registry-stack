@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Entity-layer config validation tests.
 
-use data_gate::entity::EntityRegistry;
+use registry_relay::entity::EntityRegistry;
 use tempfile::TempDir;
 
 fn write_config(tmp: &TempDir, body: &str) -> std::path::PathBuf {
@@ -136,7 +136,7 @@ fn valid_dataset() -> String {
 fn valid_household_individual_entities_load_and_compile() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp, &base_config(&valid_dataset()));
-    let config = data_gate::config::load(&config_path).expect("config loads");
+    let config = registry_relay::config::load(&config_path).expect("config loads");
     let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
 
     let dataset = registry.dataset("social_registry").expect("dataset");
@@ -151,7 +151,7 @@ fn entity_referencing_missing_table_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace("table: households_table", "table: missing_table");
     let config_path = write_config(&tmp, &base_config(&invalid));
-    let err = data_gate::config::load(&config_path).expect_err("config rejects missing table");
+    let err = registry_relay::config::load(&config_path).expect_err("config rejects missing table");
     assert_eq!(err.code(), "config.validation_error");
 }
 
@@ -213,7 +213,7 @@ fn required_filters_not_in_allowed_filters_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_required_filters("[id, unknown_field]");
     let config_path = write_config(&tmp, &base_config(&dataset));
-    let err = data_gate::config::load(&config_path)
+    let err = registry_relay::config::load(&config_path)
         .expect_err("config rejects required_filters with unknown field");
     assert_eq!(err.code(), "config.validation_error");
 }
@@ -223,7 +223,7 @@ fn required_filters_all_in_allowed_filters_loads_cleanly() {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_required_filters("[id, group_id]");
     let config_path = write_config(&tmp, &base_config(&dataset));
-    let config = data_gate::config::load(&config_path).expect("config loads");
+    let config = registry_relay::config::load(&config_path).expect("config loads");
     let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
     let dataset = registry.dataset("my_dataset").expect("dataset");
     let entity = dataset.entity("record").expect("entity");
@@ -235,7 +235,7 @@ fn required_filters_empty_is_accepted() {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_required_filters("[]");
     let config_path = write_config(&tmp, &base_config(&dataset));
-    let config = data_gate::config::load(&config_path).expect("config loads");
+    let config = registry_relay::config::load(&config_path).expect("config loads");
     let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
     let dataset = registry.dataset("my_dataset").expect("dataset");
     let entity = dataset.entity("record").expect("entity");
@@ -250,7 +250,7 @@ fn allowed_expansions_without_matching_relationship_are_rejected() {
         "          max_limit: 1000\n          allowed_expansions: [ghost]\n",
     );
     let config_path = write_config(&tmp, &base_config(&dataset));
-    let err = data_gate::config::load(&config_path)
+    let err = registry_relay::config::load(&config_path)
         .expect_err("config rejects expansion without relationship");
     assert_eq!(err.code(), "config.validation_error");
 }
@@ -271,6 +271,6 @@ fn relationship_foreign_key_type_mismatch_is_rejected() {
         "            - name: household_id\n              type: integer\n              nullable: false",
     );
     let config_path = write_config(&tmp, &base_config(&invalid));
-    let err = data_gate::config::load(&config_path).expect_err("config rejects FK mismatch");
+    let err = registry_relay::config::load(&config_path).expect_err("config rejects FK mismatch");
     assert_eq!(err.code(), "config.validation_error");
 }

@@ -4,7 +4,9 @@
 use std::fs;
 use std::path::Path;
 
-use data_gate::audit::{AuditEnvelope, AuditRecord, AuditSink, EndpointKind, FileSink, SyslogSink};
+use registry_relay::audit::{
+    AuditEnvelope, AuditRecord, AuditSink, EndpointKind, FileSink, SyslogSink,
+};
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::time::{timeout, Duration};
@@ -121,7 +123,7 @@ async fn syslog_sink_returns_io_error_when_socket_unavailable() {
         .await
         .expect_err("missing socket should be an audit error");
 
-    assert!(matches!(error, data_gate::audit::AuditError::Io(_)));
+    assert!(matches!(error, registry_relay::audit::AuditError::Io(_)));
 }
 
 fn rotated_path(path: &Path, index: u32) -> String {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `data_gate`: a config-driven controlled data gateway.
+//! `registry-relay`: a config-driven registry relay.
 //!
 //! The crate turns local CSV, XLSX, and Parquet sources into protected,
 //! read-only, entity-shaped HTTP APIs. The public surface is deliberately

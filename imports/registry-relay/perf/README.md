@@ -1,7 +1,7 @@
-# data_gate Performance Testing
+# registry-relay Performance Testing
 
 This directory contains the scaffolding for local, CI, and scheduled performance runs
-against the `data_gate` HTTP service. The goal is to measure authenticated read latency,
+against the `registry-relay` HTTP service. The goal is to measure authenticated read latency,
 ETag/304 cache behaviour, aggregate throughput, and error-path predictability across
 small (1k), medium (100k), and large (1M) synthetic datasets.
 
@@ -70,7 +70,7 @@ With [1Password CLI](https://developer.1password.com/docs/cli/):
 
 ```bash
 op run --env-file=target/perf/perf.env -- \
-  target/release/data_gate --config perf/config/medium.yaml
+  target/release/registry-relay --config perf/config/medium.yaml
 ```
 
 Without 1Password (source the env file directly):
@@ -79,7 +79,7 @@ Without 1Password (source the env file directly):
 set -a
 . target/perf/perf.env
 set +a
-target/release/data_gate --config perf/config/medium.yaml
+target/release/registry-relay --config perf/config/medium.yaml
 ```
 
 Wait until `/ready` returns `200` before sending load:
@@ -152,9 +152,9 @@ Both scripts are written by a separate agent and documented there.
 | `DATA_GATE_TOKEN_INVALID`   | `not-a-real-token-xxxx`    | Deliberately invalid token for 401 tests         |
 | `DATA_GATE_DATASET_ID`      | `clinic_capacity`          | Dataset id used in k6 URL construction           |
 | `DATA_GATE_ENTITY`          | `facility`                 | Entity name used in k6 URL construction          |
-| `PERF_ROWS_KEY_HASH`        | (generated sha256 hash)    | Fingerprint read by data_gate for `perf_rows`    |
-| `PERF_METADATA_KEY_HASH`    | (generated sha256 hash)    | Fingerprint read by data_gate for `perf_metadata`|
+| `PERF_ROWS_KEY_HASH`        | (generated sha256 hash)    | Fingerprint read by registry-relay for `perf_rows`    |
+| `PERF_METADATA_KEY_HASH`    | (generated sha256 hash)    | Fingerprint read by registry-relay for `perf_metadata`|
 | `PERF_AGGREGATE_KEY_HASH`   | (generated sha256 hash)    | Fingerprint for `perf_aggregate`                 |
 | `PERF_NO_SCOPE_KEY_HASH`    | (generated sha256 hash)    | Fingerprint for `perf_no_scope`                  |
 
-All hash env vars follow data_gate's convention: `sha256:<64 lowercase hex chars>`.
+All hash env vars follow registry-relay's convention: `sha256:<64 lowercase hex chars>`.

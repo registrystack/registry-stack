@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `did:web` document builder for gateway-mode deployments.
 //!
-//! In gateway mode (`provenance.issuer.mode: gateway`), data_gate hosts
+//! In gateway mode (`provenance.issuer.mode: gateway`), registry-relay hosts
 //! `/.well-known/did.json`. The document contains the issuer DID, every
 //! active verification method (the current signing key), and any retired
 //! keys still inside their grace window.

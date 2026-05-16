@@ -11,7 +11,7 @@
 // metadata-only ETag path should make this threshold green.
 //
 // This script uses cached_304_large thresholds. If you want to observe the
-// raw timing without failing the run, set DATA_GATE_NO_THRESHOLD=1 to skip
+// raw timing without failing the run, set REGISTRY_RELAY_NO_THRESHOLD=1 to skip
 // the threshold gate (not yet wired; document the intent).
 
 import http from 'k6/http';

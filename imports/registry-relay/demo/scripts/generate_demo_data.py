@@ -5,7 +5,7 @@
 #   "openpyxl>=3.1",
 # ]
 # ///
-"""Generate five synthetic XLSX workbooks for the data_gate demo pack.
+"""Generate five synthetic XLSX workbooks for the registry-relay demo pack.
 
 Reads no inputs. Writes:
   - demo/data/benefits_casework.xlsx
@@ -1150,8 +1150,8 @@ def write_workbook(path: Path, sheets: dict[str, list[list[Any]]], title: str) -
     # openpyxl resets `modified` on save, but we override the XML after
     # serializing the archive so this is mostly defensive.
     props = DocumentProperties()
-    props.creator = "data_gate_demo_generator"
-    props.lastModifiedBy = "data_gate_demo_generator"
+    props.creator = "registry-relay-demo-generator"
+    props.lastModifiedBy = "registry-relay-demo-generator"
     props.created = FIXED_TIMESTAMP
     props.modified = FIXED_TIMESTAMP
     props.title = title

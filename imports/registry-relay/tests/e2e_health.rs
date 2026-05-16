@@ -32,13 +32,13 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use data_gate::audit::{AuditSink, InMemorySink};
-use data_gate::auth::api_key::ApiKeyAuth;
-use data_gate::config::{Config, DatasetId, ResourceId};
-use data_gate::format::FormatRegistry;
-use data_gate::ingest::{IngestRegistry, ReadinessSnapshot, ReadyResource};
-use data_gate::server::{build_admin_app, build_app, build_app_with_readiness};
 use datafusion::execution::context::SessionContext;
+use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::auth::api_key::ApiKeyAuth;
+use registry_relay::config::{Config, DatasetId, ResourceId};
+use registry_relay::format::FormatRegistry;
+use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot, ReadyResource};
+use registry_relay::server::{build_admin_app, build_app, build_app_with_readiness};
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -61,7 +61,7 @@ fn load_example_config() -> Config {
         std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
         std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
-    data_gate::config::load(&path).expect("example config loads")
+    registry_relay::config::load(&path).expect("example config loads")
 }
 
 fn build_test_app(sink: Arc<dyn AuditSink>) -> axum::Router {

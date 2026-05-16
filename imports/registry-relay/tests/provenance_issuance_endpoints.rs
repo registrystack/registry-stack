@@ -24,20 +24,6 @@ use axum::{Extension, Router};
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use data_gate::api::{aggregates_router, entity_router, CursorSigner};
-use data_gate::audit::{audit_layer, AuditSettings, AuditSink, InMemorySink};
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
-use data_gate::config::{
-    self, Config, DatasetId, ProvenanceAlgorithm, ResourceId, SoftwareSignerConfig,
-};
-use data_gate::entity::EntityRegistry;
-use data_gate::ingest::{register_versioned_table, table_name, ReadinessSnapshot, ReadyResource};
-use data_gate::provenance::signers::software::SoftwareSigner;
-use data_gate::provenance::{
-    IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig, ResolvedUrls,
-    Signer,
-};
-use data_gate::query::{AggregateQueryEngine, EntityQueryEngine};
 use datafusion::arrow::array::{Float64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -45,7 +31,24 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
+use registry_relay::api::{aggregates_router, entity_router, CursorSigner};
+use registry_relay::audit::{audit_layer, AuditSettings, AuditSink, InMemorySink};
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::config::{
+    self, Config, DatasetId, ProvenanceAlgorithm, ResourceId, SoftwareSignerConfig,
+};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::ingest::{
+    register_versioned_table, table_name, ReadinessSnapshot, ReadyResource,
+};
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{
+    IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig, ResolvedUrls,
+    Signer,
+};
+use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::watch;
 use ulid::Ulid;
@@ -60,6 +63,22 @@ fn principal(scopes: &[&str]) -> Principal {
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
+}
+
+const FULL_STACK_RAW_API_KEY: &str = "registry_relay_full_stack_provenance_test_key";
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn fingerprint(raw: &str) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(raw.as_bytes())))
 }
 
 fn export_jwk(env_name: &str) -> VerifyingKey {
@@ -120,6 +139,32 @@ fn decode_and_verify_payload(jws: &str, vk: &VerifyingKey) -> Value {
         .expect("signature verifies against pubkey");
     let payload_bytes = URL_SAFE_NO_PAD.decode(parts[1]).expect("payload base64url");
     serde_json::from_slice(&payload_bytes).expect("payload JSON")
+}
+
+fn assert_credential_subject_matches_schema(
+    claim_type: registry_relay::provenance::jwt_vc::ClaimType,
+    subject: &Value,
+) {
+    let schema_bytes = match claim_type {
+        registry_relay::provenance::jwt_vc::ClaimType::VerifyResult => {
+            registry_relay::provenance::resources::VERIFY_RESULT_V1
+        }
+        registry_relay::provenance::jwt_vc::ClaimType::AggregateResult => {
+            registry_relay::provenance::resources::AGGREGATE_RESULT_V1
+        }
+        registry_relay::provenance::jwt_vc::ClaimType::EntityRecord => {
+            registry_relay::provenance::resources::ENTITY_RECORD_V1
+        }
+        _ => panic!("unexpected claim type {claim_type:?}"),
+    };
+    let schema: Value = serde_json::from_slice(schema_bytes).expect("schema JSON");
+    let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+    if let Err(errors) = compiled.validate(subject) {
+        let messages: Vec<String> = errors.map(|error| error.to_string()).collect();
+        panic!(
+            "credentialSubject for {claim_type:?} must match published schema: {messages:?}\nsubject: {subject}"
+        );
+    };
 }
 
 /// Install the production audit middleware on a Router. Mirrors the
@@ -414,6 +459,10 @@ async fn verify_returns_signed_vc_when_accept_opts_in() {
     );
     assert_eq!(payload["credentialSubject"]["predicate"], "exists");
     assert_eq!(payload["credentialSubject"]["value"], true);
+    assert_credential_subject_matches_schema(
+        registry_relay::provenance::jwt_vc::ClaimType::VerifyResult,
+        &payload["credentialSubject"],
+    );
 
     // Audit envelope carries the issuance block.
     let record = audit_record_for(
@@ -494,6 +543,10 @@ async fn entity_record_returns_signed_vc_when_accept_opts_in() {
         payload["credentialSubject"].get("expanded").is_none(),
         "no expansions requested, so `expanded` should be absent"
     );
+    assert_credential_subject_matches_schema(
+        registry_relay::provenance::jwt_vc::ClaimType::EntityRecord,
+        &payload["credentialSubject"],
+    );
 
     let record = audit_record_for(
         &harness.audit_sink,
@@ -550,6 +603,10 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
     // `{group, values}`; cross-check the first row has both keys.
     assert!(rows[0]["group"].is_object());
     assert!(rows[0]["values"].is_object());
+    assert_credential_subject_matches_schema(
+        registry_relay::provenance::jwt_vc::ClaimType::AggregateResult,
+        subject,
+    );
 
     let record = audit_record_for(
         &harness.audit_sink,
@@ -721,6 +778,90 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     );
     assert_eq!(rows[0]["group"]["municipality_code"], "mun-1");
     assert_eq!(rows[0]["values"]["individual_count"], 2);
+}
+
+#[tokio::test]
+async fn production_app_builder_issues_vc_after_real_api_key_auth() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cfg = Arc::new(write_config(&tmp));
+    std::mem::forget(tmp);
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+    let ingest_version = Ulid::from_string("01J5K8M0000000000000000000").expect("ulid");
+    register_individuals(&ctx, ingest_version);
+
+    let query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+    ));
+    let aggregate_query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+        Arc::clone(&cfg),
+    ));
+    let mut snapshot = ReadinessSnapshot::default();
+    snapshot.ready.insert(
+        (id("social_registry"), id("individuals_table")),
+        ReadyResource {
+            ingest_ulid: ingest_version,
+            registered_at: time::OffsetDateTime::now_utc(),
+        },
+    );
+    let (_tx, readiness) = watch::channel(snapshot);
+
+    let auth_entry = registry_relay::auth::api_key::ApiKeyEntry::new(
+        "vc-full-stack".to_string(),
+        ScopeSet::from_iter([
+            "social_registry:metadata",
+            "social_registry:rows",
+            "social_registry:verify",
+        ]),
+        fingerprint(FULL_STACK_RAW_API_KEY),
+    )
+    .expect("fingerprint parses");
+    let auth = Arc::new(registry_relay::auth::api_key::ApiKeyAuth::new(vec![
+        auth_entry,
+    ]));
+    let audit_sink = InMemorySink::new();
+    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let (provenance, verifying_key) = build_provenance_state("FULL_STACK_PROVENANCE_JWK");
+
+    let app = registry_relay::server::build_app_with_entity_query_and_provenance(
+        Arc::clone(&cfg),
+        auth,
+        sink_arc,
+        readiness,
+        registry,
+        query,
+        aggregate_query,
+        Some(provenance),
+    );
+    let server = TestServer::new(app);
+
+    let resp = server
+        .get("/datasets/social_registry/individual/verify?id=ind-1")
+        .add_header("authorization", format!("Bearer {FULL_STACK_RAW_API_KEY}"))
+        .add_header("accept", "application/vc+jwt")
+        .await;
+    resp.assert_status_ok();
+    assert_eq!(
+        resp.header("content-type").to_str().unwrap_or(""),
+        "application/vc+jwt"
+    );
+
+    let body = String::from_utf8(resp.as_bytes().to_vec()).expect("body utf8");
+    let payload = decode_and_verify_payload(&body, &verifying_key);
+    assert_eq!(payload["type"][1], "VerifyResult");
+    assert_eq!(payload["credentialSubject"]["value"], true);
+    assert_credential_subject_matches_schema(
+        registry_relay::provenance::jwt_vc::ClaimType::VerifyResult,
+        &payload["credentialSubject"],
+    );
+
+    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/verify");
+    assert_eq!(record["api_key_id"], "vc-full-stack");
+    assert_eq!(record["auth_mode"], "api_key");
+    assert_eq!(record["provenance"]["event"], "provenance.vc.issued");
 }
 
 // ---------------------------------------------------------------------------

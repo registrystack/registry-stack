@@ -2,11 +2,11 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Generate demo API key pairs for data_gate local review.
+"""Generate demo API key pairs for registry-relay local review.
 
 Each persona gets a freshly generated raw key (32 random bytes, base64url-encoded,
 no padding) and a SHA-256 fingerprint of that key. The fingerprint is what goes
-in the data_gate config's hash_env; the raw key is what Bruno sends as Bearer.
+in the registry-relay config's hash_env; the raw key is what Bruno sends as Bearer.
 
 Re-running always generates fresh keys. Old keys are not preserved.
 """
@@ -41,7 +41,7 @@ BRUNO_VAR_MAP = {
 # Bruno reads a `.env` at the collection root and exposes its keys to environment
 # files via `{{process.env.NAME}}`. We mirror demo/.env.local's variable names
 # (PERSONA_RAW) here so one rotation seeds both consumers.
-BRUNO_ENV_PATH = Path("bruno/data_gate_demo/.env")
+BRUNO_ENV_PATH = Path("bruno/registry-relay-demo/.env")
 
 
 def generate_raw_key() -> str:

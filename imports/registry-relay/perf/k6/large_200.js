@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scenario: 200 reads against the large fixture profile (1M rows).
 //
-// Single user by default (DATA_GATE_PROFILE=large). The response body is
+// Single user by default (REGISTRY_RELAY_PROFILE=large). The response body is
 // large; latency thresholds are set accordingly.
 //
-// Threshold key is chosen by DATA_GATE_PROFILE:
+// Threshold key is chosen by REGISTRY_RELAY_PROFILE:
 //   large (default): hot_200_1mb  (p95 < 50ms, p99 < 150ms)
 //   large-wide:      hot_200_10mb (p95 < 250ms, p99 < 750ms)
 //   large-full:      hot_200_50mb (p95 < 1500ms, p99 < 5000ms)
 //
 // Run against the large config:
 //   op run --env-file=target/perf/perf.env -- \
-//     target/release/data_gate --config perf/config/large.yaml
+//     target/release/registry-relay --config perf/config/large.yaml
 //
 // Then:
-//   DATA_GATE_PROFILE=large k6 run perf/k6/large_200.js
+//   REGISTRY_RELAY_PROFILE=large k6 run perf/k6/large_200.js
 
 import http from 'k6/http';
 import { check } from 'k6';

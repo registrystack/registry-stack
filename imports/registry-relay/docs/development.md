@@ -1,4 +1,4 @@
-# data_gate Development Guide
+# registry-relay Development Guide
 
 This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), and [provenance.md](provenance.md).
 

@@ -2,7 +2,7 @@
   "@context": {
     "@version": 1.1,
     "@protected": true,
-    "dg": "https://schemas.data-gate.org/provenance/v1#",
+    "dg": "https://schemas.registry-relay.org/provenance/v1#",
 
     "VerifyResult": {
       "@id": "dg:VerifyResult"

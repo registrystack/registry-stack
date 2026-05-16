@@ -1,15 +1,15 @@
 ---
-name: data-gate-config-author
-description: Use when a user has a CSV, XLSX, or Parquet file and wants to expose it with data_gate, or when creating/modifying data_gate V1 YAML configuration for datasets, private tables, entities, relationships, scopes, filters, aggregates, semantic URIs, audit, or server settings.
+name: registry-relay-config-author
+description: Use when a user has a CSV, XLSX, or Parquet file and wants to expose it with registry-relay, or when creating/modifying registry-relay V1 YAML configuration for datasets, private tables, entities, relationships, scopes, filters, aggregates, semantic URIs, audit, or server settings.
 ---
 
-# Data Gate Config Author
+# Registry Relay Config Author
 
-Use this skill to turn a user's CSV, XLSX, or Parquet file into a `data_gate` V1 config that exposes protected, read-only, domain-oriented REST APIs.
+Use this skill to turn a user's CSV, XLSX, or Parquet file into a `registry-relay` V1 config that exposes protected, read-only, domain-oriented REST APIs.
 
 ## Bundled Contract
 
-This skill is self-contained. Do not assume access to the `data_gate` repository, `Spec.md`, or Rust source code.
+This skill is self-contained. Do not assume access to the `registry-relay` repository, `Spec.md`, or Rust source code.
 
 Before drafting a non-trivial config, read:
 
@@ -117,7 +117,7 @@ After drafting a config:
 2. Confirm every storage table, entity, relationship, scope, filter, and aggregate reference resolves.
 3. Confirm verify-only, aggregate-only, row, metadata, bulk-export, and admin scopes remain independent.
 4. Confirm hidden storage columns are not used as public filters, aggregate columns, verify parameters, or documentation fields.
-5. If the user supplies loader errors or validation logs from a `data_gate` deployment, map them back to the bundled contract and revise the YAML. Do not require repository access to complete the config draft.
+5. If the user supplies loader errors or validation logs from a `registry-relay` deployment, map them back to the bundled contract and revise the YAML. Do not require repository access to complete the config draft.
 6. If env-backed API keys appear in examples, use placeholder environment variable names only. Do not print real secrets.
 
 ## Gotchas

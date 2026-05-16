@@ -1,6 +1,6 @@
-# data_gate
+# Registry Relay
 
-Controlled Data Gateway is a config-driven Rust service that turns sensitive government tabular files into protected, read-only, domain-oriented APIs.
+Registry Relay is a config-driven Rust service that turns sensitive government tabular files into protected, read-only, domain-oriented APIs.
 
 V1 is built around two layers:
 
@@ -11,7 +11,7 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 ## Current Status
 
-V1.0 is release-ready for protected consultation APIs over local CSV, XLSX, and Parquet sources. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD includes DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
+0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, and Parquet sources. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD includes DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
 
 - `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable` on the admin listener when `server.admin_bind` is configured.
 - Bulk export endpoints are contract-locked for V1.x and are not implemented.
@@ -46,14 +46,14 @@ just setup
 just build
 ```
 
-The release binary is written to `target/release/data_gate`.
+The release binary is written to `target/release/registry-relay`.
 
 ## Configure
 
 The binary reads config from the first available source:
 
 1. `--config <path>`
-2. `DATAGATE_CONFIG`
+2. `REGISTRY_RELAY_CONFIG`
 3. `./config/example.yaml`
 
 API keys are never stored in the YAML file. Each configured key points at an environment variable containing a SHA-256 fingerprint of a high-entropy raw key:
@@ -158,30 +158,30 @@ uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
   --shapes path/to/external-dcat-ap-shapes.ttl
 ```
 
-For CI jobs that should exercise the external engine from Rust tests, set `DATAGATE_RUN_EXTERNAL_SHACL=1` before running `cargo test --test catalog_entity generated_catalog_can_run_external_shacl_validation_when_enabled`.
+For CI jobs that should exercise the external engine from Rust tests, set `REGISTRY_RELAY_RUN_EXTERNAL_SHACL=1` before running `cargo test --test catalog_entity generated_catalog_can_run_external_shacl_validation_when_enabled`.
 
 ## Container Image
 
 Build the production image with Docker:
 
 ```sh
-docker build -t data_gate:local .
+docker build -t registry-relay:local .
 ```
 
 or with the helper:
 
 ```sh
-scripts/build-image.sh data_gate:local
+scripts/build-image.sh registry-relay:local
 ```
 
 The image:
 
 - builds the Rust release binary in a cargo builder stage;
 - copies only the binary and license into a small Debian runtime stage;
-- runs as the non-root `data_gate` user;
+- runs as the non-root `registry_relay` user;
 - exposes port `8080`;
-- uses `/etc/data_gate/config.yaml` as the default config path;
-- creates `/var/lib/data_gate/cache`, `/var/lib/data_gate/data`, and `/var/log/data_gate`.
+- uses `/etc/registry-relay/config.yaml` as the default config path;
+- creates `/var/lib/registry-relay/cache`, `/var/lib/registry-relay/data`, and `/var/log/registry-relay`.
 
 Example run:
 
@@ -190,9 +190,9 @@ docker run --rm -p 8080:8080 \
   -e PROGRAM_SYSTEM_API_KEY_HASH \
   -e STATS_OFFICE_API_KEY_HASH \
   -e VERIFICATION_SERVICE_API_KEY_HASH \
-  -v "$PWD/config/example.yaml:/etc/data_gate/config.yaml:ro" \
-  -v "$PWD/fixtures:/var/lib/data_gate/data:ro" \
-  data_gate:local
+  -v "$PWD/config/example.yaml:/etc/registry-relay/config.yaml:ro" \
+  -v "$PWD/fixtures:/var/lib/registry-relay/data:ro" \
+  registry-relay:local
 ```
 
 For production, mount a deployment-specific config, mount source data read-only, provide API-key hashes through the platform secret store, and choose the audit sink that matches the platform logging model.

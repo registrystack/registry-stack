@@ -5,8 +5,8 @@
 //   group_by: [region_code]
 //   measures: facility_count (count/id), total_capacity (sum/capacity)
 //
-// Requires clinic_capacity:aggregate scope (DATA_GATE_TOKEN_AGGREGATE).
-// Override the aggregate id via DATA_GATE_AGGREGATE_ID.
+// Requires clinic_capacity:aggregate scope (REGISTRY_RELAY_TOKEN_AGGREGATE).
+// Override the aggregate id via REGISTRY_RELAY_AGGREGATE_ID.
 
 import http from 'k6/http';
 import { check } from 'k6';

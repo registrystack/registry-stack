@@ -4,17 +4,19 @@
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
-use data_gate::api::{aggregates_router, entity_router, CursorSigner};
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
-use data_gate::config::{self, DatasetId, ResourceId};
-use data_gate::entity::EntityRegistry;
-use data_gate::ingest::{register_versioned_table, table_name, ReadinessSnapshot, ReadyResource};
-use data_gate::query::EntityQueryEngine;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use registry_relay::api::{aggregates_router, entity_router, CursorSigner};
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::config::{self, DatasetId, ResourceId};
+use registry_relay::entity::EntityRegistry;
+use registry_relay::ingest::{
+    register_versioned_table, table_name, ReadinessSnapshot, ReadyResource,
+};
+use registry_relay::query::EntityQueryEngine;
 use serde_json::Value;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -411,7 +413,7 @@ async fn entity_collection_validates_query_before_cached_not_modified() {
     let server = server_with_query().await;
     let validator = serde_json::to_string(&std::collections::BTreeMap::from([("limit", "0")]))
         .expect("validator serializes");
-    let etag = data_gate::api::entity::entity_etag(
+    let etag = registry_relay::api::entity::entity_etag(
         "collection",
         "social_registry",
         "household",

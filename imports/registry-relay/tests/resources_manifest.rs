@@ -77,27 +77,27 @@ fn compiled_in_resources_match_pinned_sha256() {
     let mut compiled: HashMap<&'static str, &'static [u8]> = HashMap::new();
     compiled.insert(
         "jsonld/provenance/v1/context.jsonld",
-        data_gate::provenance::resources::PROVENANCE_CONTEXT_V1,
+        registry_relay::provenance::resources::PROVENANCE_CONTEXT_V1,
     );
     compiled.insert(
         "jsonld/vc/v2/credentials.jsonld",
-        data_gate::provenance::resources::VC_V2_CONTEXT,
+        registry_relay::provenance::resources::VC_V2_CONTEXT,
     );
     compiled.insert(
         "schemas/verify-result/v1.json",
-        data_gate::provenance::resources::VERIFY_RESULT_V1,
+        registry_relay::provenance::resources::VERIFY_RESULT_V1,
     );
     compiled.insert(
         "schemas/aggregate-result/v1.json",
-        data_gate::provenance::resources::AGGREGATE_RESULT_V1,
+        registry_relay::provenance::resources::AGGREGATE_RESULT_V1,
     );
     compiled.insert(
         "schemas/entity-record/v1.json",
-        data_gate::provenance::resources::ENTITY_RECORD_V1,
+        registry_relay::provenance::resources::ENTITY_RECORD_V1,
     );
     compiled.insert(
         "scalar/api-reference.js",
-        data_gate::api::docs::SCALAR_BUNDLE,
+        registry_relay::api::docs::SCALAR_BUNDLE,
     );
 
     let manifest_bytes = fs::read(manifest_path()).expect("manifest readable");

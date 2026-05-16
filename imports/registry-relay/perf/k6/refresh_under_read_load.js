@@ -13,13 +13,13 @@
 //   other:metadata (no-scope), and an invalid token.
 // None of these carry the "admin" scope required by POST /admin/reload.
 //
-// This script expects an additional env var DATA_GATE_TOKEN_ADMIN carrying
+// This script expects an additional env var REGISTRY_RELAY_TOKEN_ADMIN carrying
 // a key with scope "admin". If it is absent, the reload trigger step is
 // skipped and a warning is logged. The read load portion still runs and
 // measures p99 stability.
 //
 // Table id from the perf config: facility_table
-// Override via DATA_GATE_TABLE_ID.
+// Override via REGISTRY_RELAY_TABLE_ID.
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -34,12 +34,12 @@ import {
   logScenarioStart,
 } from './lib/common.js';
 
-const tableId = __ENV.DATA_GATE_TABLE_ID || 'facility_table';
+const tableId = __ENV.REGISTRY_RELAY_TABLE_ID || 'facility_table';
 // Reload interval in seconds. Default: trigger a reload every 30 seconds.
-const reloadIntervalSec = parseInt(__ENV.DATA_GATE_RELOAD_INTERVAL || '30', 10);
+const reloadIntervalSec = parseInt(__ENV.REGISTRY_RELAY_RELOAD_INTERVAL || '30', 10);
 
 // Admin token is optional. If missing, reload step is skipped.
-const adminToken = __ENV.DATA_GATE_TOKEN_ADMIN || '';
+const adminToken = __ENV.REGISTRY_RELAY_TOKEN_ADMIN || '';
 
 export const options = commonOptions({
   scenario: 'refresh_under_read_load',
@@ -59,9 +59,9 @@ export function setup() {
 
   if (!adminToken) {
     console.warn(
-      'refresh_under_read_load: DATA_GATE_TOKEN_ADMIN is not set. ' +
+      'refresh_under_read_load: REGISTRY_RELAY_TOKEN_ADMIN is not set. ' +
       'The admin reload step will be skipped. To test reload under load, ' +
-      'generate a key with scope "admin" and set DATA_GATE_TOKEN_ADMIN. ' +
+      'generate a key with scope "admin" and set REGISTRY_RELAY_TOKEN_ADMIN. ' +
       'Note: the perf key generator does not currently emit an admin-scoped key.'
     );
   } else {

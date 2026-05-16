@@ -17,7 +17,7 @@
 //! Adding a v2 of any resource means adding a new constant and a new
 //! lookup arm; the old version is never replaced or mutated.
 
-/// JSON-LD 1.1 context for the data_gate provenance vocabulary (v1).
+/// JSON-LD 1.1 context for the Registry Relay provenance vocabulary (v1).
 /// Mounted at `<context_base_url>/provenance/v1.jsonld`.
 pub const PROVENANCE_CONTEXT_V1: &[u8] =
     include_bytes!("../../resources/jsonld/provenance/v1/context.jsonld");

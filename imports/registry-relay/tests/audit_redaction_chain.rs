@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use data_gate::audit::chain::{
+use registry_relay::audit::chain::{
     verify_chain_lines, verify_chain_lines_from_prev_hash, ChainState, ChainVerificationError,
 };
-use data_gate::audit::redact::{redact_query_with_sensitive_fields, sensitive_value_hash};
-use data_gate::audit::{
+use registry_relay::audit::redact::{redact_query_with_sensitive_fields, sensitive_value_hash};
+use registry_relay::audit::{
     AuditEnvelope, AuditError, AuditFuture, AuditRecord, AuditSink, ChainingSink, EndpointKind,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};

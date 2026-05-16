@@ -1,6 +1,6 @@
 # Data Provenance
 
-`data_gate` can return W3C Verifiable Credentials (VCs), signed as
+`registry-relay` can return W3C Verifiable Credentials (VCs), signed as
 compact JWS, for three response families:
 
 - `GET /datasets/{dataset_id}/{entity}/verify` -> `VerifyResult`
@@ -16,10 +16,10 @@ shapes, endpoints, audit events, and key management.
 
 ## Why Verifiable Credentials
 
-Consumers of `data_gate` increasingly need to relay government data to
+Consumers of `registry-relay` increasingly need to relay government data to
 downstream parties (cross-ministry workflows, EU-level dataspaces,
 audit reviewers). Plain JSON gives them no cryptographic way to prove
-"this came from data_gate at time T under DID D". A VC-JWT does:
+"this came from registry-relay at time T under DID D". A VC-JWT does:
 issuer DID, signing key, claim type, subject URI, and validity window
 are all signed under one envelope that any verifier with the issuer's
 DID Document can check.
@@ -49,7 +49,7 @@ provenance:
     verification_method_id: did:web:data.example.gov#issuance
     signer:
       kind: software
-      jwk_env: DATAGATE_PROVENANCE_JWK
+      jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
       signing_algorithm: EdDSA
 ```
 
@@ -63,8 +63,50 @@ YAML). The env value is a JSON-encoded private JWK, e.g.:
 Use 1Password, AWS Secrets Manager, or your platform's secret store to
 inject it. Do not echo, log, or commit this value.
 
+For local smoke tests, generate a throwaway Ed25519 JWK into ignored
+build output and inject it into the environment:
+
+```sh
+mkdir -p target/provenance
+node -e 'const crypto=require("node:crypto"); const {privateKey}=crypto.generateKeyPairSync("ed25519"); process.stdout.write(JSON.stringify({...privateKey.export({format:"jwk"}), alg:"EdDSA"}));' \
+  > target/provenance/ed25519-private.jwk
+export REGISTRY_RELAY_PROVENANCE_JWK="$(cat target/provenance/ed25519-private.jwk)"
+```
+
+This command is only for local testing. In production, mint the key in
+the platform secret-management workflow and inject the env var without
+writing private material to disk.
+
 When `enabled: false` (or the block is omitted entirely), the gateway
 behaves as a plain JSON service.
+
+## Production Hardening Checklist
+
+Treat the signing key as a production credential with the same handling
+standard as an API root key:
+
+1. Inject `REGISTRY_RELAY_PROVENANCE_JWK` from the platform secret store at
+   process start. Do not place it in the YAML config, image layers,
+   shell history, crash reports, issue trackers, or deployment logs.
+2. Run the gateway under a dedicated service account with least
+   privilege on the secret, config, source-data, cache, and audit paths.
+3. Disable process core dumps and memory diagnostics that could capture
+   environment variables or heap contents holding signer material.
+4. Restrict interactive shell access on hosts that can read the signer
+   env var. Prefer short-lived break-glass sessions with recorded
+   access.
+5. Keep source-data mounts read-only and keep audit sinks append-only
+   from the gateway process where the platform supports it.
+6. Alert on startup failures with `provenance.config.*`,
+   `provenance.signer_unavailable`, and `provenance.issuance_failed`.
+7. Exercise key rotation in a staging deployment before production:
+   issue a VC with the old key, rotate, confirm the old `kid` remains
+   in `/.well-known/did.json`, verify the old VC, and confirm the old
+   key disappears only after the longest validity window has elapsed.
+8. Publish the `/schemas/...` and `/contexts/...` URLs behind the same
+   externally reachable base URL used in issued credentials, otherwise
+   downstream verifiers cannot resolve the contract named in
+   `credentialSchema.id` and `@context`.
 
 ## Issuer Modes
 
@@ -191,7 +233,8 @@ omit the `provenance` block entirely.
 The signing key is referenced indirectly: the config names an env var,
 the env var holds the JWK. To rotate:
 
-1. Mint a new keypair (Ed25519 or P-256, matching `signing_algorithm`).
+1. Mint a new keypair. V1 software signing supports Ed25519 (`EdDSA`);
+   P-256 (`ES256`) is reserved for a future signer backend.
 2. Add the new public JWK to the DID Document under a new
    `verificationMethod` id (gateway mode: edit the source the DID
    Document handler reads; delegated mode: coordinate with the
@@ -212,6 +255,74 @@ Never check a private JWK into git, into config, or into a container
 image. Never log it, never include it in error messages, and never
 embed it in a PR description.
 
+Gateway-mode rotation config should keep the previous public key in
+`retired_keys` until every credential signed by it has expired:
+
+```yaml
+provenance:
+  enabled: true
+  schema_base_url: https://data.example.gov/schemas
+  context_base_url: https://data.example.gov/contexts
+  claim_validity:
+    verify_result: 5m
+    aggregate_result: 1h
+    entity_record: 24h
+  issuer:
+    mode: gateway
+    did: did:web:data.example.gov
+    verification_method_id: did:web:data.example.gov#issuance-2026-06
+    signer:
+      kind: software
+      jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
+      signing_algorithm: EdDSA
+    retired_keys:
+      - verification_method_id: did:web:data.example.gov#issuance-2026-05
+        jwk_env: REGISTRY_RELAY_RETIRED_2026_05_PUBLIC_JWK
+        retired_after: "2026-06-01T00:00:00Z"
+```
+
+`REGISTRY_RELAY_RETIRED_2026_05_PUBLIC_JWK` must contain only the
+public JWK. If an operator accidentally supplies a full keypair, the
+gateway strips `d` before publishing the DID Document, but secret-store
+policy should still keep retired private keys out of public config.
+
+## Delegated Mode Runbook
+
+Delegated mode signs under the ministry DID while the gateway continues
+to host schemas and contexts. The ministry, not the gateway, must host
+the DID Document:
+
+```yaml
+provenance:
+  enabled: true
+  schema_base_url: https://relay.example.gov/schemas
+  context_base_url: https://relay.example.gov/contexts
+  claim_validity:
+    verify_result: 5m
+    aggregate_result: 1h
+    entity_record: 24h
+  issuer:
+    mode: delegated
+    ministry_did: did:web:ministry.example.gov
+    verification_method_id: did:web:ministry.example.gov#registry-relay
+    signer:
+      kind: software
+      jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
+      signing_algorithm: EdDSA
+```
+
+Before enabling delegated mode in production:
+
+1. Confirm `https://ministry.example.gov/.well-known/did.json`
+   contains `verificationMethod[].id:
+   did:web:ministry.example.gov#registry-relay`.
+2. Confirm that method's `publicKeyJwk.x` matches the gateway signing
+   key's public key and does not contain `d`.
+3. Confirm the gateway returns `404 provenance.did_document_unavailable`
+   for `GET /.well-known/did.json`.
+4. Issue a VC from the gateway and verify it with the ministry-hosted
+   DID Document plus the gateway-hosted schema.
+
 ## KMS Backend
 
 The config model accepts `signer.kind: kms`, but the in-tree V1 KMS
@@ -219,6 +330,23 @@ backend is a test mock. Production-grade AWS KMS signing is reserved
 for future work; do not deploy with `provider: aws_kms`. The
 `mock` provider is intentionally inaccessible to production configs
 through validation.
+
+The production acceptance bar for a real KMS backend is:
+
+- The gateway never receives or logs private key material.
+- Startup can resolve the configured key id to a public JWK suitable
+  for `/.well-known/did.json`.
+- Runtime signing returns compact JWS output with the same JOSE header
+  and VCDM 2.0 payload shape as the software Ed25519 path.
+- Key-disabled, access-denied, throttling, and regional outage failures
+  map to `provenance.signer_unavailable` without leaking request
+  payloads or secret identifiers beyond operator-safe key ids.
+- Integration tests verify issued VCs with a third-party JOSE library
+  using only the DID-published public JWK.
+
+Until that backend exists, the supported production signer is the
+software Ed25519 path with strict secret-store and host-hardening
+controls.
 
 ## Verifying a VC Externally
 
@@ -241,3 +369,75 @@ VCs. Minimum verification recipe:
    - the `credentialSubject` shape conforms to that schema.
 
 Treat any failure as a hard reject.
+
+The repository includes an operator-facing verifier that performs this
+flow using only public artifacts:
+
+```sh
+node scripts/verify_vc_jwt.mjs \
+  --jwt-file target/provenance/vc.jwt \
+  --did-document target/provenance/did.json \
+  --issuer did:web:data.example.gov \
+  --claim-type VerifyResult \
+  --schema-id https://data.example.gov/schemas/verify-result/v1.json \
+  --schema target/provenance/verify-result.schema.json
+```
+
+The verifier accepts local paths, `file://` URLs, and `http(s)` URLs
+for DID Documents and schemas. For deterministic fixture checks, pass
+`--now <unix-or-rfc3339>`.
+
+### Live Verification Smoke
+
+Use this smoke after every provenance deployment or key rotation:
+
+```sh
+mkdir -p target/provenance
+
+curl -fsS \
+  -H "Authorization: Bearer ${VERIFICATION_SERVICE_API_KEY}" \
+  -H "Accept: application/vc+jwt" \
+  "https://data.example.gov/datasets/social_registry/individual/verify?id=ind-123" \
+  -o target/provenance/vc.jwt
+
+curl -fsS \
+  "https://data.example.gov/.well-known/did.json" \
+  -o target/provenance/did.json
+
+curl -fsS \
+  "https://data.example.gov/schemas/verify-result/v1.json" \
+  -o target/provenance/verify-result.schema.json
+
+node scripts/verify_vc_jwt.mjs \
+  --jwt-file target/provenance/vc.jwt \
+  --did-document target/provenance/did.json \
+  --issuer did:web:data.example.gov \
+  --claim-type VerifyResult \
+  --schema-id https://data.example.gov/schemas/verify-result/v1.json \
+  --schema target/provenance/verify-result.schema.json
+```
+
+For delegated mode, replace `--did-document` with the ministry-hosted
+DID Document and keep `--schema` pointed at the gateway-hosted schema:
+
+```sh
+curl -fsS \
+  "https://ministry.example.gov/.well-known/did.json" \
+  -o target/provenance/ministry.did.json
+
+node scripts/verify_vc_jwt.mjs \
+  --jwt-file target/provenance/vc.jwt \
+  --did-document target/provenance/ministry.did.json \
+  --issuer did:web:ministry.example.gov \
+  --claim-type VerifyResult \
+  --schema-id https://relay.example.gov/schemas/verify-result/v1.json \
+  --schema target/provenance/verify-result.schema.json
+```
+
+### Fixture Corpus
+
+`tests/fixtures/vc/verify-result-v1/` contains a static VC-JWT, decoded
+payload, DID Document, and JSON Schema. It is signed outside
+`registry_relay` and verified by `tests/vc_external_verifier.rs` through
+the Node verifier. Add a new fixture directory whenever the public VC
+wire contract changes or a new claim type/version is introduced.

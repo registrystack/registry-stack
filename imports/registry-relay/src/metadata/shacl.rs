@@ -126,7 +126,7 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
                 "@type": "dcat:Distribution",
                 "dcterms:title": entity.title.as_deref().unwrap_or(entity.name.as_str()),
                 "dct:format": {
-                    "@id": "data_gate:HttpData-PULL",
+                    "@id": "registry_relay:HttpData-PULL",
                 },
                 "dcat:accessURL": entity.links.collection,
                 "dcat:accessService": {
@@ -136,7 +136,7 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
                         "{} REST access service",
                         entity.title.as_deref().unwrap_or(entity.name.as_str())
                     ),
-                    "dspace:dataServiceType": "data_gate:entity-rest",
+                    "dspace:dataServiceType": "registry_relay:entity-rest",
                     "dcat:endpointURL": entity.links.collection,
                     "dcterms:conformsTo": entity.links.schema,
                 },
@@ -179,18 +179,18 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
             "@type": "sh:PropertyShape",
             "sh:path": field_property_uri(base_url, &dataset.dataset_id, &entity.name, field),
             "sh:name": field.name,
-            "data_gate:type": field.r#type,
+            "registry_relay:type": field.r#type,
             "sh:minCount": if field.nullable { 0 } else { 1 },
         });
         insert_optional(
             &mut property,
-            "data_gate:codelist",
+            "registry_relay:codelist",
             field.codelist.as_deref(),
         );
-        insert_optional(&mut property, "data_gate:unit", field.unit.as_deref());
+        insert_optional(&mut property, "registry_relay:unit", field.unit.as_deref());
         insert_optional(
             &mut property,
-            "data_gate:language",
+            "registry_relay:language",
             field.language.as_deref(),
         );
         property
@@ -217,9 +217,9 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
             "@type": "sh:PropertyShape",
             "sh:path": path,
             "sh:name": relationship.name,
-            "data_gate:relationshipKind": relationship.kind,
-            "data_gate:targetEntity": relationship.target,
-            "data_gate:foreignKey": relationship.foreign_key,
+            "registry_relay:relationshipKind": relationship.kind,
+            "registry_relay:targetEntity": relationship.target,
+            "registry_relay:foreignKey": relationship.foreign_key,
             "sh:class": target_class,
         })
     });
@@ -231,7 +231,7 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
         "dcterms:isPartOf": dataset.links.self_url,
         "dcterms:identifier": format!("{}:{}", dataset.dataset_id, entity.name),
         "sh:name": entity.name,
-        "data_gate:primaryKey": entity.primary_key,
+        "registry_relay:primaryKey": entity.primary_key,
         "sh:property": field_properties.chain(relationship_properties).collect::<Vec<_>>(),
     })
 }
@@ -338,7 +338,7 @@ fn context() -> Value {
         "foaf": "http://xmlns.com/foaf/0.1/",
         "odrl": "http://www.w3.org/ns/odrl/2/",
         "sh": "http://www.w3.org/ns/shacl#",
-        "data_gate": "https://data-gate.dev/ns#",
+        "registry_relay": "https://registry-relay.dev/ns#",
         "dcat:accessURL": { "@type": "@id" },
         "dcat:accessService": { "@type": "@id" },
         "dcat:distribution": { "@type": "@id" },

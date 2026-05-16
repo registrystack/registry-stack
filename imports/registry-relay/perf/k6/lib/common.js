@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Shared helpers for data_gate k6 load test scenarios.
+// Shared helpers for registry-relay k6 load test scenarios.
 //
 // Protocol notes:
 //   HTTP version: k6 defaults to HTTP/1.1 with connection keepalive. Do not override.
@@ -27,33 +27,33 @@ export const serverErrors5xx = new Counter('server_errors_5xx');
 // ---------------------------------------------------------------------------
 
 export function baseUrl() {
-  return __ENV.DATA_GATE_BASE_URL || 'http://127.0.0.1:18080';
+  return __ENV.REGISTRY_RELAY_BASE_URL || 'http://127.0.0.1:18080';
 }
 
 export function dataset() {
-  return __ENV.DATA_GATE_DATASET_ID || 'clinic_capacity';
+  return __ENV.REGISTRY_RELAY_DATASET_ID || 'clinic_capacity';
 }
 
 export function entity() {
-  return __ENV.DATA_GATE_ENTITY || 'facility';
+  return __ENV.REGISTRY_RELAY_ENTITY || 'facility';
 }
 
 export function aggregateId() {
-  return __ENV.DATA_GATE_AGGREGATE_ID || 'by_region';
+  return __ENV.REGISTRY_RELAY_AGGREGATE_ID || 'by_region';
 }
 
 export function auditSink() {
-  return __ENV.DATA_GATE_AUDIT_SINK || 'file';
+  return __ENV.REGISTRY_RELAY_AUDIT_SINK || 'file';
 }
 
 export function profile() {
-  return __ENV.DATA_GATE_PROFILE || 'medium';
+  return __ENV.REGISTRY_RELAY_PROFILE || 'medium';
 }
 
 const loggedTokenLabels = new Set();
 
 function logTokenPresenceOnce(label, message) {
-  if (__ENV.DATA_GATE_LOG_TOKENS !== '1') {
+  if (__ENV.REGISTRY_RELAY_LOG_TOKENS !== '1') {
     return;
   }
   if (!loggedTokenLabels.has(label)) {
@@ -72,32 +72,32 @@ function requireToken(envVar, label) {
 }
 
 export function rowsToken() {
-  return requireToken('DATA_GATE_TOKEN', 'rows token');
+  return requireToken('REGISTRY_RELAY_TOKEN', 'rows token');
 }
 
 export function metadataToken() {
-  return requireToken('DATA_GATE_TOKEN_METADATA', 'metadata token');
+  return requireToken('REGISTRY_RELAY_TOKEN_METADATA', 'metadata token');
 }
 
 export function aggregateToken() {
-  return requireToken('DATA_GATE_TOKEN_AGGREGATE', 'aggregate token');
+  return requireToken('REGISTRY_RELAY_TOKEN_AGGREGATE', 'aggregate token');
 }
 
 export function noScopeToken() {
-  return requireToken('DATA_GATE_TOKEN_NO_SCOPE', 'no-scope token');
+  return requireToken('REGISTRY_RELAY_TOKEN_NO_SCOPE', 'no-scope token');
 }
 
 export function invalidToken() {
   // Invalid token is expected to be a synthetic value. We do not fail-fast
   // because a blank invalid token still exercises the 401 path.
-  const token = __ENV.DATA_GATE_TOKEN_INVALID || 'invalid-token-value';
+  const token = __ENV.REGISTRY_RELAY_TOKEN_INVALID || 'invalid-token-value';
   logTokenPresenceOnce('invalid token', 'invalid token: token present: yes (synthetic)');
   return token;
 }
 
 // Base request headers using Authorization: Bearer (default auth path).
 export function baseHeaders() {
-  const token = __ENV.DATA_GATE_TOKEN || '';
+  const token = __ENV.REGISTRY_RELAY_TOKEN || '';
   return {
     'Authorization': `Bearer ${token}`,
     'Accept': 'application/json',
@@ -211,8 +211,8 @@ export function commonOptions(opts) {
     extraTags,
   } = opts;
 
-  const vus = parseInt(__ENV.DATA_GATE_VUS || String(defaultVus || 20), 10);
-  const duration = __ENV.DATA_GATE_DURATION || defaultDuration || '30s';
+  const vus = parseInt(__ENV.REGISTRY_RELAY_VUS || String(defaultVus || 20), 10);
+  const duration = __ENV.REGISTRY_RELAY_DURATION || defaultDuration || '30s';
 
   // Default tag so {expected_status:false} threshold filters select normal
   // requests. Per-request tags (e.g. expected_status: '401' in auth_deny)
@@ -220,7 +220,7 @@ export function commonOptions(opts) {
   const tags = Object.assign({ scenario, expected_status: 'false' }, extraTags || {});
 
   if (scenarioType === 'constant-arrival-rate') {
-    const rate = parseInt(__ENV.DATA_GATE_RATE || String(defaultRate || 100), 10);
+    const rate = parseInt(__ENV.REGISTRY_RELAY_RATE || String(defaultRate || 100), 10);
     return {
       scenarios: {
         [scenario]: {

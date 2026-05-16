@@ -17,8 +17,8 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 
-use data_gate::source::local_file::LocalFileSource;
-use data_gate::source::{Source, SourceError};
+use registry_relay::source::local_file::LocalFileSource;
+use registry_relay::source::{Source, SourceError};
 use tempfile::tempdir;
 use tokio::io::AsyncReadExt as _;
 

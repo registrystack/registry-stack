@@ -6,9 +6,9 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
-use data_gate::api::datasets_router;
-use data_gate::auth::{AuthMode, Principal, ScopeSet};
-use data_gate::config;
+use registry_relay::api::datasets_router;
+use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::config;
 use serde_json::Value;
 use tempfile::TempDir;
 

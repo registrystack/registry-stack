@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a generated data_gate DCAT-AP JSON-LD catalog with pySHACL."""
+"""Validate a generated Registry Relay DCAT-AP JSON-LD catalog with pySHACL."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def read_catalog(source: str, headers: dict[str, str]) -> bytes | str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Validate a data_gate DCAT-AP JSON-LD catalog with a real SHACL engine. "
+            "Validate a Registry Relay DCAT-AP JSON-LD catalog with a real SHACL engine. "
             "The default shape fixture is a CI-friendly DCAT-AP smoke profile; "
             "pass --shapes to use stricter external DCAT-AP shapes."
         )

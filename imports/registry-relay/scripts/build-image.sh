@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 set -eu
 
-image="${1:-data_gate:local}"
+image="${1:-registry-relay:local}"
 
 docker build -t "$image" .

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Microbenchmarks for `serde_json::to_vec` on representative record shapes.
 //!
-//! These cover the JSON serialization cost for the shapes `data_gate`
+//! These cover the JSON serialization cost for the shapes `registry_relay`
 //! actually emits on `GET /datasets/{dataset_id}/{entity}` responses:
 //! narrow, medium, and wide rows, and a paginated collection envelope.
 

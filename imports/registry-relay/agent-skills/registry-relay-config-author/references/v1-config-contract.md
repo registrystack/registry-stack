@@ -1,10 +1,10 @@
-# data_gate V1 Config Contract
+# registry-relay V1 Config Contract
 
-This reference is self-contained. Use it when reviewing `data_gate` V1 YAML without access to the app repository or implementation spec.
+This reference is self-contained. Use it when authoring `registry-relay` V1 YAML without access to the app repository or implementation spec.
 
 ## Product Shape
 
-`data_gate` is a config-driven Rust service that exposes sensitive tabular files as protected, read-only, domain-oriented REST APIs.
+`registry-relay` is a config-driven Rust service that exposes sensitive tabular files as protected, read-only, domain-oriented REST APIs.
 
 V1 has two layers under one binary:
 
@@ -41,7 +41,7 @@ server:
   #     - 10.0.0.0/8
 
 catalog:
-  title: Internal Government Data Gateway
+  title: Internal Government Registry Relay
   base_url: https://data.example.gov
   publisher: Ministry of Digital Government
 
@@ -270,7 +270,7 @@ audit:
   # include_health: false
   # For file sink:
   # sink: file
-  # path: /var/log/data_gate/audit.jsonl
+  # path: /var/log/registry-relay/audit.jsonl
   # rotate:
   #   max_size_mb: 100
   #   max_files: 14
@@ -795,7 +795,7 @@ Do not configure or imply:
 
 ## Self-Review Checklist
 
-Before approving a config:
+Before delivering a config:
 
 - Every referenced table, entity, relationship, field, scope, aggregate, and vocabulary prefix resolves.
 - Public names are entity-oriented and do not leak storage table IDs.

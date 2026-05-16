@@ -14,11 +14,11 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use data_gate::audit::{AuditEnvelope, AuditRecord, AuditSink, EndpointKind, InMemorySink};
+use registry_relay::audit::{AuditEnvelope, AuditRecord, AuditSink, EndpointKind, InMemorySink};
 
 fn sample_record() -> AuditRecord {
     AuditRecord {
-        ts: data_gate::audit::now_iso8601_millis(),
+        ts: registry_relay::audit::now_iso8601_millis(),
         request_id: "01HZXK3PQJR8M2N4WVBT6SCDE7".to_string(),
         api_key_id: Some("statistics_office".to_string()),
         auth_mode: Some("api_key".to_string()),
@@ -47,7 +47,7 @@ fn benchmark_record_construction(c: &mut Criterion) {
     c.bench_function("audit/record_construction", |b| {
         b.iter(|| {
             black_box(AuditRecord {
-                ts: data_gate::audit::now_iso8601_millis(),
+                ts: registry_relay::audit::now_iso8601_millis(),
                 request_id: "01HZXK3PQJR8M2N4WVBT6SCDE7".to_string(),
                 api_key_id: Some("statistics_office".to_string()),
                 auth_mode: Some("api_key".to_string()),

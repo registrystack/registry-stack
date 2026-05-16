@@ -7,7 +7,7 @@
 # ]
 # ///
 """
-Deterministic synthetic fixture generator for data_gate performance testing.
+Deterministic synthetic fixture generator for Registry Relay performance testing.
 
 Fixed seed 42. Re-running produces identical row content. Outputs Parquet and
 CSV files plus a manifest.json summarising every generated file.
@@ -181,7 +181,7 @@ FIXTURE_ROW_COUNTS = {
 # ---- main -------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate synthetic perf fixtures for data_gate.")
+    parser = argparse.ArgumentParser(description="Generate synthetic perf fixtures for Registry Relay.")
     parser.add_argument(
         "--profile",
         choices=["small", "medium", "large", "all"],

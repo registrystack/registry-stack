@@ -13,12 +13,12 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
-use data_gate::config::vocabularies;
-use data_gate::config::{
+use registry_relay::config::vocabularies;
+use registry_relay::config::{
     self, AccessRights, AggregateFunction, AuditFormat, AuditSinkConfig, AuthMode, FieldType,
     FilterOp, RefreshConfig, Sensitivity, SourceConfig, Suppression, UpdateFrequency,
 };
-use data_gate::error::{ConfigError, Error};
+use registry_relay::error::{ConfigError, Error};
 use sha2::{Digest, Sha256};
 
 fn make_fingerprint(plaintext: &[u8]) -> String {
@@ -82,7 +82,7 @@ fn example_config_loads_and_validates() {
 
     assert_eq!(config.server.bind.to_string(), "0.0.0.0:8080");
 
-    assert_eq!(config.catalog.title, "Internal Government Data Gateway");
+    assert_eq!(config.catalog.title, "Internal Government Registry Relay");
     assert_eq!(config.catalog.base_url, "https://data.example.gov");
     assert_eq!(config.catalog.publisher, "Ministry of Digital Government");
     assert_eq!(
@@ -324,7 +324,7 @@ fn config_error_codes_are_stable() {
 /// logs only.
 #[test]
 fn loader_does_not_leak_path_in_error_message() {
-    let bogus = Path::new("/no/such/file/data_gate_unit_test.yaml");
+    let bogus = Path::new("/no/such/file/registry_relay_unit_test.yaml");
     let result = config::load(bogus);
     let msg = match result {
         Err(e) => e.detail(),
