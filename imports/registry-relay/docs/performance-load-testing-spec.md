@@ -67,6 +67,12 @@ Required public endpoints:
 - `GET /catalog`
 - `GET /catalog/dcat-ap.jsonld`
 
+Required admin-only observability endpoint:
+
+- `GET /metrics`
+
+Scrape `/metrics` only from the admin listener configured by `server.admin_bind`. The public listener must not return a successful metrics response for `/metrics`.
+
 Required auth cases:
 
 - Valid token.
@@ -148,6 +154,22 @@ Expected:
 - ETag is present.
 - Response size is recorded.
 - Latency is measured separately for small, medium, and large datasets.
+
+### Metrics Scrape
+
+Request:
+
+```text
+GET /metrics
+```
+
+Expected:
+
+- Status is `200` on the admin listener.
+- Content type starts with `text/plain`.
+- Body is Prometheus-style text with request count, request duration, and readiness gauge metrics.
+- Labels stay low-cardinality. Route or endpoint class labels are acceptable; raw query strings, request ids, bearer tokens, key ids, purpose values, and row data are not.
+- Scrape latency and response bytes are recorded separately from public API workloads.
 
 ### Cold First Request
 

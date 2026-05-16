@@ -37,9 +37,12 @@ GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 Admin routes on `server.admin_bind`:
 
 ```text
+GET /metrics
 POST /admin/datasets/{dataset_id}/tables/{table_id}/reload
 POST /admin/reload
 ```
+
+`GET /metrics` returns Prometheus-style `text/plain` metrics for operators. It is intentionally admin-listener only and is not mounted on `server.bind`.
 
 `POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable`.
 

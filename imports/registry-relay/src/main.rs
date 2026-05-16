@@ -40,6 +40,7 @@ use data_gate::entity::EntityRegistry;
 use data_gate::error::{ConfigError, Error};
 use data_gate::format::FormatRegistry;
 use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
+use data_gate::observability::RequestMetrics;
 use data_gate::provenance::{
     build_resolved_provenance_config, ProvenanceState, ResolvedProvenanceConfig,
 };
@@ -126,7 +127,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let cfg = state.config();
         (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
     });
-    let app = data_gate::server::build_app_with_entity_query_and_provenance(
+    let metrics = RequestMetrics::shared();
+    let app = data_gate::server::build_app_with_entity_query_and_provenance_and_metrics(
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&audit_sink),
@@ -135,6 +137,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         query,
         aggregate_query,
         provenance_state.clone(),
+        Arc::clone(&metrics),
     );
 
     let listener = TcpListener::bind(bind).await.map_err(|err| {
@@ -188,12 +191,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // the other.
     let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
         if let Some(admin_listener) = admin_listener {
-            let admin_app = data_gate::server::build_admin_app(
+            let admin_app = data_gate::server::build_admin_app_with_metrics(
                 Arc::clone(&config),
                 Arc::clone(&auth),
                 Arc::clone(&audit_sink),
                 readiness_rx.clone(),
                 Arc::clone(&ingest),
+                Arc::clone(&metrics),
             );
             let admin_serve = axum::serve(
                 admin_listener,

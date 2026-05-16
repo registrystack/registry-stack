@@ -24,6 +24,7 @@ pub mod error;
 pub mod format;
 pub mod ingest;
 pub mod metadata;
+pub mod observability;
 pub mod provenance;
 pub mod query;
 pub mod server;

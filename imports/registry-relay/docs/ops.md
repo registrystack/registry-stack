@@ -176,6 +176,25 @@ In orchestrators:
 - Use `/ready` for readiness and traffic gating.
 - Give startup enough time for the largest XLSX/Parquet ingest.
 
+## Metrics
+
+When `server.admin_bind` is configured, the admin listener exposes:
+
+```text
+GET /metrics
+```
+
+The response is Prometheus-style `text/plain` suitable for scraping from the private admin network. The public data-plane listener does not mount `/metrics`.
+
+Metrics are intentionally bounded. Request metrics use low-cardinality labels such as method, route or endpoint class, and status, plus request-duration buckets. Readiness metrics are gauges derived from the ingest readiness snapshot. Metrics must not include raw query values, raw bearer tokens, request ids, API-key ids, key fingerprints, `Data-Purpose` values, or dataset row content.
+
+Recommended scrape posture:
+
+- Scrape only the admin listener from a private monitoring network.
+- Treat `/metrics` as operational telemetry, not an audit record or per-request trace.
+- Use audit logs for security review and request-level accountability.
+- Alert on readiness gauges and elevated 5xx/error counters before routing traffic away.
+
 ## Troubleshooting
 
 Config fails at startup:
@@ -231,3 +250,9 @@ Admin reload unavailable:
 - Confirm `server.admin_bind` is configured and reachable only from the private admin network.
 - Confirm the key has the independent `admin` scope.
 - Use the single-table reload path for V1. If `POST /admin/reload` returns `501 admin.reload_unavailable`, use the table-specific endpoint, refresh mode, or restart as the operational workaround.
+
+Metrics missing:
+
+- Confirm you are scraping the admin listener, not `server.bind`.
+- Confirm `server.admin_bind` is configured and reachable from the monitoring network.
+- Expect `/metrics` on the public listener to be unavailable. Depending on the auth stack, the response may be `401` rather than `404`.

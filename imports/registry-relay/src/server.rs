@@ -5,8 +5,9 @@
 //! [`Config`], [`AuthProvider`], and [`AuditSink`] state. The production
 //! path installs ingest readiness plus entity/query state through
 //! [`build_app_with_entity_query`]. Layering order follows the V1
-//! operational requirements for request ids, audit records, CORS,
-//! body limits, timeouts, and scoped API-key authentication.
+//! operational requirements for request ids, audit records, bounded
+//! metrics, CORS, body limits, timeouts, and scoped API-key
+//! authentication.
 //!
 //! ## Layer order (outer to inner)
 //!
@@ -16,17 +17,19 @@
 //!    the audit log.
 //! 2. Audit middleware: emits one record per request to the configured
 //!    sink, with health/ready gated by `audit.include_health`.
-//! 3. `TraceLayer`: structured request/response spans for operational
+//! 3. Metrics middleware: records low-cardinality request counters and
+//!    duration buckets for the admin-only Prometheus exposition route.
+//! 4. `TraceLayer`: structured request/response spans for operational
 //!    logs. The audit log is the load-bearing observability surface;
 //!    this layer adds debugging context.
-//! 4. `CorsLayer`: built from `config.server.cors.allowed_origins`.
+//! 5. `CorsLayer`: built from `config.server.cors.allowed_origins`.
 //!    Empty allowlist (the default) means no `Access-Control-Allow-*`
 //!    headers go out, matching the default-deny CORS policy.
-//! 5. Internal error normalizer: maps timeout/body-limit responses into
+//! 6. Internal error normalizer: maps timeout/body-limit responses into
 //!    RFC 7807 Problem Details before audit records them.
-//! 6. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
-//! 7. `TimeoutLayer`: built from `config.server.request_timeout`.
-//! 8. Auth middleware on a *sub-router* that mounts data-plane routes
+//! 7. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
+//! 8. `TimeoutLayer`: built from `config.server.request_timeout`.
+//! 9. Auth middleware on a *sub-router* that mounts data-plane routes
 //!    only. The health sub-router is merged separately so `/health`
 //!    and `/ready` stay unauthenticated.
 //!
@@ -35,9 +38,9 @@
 //! [`build_admin_app`] mirrors [`build_app`] for the optional admin
 //! listener (`config.server.admin_bind`). Admin routes are intentionally
 //! kept off the public data-plane listener. The admin listener carries
-//! `/health`, table reload, and the registry-wide reload placeholder;
-//! `POST /admin/reload` remains a reserved V1.x surface that returns
-//! `501 admin.reload_unavailable`.
+//! `/health`, admin-listener-only `/metrics`, table reload, and the
+//! registry-wide reload placeholder; `POST /admin/reload` remains a
+//! reserved V1.x surface that returns `501 admin.reload_unavailable`.
 //!
 //! ## What lives elsewhere
 //!
@@ -70,6 +73,7 @@ use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
 use crate::ingest::{IngestRegistry, ReadinessSnapshot};
+use crate::observability::RequestMetrics;
 use crate::query::{AggregateQueryEngine, EntityQueryEngine};
 
 /// Defensive cap on request body size (1 MiB). V1 endpoints are GET only;
@@ -126,6 +130,27 @@ pub fn build_app_with_provenance<P>(
 where
     P: AuthProvider,
 {
+    build_app_with_provenance_and_metrics(
+        config,
+        auth,
+        audit_sink,
+        provenance,
+        RequestMetrics::shared(),
+    )
+}
+
+/// Same as [`build_app_with_provenance`] but lets callers supply the
+/// request metrics collector installed in the cross-cutting stack.
+pub fn build_app_with_provenance_and_metrics<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
+    metrics: Arc<RequestMetrics>,
+) -> Router
+where
+    P: AuthProvider,
+{
     // Health/ready routes: unauthenticated sub-router. Merged onto the
     // top-level router *outside* the auth layer. The Scalar viewer
     // (`/docs` + `/docs/scalar.js`) is a static HTML+JS shell with no
@@ -172,7 +197,7 @@ where
     // for opaque pagination tokens.
     let cursor_signer = Arc::new(CursorSigner::new_random());
 
-    let mut router = apply_cross_cutting_layers(merged, &config, audit_sink)
+    let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
         .layer(Extension(cursor_signer))
         .layer(Extension(config));
     if let Some(state) = provenance {
@@ -235,7 +260,39 @@ pub fn build_app_with_entity_query_and_provenance<P>(
 where
     P: AuthProvider,
 {
-    build_app_with_provenance(config, auth, audit_sink, provenance)
+    build_app_with_entity_query_and_provenance_and_metrics(
+        config,
+        auth,
+        audit_sink,
+        readiness,
+        entity_registry,
+        query,
+        aggregate_query,
+        provenance,
+        RequestMetrics::shared(),
+    )
+}
+
+/// Same as [`build_app_with_entity_query_and_provenance`] but lets the
+/// caller share one request metrics collector across multiple listeners.
+/// The binary uses this to expose data-plane and admin traffic through
+/// the admin-only `/metrics` route.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_with_entity_query_and_provenance_and_metrics<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    entity_registry: Arc<EntityRegistry>,
+    query: Arc<EntityQueryEngine>,
+    aggregate_query: Arc<AggregateQueryEngine>,
+    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
+    metrics: Arc<RequestMetrics>,
+) -> Router
+where
+    P: AuthProvider,
+{
+    build_app_with_provenance_and_metrics(config, auth, audit_sink, provenance, metrics)
         .layer(Extension(readiness))
         .layer(Extension(aggregate_query))
         .layer(Extension(query))
@@ -258,23 +315,45 @@ pub fn build_admin_app<P>(
 where
     P: AuthProvider,
 {
-    let public = api::health_router();
+    build_admin_app_with_metrics(
+        config,
+        auth,
+        audit_sink,
+        readiness,
+        ingest,
+        RequestMetrics::shared(),
+    )
+}
+
+/// Same as [`build_admin_app`] but shares a request metrics collector
+/// with another listener.
+pub fn build_admin_app_with_metrics<P>(
+    config: Arc<Config>,
+    auth: Arc<P>,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    ingest: Arc<IngestRegistry>,
+    metrics: Arc<RequestMetrics>,
+) -> Router
+where
+    P: AuthProvider,
+{
+    let public = api::health_router()
+        .merge(crate::observability::router())
+        .layer(Extension(metrics.clone()));
     let protected = api::admin_router().layer(Extension(ingest));
     let protected = auth_layer(protected, auth);
     let merged: Router<()> = Router::new().merge(public).merge(protected);
-    apply_cross_cutting_layers(merged, &config, audit_sink)
+    apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
         .layer(Extension(readiness))
         .layer(Extension(config))
 }
 
-/// Install the cross-cutting tower layers (audit, request-id, CORS,
-/// body limit, timeout) on a composed sub-router. Shared between
-/// [`build_app`] and [`build_admin_app`] so layer order stays in lock
-/// step across both listeners.
-fn apply_cross_cutting_layers(
+fn apply_cross_cutting_layers_with_metrics(
     router: Router,
     config: &Config,
     audit_sink: Arc<dyn AuditSink>,
+    metrics: Arc<RequestMetrics>,
 ) -> Router {
     let x_request_id: HeaderName = HeaderName::from_static("x-request-id");
     let cors = build_cors_layer(&config.server.cors);
@@ -295,6 +374,7 @@ fn apply_cross_cutting_layers(
         .layer(from_fn(normalize_internal_error_response))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
+    let with_operational_layers = crate::observability::install(with_operational_layers, metrics);
 
     let with_audit = audit::middleware::install_with_settings(
         with_operational_layers,
@@ -485,7 +565,12 @@ mod tests {
                 StatusCode::OK
             }),
         );
-        let app = apply_cross_cutting_layers(router, &config, sink);
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        );
 
         let response = app
             .oneshot(
@@ -520,7 +605,12 @@ mod tests {
             "/echo",
             axum::routing::post(|_body: String| async { StatusCode::OK }),
         );
-        let app = apply_cross_cutting_layers(router, &config, sink);
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        );
         let body = vec![b'x'; REQUEST_BODY_LIMIT_BYTES + 1];
 
         let response = app
