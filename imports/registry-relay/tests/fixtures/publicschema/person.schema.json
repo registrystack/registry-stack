@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://publicschema.org/schemas/Person.schema.json",
+  "title": "Person",
+  "type": "object",
+  "required": [
+    "id",
+    "type",
+    "given_name",
+    "family_name",
+    "date_of_birth",
+    "gender"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "type": {
+      "const": "Person"
+    },
+    "given_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "family_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "date_of_birth": {
+      "type": "string",
+      "format": "date"
+    },
+    "gender": {
+      "type": "string",
+      "enum": [
+        "male",
+        "female",
+        "other",
+        "not_stated"
+      ]
+    },
+    "email_address": {
+      "type": "string"
+    }
+  }
+}

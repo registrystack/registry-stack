@@ -1,0 +1,51 @@
+version: "0.2"
+id: registry-relay-individual-to-publicschema-person
+source: registry-relay.individual
+target: publicschema.Person
+runtime:
+  bindings: publicschema-v1
+property_mappings:
+  - id: subject-id
+    source: /id
+    target: /id
+    required: true
+    formula:
+      to_target:
+        expression: ctx.subject_uri
+  - id: type
+    source: /id
+    target: /type
+    formula:
+      to_target:
+        expression: '"Person"'
+  - id: given-name
+    source: /first_name
+    target: /given_name
+    required: true
+    formula:
+      to_target:
+        expression: text_normalize_space(source)
+  - id: family-name
+    source: /last_name
+    target: /family_name
+    required: true
+    formula:
+      to_target:
+        expression: text_normalize_space(source)
+  - id: date-of-birth
+    source: /dob
+    target: /date_of_birth
+    required: true
+  - id: gender
+    source: /sex_code
+    target: /gender
+    required: true
+    formula:
+      to_target:
+        expression: 'source == "M" ? "male" : source == "F" ? "female" : source == "X" ? "other" : "not_stated"'
+  - id: email
+    source: /email
+    target: /email_address
+    formula:
+      to_target:
+        expression: email_normalize(source)

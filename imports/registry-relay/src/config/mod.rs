@@ -404,6 +404,33 @@ pub struct EntityConfig {
     pub api: EntityApiConfig,
     #[serde(default)]
     pub aggregates: Vec<AggregateConfig>,
+    #[serde(default)]
+    pub publicschema: Option<EntityPublicSchemaConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityPublicSchemaConfig {
+    /// PublicSchema concept name, for example `Person`.
+    pub target: String,
+    /// Path to a PublicSchema CEL mapping YAML document.
+    pub mapping_path: PathBuf,
+    /// JSON-LD context URL embedded in the issued VC. Defaults to the
+    /// canonical PublicSchema draft context.
+    #[serde(default)]
+    pub context_url: Option<String>,
+    /// JSON Schema URL embedded in `credentialSchema.id`. Defaults to
+    /// `https://publicschema.org/schemas/{target}.schema.json`.
+    #[serde(default)]
+    pub schema_url: Option<String>,
+    /// Optional local JSON Schema used to validate mapped
+    /// credentialSubject output before signing.
+    #[serde(default)]
+    pub schema_validation_path: Option<PathBuf>,
+    /// VC `type[1]` value. Defaults to `{target}` so a Person mapping
+    /// issues a `["VerifiableCredential", "Person"]` credential.
+    #[serde(default)]
+    pub credential_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

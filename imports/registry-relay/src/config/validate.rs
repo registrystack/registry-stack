@@ -39,6 +39,99 @@ pub fn run(config: &Config) -> Result<(), Error> {
     if let Some(provenance) = &config.provenance {
         validate_provenance(provenance).map_err(Error::from)?;
     }
+    validate_publicschema_feature(config).map_err(Error::from)?;
+    Ok(())
+}
+
+fn validate_publicschema_feature(config: &Config) -> Result<(), ConfigError> {
+    for dataset in &config.datasets {
+        for entity in &dataset.entities {
+            let Some(publicschema) = &entity.publicschema else {
+                continue;
+            };
+            #[cfg(not(feature = "publicschema-cel"))]
+            {
+                let _ = publicschema;
+                tracing::error!(
+                    code = "publicschema.config.feature_disabled",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    "entity declares publicschema mapping but binary was built without the publicschema-cel feature",
+                );
+                return Err(ConfigError::PublicSchemaFeatureDisabled);
+            }
+
+            #[cfg(feature = "publicschema-cel")]
+            {
+                if publicschema.target.trim().is_empty() {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        "publicschema.target must not be empty",
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+                if publicschema.mapping_path.as_os_str().is_empty() {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        "publicschema.mapping_path must not be empty",
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+                if let Some(context_url) = &publicschema.context_url {
+                    if !is_http_url(context_url) {
+                        tracing::error!(
+                            code = "config.validation_error",
+                            dataset_id = %dataset.id,
+                            entity = %entity.name,
+                            "publicschema.context_url must be an http(s) URL",
+                        );
+                        return Err(ConfigError::ValidationError);
+                    }
+                }
+                if let Some(schema_url) = &publicschema.schema_url {
+                    if !is_http_url(schema_url) {
+                        tracing::error!(
+                            code = "config.validation_error",
+                            dataset_id = %dataset.id,
+                            entity = %entity.name,
+                            "publicschema.schema_url must be an http(s) URL",
+                        );
+                        return Err(ConfigError::ValidationError);
+                    }
+                }
+                if publicschema
+                    .schema_validation_path
+                    .as_ref()
+                    .is_some_and(|path| path.as_os_str().is_empty())
+                {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        "publicschema.schema_validation_path must not be empty",
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+                if publicschema
+                    .credential_type
+                    .as_deref()
+                    .is_some_and(|credential_type| credential_type.trim().is_empty())
+                {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        "publicschema.credential_type must not be empty",
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+            }
+        }
+    }
     Ok(())
 }
 

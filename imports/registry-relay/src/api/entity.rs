@@ -507,6 +507,7 @@ async fn entity_record(
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     config: Option<Extension<Arc<Config>>>,
     provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
+    publicschema: Option<Extension<Arc<crate::provenance::publicschema::PublicSchemaVcRegistry>>>,
 ) -> Response {
     let audit_context = registry.as_ref().and_then(|Extension(registry)| {
         audit_context_for_entity_record(registry, &path.dataset_id, &path.entity)
@@ -582,9 +583,11 @@ async fn entity_record(
             };
             let provenance_state = provenance.as_ref().map(|Extension(state)| state);
             let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
+            let publicschema_ref = publicschema.as_ref().map(|Extension(registry)| registry);
             let mut response = crate::api::provenance_issuance::maybe_issue_entity_record(
                 provenance_state,
                 config_ref,
+                publicschema_ref,
                 &headers,
                 plain_response,
                 &path.dataset_id,

@@ -192,6 +192,78 @@ for entity / verify claims and
 `<catalog.base_url>/datasets/<dataset>/<entity>/aggregates/<aggregate_id>`
 for aggregates.
 
+## PublicSchema.org Entity Credentials
+
+When the binary is built with the optional `publicschema-cel` Cargo
+feature, an entity can declare a PublicSchema.org mapping for its
+entity-record VC. The plain JSON API stays unchanged. Only callers that
+request `Accept: application/vc+jwt` receive the mapped PublicSchema
+credential.
+
+```yaml
+entities:
+  - name: individual
+    table: individuals_table
+    fields:
+      - name: id
+        from: individual_id
+      - name: first_name
+      - name: last_name
+      - name: dob
+      - name: sex_code
+    access: { ... }
+    api: { default_limit: 100, max_limit: 1000 }
+    publicschema:
+      target: Person
+      mapping_path: mappings/individual-person.publicschema.yaml
+      schema_validation_path: ../publicschema.org/dist/schemas/Person.schema.json
+```
+
+`mapping_path` points to a PublicSchema CEL mapping document. Its source
+record is the projected entity JSON, not the private storage row, so
+mapping rules should refer to public field names such as `/id` or
+`/first_name`. At startup the gateway compiles every declared mapping;
+an unreadable or invalid mapping fails startup.
+
+During evaluation the gateway passes a CEL context object with
+`ctx.subject_uri`, `ctx.dataset`, and `ctx.entity`. Mapping files should
+use `ctx.subject_uri` for `/id`; the gateway rejects issuance if the
+mapped `credentialSubject.id` differs from the canonical entity URI.
+This keeps the VC `sub` and subject identifier anchored to the gateway
+route even when mappings are reused across deployments.
+
+`schema_validation_path` is optional but recommended. When present, the
+gateway compiles the local JSON Schema at startup and validates every
+mapped `credentialSubject` before signing. Validation failures abort VC
+issuance with `provenance.issuance_failed`, so a bad mapping cannot
+produce a signed credential.
+
+By default the issued VC uses:
+
+- `type[1]`: the configured `target`, for example `Person`
+- `@context[1]`: `https://publicschema.org/ctx/draft.jsonld`
+- `credentialSchema.id`:
+  `https://publicschema.org/schemas/{target}.schema.json`
+
+Operators may override those defaults with `context_url`, `schema_url`,
+and `credential_type` under the same `publicschema:` block.
+
+The mapper dependency is pinned to the public
+`https://github.com/PublicSchema/cel-mapping` repository in
+`Cargo.toml`, so release builds do not depend on a sibling checkout.
+
+Build and verify the optional path with:
+
+```sh
+cargo test --features publicschema-cel --test publicschema_cel_feature
+```
+
+A binary built without `publicschema-cel` rejects configs that declare
+`entities[].publicschema`, using
+`publicschema.config.feature_disabled`. This prevents accidental
+fallback to the native `EntityRecord` VC when the operator expected a
+PublicSchema credential.
+
 ## Supporting Endpoints
 
 When provenance is enabled in `gateway` mode, the data plane serves
@@ -393,18 +465,24 @@ The verifier accepts local paths, `file://` URLs, and `http(s)` URLs
 for DID Documents and schemas. For deterministic fixture checks, pass
 `--now <unix-or-rfc3339>`.
 
-### Live Verification Smoke
+### Production Smoke Checklist
 
-Use this smoke after every provenance deployment or key rotation:
+Use this checklist after every production deployment that uses the local
+software Ed25519 signer:
+
+1. Start the gateway with `REGISTRY_RELAY_PROVENANCE_JWK` injected from
+   the secret store, not from a shell prompt or config file. Confirm
+   startup succeeds and readiness is green:
+
+```sh
+curl -fsS "https://data.example.gov/ready"
+```
+
+2. Fetch the public contract artifacts from the same externally
+   reachable host named by issued credentials:
 
 ```sh
 mkdir -p target/provenance
-
-curl -fsS \
-  -H "Authorization: Bearer ${VERIFICATION_SERVICE_API_KEY}" \
-  -H "Accept: application/vc+jwt" \
-  "https://data.example.gov/datasets/social_registry/individual/verify?id=ind-123" \
-  -o target/provenance/vc.jwt
 
 curl -fsS \
   "https://data.example.gov/.well-known/did.json" \
@@ -413,7 +491,22 @@ curl -fsS \
 curl -fsS \
   "https://data.example.gov/schemas/verify-result/v1.json" \
   -o target/provenance/verify-result.schema.json
+```
 
+3. Issue one verify VC with the lowest-privilege verification API key:
+
+```sh
+curl -fsS \
+  -H "Authorization: Bearer ${VERIFICATION_SERVICE_API_KEY}" \
+  -H "Accept: application/vc+jwt" \
+  "https://data.example.gov/datasets/social_registry/individual/verify?id=ind-123" \
+  -o target/provenance/vc.jwt
+```
+
+4. Verify the VC with the repository verifier using only public
+   artifacts:
+
+```sh
 node scripts/verify_vc_jwt.mjs \
   --jwt-file target/provenance/vc.jwt \
   --did-document target/provenance/did.json \
@@ -439,6 +532,16 @@ node scripts/verify_vc_jwt.mjs \
   --schema-id https://relay.example.gov/schemas/verify-result/v1.json \
   --schema target/provenance/verify-result.schema.json
 ```
+
+5. For rotation smoke, run the same issuance and verifier steps once
+   before rotation and save the old VC. After rolling the new
+   `verification_method_id` and new private JWK, fetch
+   `/.well-known/did.json` again, confirm it publishes both old and new
+   verification methods, issue a new VC, and verify both JWT files. The
+   old VC must verify through the retired public key until the longest
+   configured `claim_validity` window has elapsed. After that window,
+   remove the retired key and repeat the DID fetch to confirm the old
+   `kid` is no longer published.
 
 ### Fixture Corpus
 

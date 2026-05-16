@@ -29,11 +29,12 @@ pub mod claim;
 pub mod did_web;
 pub mod jwt_vc;
 pub mod negotiate;
+pub mod publicschema;
 pub mod resources;
 pub mod signer;
 pub mod signers;
 
-pub use jwt_vc::{ClaimType, SignedEnvelope, VcEnvelopeInputs};
+pub use jwt_vc::{ClaimType, SignedEnvelope, VcCredentialProfile, VcEnvelopeInputs};
 pub use negotiate::{negotiate, NegotiationOutcome};
 pub use signer::{Signer, SignerError, SigningAlgorithm};
 
@@ -192,6 +193,7 @@ pub struct SignedVc {
     pub compact_jws: String,
     pub jti: String,
     pub claim_type: ClaimType,
+    pub credential_type: String,
     pub subject_uri: String,
     pub issuer_did: String,
     pub verification_method_id: String,
@@ -219,6 +221,16 @@ impl ProvenanceState {
     ///
     /// Validity is `issued_at + claim_validity.<type>`.
     pub fn issue(&self, ctx: IssuanceContext) -> Result<SignedVc, IssueError> {
+        self.issue_with_profile(ctx, None)
+    }
+
+    /// Issue a signed VC with optional profile overrides for the VC
+    /// type, context, and schema URL.
+    pub fn issue_with_profile(
+        &self,
+        ctx: IssuanceContext,
+        profile: Option<VcCredentialProfile>,
+    ) -> Result<SignedVc, IssueError> {
         let cfg = &self.inner;
         let window = match ctx.claim_type {
             ClaimType::VerifyResult => cfg.claim_validity.verify_result,
@@ -246,7 +258,8 @@ impl ProvenanceState {
             issued_at: ctx.issued_at,
             valid_until,
         };
-        let envelope = jwt_vc::encode(cfg.signer.as_ref(), envelope_inputs).map_err(|err| {
+        let envelope = jwt_vc::encode_with_profile(cfg.signer.as_ref(), envelope_inputs, profile)
+            .map_err(|err| {
             map_encode_error(&err);
             match err {
                 jwt_vc::EncodeError::Signer(SignerError::Unavailable) => {
@@ -259,6 +272,7 @@ impl ProvenanceState {
             compact_jws: envelope.compact_jws,
             jti: envelope.jti,
             claim_type: envelope.claim_type,
+            credential_type: envelope.credential_type,
             subject_uri: envelope.subject_uri,
             issuer_did: envelope.issuer_did,
             verification_method_id: envelope.verification_method_id,

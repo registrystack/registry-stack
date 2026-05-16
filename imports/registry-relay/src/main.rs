@@ -43,7 +43,8 @@ use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot};
 use registry_relay::observability::RequestMetrics;
 use registry_relay::provenance::{
-    build_resolved_provenance_config, ProvenanceState, ResolvedProvenanceConfig,
+    build_resolved_provenance_config, publicschema::build_publicschema_registry, ProvenanceState,
+    ResolvedProvenanceConfig,
 };
 use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use tokio::net::TcpListener;
@@ -123,12 +124,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let provenance_state: Option<Arc<ProvenanceState>> =
         build_resolved_provenance_config(config.provenance.as_ref())?
             .map(|resolved: ResolvedProvenanceConfig| Arc::new(ProvenanceState::new(resolved)));
+    let publicschema_registry = build_publicschema_registry(&config)?.map(Arc::new);
     let provenance_state_for_log = provenance_state.as_ref().map(|state| {
         let cfg = state.config();
         (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
     });
     let metrics = RequestMetrics::shared();
-    let app = registry_relay::server::build_app_with_entity_query_and_provenance_and_metrics(
+    let mut app = registry_relay::server::build_app_with_entity_query_and_provenance_and_metrics(
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&audit_sink),
@@ -139,6 +141,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         provenance_state.clone(),
         Arc::clone(&metrics),
     );
+    if let Some(publicschema_registry) = publicschema_registry {
+        app = app.layer(axum::Extension(publicschema_registry));
+    }
 
     let listener = TcpListener::bind(bind).await.map_err(|err| {
         error!(error = %err, bind = %bind, "failed to bind listener");

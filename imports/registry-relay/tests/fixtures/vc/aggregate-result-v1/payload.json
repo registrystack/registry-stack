@@ -1,0 +1,54 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://fixture.example/contexts/provenance/v1.jsonld"
+  ],
+  "type": ["VerifiableCredential", "AggregateResult"],
+  "id": "urn:uuid:22222222-2222-4222-8222-222222222222",
+  "issuer": "did:web:aggregate.fixture.example",
+  "validFrom": "2026-05-16T09:30:00Z",
+  "validUntil": "2026-05-16T09:35:00Z",
+  "credentialSchema": {
+    "id": "https://schemas.registry-relay.org/aggregate-result/v1.json",
+    "type": "JsonSchema"
+  },
+  "credentialSubject": {
+    "id": "https://fixture.example/datasets/social_registry/individual/aggregates/by-region",
+    "dataset": "social_registry",
+    "entity": "individual",
+    "aggregateId": "by-region",
+    "aggregateUrl": "https://fixture.example/datasets/social_registry/individual/aggregates/by-region",
+    "groupBy": ["region"],
+    "measures": ["count", "avg_income"],
+    "rows": [
+      {
+        "group": {
+          "region": "north"
+        },
+        "values": {
+          "count": 42,
+          "avg_income": 1234.5
+        }
+      },
+      {
+        "group": {
+          "region": "south"
+        },
+        "values": {
+          "count": 7,
+          "avg_income": null
+        }
+      }
+    ],
+    "suppressedGroups": 1,
+    "minGroupSize": 5,
+    "computedAt": "2026-05-16T09:30:00Z",
+    "asOf": "2026-05-16T09:30:00Z"
+  },
+  "iss": "did:web:aggregate.fixture.example",
+  "sub": "https://fixture.example/datasets/social_registry/individual/aggregates/by-region",
+  "iat": 1778923800,
+  "nbf": 1778923800,
+  "exp": 1778924100,
+  "jti": "urn:uuid:22222222-2222-4222-8222-222222222222"
+}

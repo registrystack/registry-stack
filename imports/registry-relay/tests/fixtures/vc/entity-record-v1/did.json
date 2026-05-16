@@ -1,0 +1,22 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/jws-2020/v1"
+  ],
+  "id": "did:web:entity.fixture.example",
+  "verificationMethod": [
+    {
+      "id": "did:web:entity.fixture.example#fixture-2026",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:entity.fixture.example",
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "x": "UeWzNAe-zgOlvyKlVsWqppQg9nUnfzebkaR2xnWzjFk",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "kid": "did:web:entity.fixture.example#fixture-2026"
+      }
+    }
+  ],
+  "assertionMethod": ["did:web:entity.fixture.example#fixture-2026"]
+}

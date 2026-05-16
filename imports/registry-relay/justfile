@@ -1,5 +1,7 @@
 # registry-relay task runner. Requires `just` (https://github.com/casey/just).
 
+export CARGO_NET_GIT_FETCH_WITH_CLI := "true"
+
 # Install the Rust toolchain via mise and fetch all dependencies.
 setup:
     mise install
@@ -13,9 +15,18 @@ build:
 test:
     cargo test --all-features
 
+# Run the default binary shape. This keeps optional-feature guardrails
+# covered separately from the all-features build.
+test-default:
+    cargo test
+
 # Run clippy on all targets and features; treat warnings as errors.
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
+
+# Run clippy on the default binary shape.
+lint-default:
+    cargo clippy --all-targets -- -D warnings
 
 # Format all source files in place.
 fmt:
@@ -39,8 +50,9 @@ validate-catalog-shacl catalog:
 audit:
     if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check advisories; else cargo deny check advisories; fi
 
-# Run the full CI gate locally: fmt-check, lint, test, deny.
-ci: fmt-check lint test deny
+# Run the full CI gate locally: fmt-check, default/all-feature lint,
+# default/all-feature tests, and cargo-deny.
+ci: fmt-check lint-default lint test-default test deny
 
 # Run the development server with a config file.
 # Usage: just run              (uses config/example.yaml)

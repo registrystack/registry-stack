@@ -218,6 +218,10 @@ pub enum ConfigError {
     /// configured issuer DID plus a fragment.
     #[error("provenance verification method mismatch")]
     ProvenanceVerificationMethodMismatch,
+    /// PublicSchema CEL mapping was configured but the binary was
+    /// built without the optional mapper dependency.
+    #[error("publicschema cel feature disabled")]
+    PublicSchemaFeatureDisabled,
 }
 
 /// `provenance.*` runtime codes.
@@ -673,6 +677,7 @@ impl ConfigError {
             ConfigError::ProvenanceVerificationMethodMismatch => {
                 "provenance.config.verification_method_mismatch"
             }
+            ConfigError::PublicSchemaFeatureDisabled => "publicschema.config.feature_disabled",
         }
     }
 
@@ -700,6 +705,7 @@ impl ConfigError {
             ConfigError::ProvenanceVerificationMethodMismatch => {
                 "Provenance verification method mismatch"
             }
+            ConfigError::PublicSchemaFeatureDisabled => "PublicSchema CEL feature disabled",
         }
     }
 
@@ -735,6 +741,9 @@ impl ConfigError {
             }
             ConfigError::ProvenanceVerificationMethodMismatch => {
                 "verification_method_id must be a fragment of the issuer DID"
+            }
+            ConfigError::PublicSchemaFeatureDisabled => {
+                "publicschema mappings require a binary built with the publicschema-cel feature"
             }
         }
     }

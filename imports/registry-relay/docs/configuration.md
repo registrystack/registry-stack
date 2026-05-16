@@ -258,11 +258,28 @@ entities:
           ops: [eq, in]
       allowed_expansions:
         - household
+    publicschema:
+      target: Person
+      mapping_path: mappings/individual-person.publicschema.yaml
+      schema_validation_path: ../publicschema.org/dist/schemas/Person.schema.json
 ```
 
 When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list.
 
 Relationships are dataset-local in V1. Cross-dataset workflows should compose client-side with separate scoped calls and separate audit records.
+
+`publicschema` is optional and requires a binary built with
+`--features publicschema-cel`. When present, entity-record VC issuance
+uses the mapping file to transform the public entity JSON into a
+PublicSchema.org subject. The plain JSON route is unchanged. Defaults
+are `context_url: https://publicschema.org/ctx/draft.jsonld`,
+`schema_url: https://publicschema.org/schemas/{target}.schema.json`,
+and `credential_type: {target}`. `schema_validation_path` is optional
+but recommended; when set, every mapped VC subject is validated before
+signing. Mapping CEL expressions receive `ctx.subject_uri`, `ctx.dataset`,
+and `ctx.entity`; use `ctx.subject_uri` for the PublicSchema subject
+`/id` so the mapped credential stays bound to the canonical gateway
+entity URI.
 
 ## Aggregates
 

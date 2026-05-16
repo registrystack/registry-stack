@@ -82,6 +82,7 @@ pub struct SignedEnvelope {
     pub compact_jws: String,
     pub jti: String,
     pub claim_type: ClaimType,
+    pub credential_type: String,
     pub subject_uri: String,
     pub issuer_did: String,
     pub verification_method_id: String,
@@ -116,6 +117,28 @@ pub fn encode(
     signer: &dyn Signer,
     inputs: VcEnvelopeInputs,
 ) -> Result<SignedEnvelope, EncodeError> {
+    encode_with_profile(signer, inputs, None)
+}
+
+/// Same encoder as [`encode`], but allows a caller to override the VC
+/// type tag, JSON-LD context, and `credentialSchema.id`. This is used
+/// by optional PublicSchema.org mappings while keeping the default
+/// Registry Relay claim types stable.
+pub fn encode_with_profile(
+    signer: &dyn Signer,
+    mut inputs: VcEnvelopeInputs,
+    profile: Option<VcCredentialProfile>,
+) -> Result<SignedEnvelope, EncodeError> {
+    let default_type_tag = inputs.claim_type.type_tag();
+    let credential_type = profile
+        .as_ref()
+        .map(|profile| profile.credential_type.as_str())
+        .unwrap_or(default_type_tag)
+        .to_string();
+    if let Some(profile) = profile {
+        inputs.provenance_context_url = profile.context_url;
+        inputs.credential_schema_url = profile.schema_url;
+    }
     let jti = format!("urn:uuid:{}", Uuid::new_v4());
     let iat = inputs.issued_at.unix_timestamp();
     let nbf = iat;
@@ -138,7 +161,7 @@ pub fn encode(
 
     let payload = json!({
         "@context": [VCDM_V2_CONTEXT, &inputs.provenance_context_url],
-        "type": ["VerifiableCredential", inputs.claim_type.type_tag()],
+        "type": ["VerifiableCredential", &credential_type],
         "id": &jti,
         "issuer": &inputs.issuer_did,
         "validFrom": &valid_from_str,
@@ -161,6 +184,7 @@ pub fn encode(
         compact_jws,
         jti,
         claim_type: inputs.claim_type,
+        credential_type,
         subject_uri: inputs.subject_uri,
         issuer_did: inputs.issuer_did,
         verification_method_id: inputs.verification_method_id,
@@ -168,6 +192,15 @@ pub fn encode(
         nbf,
         exp,
     })
+}
+
+/// Per-credential overrides for profiles whose subject schema is not
+/// one of the built-in Registry Relay schemas.
+#[derive(Debug, Clone)]
+pub struct VcCredentialProfile {
+    pub credential_type: String,
+    pub context_url: String,
+    pub schema_url: String,
 }
 
 #[cfg(test)]

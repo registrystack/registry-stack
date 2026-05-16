@@ -97,6 +97,25 @@ The provenance feature (signed Verifiable Credentials, see [docs/provenance.md](
 
 The signing key never lives in YAML. It is injected through the env var named by `provenance.issuer.signer.jwk_env`, holding a JSON-encoded private JWK. The public half goes in the DID Document; the private half stays in the secret store.
 
+Production smoke for local software Ed25519 deployments:
+
+1. Boot or roll the gateway with `REGISTRY_RELAY_PROVENANCE_JWK`
+   injected by the runtime secret store.
+2. Fetch `/.well-known/did.json` and
+   `/schemas/verify-result/v1.json` from the public data-plane URL.
+3. Request a verify VC with `Accept: application/vc+jwt` and a key
+   scoped only for verify.
+4. Run `node scripts/verify_vc_jwt.mjs` against the saved VC, DID
+   Document, expected issuer, expected `VerifyResult` claim type, and
+   saved schema.
+5. During rotation, save a pre-rotation VC, roll the new private JWK
+   and `verification_method_id`, confirm the DID Document publishes
+   both old and new `kid` values, then verify both old and new VCs.
+   Remove the retired public key only after the longest configured
+   `claim_validity` window has elapsed and repeat the DID fetch.
+
+See [Production Smoke Checklist](provenance.md#production-smoke-checklist) for exact commands.
+
 Rotation procedure (gateway mode):
 
 1. Mint a new Ed25519 keypair for `EdDSA`. Store the new private JWK in the deployment secret store.

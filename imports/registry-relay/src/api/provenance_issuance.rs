@@ -35,8 +35,10 @@ use crate::provenance::claim::{
     aggregate_result_subject, entity_record_subject, verify_result_subject, AggregateResultInput,
     EntityRecordInput, VerifyResultInput,
 };
+use crate::provenance::publicschema::PublicSchemaVcRegistry;
 use crate::provenance::{
     negotiate, ClaimType, IssuanceContext, IssueError, NegotiationOutcome, ProvenanceState,
+    VcCredentialProfile,
 };
 
 /// Media type emitted on a signed VC response. The audit / observability
@@ -90,14 +92,18 @@ fn issue_response(
     claim_type: ClaimType,
     subject_uri: String,
     credential_subject: Value,
+    profile: Option<VcCredentialProfile>,
 ) -> Response {
     let issued_at = OffsetDateTime::now_utc();
-    let signed = match state.issue(IssuanceContext {
-        claim_type,
-        subject_uri: subject_uri.clone(),
-        credential_subject,
-        issued_at,
-    }) {
+    let signed = match state.issue_with_profile(
+        IssuanceContext {
+            claim_type,
+            subject_uri: subject_uri.clone(),
+            credential_subject,
+            issued_at,
+        },
+        profile,
+    ) {
         Ok(signed) => signed,
         Err(err) => return issue_error_to_response(err),
     };
@@ -109,20 +115,13 @@ fn issue_response(
         iss: signed.issuer_did,
         kid: signed.verification_method_id,
         jti: signed.jti,
-        claim_type: claim_type_label(claim_type).to_string(),
+        claim_type: signed.credential_type,
         subject: subject_uri,
         iat: signed.iat,
         nbf: signed.nbf,
         exp: signed.exp,
     });
     response
-}
-
-fn claim_type_label(claim_type: ClaimType) -> &'static str {
-    // Audit `claim_type` mirrors the `type[1]` array entry from the
-    // VC payload, so consumers can correlate the audit event with the
-    // emitted JWS without re-parsing the JWS body.
-    claim_type.type_tag()
 }
 
 fn issue_error_to_response(err: IssueError) -> Response {
@@ -165,7 +164,7 @@ pub(crate) fn maybe_issue_verify_result(
         value,
         as_of_rfc3339,
     });
-    issue_response(state, ClaimType::VerifyResult, subject_uri, subject)
+    issue_response(state, ClaimType::VerifyResult, subject_uri, subject, None)
 }
 
 /// Inputs for [`maybe_issue_aggregate_result`]. Carrying them in a
@@ -215,7 +214,13 @@ pub(crate) fn maybe_issue_aggregate_result(
         computed_at_rfc3339: args.computed_at_rfc3339,
         as_of_rfc3339: args.as_of_rfc3339,
     });
-    issue_response(state, ClaimType::AggregateResult, subject_uri, subject)
+    issue_response(
+        state,
+        ClaimType::AggregateResult,
+        subject_uri,
+        subject,
+        None,
+    )
 }
 
 /// Issue an `EntityRecord` VC. Same opt-in contract as
@@ -224,6 +229,7 @@ pub(crate) fn maybe_issue_aggregate_result(
 pub(crate) fn maybe_issue_entity_record(
     state: Option<&Arc<ProvenanceState>>,
     config: Option<&Arc<Config>>,
+    publicschema: Option<&Arc<PublicSchemaVcRegistry>>,
     headers: &HeaderMap,
     plain_response: Response,
     dataset: &str,
@@ -240,6 +246,28 @@ pub(crate) fn maybe_issue_entity_record(
         return plain_response;
     };
     let subject_uri = entity_subject_uri(config, dataset, entity, subject_id);
+    if let Some(publicschema) = publicschema {
+        match publicschema.mapped_entity_credential(dataset, entity, &subject_uri, record.clone()) {
+            Ok(Some(mapped)) => {
+                return issue_response(
+                    state,
+                    ClaimType::EntityRecord,
+                    subject_uri,
+                    mapped.credential_subject,
+                    Some(VcCredentialProfile {
+                        credential_type: mapped.credential_type,
+                        context_url: mapped.context_url,
+                        schema_url: mapped.schema_url,
+                    }),
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::error!(error = %err, "publicschema.issuance_failed");
+                return issue_error_to_response(IssueError::IssuanceFailed);
+            }
+        }
+    }
     let subject = entity_record_subject(&EntityRecordInput {
         subject_uri: subject_uri.clone(),
         dataset: dataset.to_string(),
@@ -249,7 +277,7 @@ pub(crate) fn maybe_issue_entity_record(
         expansions,
         as_of_rfc3339,
     });
-    issue_response(state, ClaimType::EntityRecord, subject_uri, subject)
+    issue_response(state, ClaimType::EntityRecord, subject_uri, subject, None)
 }
 
 /// Build an RFC 3339 string for "now" in UTC. Helper kept here so the

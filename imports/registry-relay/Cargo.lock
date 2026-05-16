@@ -771,6 +771,7 @@ dependencies = [
 [[package]]
 name = "cel-mapper-core"
 version = "0.1.0"
+source = "git+https://github.com/PublicSchema/cel-mapping?rev=fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b#fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b"
 dependencies = [
  "base64",
  "cel",

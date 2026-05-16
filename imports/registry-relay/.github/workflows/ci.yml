@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
 
 # Third-party actions are pinned to major version tags.
@@ -49,9 +50,15 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (treat warnings as errors)
+        run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
+
+      - name: Clippy all features (treat warnings as errors)
         run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
 
       - name: Run tests
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Run all-features tests
         run: cargo test --all-features --target ${{ matrix.target }}
 
   # ── cargo-deny (license + advisory + bans) ───────────────────────────────

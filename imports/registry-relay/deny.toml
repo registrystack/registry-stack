@@ -52,9 +52,9 @@ skip = []
 skip-tree = []
 
 [sources]
-# Only allow crates from crates.io; deny git and local path deps in
-# the published dependency graph.
+# Only allow crates from crates.io plus the pinned PublicSchema CEL mapper.
+# Keep git exceptions narrow and explicit.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = ["https://github.com/PublicSchema/cel-mapping"]
