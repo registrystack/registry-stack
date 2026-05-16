@@ -27,6 +27,9 @@ Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat def
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
+- [docs/performance-load-testing-spec.md](docs/performance-load-testing-spec.md): performance and load testing plan.
+- [perf/](perf/): k6 scenarios, synthetic fixture configs, and performance run helpers.
+- [benches/](benches/): Criterion microbenchmarks for auth, ETags, query planning, JSON, registry lookup, and audit.
 - [fixtures/](fixtures/): small local files for development and demos.
 - [src/](src/): gateway implementation.
 - [tests/](tests/): focused integration and unit tests.
@@ -205,6 +208,47 @@ Accept: application/vc+jwt
 When either side opts out, responses stay plain JSON. Issued VCs carry a `provenance.vc.issued` audit event alongside the regular audit record.
 
 See [docs/provenance.md](docs/provenance.md) for the full wire shape, issuer modes (`gateway`, `delegated`), supporting endpoints (`/.well-known/did.json`, `/schemas/*`, `/contexts/*`), key rotation procedure, and external verification recipe.
+
+## Performance Testing
+
+Performance testing uses generated synthetic fixtures, generated throwaway API keys, k6 HTTP scenarios, and Criterion microbenchmarks. Generated fixtures, secrets, and reports stay under ignored paths such as `perf/fixtures/generated/` and `target/perf/`.
+
+Prepare local fixtures and perf keys:
+
+```sh
+just perf-gen profile=large
+just perf-keys
+```
+
+Run the default overnight soak profile:
+
+```sh
+just perf-soak
+```
+
+That starts the release server with `perf/config/large.yaml`, runs `perf/k6/soak.js` for 60 minutes, samples process stats every 5 seconds, and writes reports under `target/perf/reports/`.
+
+Useful shorter runs:
+
+```sh
+just perf-scenario cached_304
+just perf-scenario large_304 large 10s
+just perf-scenario mixed_read medium 2m
+```
+
+Build and syntax-check the perf harness without running k6:
+
+```sh
+just perf-smoke
+```
+
+Run Criterion microbenchmarks:
+
+```sh
+just perf-bench
+```
+
+Reported numbers should state the machine, profile, fixture size, VU count, duration, compression setting, and whether the run is loopback-only. See [perf/README.md](perf/README.md) for the full local workflow and [docs/performance-load-testing-spec.md](docs/performance-load-testing-spec.md) for the benchmark design and thresholds.
 
 ## Operations
 
