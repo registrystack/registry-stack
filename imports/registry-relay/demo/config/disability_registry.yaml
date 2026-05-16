@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Optional Social Protection Digital Convergence Initiative (SP DCI)
-# Disability Registry sync adapter example.
-# Build with: cargo run --features spdci-api-standards -- --config this-file.yaml
+# Disability Registry demo.
+# Run with:
+#   cargo run --features spdci-api-standards -- --config demo/config/disability_registry.yaml
 
 server:
-  bind: 0.0.0.0:8080
+  bind: 0.0.0.0:4242
 
 catalog:
-  title: Disability Registry Relay
-  base_url: https://data.example.gov
-  publisher: Ministry of Social Affairs
+  title: SP DCI Disability Registry Gateway (Demo)
+  base_url: http://127.0.0.1:4242
+  publisher: Ministry of Social Affairs (Demo)
 
 vocabularies:
   spdci: https://schema.spdci.org/
@@ -17,26 +18,43 @@ vocabularies:
 auth:
   mode: api_key
   api_keys:
-    - id: disability_verification_service
-      hash_env: DISABILITY_VERIFICATION_API_KEY_HASH
+    - id: catalog_viewer
+      hash_env: CATALOG_VIEWER_HASH
       scopes:
-        - disability_registry:verify
-    - id: disability_casework_system
-      hash_env: DISABILITY_CASEWORK_API_KEY_HASH
+        - disability_registry:metadata
+
+    - id: planning_analyst
+      hash_env: PLANNING_ANALYST_HASH
+      scopes:
+        - disability_registry:metadata
+
+    - id: casework_system
+      hash_env: CASEWORK_SYSTEM_HASH
       scopes:
         - disability_registry:metadata
         - disability_registry:rows
         - disability_registry:verify
+
+    - id: verification_service
+      hash_env: VERIFICATION_SERVICE_HASH
+      scopes:
+        - disability_registry:verify
+
+    - id: operations_admin
+      hash_env: OPERATIONS_ADMIN_HASH
+      scopes:
+        - admin
+        - disability_registry:metadata
 
 standards:
   spdci:
     disability_registry:
       dataset: disability_registry
       entity: disabled_person
-      query_key: member.member_identifier
-      query_field: id
+      query_key: personal_details.member_identifier
+      query_field: member_identifier
       disabled_status_field: disability_status
-      disabled_positive_values: [approved, yes]
+      disabled_positive_values: [approved]
     registries:
       dr:
         dataset: disability_registry
@@ -44,43 +62,48 @@ standards:
         registry_type: ns:org:RegistryType:DR
         record_type: spdci-extensions-dci:DisabledPerson
         identifiers:
-          DISABILITY_ID: id
-          MEMBER_ID: id
-          UIN: id
-          NIN: id
+          DISABILITY_ID: member_identifier
+          MEMBER_ID: member_identifier
+          UIN: member_identifier
+          NIN: member_identifier
         expression_fields:
           disability_status: disability_status
           disability_details.impairment_type: impairment_type
 
+audit:
+  sink: stdout
+  format: jsonl
+
 datasets:
   - id: disability_registry
-    title: Disability Registry
-    description: Disability registry backed by an XLSX worksheet.
+    title: SP DCI Disability Registry
+    description: >-
+      Synthetic disability registry backed by a spreadsheet. It demonstrates
+      the optional SP DCI Disability Registry sync adapter for disabled-status,
+      disability-details, and disability-support lookups.
     owner: Ministry of Social Affairs
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
     conforms_to:
       - spdci:extensions/dr/v1/DisabledPerson
+    source:
+      type: file
+      path: demo/data/disability_registry.xlsx
+    refresh:
+      mode: manual
 
     tables:
       - id: disabled_people_table
-        materialization: snapshot
-        source:
-          type: file
-          path: ./data/disability_registry.xlsx
-          format:
-            xlsx:
-              sheet: DisabledPeople
-              header_row: 1
-        refresh:
-          mode: mtime
-          interval: 1h
+        sheet: DisabledPeople
         primary_key: person_id
         schema:
           strict: true
           fields:
             - name: person_id
+              type: string
+              nullable: false
+            - name: member_identifier
               type: string
               nullable: false
             - name: disability_status
@@ -104,11 +127,23 @@ datasets:
             - name: support_status
               type: string
               nullable: true
+            - name: disability_details
+              type: string
+              nullable: true
+            - name: disability_support
+              type: string
+              nullable: true
+            - name: home_district
+              type: string
+              nullable: true
+            - name: age_band
+              type: string
+              nullable: true
             - name: registration_date
-              type: timestamp
+              type: date
               nullable: true
             - name: last_updated
-              type: timestamp
+              type: date
               nullable: true
 
     entities:
@@ -120,15 +155,34 @@ datasets:
         fields:
           - name: id
             from: person_id
+          - name: member_identifier
+            from: member_identifier
           - name: disability_status
+            from: disability_status
           - name: disability_level
+            from: disability_level
           - name: impairment_type
+            from: impairment_type
           - name: impairment_level
+            from: impairment_level
           - name: human_assistance_type
+            from: human_assistance_type
           - name: support_frequency
+            from: support_frequency
           - name: support_status
+            from: support_status
+          - name: disability_details
+            from: disability_details
+          - name: disability_support
+            from: disability_support
+          - name: home_district
+            from: home_district
+          - name: age_band
+            from: age_band
           - name: registration_date
+            from: registration_date
           - name: last_updated
+            from: last_updated
         access:
           metadata_scope:    disability_registry:metadata
           aggregate_scope:   disability_registry:aggregate
@@ -141,11 +195,11 @@ datasets:
           allowed_filters:
             - field: id
               ops: [eq, in]
+            - field: member_identifier
+              ops: [eq, in]
             - field: disability_status
               ops: [eq, in]
             - field: impairment_type
               ops: [eq, in]
-
-audit:
-  sink: stdout
-  format: jsonl
+            - field: home_district
+              ops: [eq, in]

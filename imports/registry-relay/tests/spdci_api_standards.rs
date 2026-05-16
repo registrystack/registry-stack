@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg(feature = "spdci-api-standards")]
 
-//! SPD CI Disability Registry adapter coverage.
+//! SP DCI Disability Registry adapter coverage.
 
+use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -22,12 +24,33 @@ use registry_relay::ingest::{
 };
 use registry_relay::query::EntityQueryEngine;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::watch;
 use ulid::Ulid;
 
 fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
+}
+
+fn make_fingerprint(plaintext: &[u8]) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn demo_config(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("demo/config")
+        .join(name)
 }
 
 fn principal(scopes: &[&str]) -> Principal {
@@ -71,6 +94,18 @@ standards:
       query_field: id
       disabled_status_field: disability_status
       disabled_positive_values: [approved]
+    registries:
+      dr:
+        dataset: disability_registry
+        entity: disabled_person
+        registry_type: ns:org:RegistryType:DR
+        record_type: spdci-extensions-dci:DisabledPerson
+        identifiers:
+          DISABILITY_ID: id
+          MEMBER_ID: id
+        expression_fields:
+          disability_status: disability_status
+          disability_details.impairment_type: impairment_type
 
 datasets:
   - id: disability_registry
@@ -123,6 +158,10 @@ datasets:
           allowed_filters:
             - field: id
               ops: [eq]
+            - field: disability_status
+              ops: [eq, in]
+            - field: impairment_type
+              ops: [eq, in]
 "#,
     )
     .expect("write config");
@@ -179,11 +218,47 @@ datasets:
     )
 }
 
+#[test]
+fn disability_registry_demo_config_loads_with_spdci_feature() {
+    for name in [
+        "CATALOG_VIEWER_HASH",
+        "PLANNING_ANALYST_HASH",
+        "CASEWORK_SYSTEM_HASH",
+        "VERIFICATION_SERVICE_HASH",
+        "OPERATIONS_ADMIN_HASH",
+    ] {
+        env::set_var(name, make_fingerprint(name.as_bytes()));
+    }
+
+    let config_path = demo_config("disability_registry.yaml");
+    let config = config::load(&config_path).expect("disability_registry.yaml failed to load");
+    assert_eq!(config.datasets.len(), 1);
+    assert!(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("demo/data/disability_registry.xlsx")
+            .is_file(),
+        "disability registry demo workbook should be committed"
+    );
+    let spdci = config
+        .standards
+        .spdci
+        .as_ref()
+        .expect("demo should configure SP DCI");
+    let disability_registry = spdci
+        .disability_registry
+        .as_ref()
+        .expect("demo should configure the disability registry");
+    assert_eq!(
+        disability_registry.query_key,
+        "personal_details.member_identifier"
+    );
+}
+
 #[tokio::test]
 async fn sync_disabled_returns_spdci_status_from_entity_row() {
     let server = server().await;
     let response = server
-        .post("/registry/sync/disabled")
+        .post("/dci/dr/registry/sync/disabled")
         .json(&json!({
             "header": {
                 "message_id": "msg-1",
@@ -203,6 +278,7 @@ async fn sync_disabled_returns_spdci_status_from_entity_row() {
         .await;
     response.assert_status(StatusCode::OK);
     let body: Value = response.json();
+    assert_eq!(body["header"]["status"], "succ");
     assert_eq!(body["message"]["transaction_id"], "txn-1");
     assert_eq!(
         body["message"]["disabled_response"][0]["disabled_status"],
@@ -211,10 +287,86 @@ async fn sync_disabled_returns_spdci_status_from_entity_row() {
 }
 
 #[tokio::test]
+async fn sync_search_returns_spdci_search_response_from_configured_registry() {
+    let server = server().await;
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&json!({
+            "header": {
+                "message_id": "msg-search-1",
+                "action": "search"
+            },
+            "message": {
+                "transaction_id": "txn-search-1",
+                "search_request": [{
+                    "reference_id": "ref-search-1",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "idtype-value",
+                        "query": {
+                            "type": "DISABILITY_ID",
+                            "value": "ABC451123"
+                        }
+                    }
+                }]
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(body["header"]["status"], "succ");
+    assert_eq!(body["message"]["transaction_id"], "txn-search-1");
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_record_type"],
+        "spdci-extensions-dci:DisabledPerson"
+    );
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"]["id"],
+        "ABC451123"
+    );
+}
+
+#[tokio::test]
+async fn sync_search_supports_named_dci_registry_path() {
+    let server = server().await;
+    let response = server
+        .post("/dci/dr/registry/sync/search")
+        .json(&json!({
+            "message": {
+                "transaction_id": "txn-search-2",
+                "search_request": [{
+                    "reference_id": "ref-search-2",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "search_criteria": {
+                        "query_type": "expression",
+                        "query": {
+                            "type": "ns:org:QueryType:expression",
+                            "value": {
+                                "expression": {
+                                    "query": {
+                                        "disability_status": { "$eq": "Approved" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }]
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::OK);
+    let body: Value = response.json();
+    assert_eq!(
+        body["message"]["search_response"][0]["data"]["reg_records"]["impairment_type"],
+        "mobility"
+    );
+}
+
+#[tokio::test]
 async fn sync_disability_details_returns_entity_record() {
     let server = server().await;
     let response = server
-        .post("/registry/sync/get-disability-details")
+        .post("/dci/dr/registry/sync/get-disability-details")
         .json(&json!({
             "message": {
                 "transaction_id": "txn-2",
@@ -232,6 +384,7 @@ async fn sync_disability_details_returns_entity_record() {
         .await;
     response.assert_status(StatusCode::OK);
     let body: Value = response.json();
+    assert_eq!(body["header"]["status"], "succ");
     assert_eq!(
         body["message"]["search_response"][0]["data"]["reg_records"][0]["impairment_type"],
         "mobility"

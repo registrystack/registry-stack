@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Focused config-loading verification for the five demo-pack YAMLs and the
+//! Focused config-loading verification for the five core demo-pack YAMLs and the
 //! combined `all_demos.yaml`. This keeps the public demo pack covered by
 //! a focused config-loading check.
 //!
-//! All six configs declare the same six persona `hash_env:` names
+//! The core configs declare the same six persona `hash_env:` names
 //! (`CATALOG_VIEWER_HASH` etc.), so this binary keeps a single test function
-//! that loads all six in sequence. Cargo runs each `tests/*.rs` binary in its
+//! that loads them in sequence. Cargo runs each `tests/*.rs` binary in its
 //! own process, so the global env writes here cannot race with other tests
 //! that use disjoint env names.
 
@@ -45,7 +45,7 @@ const PERSONA_HASH_ENVS: &[&str] = &[
 ];
 
 #[test]
-fn all_six_demo_configs_load_and_validate() {
+fn core_demo_configs_load_and_validate() {
     for name in PERSONA_HASH_ENVS {
         env::set_var(name, make_fingerprint(name.as_bytes()));
     }

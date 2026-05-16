@@ -5,7 +5,7 @@
 #   "openpyxl>=3.1",
 # ]
 # ///
-"""Generate five synthetic XLSX workbooks for the registry-relay demo pack.
+"""Generate synthetic XLSX workbooks for the registry-relay demo pack.
 
 Reads no inputs. Writes:
   - demo/data/benefits_casework.xlsx
@@ -13,6 +13,7 @@ Reads no inputs. Writes:
   - demo/data/public_works_projects.xlsx
   - demo/data/education_registry.xlsx
   - demo/data/subject_registry.xlsx
+  - demo/data/disability_registry.xlsx
 
 Determinism:
   - Single seeded random.Random instance threads through every draw.
@@ -937,6 +938,84 @@ def build_education(
 
 
 # ---------------------------------------------------------------------------
+# SP DCI Disability Registry
+# ---------------------------------------------------------------------------
+
+
+def build_disability_registry(rng: random.Random, count: int) -> dict[str, list[list[Any]]]:
+    """Return sheet data for the optional SP DCI Disability Registry demo."""
+
+    header = [
+        "person_id",
+        "member_identifier",
+        "disability_status",
+        "disability_level",
+        "impairment_type",
+        "impairment_level",
+        "human_assistance_type",
+        "support_frequency",
+        "support_status",
+        "disability_details",
+        "disability_support",
+        "home_district",
+        "age_band",
+        "registration_date",
+        "last_updated",
+    ]
+    statuses = ["Approved", "Approved", "Pending Review", "Suspended", "Not Certified"]
+    disability_levels = ["mild", "moderate", "severe", "profound"]
+    impairment_types = ["mobility", "visual", "hearing", "cognitive", "psychosocial"]
+    impairment_levels = ["low", "medium", "high"]
+    assistance_types = ["personal_assistant", "guide", "interpreter", "caregiver", "none"]
+    support_frequencies = ["daily", "weekly", "monthly", "as_needed"]
+    support_statuses = ["active", "pending", "paused", "completed"]
+    age_bands = ["0-17", "18-29", "30-44", "45-64", "65+"]
+
+    rows: list[list[Any]] = [header]
+    for i in range(1, count + 1):
+        person_id = f"drp-{7000 + i}"
+        member_identifier = f"DR-MEMBER-{i:03d}"
+        status = statuses[(i - 1) % len(statuses)]
+        impairment_type = pick(rng, impairment_types)
+        disability_level = pick(rng, disability_levels)
+        impairment_level = pick(rng, impairment_levels)
+        assistance_type = pick(rng, assistance_types)
+        support_frequency = pick(rng, support_frequencies)
+        support_status = pick(rng, support_statuses)
+        district = pick(rng, DISTRICTS, weights=[20, 18, 25, 12, 10, 15])
+        age_band = pick(rng, age_bands, weights=[18, 16, 24, 28, 14])
+        registered = daterange(rng, dt.date(2024, 1, 1), dt.date(2026, 3, 31))
+        updated = registered + dt.timedelta(days=rng.randint(0, 180))
+        details = f"{disability_level} {impairment_type} impairment"
+        support = (
+            "No recurring assistance registered"
+            if assistance_type == "none"
+            else f"{support_frequency} {assistance_type.replace('_', ' ')} support"
+        )
+        rows.append(
+            [
+                person_id,
+                member_identifier,
+                status,
+                disability_level,
+                impairment_type,
+                impairment_level,
+                assistance_type,
+                support_frequency,
+                support_status,
+                details,
+                support,
+                district,
+                age_band,
+                registered,
+                updated,
+            ]
+        )
+
+    return {"DisabledPeople": rows}
+
+
+# ---------------------------------------------------------------------------
 # Subject registry
 # ---------------------------------------------------------------------------
 
@@ -1519,6 +1598,7 @@ def main() -> int:
         student_ids,
         guardian_ids_by_student,
     )
+    dr_sheets = build_disability_registry(rng, count=80)
 
     workbooks = {
         "benefits_casework": benefits_sheets,
@@ -1526,6 +1606,7 @@ def main() -> int:
         "public_works_projects": pw_sheets,
         "education_registry": edu_sheets,
         "subject_registry": sub_sheets,
+        "disability_registry": dr_sheets,
     }
 
     # Run distribution and alias checks before writing files. Cheap insurance
@@ -1567,6 +1648,7 @@ def main() -> int:
         "public_works_projects": "Projects",
         "education_registry": "Students",
         "subject_registry": "Subjects",
+        "disability_registry": "DisabledPeople",
     }
     for name, path in output_paths.items():
         ps = primary_sheet_for[name]

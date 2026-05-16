@@ -222,7 +222,7 @@ pub enum ConfigError {
     /// built without the optional mapper dependency.
     #[error("publicschema cel feature disabled")]
     PublicSchemaFeatureDisabled,
-    /// SPD CI standards adapters were configured but the binary was
+    /// SP DCI standards adapters were configured but the binary was
     /// built without the optional adapter feature.
     #[error("spdci api standards feature disabled")]
     SpdciFeatureDisabled,
@@ -711,7 +711,7 @@ impl ConfigError {
                 "Provenance verification method mismatch"
             }
             ConfigError::PublicSchemaFeatureDisabled => "PublicSchema CEL feature disabled",
-            ConfigError::SpdciFeatureDisabled => "SPD CI API standards feature disabled",
+            ConfigError::SpdciFeatureDisabled => "SP DCI API standards feature disabled",
         }
     }
 
@@ -752,7 +752,7 @@ impl ConfigError {
                 "publicschema mappings require a binary built with the publicschema-cel feature"
             }
             ConfigError::SpdciFeatureDisabled => {
-                "spdci standards adapters require a binary built with the spdci-api-standards feature"
+                "SP DCI standards adapters require a binary built with the spdci-api-standards feature"
             }
         }
     }

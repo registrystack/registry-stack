@@ -13,10 +13,11 @@ use std::net::IpAddr;
 
 use crate::error::{ConfigError, Error};
 
+use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
-    EntityRelationshipConfig, FieldConfig, MaterializationMode, RefreshConfig, RelationshipKind,
-    ResourceConfig, SourceConfig,
+    EntityRelationshipConfig, FieldConfig, RefreshConfig, RelationshipKind, ResourceConfig,
+    SourceConfig,
 };
 
 /// Prefix for the special `admin` scope. Spec.md Section 8.
@@ -69,14 +70,20 @@ fn validate_spdci_config(
     config: &Config,
     spdci: &super::SpdciStandardsConfig,
 ) -> Result<(), ConfigError> {
-    let Some(disability) = &spdci.disability_registry else {
+    if spdci.disability_registry.is_none() && spdci.registries.is_empty() {
         tracing::error!(
             code = "config.validation_error",
             "standards.spdci must declare at least one adapter"
         );
         return Err(ConfigError::ValidationError);
     };
-    validate_spdci_disability_registry(config, disability)
+    if let Some(disability) = &spdci.disability_registry {
+        validate_spdci_disability_registry(config, disability)?;
+    }
+    for (name, registry) in &spdci.registries {
+        validate_spdci_registry(config, name, registry)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -103,45 +110,12 @@ fn validate_spdci_disability_registry(
         return Err(ConfigError::ValidationError);
     }
 
-    let dataset = config
-        .datasets
-        .iter()
-        .find(|dataset| dataset.id == disability.dataset)
-        .ok_or_else(|| {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %disability.dataset,
-                "standards.spdci.disability_registry references an unknown dataset"
-            );
-            ConfigError::ValidationError
-        })?;
-    let entity = dataset
-        .entities
-        .iter()
-        .find(|entity| entity.name == disability.entity)
-        .ok_or_else(|| {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %disability.dataset,
-                entity = %disability.entity,
-                "standards.spdci.disability_registry references an unknown entity"
-            );
-            ConfigError::ValidationError
-        })?;
-    let table = dataset
-        .table_configs()
-        .find(|table| table.id == entity.table)
-        .ok_or_else(|| {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %disability.dataset,
-                entity = %disability.entity,
-                table_id = %entity.table,
-                "standards.spdci.disability_registry entity references an unknown table"
-            );
-            ConfigError::ValidationError
-        })?;
-    let fields = exposed_entity_fields(entity, table)?;
+    let (entity, fields) = spdci_entity_fields(
+        config,
+        disability.dataset.as_str(),
+        &disability.entity,
+        "standards.spdci.disability_registry",
+    )?;
     for required in [
         disability.query_field.as_str(),
         disability.disabled_status_field.as_str(),
@@ -173,6 +147,120 @@ fn validate_spdci_disability_registry(
         return Err(ConfigError::ValidationError);
     }
     Ok(())
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn validate_spdci_registry(
+    config: &Config,
+    name: &str,
+    registry: &super::SpdciRegistryConfig,
+) -> Result<(), ConfigError> {
+    if name.trim().is_empty()
+        || registry.entity.trim().is_empty()
+        || registry.registry_type.trim().is_empty()
+        || registry.record_type.trim().is_empty()
+        || registry.identifiers.is_empty()
+        || registry.default_limit == 0
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            "standards.spdci.registries entries must declare non-empty bindings"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let (entity, fields) = spdci_entity_fields(
+        config,
+        registry.dataset.as_str(),
+        &registry.entity,
+        "standards.spdci.registries",
+    )?;
+    for field in registry
+        .identifiers
+        .values()
+        .chain(registry.expression_fields.values())
+    {
+        if field.trim().is_empty() || !fields.contains_key(field.as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                field = %field,
+                "standards.spdci.registries references an unknown entity field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !entity
+            .api
+            .allowed_filters
+            .iter()
+            .any(|filter| filter.field == *field)
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                field = %field,
+                "standards.spdci.registries search fields must be allowed entity filters"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_entity_fields<'a>(
+    config: &'a Config,
+    dataset_id: &str,
+    entity_name: &str,
+    context: &str,
+) -> Result<(&'a EntityConfig, BTreeMap<String, String>), ConfigError> {
+    let dataset = config
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id.as_ref() == dataset_id)
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id,
+                "{context} references an unknown dataset"
+            );
+            ConfigError::ValidationError
+        })?;
+    let entity = dataset
+        .entities
+        .iter()
+        .find(|entity| entity.name == entity_name)
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id,
+                entity = entity_name,
+                "{context} references an unknown entity"
+            );
+            ConfigError::ValidationError
+        })?;
+    let table = dataset
+        .table_configs()
+        .find(|table| table.id == entity.table)
+        .ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id,
+                entity = entity_name,
+                table_id = %entity.table,
+                "{context} entity references an unknown table"
+            );
+            ConfigError::ValidationError
+        })?;
+    let fields = exposed_entity_fields(entity, table)?;
+    Ok((entity, fields))
 }
 
 fn validate_publicschema_feature(config: &Config) -> Result<(), ConfigError> {
@@ -977,36 +1065,33 @@ fn validate_materialization_refresh(
     refresh: &RefreshConfig,
 ) -> Result<(), ConfigError> {
     let materialization = resource.effective_materialization(dataset);
+    let capabilities = source_capabilities(source, materialization);
 
-    if materialization == MaterializationMode::Live && matches!(source, SourceConfig::File { .. }) {
-        tracing::error!(
-            code = "config.validation_error",
-            dataset_id = %dataset.id,
-            resource_id = %resource.id,
-            "file sources support only snapshot materialization"
-        );
+    if !capabilities.materialization_supported {
+        match source {
+            SourceConfig::File { .. } => tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                resource_id = %resource.id,
+                "file sources support only snapshot materialization"
+            ),
+            SourceConfig::Postgres { query: Some(_), .. } => tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                resource_id = %resource.id,
+                "postgres live materialization supports table sources only"
+            ),
+            SourceConfig::Postgres { .. } => tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                resource_id = %resource.id,
+                "source does not support live materialization"
+            ),
+        }
         return Err(ConfigError::ValidationError);
     }
 
-    if matches!(
-        (materialization, source),
-        (
-            MaterializationMode::Live,
-            SourceConfig::Postgres { query: Some(_), .. }
-        )
-    ) {
-        tracing::error!(
-            code = "config.validation_error",
-            dataset_id = %dataset.id,
-            resource_id = %resource.id,
-            "postgres live materialization supports table sources only"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-
-    if materialization == MaterializationMode::Live
-        && matches!(refresh, RefreshConfig::Mtime { .. })
-    {
+    if matches!(refresh, RefreshConfig::Mtime { .. }) && !capabilities.mtime_refresh {
         tracing::error!(
             code = "config.validation_error",
             dataset_id = %dataset.id,

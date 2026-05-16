@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+pub mod capabilities;
 pub mod loader;
 pub mod provenance;
 pub mod validate;
@@ -67,28 +68,52 @@ pub struct StandardsConfig {
     pub spdci: Option<SpdciStandardsConfig>,
 }
 
-/// Digital Convergence Initiative / SPD CI adapter configuration.
+/// Social Protection Digital Convergence Initiative (SP DCI) adapter
+/// configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciStandardsConfig {
     #[serde(default)]
     pub disability_registry: Option<SpdciDisabilityRegistryConfig>,
+    #[serde(default)]
+    pub registries: BTreeMap<String, SpdciRegistryConfig>,
 }
 
-/// Runtime binding from SPD CI Disability Registry sync APIs to one
+/// Runtime binding from a DCI registry sync search API to one configured
+/// Registry Relay entity.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpdciRegistryConfig {
+    pub dataset: DatasetId,
+    pub entity: String,
+    #[serde(default = "default_spdci_registry_type")]
+    pub registry_type: String,
+    #[serde(default = "default_spdci_record_type")]
+    pub record_type: String,
+    /// DCI identifier type to entity field mappings for `idtype-value`.
+    #[serde(default)]
+    pub identifiers: BTreeMap<String, String>,
+    /// DCI expression or predicate attribute to entity field mappings.
+    #[serde(default)]
+    pub expression_fields: BTreeMap<String, String>,
+    #[serde(default = "default_spdci_search_limit")]
+    pub default_limit: u32,
+}
+
+/// Runtime binding from SP DCI Disability Registry sync APIs to one
 /// configured Registry Relay entity.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciDisabilityRegistryConfig {
     pub dataset: DatasetId,
     pub entity: String,
-    /// Query key accepted from SPD CI `disabled_criteria.query`.
+    /// Query key accepted from SP DCI `disabled_criteria.query`.
     #[serde(default = "default_spdci_disability_query_key")]
     pub query_key: String,
-    /// Entity field filtered when the SPD CI query key is present.
+    /// Entity field filtered when the SP DCI query key is present.
     #[serde(default = "default_spdci_disability_query_field")]
     pub query_field: String,
-    /// Entity field whose value determines `/registry/sync/disabled`.
+    /// Entity field whose value determines the SP DCI disabled response.
     #[serde(default = "default_spdci_disabled_status_field")]
     pub disabled_status_field: String,
     /// Case-insensitive values interpreted as disabled.
@@ -113,6 +138,18 @@ fn default_spdci_disabled_positive_values() -> Vec<String> {
         .into_iter()
         .map(str::to_string)
         .collect()
+}
+
+fn default_spdci_registry_type() -> String {
+    "ns:org:RegistryType:DR".to_string()
+}
+
+fn default_spdci_record_type() -> String {
+    "spdci-extensions-dci:DisabledPerson".to_string()
+}
+
+fn default_spdci_search_limit() -> u32 {
+    100
 }
 
 /// HTTP listener and adjacent server-wide knobs.
@@ -327,8 +364,8 @@ impl DatasetConfig {
     }
 }
 
-/// Source plugin selection. Tagged on `type:` so HTTP, S3, or database
-/// variants can land additively later. V1 supports local files only.
+/// Source plugin selection. Tagged on `type:` so HTTP, S3, or additional
+/// database variants can land additively later.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg(not(feature = "spdci-api-standards"))]
 
-//! Guardrail for binaries built without the optional SPD CI adapter.
+//! Guardrail for binaries built without the optional SP DCI adapter.
 
 use std::io::Write;
 use std::path::PathBuf;

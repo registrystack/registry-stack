@@ -63,11 +63,11 @@ vocabularies:
 
 Vocabulary prefixes let entity fields and dataset metadata use compact semantic references such as `psc:concepts/Person`.
 
-## Optional SPD CI Sync Adapter
+## Optional Social Protection Digital Convergence Initiative (SP DCI) Sync Adapter
 
-Build with `--features spdci-api-standards` to enable the optional SPD CI Disability Registry sync adapter. Without that feature, any `standards.spdci` config is rejected with `spdci.config.feature_disabled`.
+Build with `--features spdci-api-standards` to enable the optional SP DCI sync adapters. Without that feature, any `standards.spdci` config is rejected with `spdci.config.feature_disabled`.
 
-The adapter does not add new storage semantics. Configure a normal Registry Relay entity, often backed by an XLSX worksheet, then bind the SPD CI sync routes to it:
+The adapter does not add new storage semantics. Configure a normal Registry Relay entity, often backed by an XLSX worksheet, then bind the SP DCI sync routes to it:
 
 ```yaml
 standards:
@@ -79,19 +79,36 @@ standards:
       query_field: id
       disabled_status_field: disability_status
       disabled_positive_values: [approved, yes]
+    registries:
+      dr:
+        dataset: disability_registry
+        entity: disabled_person
+        registry_type: ns:org:RegistryType:DR
+        record_type: spdci-extensions-dci:DisabledPerson
+        identifiers:
+          DISABILITY_ID: id
+          MEMBER_ID: id
+        expression_fields:
+          disability_status: disability_status
+          disability_details.impairment_type: impairment_type
 ```
 
-When enabled and configured, Registry Relay serves these SPD CI sync endpoints on the protected data-plane listener:
+When enabled and configured, Registry Relay serves these SP DCI sync endpoints on the protected data-plane listener:
 
 ```text
-POST /registry/sync/disabled
-POST /registry/sync/get-disability-details
-POST /registry/sync/get-disability-support
+POST /dci/{registry}/registry/sync/search
+POST /dci/{registry}/registry/sync/disabled
+POST /dci/{registry}/registry/sync/get-disability-details
+POST /dci/{registry}/registry/sync/get-disability-support
 ```
 
-`query_key` is read from `message.disabled_criteria.query` in the SPD CI request envelope. It may be represented as a literal dotted JSON key (`"member.member_identifier"`) or as nested objects (`{"member": {"member_identifier": ...}}`). `query_field` must be an allowed entity filter because the adapter delegates reads to the normal entity query engine.
+The `{registry}` segment selects a named `standards.spdci.registries` entry such as `dr`, which lets one listener host multiple DCI registry APIs without path ambiguity. The async `/registry/search`, subscribe, callback, and transaction-status APIs are intentionally not implemented by this sync adapter.
 
-For `/registry/sync/disabled`, the caller needs the configured entity `verify_scope`; details and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer.
+For generic sync search, `identifiers` maps DCI `idtype-value` query types to entity fields. `expression_fields` maps DCI expression or predicate attribute names to entity fields. Mapped fields must be exposed entity fields and allowed filters. The adapter currently supports `idtype-value`, expression `$and` with `eq`, `in`, `ge`, and `le`, and predicate conditions joined with `and`.
+
+`query_key` is read from `message.disabled_criteria.query` in the SP DCI request envelope. It may be represented as a literal dotted JSON key (`"member.member_identifier"`) or as nested objects (`{"member": {"member_identifier": ...}}`). `query_field` must be an allowed entity filter because the adapter delegates reads to the normal entity query engine.
+
+For `/dci/{registry}/registry/sync/disabled`, the caller needs the configured entity `verify_scope`; generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer.
 
 ## API Keys
 
