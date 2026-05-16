@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration tests for Wave 4 audit sinks.
+//! Integration tests for audit sinks.
 
 use std::fs;
 use std::path::Path;

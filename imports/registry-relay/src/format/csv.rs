@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `CsvFormat`: decode CSV byte streams to Arrow `RecordBatch`es.
 //!
-//! Uses the sync `csv` crate inside `tokio::task::spawn_blocking` per
-//! `decisions/wave-1.md` W1-10. Reads the entire byte stream into memory
-//! once (V1 accepted cost), hands the buffer to `csv::Reader`, then builds
-//! Arrow arrays from the resulting string records. Type coercion is driven
-//! by `FormatHints.declared`.
+//! Uses the sync `csv` crate inside `tokio::task::spawn_blocking`. The
+//! current implementation reads the byte stream into memory once, hands
+//! the buffer to `csv::Reader`, then builds Arrow arrays from the string
+//! records. Type coercion is driven by `FormatHints.declared`.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -60,7 +59,7 @@ async fn decode_csv(
     mut reader: Pin<Box<dyn AsyncRead + Send + Unpin>>,
     hints: FormatHints,
 ) -> Result<DecodedStream, FormatError> {
-    // Step 1: read the full byte stream into memory (V1 accepted cost).
+    // Step 1: read the full byte stream into memory.
     let mut bytes = Vec::new();
     reader
         .read_to_end(&mut bytes)
@@ -86,7 +85,7 @@ async fn decode_csv(
     let (schema, batch) = result;
     let schema_ref: SchemaRef = Arc::new(schema);
 
-    // Step 3: wrap the single batch in a stream (V1: one batch per decode).
+    // Step 3: wrap the single batch in a stream.
     let batches_stream = stream::once(async move { Ok(batch) });
 
     Ok(DecodedStream {

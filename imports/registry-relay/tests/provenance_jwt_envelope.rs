@@ -9,8 +9,7 @@
 //! * Verifies the signature byte-for-byte against the matching public
 //!   key.
 //! * Decodes the header and payload as JSON and asserts the VCDM 2.0
-//!   shape required by `decisions/wave-3-data-provenance.md` Section 9
-//!   (top-level `@context`, `type`, `id`, `issuer`, `validFrom`,
+//!   shape (top-level `@context`, `type`, `id`, `issuer`, `validFrom`,
 //!   `validUntil`, `credentialSubject`, `credentialSchema` + JWT
 //!   registered claims; **no** nested `vc` claim).
 //! * Confirms `iat == nbf`, `exp == iat + window`, that `validFrom`

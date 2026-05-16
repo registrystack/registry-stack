@@ -3,8 +3,8 @@
 //!
 //! The gateway only issues a signed VC when the caller explicitly asks
 //! for one via `Accept`. Plain JSON paths are byte-equivalent to a
-//! build without Wave 3 (see decision D6 / D11). The set of acceptable
-//! media types comes from
+//! deployment without provenance enabled. The set of acceptable media
+//! types comes from
 //! [`crate::config::ProvenanceConfig::accepted_media_types`].
 //!
 //! ## Algorithm (RFC 9110 §12.5.1)
@@ -17,17 +17,16 @@
 //! 2. Find the highest q value among the offers that match one of the
 //!    configured `accepted_types` (case-insensitive, full
 //!    `type/subtype` only: wildcards never opt in to a signed VC since
-//!    the wave-3 contract is explicit selection).
+//!    provenance requires explicit selection).
 //! 3. Find the highest q value among all other offers (the plain-JSON
 //!    fallback). A `q=0` on a VC offer is an explicit "not acceptable"
 //!    and excludes that offer entirely.
 //! 4. Return [`NegotiationOutcome::SignedVc`] iff the VC's best q is
-//!    strictly greater than 0 AND at least as large as the best
-//!    non-VC q. Ties resolve to `SignedVc` because the VC opt-in is
-//!    a deliberate, explicit selection.
+//!    strictly greater than 0 AND strictly greater than the best
+//!    non-VC q. Ties resolve to `PlainJson` to preserve the default.
 //! 5. When the header is absent we return
 //!    [`NegotiationOutcome::PlainJson`] so legacy clients keep their
-//!    wave-2 contract.
+//!    plain JSON contract.
 //!
 //! We never mutate the Accept header; we only inspect it.
 
@@ -37,7 +36,7 @@ use axum::http::HeaderMap;
 /// configured set of provenance media types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NegotiationOutcome {
-    /// Caller wants the wave-2 plain-JSON shape (default).
+    /// Caller wants the plain JSON shape (default).
     PlainJson,
     /// Caller wants a signed VC and the gateway can serve one.
     SignedVc,
@@ -85,7 +84,7 @@ fn parse_offer(raw: &str) -> Option<AcceptOffer<'_>> {
 /// `accepted_types` is the configured list (e.g.
 /// `["application/vc+jwt", "application/jwt"]`). Media-type comparison
 /// is case-insensitive on the literal `type/subtype` only; wildcards
-/// (`*/*`, `application/*`) never opt in because the wave-3 contract
+/// (`*/*`, `application/*`) never opt in because provenance issuance
 /// requires explicit selection. q values follow RFC 9110 §12.5.1.
 #[must_use]
 pub fn negotiate(headers: &HeaderMap, accepted_types: &[String]) -> NegotiationOutcome {
@@ -122,7 +121,7 @@ pub fn negotiate(headers: &HeaderMap, accepted_types: &[String]) -> NegotiationO
     match (best_vc_q, best_other_q) {
         // q=0 is an explicit "not acceptable"; treat the offer as absent.
         (Some(vc_q), _) if vc_q <= 0.0 => NegotiationOutcome::PlainJson,
-        (Some(vc_q), Some(other_q)) if vc_q + f32::EPSILON < other_q => {
+        (Some(vc_q), Some(other_q)) if vc_q <= other_q + f32::EPSILON => {
             NegotiationOutcome::PlainJson
         }
         (Some(_), _) => NegotiationOutcome::SignedVc,
@@ -185,11 +184,11 @@ mod tests {
     }
 
     #[test]
-    fn list_with_other_first_still_matches() {
+    fn list_with_lower_weight_other_first_still_matches() {
         let mut headers = HeaderMap::new();
         headers.insert(
             "accept",
-            HeaderValue::from_static("application/json, application/vc+jwt"),
+            HeaderValue::from_static("application/json;q=0.5, application/vc+jwt"),
         );
         assert_eq!(
             negotiate(&headers, &accepted()),
@@ -275,9 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn tie_breaks_by_accepted_list_order() {
-        // Equal q on both vc+jwt and an unrelated json. The VC was
-        // explicitly opted in, so the tie resolves to SignedVc.
+    fn tie_breaks_to_plain_json() {
+        // Equal q on both vc+jwt and application/json preserves the
+        // default plain JSON response.
         let mut headers = HeaderMap::new();
         headers.insert(
             "accept",
@@ -285,13 +284,13 @@ mod tests {
         );
         assert_eq!(
             negotiate(&headers, &accepted()),
-            NegotiationOutcome::SignedVc
+            NegotiationOutcome::PlainJson
         );
     }
 
     #[test]
     fn wildcard_does_not_opt_in_to_signed_vc() {
-        // `*/*` is the curl default. Wave-3 is opt-in by explicit
+        // `*/*` is the curl default. Provenance is opt-in by explicit
         // selection, so a wildcard never matches an accepted VC media
         // type.
         let mut headers = HeaderMap::new();

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Public, unauthenticated `/contexts/{vocab}/{version}` route.
 //!
-//! Serves the JSON-LD 1.1 context documents for the Wave 3 vocabulary
-//! and the vendored W3C VC 2.0 context. Bytes are pulled from
+//! Serves the JSON-LD 1.1 context documents for data provenance and
+//! the vendored W3C VC 2.0 context. Bytes are pulled from
 //! `crate::provenance::resources` and hash-pinned in
 //! `resources/MANIFEST.toml`.
 //!
@@ -10,6 +10,10 @@
 //! URL. The W3C VC v2 context is vendored alongside our own so a
 //! verifier offline from the W3C host still has the required @context
 //! entries.
+//!
+//! These resources are public verification artefacts, so the handler
+//! emits `Access-Control-Allow-Origin: *` directly rather than relying
+//! on the gateway's default-deny application CORS policy.
 
 use axum::extract::Path;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -48,5 +52,9 @@ fn build_context_response(bytes: &'static [u8]) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, APPLICATION_LD_JSON);
     headers.insert(header::CACHE_CONTROL, CACHE_CONTROL_24H);
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
     (StatusCode::OK, headers, bytes).into_response()
 }

@@ -61,8 +61,8 @@ pub struct AggregateResult {
     pub suppressed_groups: usize,
     /// Group-by columns declared for this aggregate. Echoed verbatim
     /// on the wire so consumers can validate row shape without a
-    /// second roundtrip; required input for the Wave 3
-    /// `AggregateResult` `credentialSubject` builder.
+    /// second roundtrip; also used when building aggregate provenance
+    /// claims.
     pub group_by: Vec<String>,
     /// Measure names declared for this aggregate. Same rationale as
     /// `group_by`.

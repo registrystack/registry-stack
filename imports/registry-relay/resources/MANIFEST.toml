@@ -1,11 +1,12 @@
-# Wave 3 provenance resources manifest.
+# Vendored resources manifest.
 #
-# Pinned SHA-256 of every shipped resource the gateway serves under the
-# unauthenticated `/contexts/...` and `/schemas/...` routes (and the
-# vendored W3C VC v2 context). The test suite re-hashes each file and
-# asserts equality, so any unreviewed edit fails CI before reaching
-# production. The hash space is `decisions/wave-3-data-provenance.md`
-# section §10 (resources).
+# Pinned SHA-256 of every shipped resource the gateway serves verbatim:
+# the Wave 3 JSON-LD contexts and JSON Schemas under the unauthenticated
+# `/contexts/...` and `/schemas/...` routes (the vendored W3C VC v2
+# context lives here too), and the Scalar UI bundle the `/docs` viewer
+# loads. The test suite re-hashes each file and asserts equality, so any
+# unreviewed edit fails CI before reaching production. The Wave 3 hash
+# space is `decisions/wave-3-data-provenance.md` section §10.
 
 [[resource]]
 path = "jsonld/provenance/v1/context.jsonld"
@@ -31,3 +32,11 @@ served_as = "schema"
 path = "schemas/entity-record/v1.json"
 sha256 = "f79d01f70b098b8972512cb8b6228aa8a6a78549c9100e6829bf7fa58c9d8932"
 served_as = "schema"
+
+# Scalar API Reference standalone bundle, @scalar/api-reference@1.57.1
+# from cdn.jsdelivr.net. Served by the `/docs/scalar.js` route under the
+# authenticated data-plane surface; the `/docs` HTML page loads it.
+[[resource]]
+path = "scalar/api-reference.js"
+sha256 = "9a65d9d53200f082b46b150bbbeafdfa9a6efc403f4c55aae1c219dbc2d9d8c3"
+served_as = "vendored"

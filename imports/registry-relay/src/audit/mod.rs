@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Audit core: trait, record schema, JSONL envelope, and helpers.
 //!
-//! The canonical record schema lives in `decisions/wave-0.md` Section 5.
 //! V1 ships the in-process trait, the `AuditRecord` struct, stdout/file
 //! / syslog sinks, optional chaining, and the request-scoped middleware.
 //!
@@ -11,9 +10,9 @@
 //!   envelope fields while keeping the core `AuditRecord` stable.
 //!
 //! Integration:
-//! - The middleware reads `Principal` from request extensions (Wave 0
-//!   Track 4 auth middleware) when present and projects its identity
-//!   into `api_key_id`, `auth_mode`, and `scopes_used`.
+//! - The middleware reads `Principal` from request extensions when
+//!   present and projects its identity into `api_key_id`, `auth_mode`,
+//!   and `scopes_used`.
 //! - The error module attaches a stable error code on failure
 //!   responses via the `ErrorCodeExt` response extension defined in
 //!   this module; the audit middleware reads it and records it.
@@ -52,10 +51,8 @@ pub use syslog::SyslogSink;
 /// Response extension carrying the stable error code emitted by failing
 /// handlers (typically `crate::error::Error::into_response`). The audit
 /// middleware reads this on the way out and records it as
-/// `AuditRecord::error_code`. Wave 0 defines the marker here so other
-/// modules can attach a code without depending on audit internals; Wave
-/// 4 may relocate it to the error module without breaking the
-/// contract (the type name and field layout stay stable).
+/// `AuditRecord::error_code`. The marker lives here so other modules
+/// can attach a code without depending on audit internals.
 #[derive(Debug, Clone)]
 pub struct ErrorCodeExt(pub String);
 
@@ -83,11 +80,9 @@ pub struct AuditContextExt {
     pub suppressed_groups: Option<u64>,
 }
 
-/// Response-extension marker emitted by Wave 3 handlers when they have
-/// signed a VC for the response. The audit middleware emits a second
-/// envelope (`event: provenance.vc.issued`) alongside the regular
-/// request audit record, per
-/// `decisions/wave-3-data-provenance.md` §11.
+/// Response-extension marker emitted by handlers that signed a VC for
+/// the response. The audit middleware embeds the issuance metadata
+/// alongside the regular request audit record.
 ///
 /// Fields mirror the spec verbatim. `validity` is exposed as three
 /// separate Unix-seconds timestamps; the audit envelope serializer
@@ -120,7 +115,6 @@ pub enum EndpointKind {
     Admin,
     Openapi,
     /// Catch-all for routes that don't match a documented family.
-    /// Wave 0 default for handler-less requests during scaffolding.
     Other,
 }
 
@@ -146,10 +140,8 @@ impl AuditOutcome {
     }
 }
 
-/// One audit record. Schema is the canonical contract from
-/// `decisions/wave-0.md` Section 5. Field order in this struct matches
-/// the table for ease of cross-reference; JSON output preserves
-/// declaration order via serde defaults.
+/// One audit record. Field order in this struct matches the JSONL
+/// output order for readability; serde preserves declaration order.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditRecord {
     /// ISO-8601 UTC with millisecond precision and trailing `Z`.
@@ -195,10 +187,8 @@ pub struct AuditRecord {
     pub duration_ms: u64,
     /// Stable taxonomy code on 4xx/5xx; `null` on 2xx/3xx.
     pub error_code: Option<String>,
-    /// Wave 3 provenance: present when the response carried a signed
-    /// VC. Mirrors the `provenance.vc.issued` event shape from
-    /// `decisions/wave-3-data-provenance.md` §11. `None` for plain
-    /// JSON responses and for wave-0 / wave-2 deployments.
+    /// Present when the response carried a signed VC. `None` for plain
+    /// JSON responses and deployments without provenance enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<ProvenanceIssuanceRecord>,
 }
@@ -244,10 +234,9 @@ impl From<&ProvenanceIssuanceExt> for ProvenanceIssuanceRecord {
     }
 }
 
-/// JSONL envelope handed to a sink. Wave 0 keeps it isomorphic to
-/// `AuditRecord`; Wave 4's chaining wrapper attaches `prev_hash` /
-/// `record_hash` here before serialising, so the inner record schema
-/// never changes.
+/// JSONL envelope handed to a sink. The chaining wrapper attaches
+/// `prev_hash` / `record_hash` here before serialising, so the inner
+/// record schema never changes.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -271,7 +260,7 @@ impl From<AuditRecord> for AuditEnvelope {
 impl AuditEnvelope {
     /// Serialise as a single JSON line terminated by `\n`. Returns
     /// `Err` only if serialisation fails; callers should log and
-    /// continue per Wave 0 audit-failure policy.
+    /// continue so audit I/O cannot break request handling.
     pub fn to_jsonl(&self) -> Result<String, AuditError> {
         let mut s = serde_json::to_string(self).map_err(AuditError::Serialize)?;
         s.push('\n');
@@ -298,8 +287,6 @@ pub type AuditFuture<'a> =
 /// Destination for audit records. Errors from `write` MUST never break
 /// the request path: the caller logs the failure and continues serving.
 ///
-/// V1 impls: [`StdoutSink`] (Wave 0). [`FileSink`], [`SyslogSink`], and
-/// the chaining wrapper arrive in Wave 4.
 pub trait AuditSink: Send + Sync + 'static {
     /// Write a single envelope. Implementations should be non-blocking
     /// on the request path; long I/O belongs behind an internal channel.
@@ -515,10 +502,8 @@ pub async fn audit_layer(
 
     // Auth middleware (inner) attaches `Principal` to the response on
     // success after the handler returns. Prefer that as the canonical
-    // source; fall back to the request-side read above. Wave 0 only
-    // knows API-key auth, so when a principal is present we record
-    // `auth_mode = "api_key"`; Wave 4's multi-mode auth will source
-    // the literal from `Principal`.
+    // source; fall back to the request-side read above. When a
+    // principal is present, its auth mode supplies the audit label.
     let principal = response
         .extensions()
         .get::<crate::auth::Principal>()

@@ -31,12 +31,11 @@ use serde_json::{json, Value};
 
 fn load_example_config() -> Config {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-    let phc = "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHRkZ3RmaXh0dXJl$\
-               EFMrkqK4dXMTH8DBlEvNN3wL/qmRvDjCwIAt7BqDpUw";
+    let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     unsafe {
-        env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
-        env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
-        env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", phc);
+        env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
+        env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
+        env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
     data_gate::config::load(&path).expect("example config loads")
 }
@@ -104,6 +103,10 @@ async fn provenance_v1_context_is_served_verbatim() {
     assert_eq!(
         resp.headers().get("cache-control").unwrap(),
         "public, max-age=86400"
+    );
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
     );
     assert_eq!(resp.as_bytes().as_ref(), resources::PROVENANCE_CONTEXT_V1);
     let _json: Value = serde_json::from_slice(resp.as_bytes().as_ref()).expect("valid JSON-LD");

@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for `CsvFormat`.
 //!
-//! Covers the eight mandatory cases from `decisions/wave-1.md` Section 6
-//! (Track 2). Each test builds a `Pin<Box<dyn AsyncRead>>` from a byte
-//! slice, calls `CsvFormat::decode`, and asserts the resulting
-//! `DecodedStream`.
+//! Each test builds a `Pin<Box<dyn AsyncRead>>` from a byte slice, calls
+//! `CsvFormat::decode`, and asserts the resulting `DecodedStream`.
 
 use std::io::Cursor;
 use std::pin::Pin;

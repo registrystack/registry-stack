@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Byte-producing sources for ingestion.
 //!
-//! Trait shape, field semantics, and forward-compat story are pinned in
-//! `decisions/wave-1.md` Section 2.1. This file is the Wave 1 Architect
-//! precondition: trait surface + supporting types with stub bodies, so
-//! all seven Wave 1 tracks can compile against the contract in parallel.
-//! Track 1 (Source + LocalFileSource) replaces the stubs with the real
-//! `LocalFileSource` impl and completes the error mapping.
+//! Sources produce raw bytes plus change metadata. Formats decode those
+//! bytes into Arrow batches. Keeping those layers separate lets the
+//! gateway add new source types without changing decoders, and add new
+//! decoders without changing source implementations.
 //!
-//! ## Source / Format separation (W1-1)
+//! ## Source / Format separation
 //!
 //! A `Source` produces raw bytes plus a change token; a `Format` decodes
 //! those bytes into Arrow `RecordBatch`es. They are paired by
@@ -32,14 +30,14 @@ pub mod local_file;
 /// happens in `IngestPlan`.
 ///
 /// V1 impl: [`local_file::LocalFileSource`].
-/// V1.x targets: HTTP, S3, SharePoint, Nextcloud. Each is a new struct
+/// Future targets: HTTP, S3, SharePoint, Nextcloud. Each is a new struct
 /// implementing this trait; no other code in the gateway changes.
 ///
 /// Forward compatibility:
 /// - Streaming sources (Kafka, CDC): add `async fn subscribe()
 ///   -> Result<BoxStream<'static, ChangeEvent>>` in V2. Not in V1.
-/// - Pre-fetch sizing / range reads: a `range()` method may join the
-///   trait in V1.x; the current shape does not preclude it.
+/// - Pre-fetch sizing / range reads: a `range()` method can be added
+///   later; the current shape does not preclude it.
 ///
 /// [`Format`]: crate::format::Format
 pub trait Source: Send + Sync + 'static {

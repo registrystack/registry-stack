@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: Apache-2.0
+# Perf config: large profile (1M rows). Regression, capacity, and latency budgets.
+# Source: perf/fixtures/generated/clinic_capacity_1m.parquet
+# Requires roughly 2 GB of memory for the server process.
+
+server:
+  bind: 127.0.0.1:18080
+
+catalog:
+  title: Clinic Capacity Perf Gateway (large)
+  base_url: http://127.0.0.1:18080
+  publisher: Perf Test Harness
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: perf_rows
+      hash_env: PERF_ROWS_KEY_HASH
+      scopes:
+        - clinic_capacity:rows
+
+    - id: perf_metadata
+      hash_env: PERF_METADATA_KEY_HASH
+      scopes:
+        - clinic_capacity:metadata
+
+    - id: perf_aggregate
+      hash_env: PERF_AGGREGATE_KEY_HASH
+      scopes:
+        - clinic_capacity:aggregate
+
+    - id: perf_no_scope
+      hash_env: PERF_NO_SCOPE_KEY_HASH
+      scopes:
+        - clinic_capacity:bulk_export
+
+datasets:
+  - id: clinic_capacity
+    title: Clinic Capacity
+    description: Synthetic facility records for perf testing
+    owner: Perf Test Harness
+    sensitivity: public
+    access_rights: public
+    update_frequency: as_needed
+
+    source:
+      type: file
+      path: perf/fixtures/generated/clinic_capacity_1m.parquet
+
+    refresh:
+      mode: manual
+
+    tables:
+      - id: facility_table
+        format:
+          parquet: {}
+        primary_key: id
+        schema:
+          strict: true
+          fields:
+            - name: id
+              type: string
+              nullable: false
+            - name: region_code
+              type: string
+              nullable: true
+            - name: capacity
+              type: integer
+              nullable: true
+            - name: occupancy
+              type: integer
+              nullable: true
+            - name: last_updated
+              type: string
+              nullable: true
+            - name: operating_since
+              type: string
+              nullable: true
+            - name: category
+              type: string
+              nullable: true
+
+    entities:
+      - name: facility
+        title: Facility
+        description: A healthcare facility (clinic, hospital, or pharmacy)
+        table: facility_table
+        fields:
+          - name: id
+            from: id
+          - name: region_code
+            from: region_code
+          - name: capacity
+            from: capacity
+          - name: occupancy
+            from: occupancy
+          - name: last_updated
+            from: last_updated
+          - name: operating_since
+            from: operating_since
+          - name: category
+            from: category
+        access:
+          metadata_scope:    clinic_capacity:metadata
+          aggregate_scope:   clinic_capacity:aggregate
+          read_scope:        clinic_capacity:rows
+          verify_scope:      clinic_capacity:verify
+          bulk_export_scope: clinic_capacity:bulk_export
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: region_code
+              ops: [eq, in]
+            - field: category
+              ops: [eq, in]
+          allowed_expansions: []
+        aggregates:
+          - id: by_region
+            description: Facility count and total capacity by region
+            group_by:
+              - region_code
+            measures:
+              - name: facility_count
+                function: count
+                column: id
+              - name: total_capacity
+                function: sum
+                column: capacity
+            disclosure_control:
+              min_group_size: 1
+
+audit:
+  sink: file
+  format: jsonl
+  path: target/perf/audit.jsonl

@@ -3,16 +3,16 @@
 //!
 //! Both endpoints are unauthenticated; load balancers, container
 //! orchestrators, and uptime probes hit them without credentials. The
-//! paths match Spec.md Section 7 and `decisions/wave-0.md` Section 8.
+//! paths match Spec.md Section 7.
 //!
 //! ## Semantics
 //!
 //! * `/health` reports process liveness only. It does not consult any
 //!   dependency state and always returns 200. This matches Spec.md
 //!   Section 7: "`/health` checks process liveness only".
-//! * `/ready` reports ingest readiness when a Wave 1 readiness watch
-//!   receiver is installed. Without that extension, it keeps Wave 0's
-//!   trivial 200 behavior for tests that only exercise the HTTP shell.
+//! * `/ready` reports ingest readiness when a readiness watch receiver
+//!   is installed. Without that extension, it returns a trivial 200 for
+//!   tests that only exercise the HTTP shell.
 
 use axum::http::{header, StatusCode};
 use axum::response::Json;
@@ -43,9 +43,9 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-/// Readiness probe. With a Wave 1 readiness receiver installed,
+/// Readiness probe. With a readiness receiver installed,
 /// returns 200 only when every configured resource has ingested. When
-/// no receiver is installed, it keeps Wave 0's trivial ready response.
+/// no receiver is installed, it returns a trivial ready response.
 async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>) -> Response {
     let Some(Extension(readiness)) = readiness else {
         return Json(json!({ "status": "ok" })).into_response();

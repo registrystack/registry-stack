@@ -222,7 +222,7 @@ async fn entity_collection(
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
-    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
+    readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
     let audit_context = registry
@@ -296,6 +296,43 @@ async fn entity_collection(
         }
     }
     let cursor = query_params.cursor.clone();
+    if cursor.is_none() && query_params.query.expansions.is_empty() {
+        if let Some(Extension(registry)) = registry.as_ref() {
+            if let Some(dataset) = registry.dataset(&path.dataset_id) {
+                if let Some(entity) = dataset.entity(&path.entity) {
+                    if let Err(error) = query.validate_collection_query(
+                        &path.dataset_id,
+                        &path.entity,
+                        &query_params.query,
+                    ) {
+                        return error.into_response();
+                    }
+                    let ingest_version = ingest_version_for_entity(
+                        readiness.as_ref().map(|Extension(readiness)| readiness),
+                        &path.dataset_id,
+                        entity,
+                    )
+                    .map(|ingest_version| format!("{}={ingest_version}", entity.table_id));
+                    let etag = entity_etag(
+                        "collection",
+                        &path.dataset_id,
+                        &path.entity,
+                        ingest_version.as_deref(),
+                        &validator,
+                    );
+                    if let Some(etag) = etag.as_deref() {
+                        if if_none_match_matches(&headers, etag) {
+                            let mut response = not_modified_response(etag);
+                            if let Some(context) = audit_context.clone() {
+                                response = with_audit_context(response, context);
+                            }
+                            return response;
+                        }
+                    }
+                }
+            }
+        }
+    }
     match query
         .read_collection(&path.dataset_id, &path.entity, query_params.query)
         .await
@@ -434,11 +471,11 @@ async fn entity_verify(
             } else {
                 Json(&body).into_response()
             };
-            // Wave 3: opt-in signed VC. When the caller asked for one
-            // (and provenance is enabled), the helper replaces the
-            // plain-JSON response with a compact JWS body and attaches
-            // the audit extension. Otherwise the plain wave-2 response
-            // flows through byte-for-byte (D6 / D11).
+            // Opt-in signed VC. When the caller asked for one and
+            // provenance is enabled, the helper replaces the plain JSON
+            // response with a compact JWS body and attaches the audit
+            // extension. Otherwise the plain response flows through
+            // unchanged.
             let provenance_state = provenance.as_ref().map(|Extension(state)| state);
             let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
             let response = crate::api::provenance_issuance::maybe_issue_verify_result(
@@ -513,8 +550,8 @@ async fn entity_record(
         Err(error) => return error.into_response(),
     };
     // Preserve the expansion list locally so the provenance helper can
-    // partition the record into `{fields, expanded}` later. The wave-2
-    // path consumes `query_params.expansions` so we clone first.
+    // partition the record into `{fields, expanded}` later. The plain
+    // JSON path consumes `query_params.expansions` so we clone first.
     let expansions_for_vc = query_params.expansions.clone();
     match query
         .read_record(
@@ -875,7 +912,8 @@ fn with_audit_context(mut response: Response, context: AuditContextExt) -> Respo
     response
 }
 
-fn entity_etag(
+#[doc(hidden)]
+pub fn entity_etag(
     kind: &str,
     dataset_id: &str,
     entity_name: &str,
@@ -901,7 +939,8 @@ fn params_validator(params: &HashMap<String, String>) -> String {
     serde_json::to_string(&params).expect("string map serializes")
 }
 
-fn strong_etag(parts: &[&str]) -> String {
+#[doc(hidden)]
+pub fn strong_etag(parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update(part.len().to_string().as_bytes());
@@ -931,7 +970,8 @@ fn not_modified_response(etag: &str) -> Response {
     with_etag(StatusCode::NOT_MODIFIED.into_response(), etag)
 }
 
-fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+#[doc(hidden)]
+pub fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get_all(header::IF_NONE_MATCH)
         .iter()

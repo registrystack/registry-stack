@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Generate XLSX test fixtures for Track 3 (XlsxFormat) integration tests.
+# Generate XLSX test fixtures for XlsxFormat integration tests.
 #
 # Requires Python 3 + openpyxl. Install with:
 #   uv venv .venv && source .venv/bin/activate && uv pip install openpyxl

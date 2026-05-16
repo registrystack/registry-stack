@@ -31,3 +31,9 @@ demo/var/
 
 # Runtime dataset caches
 cache/
+
+# Perf testing: generated fixtures, compiled artifacts, and secrets
+perf/fixtures/generated/
+target/perf/
+perf/.env
+perf/.env.*

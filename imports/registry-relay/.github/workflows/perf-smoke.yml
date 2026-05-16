@@ -1,0 +1,68 @@
+name: perf-smoke
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Smoke-checks the perf scaffolding without running any actual load.
+# It verifies:
+#   1. The Criterion benches compile (`cargo bench --no-run`).
+#   2. The fixture generator runs end-to-end at the small profile.
+#   3. Every k6 scenario passes `node --check` for basic syntax.
+# It does NOT install k6 or execute scenarios. Scheduled perf jobs do that.
+
+jobs:
+  perf-smoke:
+    name: perf-smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: perf-smoke
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Node (for node --check)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compile Criterion benches
+        run: cargo bench --no-run
+
+      - name: Generate small fixture profile
+        run: uv run perf/scripts/generate_perf_data.py --profile small --out-dir target/perf/smoke-fixtures
+
+      - name: Syntax-check every k6 scenario
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in perf/k6/*.js perf/k6/lib/*.js; do
+            if ! node --check "$f"; then
+              echo "node --check failed: $f"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+      - name: Syntax-check perf Python scripts
+        run: |
+          set -euo pipefail
+          for f in perf/scripts/*.py; do
+            python -c "import ast, sys; ast.parse(open('$f').read())"
+          done

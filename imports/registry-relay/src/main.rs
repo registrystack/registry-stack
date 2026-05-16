@@ -7,7 +7,7 @@
 //!    `DATAGATE_CONFIG` env var, or `./config/example.yaml` (in that
 //!    order of precedence).
 //! 3. Build the `ApiKeyAuth` provider from `auth.api_keys[]`: read each
-//!    `hash_env` env var (validated for presence and PHC shape by the
+//!    `hash_env` env var (validated for presence and fingerprint shape by the
 //!    config loader) and construct an `ApiKeyEntry` per configured id.
 //!    The keyring lives inside `ApiKeyAuth` and is immutable for the
 //!    lifetime of the process.
@@ -54,8 +54,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 /// <path>` positional plus the `DATAGATE_CONFIG` env var fallback.
 const CONFIG_FLAG: &str = "--config";
 
-/// Last-resort default config path. Mirrors the architect's exit
-/// criteria (`config/example.yaml`).
+/// Last-resort default config path.
 const DEFAULT_CONFIG_PATH: &str = "./config/example.yaml";
 
 #[tokio::main]
@@ -113,15 +112,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let dataset_count = config.datasets.len();
     let keyring_size = auth.len();
-    // Wave 3 provenance: build the orchestrator state from the parsed
-    // config. `build_resolved_provenance_config` returns:
+    // Build provenance state from the parsed config.
+    // `build_resolved_provenance_config` returns:
     //   * `Ok(None)` when the operator omitted the `provenance:` block
-    //     (wave-2 deployments), leaving the binary byte-for-byte
-    //     identical to its pre-wave-3 surface.
-    //   * `Ok(Some(_))` when present, even with `enabled = false`. The
-    //     state is still installed so internal wiring stays uniform;
-    //     `build_app_with_provenance` then keeps the public schemas /
-    //     contexts / DID routes invisible until `enabled = true`.
+    //     or set `enabled: false`, leaving the binary unchanged and
+    //     requiring no signing secrets.
+    //   * `Ok(Some(_))` only when provenance is enabled and signer
+    //     material has loaded successfully.
     let provenance_state: Option<Arc<ProvenanceState>> =
         build_resolved_provenance_config(config.provenance.as_ref())?
             .map(|resolved: ResolvedProvenanceConfig| Arc::new(ProvenanceState::new(resolved)));
@@ -253,7 +250,7 @@ fn resolve_config_path() -> PathBuf {
 /// Build the V1 API-key provider from `auth.api_keys[]`.
 ///
 /// The config validator (`crate::config::validate`) already enforced
-/// that every `hash_env` is set and parses as an Argon2id PHC string,
+/// that every `hash_env` is set and parses as a SHA-256 API key fingerprint,
 /// so the only failures we expect here are TOCTOU env var removals
 /// between validation and now. Those propagate as
 /// `ConfigError::MissingSecret` so the binary exits with the same
@@ -272,12 +269,12 @@ fn build_auth(config: &Config) -> Result<ApiKeyAuth, Error> {
 
 /// Resolve one `ApiKeyConfig` into an `ApiKeyEntry`.
 ///
-/// Pulls the PHC string from the env var named by `hash_env`,
-/// collects scopes into a `ScopeSet`, and validates the PHC via
+/// Pulls the fingerprint from the env var named by `hash_env`,
+/// collects scopes into a `ScopeSet`, and validates the fingerprint via
 /// `ApiKeyEntry::new` (which re-parses defensively even though the
 /// config validator already accepted it).
 fn build_api_key_entry(key: &ApiKeyConfig) -> Result<ApiKeyEntry, Error> {
-    let phc = env::var(&key.hash_env).map_err(|_| {
+    let fingerprint = env::var(&key.hash_env).map_err(|_| {
         tracing::error!(
             code = "config.missing_secret",
             api_key_id = %key.id,
@@ -287,7 +284,7 @@ fn build_api_key_entry(key: &ApiKeyConfig) -> Result<ApiKeyEntry, Error> {
         Error::from(ConfigError::MissingSecret)
     })?;
     let scopes: ScopeSet = key.scopes.iter().cloned().collect();
-    ApiKeyEntry::new(key.id.clone(), scopes, phc).map_err(|reason| {
+    ApiKeyEntry::new(key.id.clone(), scopes, fingerprint).map_err(|reason| {
         tracing::error!(
             code = "config.validation_error",
             api_key_id = %key.id,
@@ -339,7 +336,7 @@ fn audit_sink_kind(config: &Config) -> &'static str {
 }
 
 /// Initialise structured JSON tracing on stderr. `RUST_LOG` controls
-/// the filter; defaults to `info` per architect decision #9.
+/// the filter; defaults to `info`.
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let fmt_layer = fmt::layer().json().with_writer(std::io::stderr);

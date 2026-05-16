@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for the audit core (`data_gate::audit`).
 //!
-//! These tests pin the wire contract from `decisions/wave-0.md` Section 5:
-//! field set, key names, types, and ISO-8601 millisecond timestamp format.
+//! These tests pin the audit wire contract: field set, key names, types,
+//! and ISO-8601 millisecond timestamp format.
 //! They also exercise the [`StdoutSink`]-shaped path via a captured-writer
 //! variant and the middleware's query redaction policy.
 
@@ -53,8 +53,8 @@ fn sample_record() -> AuditRecord {
 }
 
 /// Section 13.1 contract: exactly the documented set of required + conditional
-/// keys must appear on every record. The chain envelope fields are
-/// off-by-default in Wave 0 and must not appear.
+/// keys must appear on every record. The chain envelope fields are off
+/// by default and must not appear.
 #[test]
 fn record_serialises_to_expected_field_shape() {
     let record = sample_record();
@@ -90,7 +90,7 @@ fn record_serialises_to_expected_field_shape() {
     let actual: BTreeSet<&str> = object.keys().map(String::as_str).collect();
     assert_eq!(actual, expected, "field set must match Section 5 contract");
 
-    // Chain envelope fields are NOT emitted in Wave 0.
+    // Chain envelope fields are not emitted unless chaining wraps the sink.
     assert!(!object.contains_key("prev_hash"));
     assert!(!object.contains_key("record_hash"));
 }
@@ -206,9 +206,9 @@ async fn in_memory_sink_writes_one_jsonl_line_per_record() {
 
 #[tokio::test]
 async fn stdout_sink_is_constructible() {
-    // We do not assert on actual stdout bytes here; integration with the
-    // process stdout is exercised by the e2e test in Track 6. We do
-    // assert the sink constructs and a write call returns Ok.
+    // We do not assert on actual stdout bytes here; the e2e tests cover
+    // the process-level path. We assert the sink constructs and a write
+    // call returns Ok.
     let sink: Arc<dyn AuditSink> = Arc::new(StdoutSink::new());
     sink.write(AuditEnvelope::from(sample_record()))
         .await
@@ -518,27 +518,23 @@ async fn middleware_hashes_configured_sensitive_query_values() {
 /// "outer middleware injects on request" pattern.
 #[tokio::test]
 async fn middleware_projects_principal_when_auth_runs_inside_audit() {
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHasher};
     use data_gate::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
     use data_gate::auth::middleware::auth_layer;
+    use sha2::{Digest, Sha256};
 
     const VALID_KEY: &str = "test-bearer-token-blk1";
 
-    // Mirror the helper in `tests/auth_flow.rs`. Fixed salt is fine
-    // for fixtures; never use this in production.
-    let salt = SaltString::from_b64("dGVzdHNhbHRkZ3RmaXh0dXJl").expect("static salt parses");
-    let phc = Argon2::default()
-        .hash_password(VALID_KEY.as_bytes(), &salt)
-        .expect("hash succeeds")
-        .to_string();
+    let fingerprint = format!(
+        "sha256:{}",
+        hex_lower_local(&Sha256::digest(VALID_KEY.as_bytes()))
+    );
 
     let entry = ApiKeyEntry::new(
         "statistics_office".to_string(),
         ScopeSet::from_iter(["catalog", "rows"]),
-        phc,
+        fingerprint,
     )
-    .expect("PHC parses");
+    .expect("fingerprint parses");
     let provider = Arc::new(ApiKeyAuth::new(vec![entry]));
 
     let sink = Arc::new(InMemorySink::new());
@@ -579,6 +575,16 @@ async fn middleware_projects_principal_when_auth_runs_inside_audit() {
         "catalog missing from {scopes:?}"
     );
     assert!(scopes.contains("rows"), "rows missing from {scopes:?}");
+}
+
+fn hex_lower_local(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// BLK-2 (production layer order): when auth short-circuits with an

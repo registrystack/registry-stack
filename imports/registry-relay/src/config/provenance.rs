@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wave 3 provenance configuration.
+//! Data provenance configuration.
 //!
-//! See `decisions/wave-3-data-provenance.md` Section 5 for the full
-//! contract. The shape here mirrors the spec verbatim. The top-level
-//! type is optional in [`crate::config::Config`] so existing wave-0 /
-//! wave-2 deployments keep loading without change.
+//! The top-level type is optional in [`crate::config::Config`] so
+//! deployments without provenance keep loading without change.
 //!
 //! Validation lives in [`crate::config::validate`]. This module owns
 //! the data model only.
@@ -14,9 +12,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use time::OffsetDateTime;
 
-/// Top-level provenance block. When `enabled = false` (the default) the
-/// wave is invisible: no routes are mounted, no Accept negotiation
-/// runs, no audit events fire.
+/// Top-level provenance block. When `enabled = false` (the default),
+/// no provenance routes are mounted, no Accept negotiation runs, and
+/// no provenance audit events fire.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvenanceConfig {

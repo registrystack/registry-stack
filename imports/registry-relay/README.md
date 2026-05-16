@@ -22,8 +22,11 @@ Keep deployment docs and examples aligned with [Spec.md](Spec.md), and treat def
 
 - [Spec.md](Spec.md): V1 product and architecture contract.
 - [config/example.yaml](config/example.yaml): canonical example config.
+- [docs/configuration.md](docs/configuration.md): operator-facing configuration reference.
+- [docs/api.md](docs/api.md): authentication, endpoint, filtering, pagination, and error contract.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
-- [docs/provenance.md](docs/provenance.md): Wave 3 signed Verifiable Credentials guide.
+- [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
+- [docs/development.md](docs/development.md): local development, verification, and contribution notes.
 - [fixtures/](fixtures/): small local files for development and demos.
 - [src/](src/): gateway implementation.
 - [tests/](tests/): focused integration and unit tests.
@@ -50,7 +53,7 @@ The binary reads config from the first available source:
 2. `DATAGATE_CONFIG`
 3. `./config/example.yaml`
 
-API keys are never stored in the YAML file. Each configured key points at an environment variable containing an Argon2id PHC hash:
+API keys are never stored in the YAML file. Each configured key points at an environment variable containing a SHA-256 fingerprint of a high-entropy raw key:
 
 ```yaml
 auth:
@@ -85,9 +88,9 @@ The example config references data under `./data/social_registry.xlsx`, so eithe
 ```sh
 mkdir -p data
 cp fixtures/example_social_registry.xlsx data/social_registry.xlsx
-export PROGRAM_SYSTEM_API_KEY_HASH='<argon2id PHC hash>'
-export STATS_OFFICE_API_KEY_HASH='<argon2id PHC hash>'
-export VERIFICATION_SERVICE_API_KEY_HASH='<argon2id PHC hash>'
+export PROGRAM_SYSTEM_API_KEY_HASH='sha256:<64 lowercase hex chars>'
+export STATS_OFFICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
+export VERIFICATION_SERVICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
 just run
 ```
 
@@ -110,6 +113,8 @@ curl -H "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY" \
 The public URL space is entity-shaped:
 
 ```text
+GET /docs
+GET /openapi.json
 GET /catalog
 GET /catalog/dcat-ap.jsonld
 GET /datasets
@@ -124,6 +129,10 @@ GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
+
+`GET /docs` serves a local Scalar API reference shell. The shell is public, but it contains no catalog data by itself. It asks for a bearer token and then fetches the auth-gated `GET /openapi.json` document with that token.
+
+See [docs/api.md](docs/api.md) for scope requirements, query parameters, pagination, `Data-Purpose`, conditional requests, and Problem Details error shapes.
 
 ## DCAT-AP And SHACL Validation
 
@@ -185,7 +194,7 @@ docker run --rm -p 8080:8080 \
 
 For production, mount a deployment-specific config, mount source data read-only, provide API-key hashes through the platform secret store, and choose the audit sink that matches the platform logging model.
 
-## Signed Verifiable Credentials (Wave 3, Opt-In)
+## Signed Verifiable Credentials (Opt-In)
 
 The gateway can return W3C Verifiable Credentials (compact JWS) for verify, aggregate, and entity-record responses. The feature is off by default; enable it by adding a `provenance:` block to the config (see [config/example.yaml](config/example.yaml) for the template). Callers opt in per request with:
 
@@ -193,7 +202,7 @@ The gateway can return W3C Verifiable Credentials (compact JWS) for verify, aggr
 Accept: application/vc+jwt
 ```
 
-When either side opts out, responses stay byte-for-byte identical to a wave-2 build. Issued VCs carry a `provenance.vc.issued` audit event alongside the regular audit record.
+When either side opts out, responses stay plain JSON. Issued VCs carry a `provenance.vc.issued` audit event alongside the regular audit record.
 
 See [docs/provenance.md](docs/provenance.md) for the full wire shape, issuer modes (`gateway`, `delegated`), supporting endpoints (`/.well-known/did.json`, `/schemas/*`, `/contexts/*`), key rotation procedure, and external verification recipe.
 

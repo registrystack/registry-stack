@@ -11,9 +11,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::net::IpAddr;
 
-use argon2::password_hash::PasswordHash;
-use argon2::Params as Argon2Params;
-
 use crate::error::{ConfigError, Error};
 
 use super::{
@@ -45,9 +42,8 @@ pub fn run(config: &Config) -> Result<(), Error> {
     Ok(())
 }
 
-/// Cross-field validation for Wave 3 provenance configuration.
+/// Cross-field validation for provenance configuration.
 ///
-/// Mirrors `decisions/wave-3-data-provenance.md` Section 5 verbatim.
 /// When `enabled = false` the block still validates its shape so
 /// operators get fast feedback when they enable it.
 fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), ConfigError> {
@@ -456,13 +452,13 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
                 return Err(ConfigError::MissingSecret);
             }
         };
-        if let Err(reason) = validate_argon2id_phc(&value) {
+        if let Err(reason) = validate_api_key_fingerprint(&value) {
             tracing::error!(
                 code = "config.validation_error",
                 api_key_id = %key.id,
                 hash_env = %key.hash_env,
                 reason = %reason,
-                "hash_env value failed Argon2id PHC validation"
+                "hash_env value failed API key fingerprint validation"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -470,29 +466,22 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// OWASP-recommended Argon2id minimums (2023 cheat sheet).
-/// m_cost: 19 MiB (19456 KiB), t_cost: 2 iterations.
-const ARGON2_MIN_M_COST: u32 = 19_456;
-const ARGON2_MIN_T_COST: u32 = 2;
-
-/// Validate an Argon2id PHC string: structural check plus parameter
-/// floor enforcement.
-///
-/// Returns `Ok(())` when the string is a well-formed `argon2id` PHC
-/// hash whose `m` and `t` parameters meet OWASP minimums. Returns
-/// `Err` with a human-readable reason string otherwise.
-fn validate_argon2id_phc(s: &str) -> Result<(), &'static str> {
-    if !s.starts_with("$argon2id$") {
-        return Err("not an Argon2id PHC string");
+/// Validate a high-entropy API key fingerprint. Raw API keys are random
+/// 32-byte values generated out-of-band; configs store only
+/// `sha256:<64 lowercase hex chars>` so request authentication is a
+/// digest plus a map lookup.
+fn validate_api_key_fingerprint(value: &str) -> Result<(), &'static str> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or("API key fingerprint must start with sha256:")?;
+    if hex.len() != 64 {
+        return Err("API key fingerprint must contain 64 lowercase hex characters");
     }
-    let parsed = PasswordHash::new(s).map_err(|_| "PHC string failed to parse")?;
-    let params =
-        Argon2Params::try_from(&parsed).map_err(|_| "could not extract Argon2 params from PHC")?;
-    if params.m_cost() < ARGON2_MIN_M_COST {
-        return Err("Argon2id m_cost is below the minimum (19456 KiB / 19 MiB)");
-    }
-    if params.t_cost() < ARGON2_MIN_T_COST {
-        return Err("Argon2id t_cost is below the minimum (2 iterations)");
+    if !hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("API key fingerprint must contain lowercase hex only");
     }
     Ok(())
 }
@@ -1165,37 +1154,37 @@ mod tests {
     }
 
     #[test]
-    fn argon_phc_check_accepts_canonical_shape() {
-        let sample = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHkxc2FsdA$Pv5b/uIqg+Z3KCJ7eqlEYUx8j7Rq3oKZxV/JTM6oRiE";
+    fn api_key_fingerprint_check_accepts_canonical_shape() {
+        let sample = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         assert!(
-            validate_argon2id_phc(sample).is_ok(),
+            validate_api_key_fingerprint(sample).is_ok(),
             "canonical shape should pass"
         );
     }
 
     #[test]
-    fn argon_phc_check_rejects_other_algos_and_plain_text() {
-        assert!(validate_argon2id_phc("not_an_argon_phc").is_err());
-        assert!(validate_argon2id_phc("$argon2i$...").is_err());
-        assert!(validate_argon2id_phc("").is_err());
+    fn api_key_fingerprint_check_rejects_missing_prefix_and_plain_text() {
+        assert!(validate_api_key_fingerprint("not_a_fingerprint").is_err());
+        assert!(validate_api_key_fingerprint("$argon2id$...").is_err());
+        assert!(validate_api_key_fingerprint("").is_err());
     }
 
     #[test]
-    fn argon_phc_check_rejects_weak_m_cost() {
-        // m=8192 is below the OWASP-recommended 19456 minimum but
-        // above argon2's own structural floor (8 * p_cost), so the
-        // params parse successfully and our minimum enforcement fires.
-        let weak = "$argon2id$v=19$m=8192,t=2,p=1$c2FsdHkxc2FsdA$Pv5b/uIqg+Z3KCJ7eqlEYUx8j7Rq3oKZxV/JTM6oRiE";
-        let err = validate_argon2id_phc(weak).expect_err("weak m_cost should be rejected");
-        assert!(err.contains("m_cost"), "error mentions m_cost: {err}");
+    fn api_key_fingerprint_check_rejects_wrong_length() {
+        let err = validate_api_key_fingerprint("sha256:abc").expect_err("short hash rejected");
+        assert!(
+            err.contains("64 lowercase hex"),
+            "error mentions length: {err}"
+        );
     }
 
     #[test]
-    fn argon_phc_check_rejects_weak_t_cost() {
-        // t=1 is below the minimum of 2; use a sufficient m_cost.
-        let weak = "$argon2id$v=19$m=19456,t=1,p=1$c2FsdHkxc2FsdA$Pv5b/uIqg+Z3KCJ7eqlEYUx8j7Rq3oKZxV/JTM6oRiE";
-        let err = validate_argon2id_phc(weak).expect_err("weak t_cost should be rejected");
-        assert!(err.contains("t_cost"), "error mentions t_cost: {err}");
+    fn api_key_fingerprint_check_rejects_uppercase_hex() {
+        let err = validate_api_key_fingerprint(
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .expect_err("uppercase hash rejected");
+        assert!(err.contains("lowercase hex"), "error mentions hex: {err}");
     }
 
     #[test]

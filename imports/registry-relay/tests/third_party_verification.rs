@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wave-3 staff review B4: third-party verification.
+//! Third-party verification coverage for issued credentials.
 //!
 //! The goal of this test crate is to prove that a VC issued by the
 //! gateway can be verified by a verifier that does NOT depend on any
@@ -9,20 +9,20 @@
 //! * the compact JWS body returned by the gateway, and
 //! * the active key's public JWK fetched from `/.well-known/did.json`,
 //!
-//! using `jsonwebtoken::decode` (a separate crate from anything the
-//! gateway's `SoftwareSigner` reaches for at sign time), then the
-//! gateway's wire format is interoperable.
+//! using independent verifier paths, then the gateway's wire format is
+//! interoperable.
 //!
 //! What this test does NOT do:
 //!
-//! * It does not re-implement Ed25519. We use `jsonwebtoken`, which
-//!   pulls in `ring` under the hood; that crate is upstream of our
-//!   signer and never sees the private key material.
+//! * It does not re-implement Ed25519. We use `jsonwebtoken` and a
+//!   Node.js sidecar backed by Node's native crypto APIs; neither sees
+//!   the private key material.
 //! * It does not assert business semantics. The point is the round
 //!   trip JWS -> public JWK -> verified payload, not the contents of
 //!   the credential.
 
 use std::env;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -251,6 +251,56 @@ fn build_app(
     entity.merge(did).layer(Extension(state))
 }
 
+fn verify_with_node_crypto(jws: &str, public_jwk: &Value) {
+    let script = r#"
+const crypto = require('node:crypto');
+
+const jws = process.env.DATAGATE_TEST_JWS;
+const jwk = JSON.parse(process.env.DATAGATE_TEST_JWK);
+const [headerB64, payloadB64, signatureB64] = jws.split('.');
+if (!headerB64 || !payloadB64 || !signatureB64) {
+  throw new Error('compact JWS must have three segments');
+}
+const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+if (header.alg !== 'EdDSA' || header.typ !== 'vc+jwt' || header.cty !== 'vc') {
+  throw new Error(`unexpected JOSE header ${JSON.stringify(header)}`);
+}
+const key = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+const ok = crypto.verify(
+  null,
+  Buffer.from(`${headerB64}.${payloadB64}`),
+  key,
+  Buffer.from(signatureB64, 'base64url')
+);
+if (!ok) {
+  throw new Error('signature verification failed');
+}
+if (payload.iss !== 'did:web:gw.example') {
+  throw new Error(`unexpected iss ${payload.iss}`);
+}
+if (!payload.jti || !payload.jti.startsWith('urn:uuid:')) {
+  throw new Error(`unexpected jti ${payload.jti}`);
+}
+"#;
+    let output = Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .env("DATAGATE_TEST_JWS", jws)
+        .env(
+            "DATAGATE_TEST_JWK",
+            serde_json::to_string(public_jwk).expect("jwk serializes"),
+        )
+        .output()
+        .expect("node verifier runs");
+    assert!(
+        output.status.success(),
+        "node crypto verifier failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// JWT payload shape we care about for the round trip. We pull out
 /// only the fields the test asserts on; extra fields are ignored.
 #[derive(Debug, Deserialize)]
@@ -327,9 +377,9 @@ async fn third_party_verifier_can_verify_vc_against_did_document_jwk() {
     );
     let jws = String::from_utf8(issue_resp.as_bytes().to_vec()).expect("body utf8");
 
-    // Step 3: verify the JWS using `jsonwebtoken`, which is an
-    // independent code path. Two flavors are exercised so a future
-    // refactor of either path stays honest:
+    // Step 3: verify the JWS using independent verifier code paths.
+    // `jsonwebtoken` checks the Rust ecosystem path; the Node sidecar
+    // checks a JavaScript runtime without linking any data_gate code.
 
     //   3a) Build the decoding key from the JWK object itself
     //   (whatever fields the DID Document publishes). This is the
@@ -371,6 +421,10 @@ async fn third_party_verifier_can_verify_vc_against_did_document_jwk() {
         assert_eq!(token.claims.iss, ISSUER_DID);
         assert!(!token.claims.jti.is_empty());
     }
+
+    //   3c) Verify in a JavaScript runtime. The sidecar receives only
+    //   the compact JWS plus the public JWK from the DID Document.
+    verify_with_node_crypto(&jws, &active_jwk_value);
 
     // Step 4: a verifier that trusts a different key MUST reject the
     // signature. This guards against accidentally validating on the

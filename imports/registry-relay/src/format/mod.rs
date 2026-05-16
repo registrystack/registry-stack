@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Decoders from a byte stream into Arrow `RecordBatch`es.
 //!
-//! Trait shape, field semantics, and forward-compat story are pinned in
-//! `decisions/wave-1.md` Section 2.2. This file is the Wave 1 Architect
-//! precondition: trait surface + supporting types with stub bodies, so
-//! all seven Wave 1 tracks can compile against the contract in parallel.
-//! Tracks 2 (CSV), 3 (XLSX), and 4 (Parquet) replace the stubs with the
-//! real `Format` impls; Track 6 wires the registry into `AppState`.
+//! Formats are stateless decoders. Per-resource details such as sheet
+//! names, header rows, delimiters, and declared schemas arrive through
+//! [`FormatHints`], which keeps the decoders reusable across datasets.
 //!
-//! ## Source / Format separation (W1-1)
+//! ## Source / Format separation
 //!
 //! See `crate::source` for the byte producer side. The two layers stay
 //! decoupled so V1.x can ship new sources without touching decoders and
@@ -37,13 +34,13 @@ pub mod xlsx;
 /// same decoder serves every resource of its format.
 ///
 /// V1 impls: [`csv::CsvFormat`], [`xlsx::XlsxFormat`],
-/// [`parquet::ParquetFormat`]. V1.x targets: `JsonlFormat`,
+/// [`parquet::ParquetFormat`]. Future targets include `JsonlFormat`,
 /// `AvroFormat`, `ArrowIpcFormat`. Each is a new struct plus one line
 /// in [`FormatRegistry::with_v1_defaults`].
 ///
 /// XLSX note: `calamine` is non-streaming. `XlsxFormat::decode` reads
 /// the entire workbook into memory before yielding the first batch.
-/// `IngestPlan` enforces a max-file-bytes guard *before* calling this
+/// `IngestPlan` enforces a max-file-bytes guard before calling this
 /// trait; `XlsxFormat` does not enforce it itself.
 pub trait Format: Send + Sync + 'static {
     /// Canonical name (`"csv"`, `"xlsx"`, `"parquet"`); used in audit

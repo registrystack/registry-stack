@@ -1,27 +1,22 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#   "argon2-cffi>=23.1",
-# ]
 # ///
 """Generate demo API key pairs for data_gate local review.
 
 Each persona gets a freshly generated raw key (32 random bytes, base64url-encoded,
-no padding) and an Argon2id PHC-format hash of that key. The hash is what goes in
-the data_gate config's hash_env; the raw key is what Bruno sends as Bearer.
+no padding) and a SHA-256 fingerprint of that key. The fingerprint is what goes
+in the data_gate config's hash_env; the raw key is what Bruno sends as Bearer.
 
 Re-running always generates fresh keys. Old keys are not preserved.
 """
 
 import argparse
 import base64
+import hashlib
 import secrets
 import sys
 from pathlib import Path
-
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 
 PERSONAS = [
     "catalog_viewer",
@@ -60,41 +55,35 @@ def env_var_name(persona: str) -> str:
 
 
 def generate_pairs() -> list[tuple[str, str, str]]:
-    """Return [(persona, raw_key, phc_hash), ...].
+    """Return [(persona, raw_key, fingerprint), ...].
 
-    Raises on any hashing failure so the caller can abort cleanly before
-    emitting partial output.
+    The raw key has 256 bits of entropy; the stored value is a fast
+    fingerprint, not a password hash.
     """
-    ph = PasswordHasher()
     pairs = []
-    try:
-        for persona in PERSONAS:
-            raw = generate_raw_key()
-            phc = ph.hash(raw)
-            pairs.append((persona, raw, phc))
-    except Exception as exc:
-        raise RuntimeError("key generation failed; no output produced") from exc
+    for persona in PERSONAS:
+        raw = generate_raw_key()
+        fingerprint = f"sha256:{hashlib.sha256(raw.encode('ascii')).hexdigest()}"
+        pairs.append((persona, raw, fingerprint))
     return pairs
 
 
 def self_verify(pairs: list[tuple[str, str, str]]) -> None:
-    """Verify every (raw, hash) pair. Raises RuntimeError if any pair fails."""
-    ph = PasswordHasher()
-    for persona, raw, phc in pairs:
-        try:
-            ph.verify(phc, raw)
-        except VerifyMismatchError as exc:
+    """Verify every (raw, fingerprint) pair before emitting output."""
+    for persona, raw, fingerprint in pairs:
+        expected = f"sha256:{hashlib.sha256(raw.encode('ascii')).hexdigest()}"
+        if fingerprint != expected:
             raise RuntimeError(
                 f"self-verification failed for persona {persona!r}; aborting"
-            ) from exc
+            )
 
 
 def format_export_block(pairs: list[tuple[str, str, str]]) -> str:
     lines = []
-    for persona, raw, phc in pairs:
+    for persona, raw, fingerprint in pairs:
         var = env_var_name(persona)
         lines.append(f"export {var}_RAW='{raw}'")
-        lines.append(f"export {var}_HASH='{phc}'")
+        lines.append(f"export {var}_HASH='{fingerprint}'")
     return "\n".join(lines) + "\n"
 
 
@@ -108,7 +97,7 @@ def format_bruno_env_block(pairs: list[tuple[str, str, str]]) -> str:
     seeds both the server (via `source demo/.env.local`) and Bruno.
     """
     lines = []
-    for persona, raw, _phc in pairs:
+    for persona, raw, _fingerprint in pairs:
         var = env_var_name(persona)
         lines.append(f"{var}_RAW={raw}")
     return "\n".join(lines) + "\n"

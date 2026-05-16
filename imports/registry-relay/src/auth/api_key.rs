@@ -4,35 +4,29 @@
 //! ## Verification flow
 //!
 //! 1. Read `Authorization: Bearer <token>` or `X-Api-Key: <token>`.
-//! 2. For each configured entry, run `Argon2::verify_password` against
-//!    the parsed PHC string. Argon2's verifier is constant-time on the
-//!    derived-hash comparison; we iterate sequentially because the
-//!    expected entry count is small (single digits in practice) and
-//!    parallelisation here adds no security and risks timing-channel
-//!    surprises.
-//! 3. On a match, return [`Principal`] with the configured id, scope
-//!    set, and `AuthMode::ApiKey`. On no match, return
-//!    `AuthError::InvalidCredential`.
+//! 2. Hash the presented high-entropy key with SHA-256.
+//! 3. Look up the fingerprint in the configured in-memory key map.
+//!    On no match, return `AuthError::InvalidCredential`.
 //!
 //! The bearer token is held in a [`Zeroizing`] `String` so its bytes
-//! are scrubbed when dropped. `argon2::PasswordHash` takes `&str`, so
-//! the verification call still sees plaintext, but it never leaves
-//! this function frame.
+//! are scrubbed when dropped. Only a SHA-256 fingerprint is retained
+//! in the provider.
 //!
 //! ## What this module does *not* do
 //!
 //! * No logging of credential bytes at any level.
-//! * No hashing of new keys; rotation arrives in Wave 4 with the
-//!   `auth.api_key` config parameters block (architect note risk #9).
+//! * No minting of new keys. Operators generate raw keys outside the
+//!   gateway, store only `sha256:<hex>` fingerprints in secret storage,
+//!   and rotate by rolling config plus secret changes together.
 //! * No credential source is preferred for security reasons. When both
 //!   headers are present, `Authorization` wins because it is the standard
 //!   HTTP auth surface.
 
+use std::collections::HashMap;
 use std::pin::Pin;
 
-use argon2::password_hash::PasswordHash;
-use argon2::{Argon2, PasswordVerifier};
 use axum::http::{header, HeaderMap};
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::AuthError;
@@ -46,37 +40,28 @@ const BEARER_SCHEME: &str = "Bearer";
 const X_API_KEY: &str = "x-api-key";
 
 /// One configured key entry: the stable id, the resolved scope set,
-/// and the parsed Argon2id PHC string. The PHC string is stored as
-/// `String` because [`PasswordHash::new`] borrows `&str`; rotation
-/// (Wave 4) will swap this for a token-rotation struct.
+/// and the SHA-256 fingerprint of the high-entropy raw API key.
 #[derive(Debug, Clone)]
 pub struct ApiKeyEntry {
     id: String,
     scopes: ScopeSet,
-    /// PHC-format Argon2id hash. Validated at construction; reparsed
-    /// per verification because `PasswordHash<'a>` borrows `&'a str`
-    /// and the verifier needs a fresh parse per call.
-    phc_string: String,
+    fingerprint: TokenFingerprint,
 }
 
 impl ApiKeyEntry {
-    /// Build an entry, validating that `phc` parses as a PHC hash so
-    /// startup fails fast on bad fixtures instead of every request
-    /// paying the parse-then-fail cost.
+    /// Build an entry, validating that `fingerprint` is shaped as
+    /// `sha256:<64 lowercase hex chars>`.
     ///
     /// # Errors
     ///
-    /// Returns `Err` with a static string if the PHC string does not
-    /// parse. Callers (the future Wave-4 config-to-auth wire-up)
-    /// surface this as `config.validation_error`.
-    pub fn new(id: String, scopes: ScopeSet, phc: String) -> Result<Self, &'static str> {
-        // Validate now; the parsed reference is dropped because we
-        // re-parse per verification call.
-        let _ = PasswordHash::new(&phc).map_err(|_| "invalid Argon2 PHC string")?;
+    /// Returns `Err` with a static string if the fingerprint does not
+    /// parse. Callers surface this as `config.validation_error`.
+    pub fn new(id: String, scopes: ScopeSet, fingerprint: String) -> Result<Self, &'static str> {
+        let fingerprint = parse_token_fingerprint(&fingerprint)?;
         Ok(Self {
             id,
             scopes,
-            phc_string: phc,
+            fingerprint,
         })
     }
 
@@ -87,27 +72,42 @@ impl ApiKeyEntry {
     }
 }
 
-/// V1 API-key provider. Holds a `Vec<ApiKeyEntry>` resolved from
-/// config at startup; never mutates after construction.
+/// V1 API-key provider. Holds a fingerprint-to-principal map resolved
+/// from config at startup; never mutates after construction.
 #[derive(Debug, Clone)]
 pub struct ApiKeyAuth {
-    entries: Vec<ApiKeyEntry>,
+    principals: HashMap<TokenFingerprint, Principal>,
 }
 
+type TokenFingerprint = [u8; 32];
+
 impl ApiKeyAuth {
-    /// Build a provider from already-resolved entries. The Wave-0
-    /// config-to-auth wire-up calls this with one entry per
-    /// `auth.api_keys[]`; tests construct entries directly.
+    /// Build a provider from already-resolved entries. Startup calls
+    /// this with one entry per `auth.api_keys[]`; tests construct
+    /// entries directly.
     #[must_use]
     pub fn new(entries: Vec<ApiKeyEntry>) -> Self {
-        Self { entries }
+        let principals = entries
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.fingerprint,
+                    Principal {
+                        api_key_id: entry.id,
+                        scopes: entry.scopes,
+                        auth_mode: AuthMode::ApiKey,
+                    },
+                )
+            })
+            .collect();
+        Self { principals }
     }
 
     /// Number of configured keys. Used in operational logs at
     /// startup; never includes any key material.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.principals.len()
     }
 
     /// Whether the provider has no configured keys. A provider in
@@ -115,45 +115,53 @@ impl ApiKeyAuth {
     /// `auth.invalid_credential` (after passing the header parse).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.principals.is_empty()
     }
 
     /// Internal verification. Pulled out of [`AuthProvider::authenticate`]
     /// so the trait method body is small and the verify loop is unit
     /// testable.
     fn verify(&self, presented: &str) -> Result<Principal, AuthError> {
-        let argon = Argon2::default();
-        for entry in &self.entries {
-            let Ok(parsed) = PasswordHash::new(&entry.phc_string) else {
-                // Constructor enforces validity; reaching this arm
-                // means memory corruption or a panic-safe rebuild.
-                // Skip rather than panic so the rest of the keyring
-                // still works.
-                tracing::trace!(
-                    target: "data_gate::auth",
-                    api_key_id = %entry.id,
-                    "stored PHC string failed to parse; skipping entry"
-                );
-                continue;
-            };
-            if argon.verify_password(presented.as_bytes(), &parsed).is_ok() {
-                tracing::debug!(
-                    target: "data_gate::auth",
-                    api_key_id = %entry.id,
-                    "api key verified",
-                );
-                return Ok(Principal {
-                    api_key_id: entry.id.clone(),
-                    scopes: entry.scopes.clone(),
-                    auth_mode: AuthMode::ApiKey,
-                });
-            }
+        let fingerprint = token_fingerprint(presented);
+        if let Some(principal) = self.principals.get(&fingerprint).cloned() {
+            tracing::debug!(
+                target: "data_gate::auth",
+                api_key_id = %principal.api_key_id,
+                "api key verified",
+            );
+            return Ok(principal);
         }
         tracing::debug!(
             target: "data_gate::auth",
             "no api key matched the presented credential",
         );
         Err(AuthError::InvalidCredential)
+    }
+}
+
+fn token_fingerprint(presented: &str) -> TokenFingerprint {
+    Sha256::digest(presented.as_bytes()).into()
+}
+
+fn parse_token_fingerprint(value: &str) -> Result<TokenFingerprint, &'static str> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or("API key fingerprint must start with sha256:")?;
+    if hex.len() != 64 {
+        return Err("API key fingerprint must contain 64 lowercase hex characters");
+    }
+    let mut out = [0u8; 32];
+    for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        out[index] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
+    }
+    Ok(out)
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, &'static str> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err("API key fingerprint must contain lowercase hex only"),
     }
 }
 
@@ -209,40 +217,41 @@ fn extract_bearer_value(value: &axum::http::HeaderValue) -> Result<Zeroizing<Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argon2::password_hash::SaltString;
-    use argon2::PasswordHasher;
 
-    fn make_phc(plain: &str) -> String {
-        // Fixed salt is fine: tests are deterministic and the salt
-        // is not load-bearing for verification, only for hash
-        // derivation. Production hashes are minted out-of-band.
-        let salt = SaltString::from_b64("dGVzdHNhbHRkZ3RmaXh0dXJl")
-            .expect("static test salt parses as b64");
-        Argon2::default()
-            .hash_password(plain.as_bytes(), &salt)
-            .expect("hash succeeds for test fixture")
-            .to_string()
+    fn make_fingerprint(plain: &str) -> String {
+        format!("sha256:{}", hex_lower(&token_fingerprint(plain)))
     }
 
     fn provider_with(plain: &str) -> ApiKeyAuth {
         let entry = ApiKeyEntry::new(
             "tester".to_string(),
             ScopeSet::from_iter(["rows"]),
-            make_phc(plain),
+            make_fingerprint(plain),
         )
-        .expect("phc parses");
+        .expect("fingerprint parses");
         ApiKeyAuth::new(vec![entry])
     }
 
     #[test]
-    fn entry_construction_rejects_garbage_phc() {
+    fn entry_construction_rejects_garbage_fingerprint() {
         let err = ApiKeyEntry::new(
             "x".to_string(),
             ScopeSet::default(),
-            "not-a-phc-string".to_string(),
+            "not-a-fingerprint".to_string(),
         )
-        .expect_err("garbage PHC rejected");
-        assert_eq!(err, "invalid Argon2 PHC string");
+        .expect_err("garbage fingerprint rejected");
+        assert_eq!(err, "API key fingerprint must start with sha256:");
+    }
+
+    #[test]
+    fn entry_construction_rejects_uppercase_fingerprint() {
+        let err = ApiKeyEntry::new(
+            "x".to_string(),
+            ScopeSet::default(),
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        )
+        .expect_err("uppercase fingerprint rejected");
+        assert_eq!(err, "API key fingerprint must contain lowercase hex only");
     }
 
     #[test]
@@ -322,5 +331,15 @@ mod tests {
         assert!(provider.is_empty());
         let err = provider.verify("anything").expect_err("denied");
         assert!(matches!(err, AuthError::InvalidCredential));
+    }
+
+    fn hex_lower(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        out
     }
 }

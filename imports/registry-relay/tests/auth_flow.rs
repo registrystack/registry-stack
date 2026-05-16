@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for the V1 auth flow.
 //!
-//! Covers the wire contract from `decisions/wave-0.md` Section 3.1 and
-//! Section 4 (`auth.*` codes):
+//! Covers the auth wire contract (`auth.*` codes):
 //!
 //! * missing `Authorization` header -> `auth.missing_credential` / 401
 //! * malformed header (wrong scheme, empty bearer) -> `auth.malformed_credential` / 401
@@ -18,8 +17,6 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use argon2::password_hash::SaltString;
-use argon2::{Argon2, PasswordHasher};
 use axum::body::Body;
 use axum::extract::Extension;
 use axum::http::{Request, StatusCode};
@@ -31,37 +28,35 @@ use data_gate::auth::middleware::auth_layer;
 use data_gate::auth::scopes::{require_scope, ScopeSet};
 use data_gate::auth::{AuthMode, AuthProvider, Principal};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 const VALID_KEY: &str = "test-bearer-token-abcdef-0123456789";
 const OTHER_KEY: &str = "another-key-9876543210";
 const CLIENT_ID: &str = "statistics_office";
 
-/// Hash a plaintext using Argon2id with default parameters and a
-/// fixed salt suitable for fixtures only. Returns the PHC string.
-///
-/// A fixed salt is acceptable here because the test universe is
-/// closed and security-irrelevant; production hashes are minted by
-/// operators with a fresh per-key salt and stored in env vars.
-fn make_phc(plain: &str) -> String {
-    // 22 ASCII chars from the b64 alphabet => 16-byte salt after decode.
-    let salt =
-        SaltString::from_b64("dGVzdHNhbHRkZ3RmaXh0dXJl").expect("static test salt parses as b64");
-    let argon = Argon2::default();
-    argon
-        .hash_password(plain.as_bytes(), &salt)
-        .expect("argon2 hash should succeed for a test fixture")
-        .to_string()
+fn make_fingerprint(plain: &str) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(plain.as_bytes())))
 }
 
 fn build_provider() -> Arc<ApiKeyAuth> {
     let entries = vec![ApiKeyEntry::new(
         CLIENT_ID.to_string(),
         ScopeSet::from_iter(["social_registry:rows", "social_registry:metadata"]),
-        make_phc(VALID_KEY),
+        make_fingerprint(VALID_KEY),
     )
-    .expect("test PHC string parses")];
+    .expect("test fingerprint parses")];
     Arc::new(ApiKeyAuth::new(entries))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Build a router that runs the auth middleware in front of two

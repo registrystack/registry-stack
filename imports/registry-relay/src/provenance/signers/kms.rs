@@ -4,12 +4,12 @@
 //! V1 ships only the trait surface plus a deterministic
 //! [`MockKmsSigner`] used in tests to prove the [`Signer`] contract is
 //! decoupled from the in-process software path. A real AWS KMS impl
-//! lands behind a future `kms-aws` cargo feature; the seam is
+//! can land behind a future `kms-aws` cargo feature; the boundary is
 //! deliberately small so that addition is purely additive.
 //!
 //! # Why a mock
 //!
-//! The orchestrator and Wave 3 integration tests need to exercise the
+//! Integration tests need to exercise the
 //! `kind: kms` config branch end to end without standing up a KMS. The
 //! mock loads an Ed25519 seed from an env var (same shape as the
 //! software signer's `jwk_env`) and signs locally. This is *not* a

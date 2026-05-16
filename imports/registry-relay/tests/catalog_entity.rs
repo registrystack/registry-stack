@@ -109,6 +109,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: true
           allowed_filters:
             - field: region
               ops: [eq, in]
@@ -667,6 +668,363 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
     );
     assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
+}
+
+#[tokio::test]
+async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready_public() {
+    let resp = server().get("/openapi.json").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    let scheme = &body["components"]["securitySchemes"]["bearerAuth"];
+    assert_eq!(scheme["type"], "http");
+    assert_eq!(scheme["scheme"], "bearer");
+
+    assert_eq!(body["security"], serde_json::json!([{ "bearerAuth": [] }]));
+
+    // `/health` and `/ready` are on the unauthenticated sub-router in
+    // `server::build_app_with_provenance`. Their entries override the
+    // document-level requirement so codegen and Scalar's auth panel do
+    // not demand a bearer for them.
+    assert_eq!(
+        body["paths"]["/health"]["get"]["security"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        body["paths"]["/ready"]["get"]["security"],
+        serde_json::json!([])
+    );
+
+    // A protected route should NOT carry its own `security` field; it
+    // inherits the document-level requirement. Pick the entity
+    // collection route as the representative case.
+    assert!(
+        body["paths"]["/datasets/social_registry/household"]["get"]["security"].is_null(),
+        "protected routes should inherit document-level security, not override it"
+    );
+}
+
+#[tokio::test]
+async fn openapi_json_groups_operations_into_sidebar_tags() {
+    // Scalar's sidebar groups operations by `tags`. Without this, every
+    // entity's operations collapse to identical labels and the sidebar
+    // becomes unusable. Each operation gets exactly one tag:
+    //   - Service: /health, /ready
+    //   - Catalog: /catalog, /datasets, /datasets/{id}, DCAT-AP
+    //   - "<dataset> / <entity>": every per-entity operation, including
+    //     the per-entity SHACL shape under /catalog/datasets/...
+    // The document-level `tags` array fixes sidebar order.
+    let resp = server().get("/openapi.json").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    let tags = body["tags"].as_array().expect("tags array");
+    let tag_names: Vec<&str> = tags
+        .iter()
+        .map(|t| t["name"].as_str().expect("tag name string"))
+        .collect();
+    assert_eq!(tag_names.first().copied(), Some("Service"));
+    assert!(tag_names.contains(&"Catalog"));
+    assert!(
+        tag_names.contains(&"social_registry / household"),
+        "tags array should declare the entity section: got {tag_names:?}"
+    );
+
+    let entity_tag = "social_registry / household";
+    for path in [
+        "/datasets/social_registry/household",
+        "/datasets/social_registry/household/{id}",
+        "/datasets/social_registry/household/schema",
+        "/datasets/social_registry/household/verify",
+        "/datasets/social_registry/household/aggregates",
+        "/datasets/social_registry/household/aggregates/{aggregate_id}",
+        "/datasets/social_registry/household/{id}/members",
+        "/catalog/datasets/social_registry/household/schema.jsonld",
+    ] {
+        assert_eq!(
+            body["paths"][path]["get"]["tags"],
+            serde_json::json!([entity_tag]),
+            "{path} should be tagged with {entity_tag}"
+        );
+    }
+
+    assert_eq!(
+        body["paths"]["/health"]["get"]["tags"],
+        serde_json::json!(["Service"])
+    );
+    assert_eq!(
+        body["paths"]["/ready"]["get"]["tags"],
+        serde_json::json!(["Service"])
+    );
+    assert_eq!(
+        body["paths"]["/catalog"]["get"]["tags"],
+        serde_json::json!(["Catalog"])
+    );
+    assert_eq!(
+        body["paths"]["/catalog/dcat-ap.jsonld"]["get"]["tags"],
+        serde_json::json!(["Catalog"])
+    );
+    assert_eq!(
+        body["paths"]["/datasets"]["get"]["tags"],
+        serde_json::json!(["Catalog"])
+    );
+    assert_eq!(
+        body["paths"]["/datasets/social_registry"]["get"]["tags"],
+        serde_json::json!(["Catalog"])
+    );
+}
+
+#[tokio::test]
+async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() {
+    // Asserts the second-pass OpenAPI rewrite: info.summary + contact +
+    // Apache-2.0 license; a single server entry with a description;
+    // x-tagGroups grouping entity tags by dataset title; x-displayName
+    // on entity tags; operationId on every per-entity operation; 3.1
+    // nullability via type arrays; 401/403/404 error envelopes; per-op
+    // filter parameter descriptions; x-codeSamples on collection and
+    // record routes. One test covers the whole contract so a future
+    // regression on any prong fails loudly with a single name.
+    let resp = server().get("/openapi.json").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    // ---- info ----
+    let info = &body["info"];
+    assert!(
+        info["summary"].as_str().is_some_and(|s| !s.is_empty()),
+        "info.summary must be a non-empty string (Scalar uses it as the doc subtitle)"
+    );
+    assert_eq!(info["contact"]["name"], "Ministry of Delivery");
+    assert_eq!(info["license"]["name"], "Apache-2.0");
+    assert_eq!(info["license"]["identifier"], "Apache-2.0");
+
+    // ---- servers ----
+    let servers = body["servers"].as_array().expect("servers array");
+    assert_eq!(servers.len(), 1);
+    assert!(
+        servers[0]["description"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "servers[0].description must be present"
+    );
+
+    // ---- x-tagGroups ----
+    let groups = body["x-tagGroups"].as_array().expect("x-tagGroups array");
+    let group_names: Vec<&str> = groups
+        .iter()
+        .map(|g| g["name"].as_str().expect("group name"))
+        .collect();
+    assert_eq!(group_names[0], "Service");
+    assert_eq!(group_names[1], "Catalog");
+    assert!(
+        group_names.contains(&"Social Registry"),
+        "x-tagGroups should include a group named after dataset.title 'Social Registry': got {group_names:?}"
+    );
+    let social_registry_group = groups
+        .iter()
+        .find(|g| g["name"] == "Social Registry")
+        .expect("Social Registry group present");
+    let social_registry_tags: Vec<&str> = social_registry_group["tags"]
+        .as_array()
+        .expect("tags array on group")
+        .iter()
+        .map(|t| t.as_str().expect("tag string"))
+        .collect();
+    assert!(
+        social_registry_tags.contains(&"social_registry / household"),
+        "Social Registry group must include the household entity tag: got {social_registry_tags:?}"
+    );
+
+    // ---- tag x-displayName ----
+    let tags = body["tags"].as_array().expect("tags array");
+    let household_tag = tags
+        .iter()
+        .find(|t| t["name"] == "social_registry / household")
+        .expect("household tag present");
+    assert_eq!(
+        household_tag["x-displayName"], "Household",
+        "entity tags must surface entity.title via x-displayName"
+    );
+
+    // ---- operationId on every per-entity op ----
+    for (path, expected) in [
+        (
+            "/datasets/social_registry/household",
+            "list_social_registry_household_records",
+        ),
+        (
+            "/datasets/social_registry/household/{id}",
+            "get_social_registry_household_record",
+        ),
+        (
+            "/datasets/social_registry/household/verify",
+            "verify_social_registry_household_record",
+        ),
+        (
+            "/datasets/social_registry/household/aggregates",
+            "list_social_registry_household_aggregates",
+        ),
+        (
+            "/datasets/social_registry/household/aggregates/{aggregate_id}",
+            "run_social_registry_household_aggregate",
+        ),
+        (
+            "/datasets/social_registry/household/schema",
+            "get_social_registry_household_field_schema",
+        ),
+        (
+            "/datasets/social_registry/household/{id}/members",
+            "get_social_registry_household_members",
+        ),
+        (
+            "/catalog/datasets/social_registry/household/schema.jsonld",
+            "get_social_registry_household_shacl_shape",
+        ),
+    ] {
+        assert_eq!(
+            body["paths"][path]["get"]["operationId"], expected,
+            "{path} must declare a stable operationId"
+        );
+    }
+
+    // ---- 3.1 nullability for the nullable `region` field ----
+    let region =
+        &body["components"]["schemas"]["Entity_social_registry_household"]["properties"]["region"];
+    assert_eq!(
+        region["type"],
+        serde_json::json!(["string", "null"]),
+        "nullable fields must encode null via OAS 3.1 type arrays, not the 3.0 nullable keyword"
+    );
+    assert!(
+        region["description"]
+            .as_str()
+            .is_some_and(|s| s.contains("Optional")),
+        "synthesized field description should mark nullable fields as Optional: got {:?}",
+        region["description"]
+    );
+
+    // ---- 401/403 envelope on a protected route, 404 on the record path ----
+    let collection_responses =
+        &body["paths"]["/datasets/social_registry/household"]["get"]["responses"];
+    for code in ["401", "403", "default"] {
+        assert_eq!(
+            collection_responses[code]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "collection responses[{code}] must point at ProblemDetails"
+        );
+    }
+    let record_responses =
+        &body["paths"]["/datasets/social_registry/household/{id}"]["get"]["responses"];
+    assert_eq!(
+        record_responses["404"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails",
+        "record GET must declare a 404 ProblemDetails response"
+    );
+    assert!(
+        record_responses["404"]["description"]
+            .as_str()
+            .is_some_and(|s| s.contains("not found")),
+        "404 description should mention not-found"
+    );
+
+    // ---- per-filter parameter descriptions ----
+    let collection_params = body["paths"]["/datasets/social_registry/household"]["get"]
+        ["parameters"]
+        .as_array()
+        .expect("collection parameters");
+    let region_eq = collection_params
+        .iter()
+        .find(|p| p["name"] == "region")
+        .expect("region eq filter param");
+    let region_in = collection_params
+        .iter()
+        .find(|p| p["name"] == "region.in")
+        .expect("region.in filter param");
+    let eq_desc = region_eq["description"]
+        .as_str()
+        .expect("eq description string");
+    let in_desc = region_in["description"]
+        .as_str()
+        .expect("in description string");
+    assert!(
+        eq_desc.contains("exact match"),
+        "eq filter description should mention exact match: {eq_desc:?}"
+    );
+    assert!(
+        in_desc.contains("comma-separated"),
+        "in filter description should mention comma-separated values: {in_desc:?}"
+    );
+    assert_ne!(
+        eq_desc, in_desc,
+        "eq and in must carry distinct descriptions"
+    );
+
+    // ---- x-codeSamples on collection and record ----
+    for path in [
+        "/datasets/social_registry/household",
+        "/datasets/social_registry/household/{id}",
+    ] {
+        let samples = body["paths"][path]["get"]["x-codeSamples"]
+            .as_array()
+            .unwrap_or_else(|| panic!("x-codeSamples array on {path}"));
+        let langs: Vec<&str> = samples
+            .iter()
+            .map(|s| s["lang"].as_str().expect("sample lang"))
+            .collect();
+        assert!(
+            langs.contains(&"Shell"),
+            "{path} must include a Shell sample: {langs:?}"
+        );
+        assert!(
+            langs.contains(&"Python"),
+            "{path} must include a Python sample: {langs:?}"
+        );
+    }
+
+    // ---- Data-Purpose header parameter on purpose-required routes ----
+    // The household entity is configured with `require_purpose_header:
+    // true`. Every route the gateway gates with `auth.purpose_required`
+    // must declare the header in OpenAPI so Scalar can render an
+    // editable field and generated clients can carry it through. Routes
+    // that the gateway does NOT gate (metadata schema, aggregates list)
+    // must not declare it, so codegen doesn't force callers to send it.
+    let purpose_param = |path: &str| -> Option<Value> {
+        body["paths"][path]["get"]["parameters"]
+            .as_array()
+            .and_then(|params| {
+                params
+                    .iter()
+                    .find(|p| {
+                        p["in"] == "header"
+                            && p["name"]
+                                .as_str()
+                                .is_some_and(|n| n.eq_ignore_ascii_case("Data-Purpose"))
+                    })
+                    .cloned()
+            })
+    };
+    for gated in [
+        "/datasets/social_registry/household",
+        "/datasets/social_registry/household/{id}",
+        "/datasets/social_registry/household/verify",
+        "/datasets/social_registry/household/{id}/members",
+    ] {
+        let param = purpose_param(gated)
+            .unwrap_or_else(|| panic!("{gated} must declare the Data-Purpose header parameter"));
+        assert_eq!(param["required"], serde_json::json!(true), "{gated}");
+        assert_eq!(param["schema"]["type"], "string", "{gated}");
+        assert_eq!(param["schema"]["minLength"], 1, "{gated}");
+    }
+    for ungated in [
+        "/datasets/social_registry/household/schema",
+        "/datasets/social_registry/household/aggregates",
+    ] {
+        assert!(
+            purpose_param(ungated).is_none(),
+            "{ungated} does not enforce purpose; OpenAPI must not declare the header"
+        );
+    }
 }
 
 #[tokio::test]

@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Per-resource refresh loop: mtime / interval / manual polling, backoff.
 //!
-//! Backoff schedule (W1-14): 30s → 60s → 120s → 240s → cap 600s.
+//! Backoff schedule: 30s, 60s, 120s, 240s, then cap at 600s.
 //! Resets to the policy's normal interval on any success.
-//!
-//! State machine transitions are described in `decisions/wave-1.md` §3.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +27,7 @@ pub enum RefreshPolicy {
 /// Spawn the refresh loop for one `IngestPlan`.
 ///
 /// Loops until `shutdown` is cancelled. Implements the exponential
-/// backoff schedule from `decisions/wave-1.md` §1 W1-14.
+/// backoff schedule used after refresh failures.
 pub async fn run_refresh_loop(
     plan: Arc<IngestPlan>,
     policy: RefreshPolicy,
@@ -165,7 +163,7 @@ async fn run_mtime_loop(
     }
 }
 
-/// Per-resource backoff state. Tracks consecutive failure count.
+/// Per-resource backoff state. Stores consecutive failure count.
 ///
 /// Schedule: first failure → 30s, doubling each time, capped at 600s.
 pub struct BackoffState {

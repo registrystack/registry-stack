@@ -2,10 +2,9 @@
 //! Claim-type payload builders.
 //!
 //! Each submodule owns the `credentialSubject` shape for one claim
-//! type (Wave 3, `decisions/wave-3-data-provenance.md` §8). The
-//! shapes are public so the orchestrator can construct them and the
-//! audit layer can label its events; the orchestrator itself lives in
-//! [`super`].
+//! type. The shapes are public so the orchestrator can construct them
+//! and the audit layer can label its events; the orchestrator itself
+//! lives in [`super`].
 
 pub mod aggregate_result;
 pub mod entity_record;

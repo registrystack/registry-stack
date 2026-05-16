@@ -1,6 +1,6 @@
 # Test Fixtures
 
-This directory contains synthetic, PII-free test data for Wave 1 integration tests.
+This directory contains synthetic, PII-free test data for decoder and ingest tests.
 
 ## Generated Fixtures
 
@@ -11,16 +11,16 @@ All fixtures are deterministically regenerated from a fixed seed (seed=42) by `s
 Three representations of the same 1000-row dataset, all with identical content:
 
 - **social_registry.csv** (58 KB)
-  CSV format with header row. Used by Track 2 (CSV format tests) and Wave 0 format-decoupling tests.
+  CSV format with header row. Used by CSV decoder and format-decoupling tests.
 
 - **social_registry.xlsx** (48 KB)
   XLSX with two sheets:
   - `metadata`: summary info (dataset name, resource name, row count, generation timestamp)
   - `data`: the 1000 data rows with headers
-  Used by Track 3 (XLSX format tests) and integration tests.
+  Used by XLSX decoder and integration tests.
 
 - **social_registry.parquet** (28 KB)
-  Arrow Parquet file. Used by Track 4 (Parquet format tests) and as the reference format for binary comparison.
+  Arrow Parquet file. Used by Parquet decoder tests and as the reference format for binary comparison.
 
 ### Schema
 
@@ -41,13 +41,13 @@ All three formats represent the same 7 columns:
 Test data for error and validation paths:
 
 - **malformed_csv_truncated.csv** (17 KB)
-  CSV file that starts with a valid header and ~300 well-formed rows, then truncates mid-record (incomplete final row). Used by Track 2 (malformed CSV test).
+  CSV file that starts with a valid header and ~300 well-formed rows, then truncates mid-record (incomplete final row). Used by malformed CSV tests.
 
 - **xlsx_type_mismatch.xlsx** (47 KB)
-  XLSX matching the schema shape but with `joined_date` column containing non-date strings in rows 3, 5, and 7 ("around march 2022", "n/a", "invalid"). Used by Track 5 (schema validation test for date parsing).
+  XLSX matching the schema shape but with `joined_date` column containing non-date strings in rows 3, 5, and 7 ("around march 2022", "n/a", "invalid"). Used by schema validation tests for date parsing.
 
 - **parquet_schema_mismatch.parquet** (29 KB)
-  Parquet with the standard 7 columns plus an extra column `internal_notes` (String) not declared in the schema. Used by Track 5 (strict-extra-column test).
+  Parquet with the standard 7 columns plus an extra column `internal_notes` (String) not declared in the schema. Used by strict-extra-column tests.
 
 ### Entity API Example Fixture
 
@@ -56,7 +56,7 @@ Test data for error and validation paths:
   - `Households`: `household_id`, `region_code`, `enrollment_date`
   - `Individuals`: `individual_id`, `household_id`, `municipality_code`, `payment_amount`
 
-  Use this file for local and container smoke tests by copying it to `data/social_registry.xlsx`. The older `social_registry.xlsx` fixture remains the Wave 1 format/ingest fixture and intentionally keeps its `metadata` and `data` sheets.
+  Use this file for local and container smoke tests by copying it to `data/social_registry.xlsx`. The older `social_registry.xlsx` fixture remains the format/ingest fixture and intentionally keeps its `metadata` and `data` sheets.
 
 ## Generation
 
@@ -69,7 +69,7 @@ Test data for error and validation paths:
 The script:
 1. Runs the inline Python generator through `uv`
 2. Installs openpyxl, pyarrow, pandas into the ephemeral `uv` environment
-3. Uses seed=42 for the Wave 1 table fixtures
+3. Uses seed=42 for the table fixtures
 4. Produces all fixture files atomically
 
 Output is idempotent: re-running produces byte-for-byte identical files (verified with MD5).
@@ -103,10 +103,10 @@ python3 -c "import openpyxl; wb=openpyxl.load_workbook('fixtures/xlsx_type_misma
 python3 -c "import pyarrow.parquet as pq; t=pq.read_table('fixtures/parquet_schema_mismatch.parquet'); print(f'Columns: {t.schema.names}')"
 ```
 
-## Track Dependencies
+## Test Coverage Map
 
-- **Track 2 (CSV format)**: uses `social_registry.csv` (well-formed) and `malformed_csv_truncated.csv` (malformed)
-- **Track 3 (XLSX format)**: uses `social_registry.xlsx` and `xlsx_type_mismatch.xlsx`
-- **Track 4 (Parquet format)**: uses `social_registry.parquet` and `parquet_schema_mismatch.parquet`
-- **Track 5 (Schema validation)**: uses all mismatched fixtures to test the §4 rule table
-- **Track 6 (Integration)**: uses the three primary fixtures for end-to-end ingest + registration tests
+- **CSV format**: uses `social_registry.csv` (well-formed) and `malformed_csv_truncated.csv` (malformed)
+- **XLSX format**: uses `social_registry.xlsx` and `xlsx_type_mismatch.xlsx`
+- **Parquet format**: uses `social_registry.parquet` and `parquet_schema_mismatch.parquet`
+- **Schema validation**: uses all mismatched fixtures for declared-vs-observed checks
+- **Integration**: uses the three primary fixtures for end-to-end ingest + registration tests

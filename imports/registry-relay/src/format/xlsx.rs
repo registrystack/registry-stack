@@ -3,9 +3,8 @@
 //!
 //! Uses `calamine` to parse the workbook. `calamine` is not streaming:
 //! the entire workbook is read into memory before the first batch is
-//! yielded. `IngestPlan` enforces the max-file-bytes guard (W1-9)
-//! *before* calling `decode`; this module does not enforce it.
-//! See `decisions/wave-1.md` §1 W1-9 and §6 Track 3.
+//! yielded. `IngestPlan` enforces the max-file-bytes guard before
+//! calling `decode`; this module does not enforce it.
 
 use std::io::Cursor;
 use std::pin::Pin;
@@ -29,13 +28,12 @@ use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHint
 /// Upper bound on the number of cells (rows x columns) calamine is allowed
 /// to materialise for one XLSX worksheet.
 ///
-/// Mitigates the decompression-bomb vector described in
-/// `docs/security-review-2026-05-16.md`. The on-disk size cap (`xlsx_max_*`
-/// in [`crate::ingest`]) only bounds the compressed ZIP; an attacker can
-/// declare a 26 col x 10M row `<dimension>` element in a kilobyte of XML
-/// and watch calamine allocate a 16 GB sparse `Range`. We refuse the
-/// workbook *before* calling `worksheet_range` (which itself calls
-/// `Range::from_sparse`, the allocating step).
+/// Mitigates a decompression-bomb vector. The on-disk size cap
+/// (`xlsx_max_*` in [`crate::ingest`]) only bounds the compressed ZIP;
+/// an attacker can declare a 26 col x 10M row `<dimension>` element in
+/// a kilobyte of XML and watch calamine allocate a 16 GB sparse
+/// `Range`. We refuse the workbook *before* calling `worksheet_range`
+/// (which itself calls `Range::from_sparse`, the allocating step).
 ///
 /// 10M cells is generous for legitimate use (a 1M-row sheet with 10
 /// columns); calibrate down later if real workloads stay well below this.

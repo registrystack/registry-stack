@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Per-resource ingestion lifecycle, registry, and readiness model.
 //!
-//! Trait shapes and lifecycle are pinned in `decisions/wave-1.md`
-//! Section 2.3. Track 6 (cache + register + refresh, sonnet) owns the
-//! orchestration logic and the submodules [`cache`], [`refresh`], and
-//! the rest of [`validation`].
+//! This module owns the flow from configured resources to registered
+//! DataFusion tables: source open, format decode, schema validation,
+//! Parquet cache write, table registration, refresh, and readiness.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
@@ -286,7 +285,8 @@ impl IngestPlan {
             })?;
 
         // Step 3: materialise all batches and build a sample.
-        // V1: full materialisation in memory. Wave 5 targets streaming.
+        // Current implementation: full materialisation in memory.
+        // Streaming ingest can replace this path later.
         let observed_schema = decoded.observed_schema;
         let mut all_batches: Vec<RecordBatch> = Vec::new();
         let mut batch_stream = decoded.batches;
@@ -761,7 +761,7 @@ impl IngestRegistry {
         (set, shutdown)
     }
 
-    /// Trigger a reload of a single resource (Wave 4 admin endpoint).
+    /// Trigger a reload of a single resource through the admin endpoint.
     pub async fn reload(
         &self,
         dataset: &DatasetId,
@@ -806,8 +806,7 @@ impl IngestRegistry {
 
 /// One row of [`ReadinessSnapshot::ready`]. Carries enough to identify
 /// the current ingest (the `ingest_ulid`) and to derive an `as_of`
-/// timestamp for downstream consumers like the wave-3 aggregate VC
-/// builder.
+/// timestamp for downstream consumers such as aggregate VC builders.
 #[derive(Clone, Debug)]
 pub struct ReadyResource {
     pub ingest_ulid: Ulid,

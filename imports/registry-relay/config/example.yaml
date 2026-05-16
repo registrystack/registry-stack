@@ -228,11 +228,11 @@ audit:
   format: jsonl
   # path: /var/log/data_gate/audit.jsonl   # when sink == file
 
-# Wave 3: Data Provenance (signed Verifiable Credentials).
+# Data provenance (signed Verifiable Credentials).
 #
 # When `enabled: false` (or the whole `provenance:` block is omitted),
-# wave-3 stays invisible: no Accept negotiation, no signing, no extra
-# audit events. Responses are byte-for-byte identical to a wave-2 build.
+# provenance stays invisible: no Accept negotiation, no signing, no
+# extra audit events. Plain JSON responses stay unchanged.
 #
 # Opting in requires a signer (`software` for dev, `kms` for production
 # once the KMS backend lands) and an issuer DID. Two issuer modes:

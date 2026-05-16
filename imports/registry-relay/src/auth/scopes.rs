@@ -6,9 +6,6 @@
 //! the per-resource `metadata_scope` / `aggregate_scope` / `row_scope`
 //! fields. The gateway does not parse or namespace them; it only
 //! checks membership.
-//!
-//! See `decisions/wave-0.md` Section 4 for the `auth.scope_denied`
-//! taxonomy entry that `require_scope` maps onto.
 
 use std::collections::BTreeSet;
 

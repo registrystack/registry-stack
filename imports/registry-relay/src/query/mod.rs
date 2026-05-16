@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Entity query API over Wave 1 DataFusion table registrations.
+//! Entity query API over DataFusion table registrations.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -89,6 +89,25 @@ pub struct EntityRelationshipPage {
 impl EntityQueryEngine {
     pub fn new(ctx: Arc<SessionContext>, registry: Arc<EntityRegistry>) -> Self {
         Self { ctx, registry }
+    }
+
+    pub fn validate_collection_query(
+        &self,
+        dataset_id: &str,
+        entity_name: &str,
+        query: &EntityCollectionQuery,
+    ) -> Result<(), Error> {
+        let entity = self.entity(dataset_id, entity_name)?;
+        validate_allowed_expansions(entity, &query.expansions)?;
+        projected_fields(entity, query.fields.as_deref())?;
+        match query.limit {
+            Some(limit) if limit == 0 || limit > entity.api.max_limit as usize => {
+                return Err(FilterError::LimitOutOfRange.into());
+            }
+            _ => {}
+        }
+        validate_allowed_filters(entity, &query.filters)?;
+        Ok(())
     }
 
     pub async fn read_collection(

@@ -5,8 +5,6 @@
 //! POSIX-rename to `<ULID>.parquet`. Rename is atomic within the same
 //! filesystem per POSIX. Crash-recovery: stale `.tmp-*` files are
 //! deleted by [`gc_resource`] on the next successful refresh.
-//!
-//! See `decisions/wave-1.md` §5 for layout and atomicity guarantees.
 
 use std::io;
 use std::path::{Path, PathBuf};

@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for `ingest::validation`.
 //!
-//! One test per row of `decisions/wave-1.md` Section 4. Each test
-//! constructs a small Arrow schema (and where the rule needs sample
-//! data, a `RecordBatch`) inline, calls `validate`, and asserts the
-//! result against the §4 expected behaviour.
-//!
-//! Tests are organised by §4 row order so a reader can map test
-//! function to rule by scrolling top-down.
+//! Each test constructs a small Arrow schema (and where the rule needs
+//! sample data, a `RecordBatch`) inline, calls `validate`, and asserts
+//! the result against the expected behavior.
 
 use std::sync::Arc;
 
@@ -461,10 +457,8 @@ fn apply_is_idempotent() {
     }
 }
 
-// ── Risk #7 flagged here: __ in dataset/resource ids is config
-// validator territory, NOT a validation responsibility. The validator
-// only checks declared-vs-observed shape. See
-// decisions/wave-1.md §9 risk #7.
+// Dataset/resource id validation belongs to the config validator, not
+// declared-vs-observed schema validation.
 
 // ── Sanity: declared types -> Arrow schema mapping ───────────────────────────
 

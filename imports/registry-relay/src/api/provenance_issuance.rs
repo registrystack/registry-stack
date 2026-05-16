@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP-layer issuance helper: Accept negotiation + VC issuance.
 //!
-//! Wave 3 wires three protected handlers into the issuance orchestrator
-//! (`/verify`, `/aggregates/{id}`, `/{entity}/{id}`). The shape is the
-//! same in all three places:
+//! Three protected handlers use this helper (`/verify`,
+//! `/aggregates/{id}`, and `/{entity}/{id}`). The shape is the same in
+//! all three places:
 //!
-//! 1. Build the wave-2 plain-JSON response.
+//! 1. Build the normal plain JSON response.
 //! 2. Ask [`crate::provenance::negotiate`] whether the caller opted in
 //!    with `Accept: application/vc+jwt`.
 //! 3. If yes (and provenance is enabled), build the typed claim subject
@@ -15,8 +15,8 @@
 //!    JWS as the body. Attach [`crate::audit::ProvenanceIssuanceExt`] so
 //!    the audit middleware emits a `provenance.vc.issued` event.
 //! 4. If no (no opt-in, or provenance disabled / absent), return the
-//!    plain-JSON response unchanged. This keeps the byte-for-byte
-//!    wave-2 contract intact for callers that don't ask for a VC.
+//!    plain JSON response unchanged. This keeps non-VC callers on the
+//!    same response contract.
 //!
 //! The helper is `pub(crate)` because it is an implementation detail of
 //! the api module; nothing outside `src/api` should call it directly.
@@ -46,7 +46,7 @@ const VC_JWT_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("application/v
 /// Decide whether the caller asked for a signed VC and the gateway is
 /// allowed to issue one (provenance present + enabled + accepted media
 /// type listed). Returns the live [`ProvenanceState`] handle when all
-/// conditions hold; `None` when the wave-2 plain-JSON path should run
+/// conditions hold; `None` when the plain JSON path should run
 /// instead.
 pub(crate) fn signed_vc_requested<'a>(
     state: Option<&'a Arc<ProvenanceState>>,
@@ -63,16 +63,15 @@ pub(crate) fn signed_vc_requested<'a>(
 }
 
 /// Build the canonical subject URI for an entity row, used as both the
-/// VC `credentialSubject.id` and JWT `sub`. Mirrors decision D9
-/// (`<catalog.base_url>/datasets/<dataset>/<entity>/<id>`).
+/// VC `credentialSubject.id` and JWT `sub`.
 pub(crate) fn entity_subject_uri(config: &Config, dataset: &str, entity: &str, id: &str) -> String {
     let base = config.catalog.base_url.trim_end_matches('/');
     format!("{base}/datasets/{dataset}/{entity}/{id}")
 }
 
 /// Build the canonical subject URI for an aggregate result, used as the
-/// VC `credentialSubject.id`. Per decision D9 the aggregate's URL is
-/// the public route the gateway exposes.
+/// VC `credentialSubject.id`. The aggregate's URL is the public route
+/// the gateway exposes.
 pub(crate) fn aggregate_subject_uri(
     config: &Config,
     dataset: &str,

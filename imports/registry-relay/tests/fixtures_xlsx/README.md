@@ -1,6 +1,6 @@
 # XLSX Test Fixtures
 
-Fixtures for `tests/format_xlsx.rs` (Track 3: XlsxFormat).
+Fixtures for `tests/format_xlsx.rs` (`XlsxFormat`).
 
 ## Regenerating
 

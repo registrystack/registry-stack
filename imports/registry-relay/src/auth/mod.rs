@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Authentication trait, [`Principal`], and mode tags.
 //!
-//! The trait shape, [`Principal`] fields, and the V1/V2 forward
-//! compatibility story are pinned in `decisions/wave-0.md` Section 3.1.
 //! In V1 the only implementation is [`api_key::ApiKeyAuth`], which
 //! verifies `Authorization: Bearer <token>` or `X-Api-Key: <token>`
-//! against Argon2id PHC strings loaded from environment variables.
+//! against SHA-256 fingerprints loaded from environment variables.
 //!
 //! ## Trait method asynchrony
 //!
@@ -41,8 +39,8 @@ pub use scopes::ScopeSet;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AuthMode {
-    /// V1: shared-secret API key verified against a stored Argon2id
-    /// hash. The mirror of `config::AuthMode::ApiKey`.
+    /// V1: high-entropy API key verified against a stored SHA-256
+    /// fingerprint. The mirror of `config::AuthMode::ApiKey`.
     ApiKey,
 }
 
@@ -50,12 +48,8 @@ pub enum AuthMode {
 /// extensions by [`middleware::auth_layer`] and read by audit and
 /// downstream handlers.
 ///
-/// Field shape mirrors `decisions/wave-0.md` Section 3.1; the
-/// `extensions` typed-map slot called out in that section is deferred
-/// to V2 (no V1 consumer reads it, and adding it now would be dead
-/// weight). When V2 lands the new field will be added as
-/// `#[non_exhaustive]` or via an opaque sub-struct so existing
-/// construction sites keep compiling.
+/// Keep this struct small and explicit: audit and handlers read these
+/// fields directly on every protected request.
 #[derive(Debug, Clone)]
 pub struct Principal {
     /// Stable identifier from `auth.api_keys[].id`. Never the secret,
@@ -74,7 +68,7 @@ pub struct Principal {
 ///
 /// V1 implementation: [`api_key::ApiKeyAuth`], reading
 /// `Authorization: Bearer <key>` or `X-Api-Key: <key>` and verifying
-/// it against Argon2id PHC strings loaded from the env vars named by
+/// it against SHA-256 fingerprints loaded from the env vars named by
 /// `auth.api_keys[].hash_env`. V2 will add JWT and dataspace
 /// implementations; the trait surface does not change.
 ///
@@ -83,12 +77,11 @@ pub struct Principal {
 /// * Never log, format, or surface the raw credential. The error path
 ///   maps to a Problem Details response that carries only the stable
 ///   taxonomy code.
-/// * Constant-time verification on the credential bytes. Argon2id's
-///   verifier is constant-time by construction; do not short-circuit
-///   it.
-/// * Return the appropriate [`AuthError`] variant per the taxonomy in
-///   `decisions/wave-0.md` Section 4. The HTTP-status mapping is owned
-///   by `crate::error`; this trait does not pick statuses.
+/// * Never store raw credential bytes in provider state. V1 stores
+///   only SHA-256 fingerprints of high-entropy generated keys.
+/// * Return the appropriate [`AuthError`] variant. The HTTP-status
+///   mapping is owned by `crate::error`; this trait does not pick
+///   statuses.
 pub trait AuthProvider: Send + Sync + 'static {
     /// Authenticate a request from its headers and peer address.
     ///

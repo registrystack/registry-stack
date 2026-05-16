@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Schema validation: declared vs observed.
 //!
-//! Implements every row of the rule table in `decisions/wave-1.md` §4.
+//! Implements strict and permissive schema checks between declared
+//! config and observed Arrow batches.
 //! Public surface:
 //! - [`validate`]: returns a [`ProjectionPlan`] on accept,
 //!   [`IngestError`] on hard fail. Logs a structured `tracing::error!`
@@ -11,10 +12,8 @@
 //! - [`ProjectionPlan::apply`]: project + cast an Arrow `RecordBatch`
 //!   to the declared schema's column order and Arrow types. Idempotent.
 //!
-//! `IngestError` is the existing Wave 0 enum (`src/error.rs`). No new
-//! variants are needed: the diff payload is emitted via `tracing` here
-//! so the operational log is complete, and the error stays opaque for
-//! `/ready` rendering (Spec §13 scrubbing).
+//! Diff details are emitted via `tracing` so operational logs are
+//! useful, while returned errors stay scrubbed for `/ready` rendering.
 
 use std::sync::Arc;
 
@@ -44,7 +43,7 @@ struct ColumnPlan {
     name: String,
 }
 
-/// Plan produced by [`validate`] and consumed by Track 6's pipeline.
+/// Plan produced by [`validate`] and consumed by the ingest pipeline.
 ///
 /// Opaque to callers; the only behaviour they need is
 /// [`ProjectionPlan::apply`] to project + cast a decoded `RecordBatch`
@@ -98,8 +97,8 @@ impl ProjectionPlan {
         })
     }
 
-    /// Arrow schema of the output batches. Useful to Track 6 when it
-    /// builds the Parquet writer's expected schema.
+    /// Arrow schema of the output batches. Used when the ingest
+    /// pipeline builds the Parquet writer's expected schema.
     pub fn output_schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }
@@ -111,14 +110,15 @@ impl ProjectionPlan {
 /// `sample_rows` enables the sample-mode checks (null-in-non-nullable,
 /// primary-key uniqueness, RFC 3339 parseability for string-encoded
 /// date/timestamp columns). When `None`, those checks are skipped
-/// (cheap-mode; used by Track 6 to validate the schema shape before
+/// (cheap mode; used to validate the schema shape before
 /// running the full decode pipeline).
 ///
 /// On accept, logs nothing at error level; `strict: false` extra
 /// columns are logged at `warn` level only. On hard fail, logs a
 /// `tracing::error!` with the diff payload and returns the appropriate
-/// [`IngestError`] variant. The error carries no diff; Track 6 already
-/// has the dataset/resource ids in scope when it consumes the result.
+/// [`IngestError`] variant. The error carries no diff; the caller
+/// already has the dataset/resource ids in scope when it consumes the
+/// result.
 #[allow(clippy::too_many_lines)]
 pub fn validate(
     dataset_id: &DatasetId,

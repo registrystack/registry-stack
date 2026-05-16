@@ -47,3 +47,42 @@ ci: fmt-check lint test deny
 #        just run config=path/to/other.yaml
 run config="config/example.yaml":
     cargo run -- --config {{config}}
+
+# Generate synthetic perf fixtures under perf/fixtures/generated/.
+# Usage: just perf-gen                       (default: all profiles)
+#        just perf-gen profile=medium
+#        just perf-gen profile=large extra="--include-5m"
+perf-gen profile="all" extra="":
+    uv run perf/scripts/generate_perf_data.py --profile {{profile}} {{extra}}
+
+# Generate synthetic perf API keys and write target/perf/perf.env.
+# Usage: just perf-keys                                 (default path)
+#        just perf-keys env="target/perf/other.env" force="--force"
+perf-keys env="target/perf/perf.env" force="":
+    mkdir -p $(dirname {{env}})
+    uv run perf/scripts/generate_perf_keys.py --env-file {{env}} {{force}}
+
+# Compile the perf benches without running them. Used as a CI smoke check.
+perf-bench-build:
+    cargo bench --no-run
+
+# Run all Criterion microbenchmarks (manual; not for CI).
+perf-bench:
+    cargo bench
+
+# Run one k6 scenario under perf/k6/, sampling the server process.
+# Requires: k6 on PATH, a running data_gate (or pass --start-server via extra).
+# Usage: just perf-run scenario=perf/k6/cached_304.js
+#        just perf-run scenario=perf/k6/hot_200.js extra="--server-pid 12345"
+perf-run scenario extra="--env-file target/perf/perf.env":
+    uv run perf/scripts/run_scenario.py --scenario {{scenario}} {{extra}}
+
+# Local CI-equivalent smoke: build release, generate the small fixture profile,
+# compile the benches, and node-check every k6 scenario. Does not start the
+# server or run k6 (CI installs k6 separately when available).
+perf-smoke:
+    cargo build --release
+    uv run perf/scripts/generate_perf_data.py --profile small --out-dir target/perf/smoke-fixtures
+    cargo bench --no-run
+    for f in perf/k6/*.js perf/k6/lib/*.js; do node --check "$f" || exit 1; done
+    @echo "perf-smoke OK"

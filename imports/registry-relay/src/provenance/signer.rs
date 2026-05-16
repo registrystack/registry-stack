@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Signer trait and supporting types for Wave 3 provenance.
+//! Signer trait and supporting types for provenance.
 //!
 //! Implementations live under [`crate::provenance::signers`]. The trait
 //! takes JSON-shaped header and payload and returns a compact JWS

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Focused config-loading verification for the five demo-pack YAMLs and the
-//! combined `all_demos.yaml`. Required by `docs/demo-spec.md` Acceptance
-//! Criteria: "Verification includes a focused config loading check."
+//! combined `all_demos.yaml`. This keeps the public demo pack covered by
+//! a focused config-loading check.
 //!
 //! All six configs declare the same six persona `hash_env:` names
 //! (`CATALOG_VIEWER_HASH` etc.), so this binary keeps a single test function
@@ -11,30 +11,22 @@
 
 use std::env;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use argon2::password_hash::{PasswordHasher, SaltString};
-use argon2::Argon2;
 use data_gate::config::{self, AuditSinkConfig};
+use sha2::{Digest, Sha256};
 
-fn make_phc(plaintext: &[u8]) -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+fn make_fingerprint(plaintext: &[u8]) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
+}
 
-    let mut bytes = [0u8; 16];
-    bytes[..8].copy_from_slice(&nanos.to_le_bytes());
-    bytes[8..].copy_from_slice(&nonce.to_le_bytes());
-    let salt = SaltString::encode_b64(&bytes).expect("encode salt");
-
-    Argon2::default()
-        .hash_password(plaintext, &salt)
-        .expect("argon2 hash")
-        .to_string()
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn demo_config(name: &str) -> PathBuf {
@@ -55,7 +47,7 @@ const PERSONA_HASH_ENVS: &[&str] = &[
 #[test]
 fn all_six_demo_configs_load_and_validate() {
     for name in PERSONA_HASH_ENVS {
-        env::set_var(name, make_phc(name.as_bytes()));
+        env::set_var(name, make_fingerprint(name.as_bytes()));
     }
 
     let single_dataset_configs = [

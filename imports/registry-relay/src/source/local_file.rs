@@ -4,8 +4,6 @@
 //! Implements the [`Source`] trait by opening a path on the local filesystem
 //! via `tokio::fs`. The ETag fingerprint is `dev:inode:mtime_ns:size` so the
 //! refresh loop detects both in-place mutations and atomic renames.
-//!
-//! See `decisions/wave-1.md` Section 2.1 and Section 6 (Track 1).
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};

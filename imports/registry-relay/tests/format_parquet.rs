@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for `ParquetFormat`.
 //!
-//! Covers Track 4 exit criteria from `decisions/wave-1.md` Section 6:
+//! Coverage:
 //! - round-trip: write via `AsyncArrowWriter`, read back via `ParquetFormat::decode`
 //! - observed schema matches parquet file metadata
 //! - `FormatHints` fields irrelevant to parquet (sheet, delimiter, etc.) are ignored

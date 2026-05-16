@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `VerifyResult` v1 credentialSubject builder.
 //!
-//! Mirrors the wave-2 `/verify` semantic: a predicate-only attestation
+//! Mirrors the `/verify` semantic: a predicate-only attestation
 //! that the gateway answers questions like "is this individual a
-//! household head" without exposing the underlying row. The conceptual
-//! model is in `decisions/wave-3-data-provenance.md` §8.
+//! household head" without exposing the underlying row.
 
 use serde_json::{json, Value};
 
@@ -22,9 +21,9 @@ pub struct VerifyResultInput {
 
 /// Build the `credentialSubject` JSON for a `VerifyResult` VC.
 ///
-/// The `id` is the canonical entity URL (decision D9); the JWT `sub`
-/// claim carries the same value, so consumers that look only at JWT
-/// claims still see the subject.
+/// The `id` is the canonical entity URL; the JWT `sub` claim carries
+/// the same value, so consumers that look only at JWT claims still see
+/// the subject.
 #[must_use]
 pub fn verify_result_subject(input: &VerifyResultInput) -> Value {
     json!({

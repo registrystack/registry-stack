@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wave 3 provenance: signed claims over verify / aggregate / entity
+//! Data provenance: signed claims over verify, aggregate, and entity
 //! responses.
 //!
 //! Module layout:
 //!
-//! * [`signer`] — [`Signer`] trait + error types.
-//! * [`signers`] — concrete implementations (software, mock KMS).
-//! * [`jwt_vc`] — VC-JWT envelope encoder (VCDM 2.0).
-//! * [`claim`] — per-claim-type `credentialSubject` builders.
-//! * [`did_web`] — gateway-mode DID Document builder.
-//! * [`resources`] — in-tree bytes for schemas and JSON-LD contexts.
-//! * [`negotiate`] — `Accept` content negotiation.
+//! * [`signer`]: [`Signer`] trait + error types.
+//! * [`signers`]: concrete implementations (software, mock KMS).
+//! * [`jwt_vc`]: VC-JWT envelope encoder (VCDM 2.0).
+//! * [`claim`]: per-claim-type `credentialSubject` builders.
+//! * [`did_web`]: gateway-mode DID Document builder.
+//! * [`resources`]: in-tree bytes for schemas and JSON-LD contexts.
+//! * [`negotiate`]: `Accept` content negotiation.
 //!
 //! [`ProvenanceState`] is the runtime handle held by the HTTP layer:
 //! one instance per process, constructed from a parsed
@@ -173,9 +173,9 @@ impl ProvenanceState {
 
 /// Per-request issuance inputs gathered by the handler.
 ///
-/// The handler owns the wave-2 response value and the audit-shaped
-/// metadata; the orchestrator owns the VC envelope, the JWT
-/// timestamps, and the signer call.
+/// The handler owns the plain response value and the audit-shaped
+/// metadata; this orchestrator owns the VC envelope, JWT timestamps,
+/// and signer call.
 #[derive(Debug, Clone)]
 pub struct IssuanceContext {
     pub claim_type: ClaimType,
@@ -297,16 +297,18 @@ pub enum BuildStateError {
 /// Build a [`ResolvedProvenanceConfig`] from validated configuration.
 ///
 /// Returns `Ok(None)` when the operator omitted the `provenance` block
-/// (wave-2 deployments). Returns `Ok(Some(_))` when present, even when
-/// `enabled = false`: the orchestrator still needs the resolved
-/// addresses so the unauthenticated `/schemas` / `/contexts` /
-/// `/.well-known/did.json` routes can mount.
+/// or set `enabled = false`. Disabled provenance
+/// must not load signer secrets or retired-key material: it is runtime
+/// invisible until the operator explicitly enables it.
 pub fn build_resolved_provenance_config(
     cfg: Option<&ProvenanceConfig>,
 ) -> Result<Option<ResolvedProvenanceConfig>, BuildStateError> {
     let Some(cfg) = cfg else {
         return Ok(None);
     };
+    if !cfg.enabled {
+        return Ok(None);
+    }
     let (mode, issuer_did, verification_method_id, signer_cfg, retired_cfgs) = match &cfg.issuer {
         IssuerConfig::Gateway(gw) => (
             IssuerMode::Gateway,

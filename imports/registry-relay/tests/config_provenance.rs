@@ -1,28 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Cross-field validation for Wave 3 `provenance` config.
+//! Cross-field validation for provenance config.
 //!
-//! Covers the validation branches listed in
-//! `decisions/wave-3-data-provenance.md` Section 5: claim validity
-//! bounds, http(s) URL shape on the two base URLs, verification method
-//! prefix, signer-kind requirements, and the env-var presence check
-//! that fires only when `enabled: true`.
+//! Covers claim validity bounds, http(s) URL shape on the two base URLs,
+//! verification method prefix, signer-kind requirements, and the env-var
+//! presence check that fires only when `enabled: true`.
 
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Once;
 
-use argon2::password_hash::{PasswordHasher, SaltString};
-use argon2::Argon2;
 use data_gate::config;
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 // All tests in this binary need the persona hash env vars present; the
 // base YAML below declares a single api_key for completeness. We seed
 // the env once per process.
 static SET_PERSONA_ENV: Once = Once::new();
-static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TEST_HASH_ENV: &str = "PROVENANCE_TEST_OPERATOR_HASH";
 // Distinct env var names per test path so parallel tests cannot stomp
 // each other (cargo runs `#[test]` cases inside one binary in
@@ -32,19 +27,25 @@ const JWK_ENV_UNSET: &str = "PROV_TEST_JWK_MISSING";
 
 fn ensure_persona_env() {
     SET_PERSONA_ENV.call_once(|| {
-        let salt_seed = SEED_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let mut bytes = [0u8; 16];
-        bytes[..8].copy_from_slice(&salt_seed.to_le_bytes());
-        let salt = SaltString::encode_b64(&bytes).expect("encode salt");
-        let phc = Argon2::default()
-            .hash_password(b"operator", &salt)
-            .expect("argon2 hash")
-            .to_string();
-        env::set_var(TEST_HASH_ENV, phc);
+        env::set_var(TEST_HASH_ENV, make_fingerprint(b"operator"));
         // A populated value here lets the `enabled: true` path pass.
         env::set_var(JWK_ENV_SET_AND_VALID, "non-empty");
         env::remove_var(JWK_ENV_UNSET);
     });
+}
+
+fn make_fingerprint(plaintext: &[u8]) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn write_yaml(body: &str) -> PathBuf {
@@ -246,8 +247,7 @@ fn jwk_env_not_required_when_disabled() {
 
 #[test]
 fn config_loads_without_provenance_block() {
-    // Backwards-compat: existing wave-0 / wave-2 deployments without a
-    // provenance block must keep loading.
+    // Backwards compat: deployments without a provenance block must keep loading.
     ensure_persona_env();
     let yaml = base_yaml("");
     // Strip the dangling `provenance:` header from base_yaml when extra
@@ -373,58 +373,34 @@ fn enabled_config_yields_resolved_state_with_enabled_flag() {
 }
 
 #[test]
-fn disabled_config_still_yields_resolved_state() {
-    // B1 contract: `enabled: false` must still produce a state so the
-    // orchestrator can decide what to mount. Without this, the binary
-    // would not be able to keep public routes invisible while still
-    // honoring the parsed config. The signer is still loaded
-    // eagerly here so config errors surface at startup rather than
-    // the first request after an operator flips `enabled: true`.
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    use ed25519_dalek::SigningKey;
-    use rand_core::OsRng;
-    use serde_json::json;
-
+fn disabled_config_yields_no_runtime_state_or_signer_load() {
+    // `enabled: false` must be runtime invisible and require no startup
+    // signing secrets. Config loading
+    // validates the non-secret shape, but the binary state builder must
+    // not touch `jwk_env` until provenance is explicitly enabled.
     ensure_persona_env();
-
-    let sk = SigningKey::generate(&mut OsRng);
-    let vk = sk.verifying_key();
-    let jwk = json!({
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "d": URL_SAFE_NO_PAD.encode(sk.to_bytes()),
-        "x": URL_SAFE_NO_PAD.encode(vk.to_bytes()),
-        "alg": "EdDSA",
-    });
-    let jwk_env = "B1_DISABLED_STATE_JWK";
-    env::set_var(jwk_env, serde_json::to_string(&jwk).unwrap());
-
     let yaml = base_yaml(&gateway_provenance(
         false,
         "10m",
         "https://data.example.test/contexts",
         "https://data.example.test/schemas",
         "did:web:data.example.test#key-1",
-        jwk_env,
+        JWK_ENV_UNSET,
     ));
     let path = write_yaml(&yaml);
     let cfg = config::load(&path).expect("config loads");
     let resolved = data_gate::provenance::build_resolved_provenance_config(cfg.provenance.as_ref())
-        .expect("orchestrator state builds")
-        .expect("provenance block produces Some(state) even when disabled");
+        .expect("orchestrator state builds");
     assert!(
-        !resolved.enabled,
-        "binary wiring contract: disabled YAML produces disabled state"
+        resolved.is_none(),
+        "disabled provenance must produce no runtime state and must not load jwk_env"
     );
 }
 
 #[test]
 fn omitted_provenance_yields_no_state() {
-    // B1 contract: no provenance block means no orchestrator state. The
-    // binary path passes `None` to `build_app_with_entity_query_and_provenance`,
-    // which keeps wave-2 deployments byte-for-byte identical to their
-    // pre-wave-3 surface.
+    // No provenance block means no orchestrator state. The binary path
+    // passes `None` to `build_app_with_entity_query_and_provenance`.
     ensure_persona_env();
     let yaml = base_yaml("").replace("provenance:\n", "");
     let path = write_yaml(&yaml);
@@ -433,7 +409,7 @@ fn omitted_provenance_yields_no_state() {
         .expect("orchestrator state builds");
     assert!(
         resolved.is_none(),
-        "wave-2 invisibility: omitting the provenance block must yield None"
+        "omitting the provenance block must yield None"
     );
 }
 

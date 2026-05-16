@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `EntityRecord` v1 credentialSubject builder.
 //!
-//! Wave-2 returns the projection of a single entity as one flat JSON
-//! object, with optional `?expand=` relationship data nested under the
-//! relationship name. The credential model in `decisions/
-//! wave-3-data-provenance.md` §8 splits that view into
-//! `{fields, expanded}` so consumers can distinguish projected scalars
-//! from related-entity blocks.
+//! The plain entity record response is one flat JSON object, with
+//! optional `?expand=` relationship data nested under the relationship
+//! name. The credential model splits that view into `{fields, expanded}`
+//! so consumers can distinguish projected scalars from related-entity
+//! blocks.
 //!
-//! The split is driven by the *relationship name list* gathered at the
-//! handler. Any key in the wave-2 record whose name matches a
-//! requested expansion lands in `expanded`; everything else lands in
+//! The split is driven by the relationship name list gathered at the
+//! handler. Any key in the plain record whose name matches a requested
+//! expansion lands in `expanded`; everything else lands in
 //! `fields`. This treats relationship names as a closed set
 //! (controlled by the projection config), which means unrelated keys
 //! cannot accidentally land in `expanded` and consumers cannot inject
@@ -53,7 +52,7 @@ pub fn entity_record_subject(input: &EntityRecordInput) -> Value {
     Value::Object(subject)
 }
 
-/// Split the wave-2 record into (fields, expanded). Returns `None` for
+/// Split the plain record into (fields, expanded). Returns `None` for
 /// `expanded` when no expansion key resolves; the caller drops the
 /// member from the credential subject when that happens, matching the
 /// spec note "`expanded` is omitted entirely when the request did not

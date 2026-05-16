@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for the config loader.
 //!
-//! These tests cover Wave 0 Track 2 exit criteria from
-//! `decisions/wave-0.md` Section 6: parse the canonical example
-//! verbatim, surface cross-field validation errors with stable
-//! `config.*` codes, and round-trip the prefix expansion helper.
+//! These tests parse the canonical example verbatim, surface
+//! cross-field validation errors with stable `config.*` codes, and
+//! round-trip the prefix expansion helper.
 //!
 //! Env vars are scoped per-fixture (each test uses unique names) so
 //! the suite can run with the default test runner without forcing
@@ -14,42 +13,26 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
-use argon2::password_hash::{PasswordHasher, SaltString};
-use argon2::Argon2;
 use data_gate::config::vocabularies;
 use data_gate::config::{
     self, AccessRights, AggregateFunction, AuditFormat, AuditSinkConfig, AuthMode, FieldType,
     FilterOp, RefreshConfig, Sensitivity, SourceConfig, Suppression, UpdateFrequency,
 };
 use data_gate::error::{ConfigError, Error};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::{Digest, Sha256};
 
-/// Build a valid Argon2id PHC string. Reused by tests that need a
-/// `hash_env` env var value the validator will accept. We avoid
-/// `OsRng` here because the test binary does not enable the
-/// `getrandom` feature on `rand_core`; a per-process monotonic
-/// counter is more than sufficient for fixture salt uniqueness.
-fn make_phc(plaintext: &[u8]) -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+fn make_fingerprint(plaintext: &[u8]) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
+}
 
-    // 16 bytes of salt entropy: 8 from nanos, 8 from nonce. Encoded
-    // to PHC's b64 (no padding) via SaltString::encode_b64.
-    let mut bytes = [0u8; 16];
-    bytes[..8].copy_from_slice(&nanos.to_le_bytes());
-    bytes[8..].copy_from_slice(&nonce.to_le_bytes());
-    let salt = SaltString::encode_b64(&bytes).expect("encode salt");
-
-    let argon2 = Argon2::default();
-    argon2
-        .hash_password(plaintext, &salt)
-        .expect("argon2 hash")
-        .to_string()
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Path to the canonical example shipped alongside the crate.
@@ -85,10 +68,10 @@ fn assert_config_code(result: Result<config::Config, Error>, expected_code: &str
 
 #[test]
 fn example_config_loads_and_validates() {
-    // Both keys in the example point at env vars; provide valid PHCs.
-    let key_a = make_phc(b"statistics-office-secret");
-    let key_b = make_phc(b"program-system-secret");
-    let key_c = make_phc(b"verification-service-secret");
+    // All configured keys point at env vars; provide valid fingerprints.
+    let key_a = make_fingerprint(b"statistics-office-secret");
+    let key_b = make_fingerprint(b"program-system-secret");
+    let key_c = make_fingerprint(b"verification-service-secret");
 
     // Safe to set: env name is unique to the example.
     env::set_var("STATS_OFFICE_API_KEY_HASH", key_a);
@@ -226,7 +209,7 @@ fn unknown_field_rejected() {
 
 #[test]
 fn invalid_scope_rejected() {
-    env::set_var("TEST_KEY_HASH_SCOPE", make_phc(b"scope-test"));
+    env::set_var("TEST_KEY_HASH_SCOPE", make_fingerprint(b"scope-test"));
     let result = config::load(&fixture_path("invalid_scope.yaml"));
     let msg = assert_config_code(result, "config.validation_error");
     // No assertion on the offending scope value beyond the code; the
@@ -245,21 +228,21 @@ fn missing_env_var_rejected() {
 
 #[test]
 fn duplicate_dataset_id_rejected() {
-    env::set_var("TEST_KEY_HASH_DUP", make_phc(b"dup-test"));
+    env::set_var("TEST_KEY_HASH_DUP", make_fingerprint(b"dup-test"));
     let result = config::load(&fixture_path("duplicate_dataset_id.yaml"));
     assert_config_code(result, "config.duplicate_id");
 }
 
 #[test]
 fn unknown_vocabulary_prefix_rejected() {
-    env::set_var("TEST_KEY_HASH_VOCAB", make_phc(b"vocab-test"));
+    env::set_var("TEST_KEY_HASH_VOCAB", make_fingerprint(b"vocab-test"));
     let result = config::load(&fixture_path("unknown_vocab_prefix.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 
 #[test]
 fn allowed_filter_unknown_field_rejected() {
-    env::set_var("TEST_KEY_HASH_FILTER", make_phc(b"filter-test"));
+    env::set_var("TEST_KEY_HASH_FILTER", make_fingerprint(b"filter-test"));
     let result = config::load(&fixture_path("allowed_filter_unknown_field.yaml"));
     assert_config_code(result, "config.validation_error");
 }
@@ -295,7 +278,7 @@ fn vocab_expand_roundtrip() {
 
 #[test]
 fn humantime_parses_interval() {
-    env::set_var("TEST_KEY_HASH_INTERVAL", make_phc(b"interval-test"));
+    env::set_var("TEST_KEY_HASH_INTERVAL", make_fingerprint(b"interval-test"));
     let config = config::load(&fixture_path("interval_refresh.yaml"))
         .expect("interval_refresh fixture must load");
     let refresh = &config.datasets[0].refresh;
@@ -308,9 +291,9 @@ fn humantime_parses_interval() {
 }
 
 #[test]
-fn reject_invalid_argon_phc() {
-    env::set_var("TEST_KEY_HASH_BADPHC", "not_an_argon_phc");
-    let result = config::load(&fixture_path("invalid_argon_phc.yaml"));
+fn reject_invalid_api_key_fingerprint() {
+    env::set_var("TEST_KEY_HASH_BAD_FINGERPRINT", "not_a_fingerprint");
+    let result = config::load(&fixture_path("invalid_api_key_fingerprint.yaml"));
     assert_config_code(result, "config.validation_error");
 }
 

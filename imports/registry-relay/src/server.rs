@@ -17,11 +17,11 @@
 //! 2. Audit middleware: emits one record per request to the configured
 //!    sink, with health/ready gated by `audit.include_health`.
 //! 3. `TraceLayer`: structured request/response spans for operational
-//!    logs. The audit log is the load-bearing observability surface
-//!    (architect decision #9); this layer only adds debugging context.
+//!    logs. The audit log is the load-bearing observability surface;
+//!    this layer adds debugging context.
 //! 4. `CorsLayer`: built from `config.server.cors.allowed_origins`.
 //!    Empty allowlist (the default) means no `Access-Control-Allow-*`
-//!    headers go out, matching architect decision #7's "default-deny".
+//!    headers go out, matching the default-deny CORS policy.
 //! 5. Internal error normalizer: maps timeout/body-limit responses into
 //!    RFC 7807 Problem Details before audit records them.
 //! 6. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
@@ -115,8 +115,8 @@ where
 }
 
 /// Same as [`build_app`] but lets a caller install a pre-built
-/// [`ProvenanceState`]. Wave 3 wiring (Phase C) takes this path; tests
-/// that don't exercise provenance keep the older [`build_app`] entry.
+/// [`ProvenanceState`]. Tests that don't exercise provenance keep the
+/// smaller [`build_app`] entry.
 pub fn build_app_with_provenance<P>(
     config: Arc<Config>,
     auth: Arc<P>,
@@ -127,20 +127,24 @@ where
     P: AuthProvider,
 {
     // Health/ready routes: unauthenticated sub-router. Merged onto the
-    // top-level router *outside* the auth layer.
-    let mut public = api::health_router();
+    // top-level router *outside* the auth layer. The Scalar viewer
+    // (`/docs` + `/docs/scalar.js`) is a static HTML+JS shell with no
+    // secrets in it, so it sits on the public surface and a browser
+    // can load it directly. The OpenAPI document it renders
+    // (`/openapi.json`) stays auth-gated below; the user pastes their
+    // API key into Scalar to fetch it.
+    let mut public = api::health_router().merge(api::docs_router());
 
-    // Wave 3 provenance: when configured AND enabled, the gateway
-    // exposes the JSON Schemas, JSON-LD contexts, and (gateway-mode
-    // only) the `/.well-known/did.json` document on the public,
-    // unauthenticated surface. These routes share the same audit +
-    // tracing pipeline as `/health` and `/ready`.
+    // When provenance is configured and enabled, the gateway exposes
+    // JSON Schemas, JSON-LD contexts, and (gateway mode only) the
+    // `/.well-known/did.json` document on the public unauthenticated
+    // surface. These routes share the same audit and tracing pipeline
+    // as `/health` and `/ready`.
     //
     // A `ProvenanceState` whose `is_enabled()` returns `false` is
     // still installed as an extension below so internal wiring stays
-    // identical; the *public* surface, however, must be byte-for-byte
-    // invisible. This preserves the wave-2 contract for deployments
-    // that load a config with `provenance.enabled: false`.
+    // identical; the public surface, however, must stay invisible for
+    // deployments that load a config with `provenance.enabled: false`.
     if provenance.as_ref().is_some_and(|state| state.is_enabled()) {
         public = public
             .merge(api::schemas_router())
@@ -213,10 +217,10 @@ where
         .layer(Extension(entity_registry))
 }
 
-/// Production assembly: wave-2 state (readiness + entity/query) plus
-/// Wave 3 [`ProvenanceState`]. Used by `main.rs` once the orchestrator
-/// has been built from the parsed config; tests that need provenance
-/// + query call this directly with their own state handles.
+/// Production assembly: readiness, entity/query state, and optional
+/// [`ProvenanceState`]. Used by `main.rs` once runtime state has been
+/// built from the parsed config; tests that need provenance plus query
+/// call this directly with their own handles.
 #[allow(clippy::too_many_arguments)]
 pub fn build_app_with_entity_query_and_provenance<P>(
     config: Arc<Config>,
@@ -395,10 +399,9 @@ fn build_cors_layer(cors: &CorsConfig) -> CorsLayer {
         match HeaderValue::from_str(origin) {
             Ok(value) => parsed.push(value),
             Err(_) => {
-                // `decisions/wave-0.md` Section 7 says server consumes
-                // `Config.server` for CORS. The config validator does
-                // not currently re-check origin syntax (it is parsed
-                // as a plain `String`), so we degrade gracefully here
+                // The config validator does not currently re-check
+                // origin syntax (it is parsed as a plain `String`), so
+                // we degrade gracefully here
                 // rather than panic at startup.
                 tracing::error!(
                     code = %Error::from(ConfigError::ValidationError).code(),
@@ -429,13 +432,12 @@ mod tests {
 
     fn load_example_config() -> Config {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-        let phc = "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHRkZ3RmaXh0dXJl$\
-                   EFMrkqK4dXMTH8DBlEvNN3wL/qmRvDjCwIAt7BqDpUw";
+        let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         #[allow(unused_unsafe)]
         unsafe {
-            std::env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
-            std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
-            std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", phc);
+            std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
+            std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
+            std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
         }
         crate::config::load(&path).expect("example config loads")
     }

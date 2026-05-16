@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wave 1 integration tests for Source -> Format -> validation -> cache
-//! -> DataFusion registration.
+//! Integration tests for source -> format -> validation -> cache ->
+//! DataFusion registration.
 
 use std::path::Path;
 use std::sync::Arc;

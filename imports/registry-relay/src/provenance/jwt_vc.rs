@@ -3,8 +3,7 @@
 //!
 //! Implements the W3C "Securing Verifiable Credentials using JOSE and
 //! COSE" Recommendation: the VCDM 2.0 credential is the JWT payload
-//! directly. There is NO legacy nested `vc` claim (`decisions/
-//! wave-3-data-provenance.md` Section 9).
+//! directly. There is no legacy nested `vc` claim.
 //!
 //! Compact wire format:
 //! `base64url(header).base64url(payload).base64url(signature)`.
@@ -113,8 +112,6 @@ pub enum EncodeError {
 /// signer for the compact JWS. The encoder owns the `@context` /
 /// `type` / `validFrom` / `validUntil` invariants; the caller owns the
 /// `credentialSubject` shape per claim type.
-///
-/// Conformance: see `decisions/wave-3-data-provenance.md` Section 9.
 pub fn encode(
     signer: &dyn Signer,
     inputs: VcEnvelopeInputs,

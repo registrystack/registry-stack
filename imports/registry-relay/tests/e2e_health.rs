@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! End-to-end tests for Wave 0 Track 6: HTTP scaffold + health/ready.
+//! End-to-end tests for HTTP health, readiness, and cross-cutting layers.
 //!
 //! Coverage:
 //! * `/health` returns 200 with the documented JSON body and echoes an
 //!   `x-request-id` header.
-//! * `/ready` returns 200 (Wave 0 readiness is trivially ready once
-//!   `build_app` returns; resource-gated readiness lands in Wave 1).
+//! * `/ready` returns 200 when `build_app` is used without resource
+//!   readiness state.
 //! * The audit middleware fires for every request: hitting `/health`
 //!   with an `InMemorySink` produces exactly one record carrying the
 //!   request method, path, and status.
@@ -44,25 +44,22 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use ulid::Ulid;
 
-/// Load the canonical Wave 0 example config from the repo. The config
+/// Load the canonical example config from the repo. The config
 /// loader runs cross-field validation; we set the required `hash_env`
-/// env vars to a known Argon2id PHC string so the loader does not
+/// env vars to a known API key fingerprint so the loader does not
 /// fail with `config.missing_secret`.
 fn load_example_config() -> Config {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-    // Set both keys to the same PHC string. The plaintext is irrelevant
-    // for these tests; we never present a credential.
-    let phc = "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHRkZ3RmaXh0dXJl$\
-               EFMrkqK4dXMTH8DBlEvNN3wL/qmRvDjCwIAt7BqDpUw";
+    let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     // Matches the existing pattern in `tests/config_loader.rs`: env
     // vars are set inline at test setup. Test binaries run each test in
     // a fresh thread but share process env, so the chosen names must be
     // unique to this fixture; the canonical example's keys are.
     #[allow(unused_unsafe)]
     unsafe {
-        std::env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
-        std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
-        std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", phc);
+        std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
+        std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
+        std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
     data_gate::config::load(&path).expect("example config loads")
 }
@@ -151,9 +148,8 @@ async fn client_supplied_x_request_id_is_replaced() {
 }
 
 #[tokio::test]
-async fn ready_returns_200_in_wave_0() {
-    // Wave 0 readiness check is trivial: once `build_app` returns,
-    // the process is ready. Dataset-gated readiness arrives in Wave 1.
+async fn ready_returns_200_without_resource_readiness_state() {
+    // Without a readiness receiver, `build_app` reports trivial ready.
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
@@ -339,12 +335,10 @@ async fn cors_unconfigured_origin_is_not_echoed() {
 
 #[tokio::test]
 async fn server_request_timeout_field_reaches_timeout_layer() {
-    // We cannot observe the timeout firing without a slow handler;
-    // Wave 0 has no sleep route. Instead, assert that `build_app` reads
-    // `request_timeout` from config by verifying the router builds and
-    // a fast request still succeeds when an extremely long timeout is
-    // configured. The negative case (timeout firing on a slow route)
-    // lands in Wave 1 once a data-plane route exists.
+    // We cannot observe the timeout firing without adding a slow test
+    // route. Instead, assert that `build_app` reads `request_timeout`
+    // from config by verifying the router builds and a fast request
+    // still succeeds when an extremely long timeout is configured.
     let mut cfg = load_example_config();
     cfg.server.request_timeout = Duration::from_secs(120);
     let config = Arc::new(cfg);

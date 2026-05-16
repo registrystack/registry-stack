@@ -7,7 +7,7 @@
 //! yield the resulting `RecordBatch` stream. The observed schema is read
 //! directly from the Parquet file metadata.
 //!
-//! ## V1 simplicity note
+//! ## Implementation note
 //!
 //! The reader buffers the entire input into memory before handing it to
 //! `ParquetRecordBatchStreamBuilder`. The async reader can accept an
@@ -15,16 +15,17 @@
 //! buffer, but that requires `AsyncRead + AsyncSeek` from the caller
 //! (the `Format::decode` surface only promises `AsyncRead`). Wrapping
 //! the buffered bytes in a `Cursor<Bytes>` provides the required `Seek`
-//! support at the cost of memory. This is a V1.x optimisation target.
+//! support at the cost of memory. A range-reading source can remove
+//! that full-buffer cost later.
 //!
 //! ## FormatHints
 //!
 //! Parquet is self-describing. The fields `sheet`, `header_row`,
 //! `data_range`, `delimiter`, and `quote` are not applicable and are
 //! silently ignored. `hints.declared` is not used for coercion here;
-//! schema validation against the declared types is Track 5's job
-//! (`src/ingest/validation.rs`). This decoder returns the observed
-//! Arrow schema as-is.
+//! schema validation against the declared types belongs to
+//! `src/ingest/validation.rs`. This decoder returns the observed Arrow
+//! schema as-is.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -44,8 +45,6 @@ use crate::format::{DecodedStream, Format, FormatError, FormatFuture, FormatHint
 /// touched. 32 MiB is comfortably above the largest legitimate
 /// wide-schema Parquet footers seen in practice; tighten if real data
 /// stays well below.
-///
-/// See `docs/security-review-2026-05-16.md` (Parquet Footer Metadata Bomb).
 pub(crate) const MAX_PARQUET_FOOTER_BYTES: usize = 32 * 1024 * 1024;
 
 /// Maximum number of leaf columns we accept in a Parquet schema.
@@ -66,8 +65,8 @@ const PARQUET_MAGIC: [u8; 4] = *b"PAR1";
 ///
 /// Stateless; one instance serves every Parquet resource. Per-resource
 /// configuration arrives via [`FormatHints`], but only `declared` is
-/// relevant to this layer (and is forwarded to Track 5 validation rather
-/// than consumed here).
+/// relevant to this layer and is forwarded to validation rather than
+/// consumed here.
 #[derive(Debug, Default, Clone)]
 pub struct ParquetFormat;
 
@@ -118,7 +117,7 @@ async fn decode_parquet(
         // Cap leaf column count. Statistics blobs live inside the
         // footer, so an attacker can fit 3000+ wide columns inside a
         // valid footer envelope. Refuse before any row-group reader is
-        // built. See `docs/security-review-2026-05-16.md`.
+        // built.
         let num_columns = builder
             .metadata()
             .file_metadata()

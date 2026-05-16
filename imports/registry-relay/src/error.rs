@@ -2,7 +2,6 @@
 //! Stable error taxonomy and RFC 9457 Problem Details rendering.
 //! (RFC 9457 obsoletes RFC 7807; the wire shape is identical.)
 //!
-//! The canonical taxonomy lives in `decisions/wave-0.md` Section 4.
 //! Every code is namespaced (`auth.*`, `filter.*`, ...) and renders as
 //! an `application/problem+json` response carrying the stable string
 //! in the `code` extension member alongside the standard `type`,
@@ -71,7 +70,7 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("{0}")]
     Internal(#[from] InternalError),
-    /// Wave 3 provenance runtime errors.
+    /// Provenance runtime errors.
     #[error("{0}")]
     Provenance(#[from] ProvenanceError),
 }
@@ -191,37 +190,37 @@ pub enum ConfigError {
     MissingSecret,
     #[error("duplicate identifier in config")]
     DuplicateId,
-    /// Wave 3 provenance: enabled but no issuer block resolved.
+    /// Provenance is enabled but no issuer block resolved.
     #[error("provenance issuer missing")]
     ProvenanceMissingIssuer,
-    /// Wave 3 provenance: gateway DID does not match the deployment host.
+    /// Gateway DID does not match the deployment host.
     #[error("provenance issuer did mismatch")]
     ProvenanceIssuerDidMismatch,
-    /// Wave 3 provenance: signer kind is not one of `software` | `kms`.
+    /// Signer kind is not one of `software` or `kms`.
     #[error("provenance signer kind invalid")]
     ProvenanceSignerKindInvalid,
-    /// Wave 3 provenance: software signer's `jwk_env` is unset or empty.
+    /// Software signer's `jwk_env` is unset or empty.
     #[error("provenance jwk_env missing")]
     ProvenanceJwkEnvMissing,
-    /// Wave 3 provenance: `signing_algorithm` is not EdDSA or ES256.
+    /// `signing_algorithm` is not EdDSA or ES256.
     #[error("provenance signing algorithm unsupported")]
     ProvenanceAlgorithmUnsupported,
-    /// Wave 3 provenance: claim validity is below 1 minute or above 365 days.
+    /// Claim validity is below 1 minute or above 365 days.
     #[error("provenance claim validity out of range")]
     ProvenanceClaimValidityOutOfRange,
-    /// Wave 3 provenance: `context_base_url` is not a valid http(s) URL.
+    /// `context_base_url` is not a valid http(s) URL.
     #[error("provenance context base url invalid")]
     ProvenanceContextBaseUrlInvalid,
-    /// Wave 3 provenance: `schema_base_url` is not a valid http(s) URL.
+    /// `schema_base_url` is not a valid http(s) URL.
     #[error("provenance schema base url invalid")]
     ProvenanceSchemaBaseUrlInvalid,
-    /// Wave 3 provenance: `verification_method_id` does not start with the
+    /// `verification_method_id` does not start with the
     /// configured issuer DID plus a fragment.
     #[error("provenance verification method mismatch")]
     ProvenanceVerificationMethodMismatch,
 }
 
-/// `provenance.*` runtime codes. Wave 3.
+/// `provenance.*` runtime codes.
 #[derive(Debug, Error)]
 pub enum ProvenanceError {
     /// The signer is configured but unavailable at request time (e.g.
@@ -341,9 +340,7 @@ impl Error {
     }
 
     /// Render the error as an [`HttpApiProblem`] with all required
-    /// RFC 9457 fields and the stable `code` extension. Wave 2 adds
-    /// the `request_id` and `instance` extension members per Spec
-    /// §7.bis.6 once handlers exist to provide the request context.
+    /// RFC 9457 fields and the stable `code` extension.
     fn to_problem(&self) -> HttpApiProblem {
         HttpApiProblem::new(self.http_status())
             .type_url(self.type_uri())
@@ -848,7 +845,7 @@ impl IntoResponse for Error {
         // Attach the stable taxonomy code to the response so the audit
         // middleware can record `error_code` on every 4xx/5xx, including
         // the auth-failure short-circuit path that routes through this
-        // impl. See `decisions/wave-0.md` Section 7.
+        // impl.
         response
             .extensions_mut()
             .insert(crate::audit::ErrorCodeExt(code));

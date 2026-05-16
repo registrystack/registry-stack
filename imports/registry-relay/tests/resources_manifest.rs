@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Pinned-byte invariant for the Wave 3 provenance resources.
+//! Pinned-byte invariant for provenance resources.
 //!
 //! `resources/MANIFEST.toml` records the sha256 of every JSON-LD
 //! context and JSON Schema the gateway serves. This test re-hashes
@@ -94,6 +94,10 @@ fn compiled_in_resources_match_pinned_sha256() {
     compiled.insert(
         "schemas/entity-record/v1.json",
         data_gate::provenance::resources::ENTITY_RECORD_V1,
+    );
+    compiled.insert(
+        "scalar/api-reference.js",
+        data_gate::api::docs::SCALAR_BUNDLE,
     );
 
     let manifest_bytes = fs::read(manifest_path()).expect("manifest readable");

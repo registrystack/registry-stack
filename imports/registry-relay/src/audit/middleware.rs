@@ -6,9 +6,6 @@
 //! This submodule provides the installation helper that wires the
 //! shared `Arc<dyn AuditSink>` into the request extensions before the
 //! layer runs.
-//!
-//! Wave 0 keeps this thin so the server scaffold (Track 6) can wire
-//! the sink without reaching into private types.
 
 use std::sync::Arc;
 

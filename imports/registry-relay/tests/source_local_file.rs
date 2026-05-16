@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for `LocalFileSource`.
 //!
-//! Covers the seven exit-criteria items for Wave 1 Track 1:
+//! Coverage:
 //! - descriptor scheme and canonical-path target
 //! - open yields all file bytes via `AsyncRead`
 //! - metadata captures mtime, size, and ETag without opening the file

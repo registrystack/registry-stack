@@ -4,8 +4,7 @@
 //! In gateway mode (`provenance.issuer.mode: gateway`), data_gate hosts
 //! `/.well-known/did.json`. The document contains the issuer DID, every
 //! active verification method (the current signing key), and any retired
-//! keys still inside their grace window (`decisions/
-//! wave-3-data-provenance.md` §6, §13.4).
+//! keys still inside their grace window.
 //!
 //! Delegated mode does not serve this route: the ministry hosts its own
 //! DID Document.

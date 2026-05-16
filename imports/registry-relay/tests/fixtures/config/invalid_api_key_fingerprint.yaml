@@ -1,5 +1,5 @@
-# Tests config.validation_error: env var is set but value isn't a
-# valid Argon2id PHC string.
+# Tests config.validation_error: env var is set but value is not a
+# valid sha256 API key fingerprint.
 server:
   bind: 127.0.0.1:8080
 catalog:
@@ -11,7 +11,7 @@ auth:
   mode: api_key
   api_keys:
     - id: k1
-      hash_env: TEST_KEY_HASH_BADPHC
+      hash_env: TEST_KEY_HASH_BAD_FINGERPRINT
       scopes:
         - admin
 audit:

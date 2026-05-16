@@ -92,7 +92,7 @@ writing if any assertion fails.
 
 ## Generating local keys
 
-A separate script produces fresh Argon2id PHC hashes for the configs and the
+A separate script produces fresh SHA-256 key fingerprints for the configs and the
 matching raw keys for Bruno:
 
 ```bash

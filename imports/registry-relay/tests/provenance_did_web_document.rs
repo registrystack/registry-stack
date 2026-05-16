@@ -39,12 +39,11 @@ const ISSUER_DID: &str = "did:web:gw.example";
 
 fn load_example_config() -> Config {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
-    let phc = "$argon2id$v=19$m=19456,t=2,p=1$dGVzdHNhbHRkZ3RmaXh0dXJl$\
-               EFMrkqK4dXMTH8DBlEvNN3wL/qmRvDjCwIAt7BqDpUw";
+    let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     unsafe {
-        env::set_var("STATS_OFFICE_API_KEY_HASH", phc);
-        env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", phc);
-        env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", phc);
+        env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
+        env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
+        env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
     }
     data_gate::config::load(&path).expect("example config loads")
 }
@@ -207,8 +206,8 @@ async fn gateway_mode_serves_did_document() {
 
 #[tokio::test]
 async fn gateway_mode_surfaces_retired_keys_in_did_document() {
-    // Wave-3 staff review B3: previously the DID handler hardcoded
-    // `retired: Vec::new()`, silently dropping retired keys that the
+    // Regression: the DID handler must not silently drop retired keys
+    // that the
     // operator declared in configuration. Until each retired key's
     // last-issued VC has expired, a consumer needs to be able to
     // resolve `did:web:<host>` and find the retired `kid` so they can
@@ -321,10 +320,10 @@ async fn delegated_mode_returns_404_with_stable_code() {
 async fn disabled_provenance_keeps_public_routes_invisible() {
     // B2: when `provenance.enabled` is `false`, the orchestrator state
     // exists (so internal wiring stays the same) but the public,
-    // unauthenticated routes must not be mounted. A wave-2 deployment
-    // that loads a config with `enabled: false` should be byte-for-byte
-    // indistinguishable from one that omits the `provenance:` block
-    // entirely: the schemas, contexts, and DID Document routes are
+    // unauthenticated routes must not be mounted. A deployment that
+    // loads a config with `enabled: false` should be indistinguishable
+    // from one that omits the `provenance:` block entirely: the schemas,
+    // contexts, and DID Document routes are
     // absent from the public surface.
     let (signer, _vk) = build_software_signer("DID_WEB_TEST_DISABLED_JWK", VM_ID);
     let resolved = ResolvedProvenanceConfig {

@@ -20,7 +20,7 @@ Determinism:
     produced .xlsx bytes are stable across runs.
 
 After generation the script runs in-process disclosure-control assertions:
-for every aggregate listed in docs/demo-spec.md it confirms at least one
+for every configured demo aggregate it confirms at least one
 group is below the dataset's min_group_size (so suppression triggers) and
 at least one group is above it (so non-suppressed output shows). For
 datasets that use 'mask' on a measure we also assert at least one masked
@@ -66,7 +66,7 @@ SUPPORT_CATEGORIES = [
     "school_supplies",
 ]
 
-# Min group sizes per dataset, taken verbatim from demo-spec.md.
+# Min group sizes per dataset, kept in sync with demo configs.
 MIN_GROUP_SIZE = {
     "benefits_casework": 5,
     "clinic_capacity": 3,

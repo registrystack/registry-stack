@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Configuration data model and loader.
 //!
-//! Shape follows `decisions/wave-0.md` Section 3.3 verbatim. Hot reload
-//! is out of scope per Spec.md Section 6.1; the parsed [`Config`] is
-//! read once at startup and stored in `AppState`.
+//! The YAML contract is documented for operators in
+//! `docs/configuration.md`; [`Config`] is the runtime representation of
+//! that contract. Config hot reload is out of scope for V1: the document
+//! is read once at startup, validated, and then held behind `Arc<Config>`.
 //!
 //! Every struct uses `#[serde(deny_unknown_fields)]` so YAML typos
 //! surface as `config.parse_error`. Cross-field invariants (id format,
@@ -47,8 +48,8 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub datasets: Vec<DatasetConfig>,
-    /// Wave 3 data-provenance configuration. Optional and disabled by
-    /// default: existing deployments load unchanged.
+    /// Optional data provenance configuration. Disabled by default:
+    /// deployments without this block load unchanged.
     #[serde(default)]
     pub provenance: Option<ProvenanceConfig>,
 }
@@ -244,15 +245,15 @@ pub struct DatasetConfig {
 }
 
 impl DatasetConfig {
-    /// Storage-layer tables, accepting `resources` as the pre-entity
-    /// Wave 1 alias until all fixtures and deployments migrate.
+    /// Storage-layer tables, accepting `resources` as a legacy alias
+    /// until all fixtures and deployments migrate.
     pub fn table_configs(&self) -> impl Iterator<Item = &ResourceConfig> {
         self.tables.iter().chain(self.resources.iter())
     }
 }
 
-/// Source plugin selection. Tagged on `type:` so HTTP / S3 variants
-/// land additively. Non-exhaustive for forward compat.
+/// Source plugin selection. Tagged on `type:` so HTTP, S3, or database
+/// variants can land additively later. V1 supports local files only.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
@@ -290,7 +291,11 @@ fn default_mtime_interval() -> Duration {
     Duration::from_secs(60)
 }
 
-/// Per-resource block under a dataset.
+/// One private storage table under a dataset.
+///
+/// The public API should not expose these ids. Entity config maps one
+/// resource into one domain resource, with optional field renaming and
+/// relationship declarations.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
@@ -310,7 +315,7 @@ pub struct ResourceConfig {
     pub aggregates: Vec<AggregateConfig>,
 }
 
-/// Storage table format override. If omitted, Wave 1 infers the format
+/// Storage table format override. If omitted, ingest infers the format
 /// from the source file extension.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

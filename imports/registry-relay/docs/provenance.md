@@ -1,18 +1,16 @@
-# Wave 3: Data Provenance
+# Data Provenance
 
-Wave 3 lets `data_gate` return W3C Verifiable Credentials (VCs), signed
-as compact JWS, for three response families:
+`data_gate` can return W3C Verifiable Credentials (VCs), signed as
+compact JWS, for three response families:
 
 - `GET /datasets/{dataset_id}/{entity}/verify` -> `VerifyResult`
 - `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}` -> `AggregateResult`
 - `GET /datasets/{dataset_id}/{entity}/{id}` -> `EntityRecord`
 
 The feature is opt-in twice over: by the operator (config flag) and by
-the caller (Accept header). When either says no, responses are
-byte-for-byte identical to a wave-2 build.
+the caller (Accept header). When either says no, responses remain plain
+JSON.
 
-For the full design rationale and decision log, see
-[`decisions/wave-3-data-provenance.md`](../decisions/wave-3-data-provenance.md).
 This document describes the runtime contract: configuration, wire
 shapes, endpoints, audit events, and key management.
 
@@ -26,9 +24,9 @@ issuer DID, signing key, claim type, subject URI, and validity window
 are all signed under one envelope that any verifier with the issuer's
 DID Document can check.
 
-The choice of W3C VCDM 2.0 + JWT binding (rather than COSE or
-SD-JWT-VC) is documented in the wave-3 decision file; the runtime
-contract here is stable regardless of the encoding evolution.
+The current encoding is W3C VCDM 2.0 + JWT binding rather than COSE or
+SD-JWT-VC. The runtime contract here is stable regardless of future
+encoding evolution.
 
 ## Enabling Provenance
 
@@ -65,8 +63,8 @@ YAML). The env value is a JSON-encoded private JWK, e.g.:
 Use 1Password, AWS Secrets Manager, or your platform's secret store to
 inject it. Do not echo, log, or commit this value.
 
-When `enabled: false` (or the block is omitted entirely), the
-gateway behaves exactly as in wave 2.
+When `enabled: false` (or the block is omitted entirely), the gateway
+behaves as a plain JSON service.
 
 ## Issuer Modes
 
@@ -93,7 +91,7 @@ Accept: application/vc+jwt
 ```
 
 Without that header (or when the header lists only types the operator
-did not configure), the response stays plain JSON with the wave-2
+did not configure), the response stays plain JSON with the normal
 content-type and body. Cache validators (`ETag`, `If-None-Match`,
 `304 Not Modified`) still apply on the plain branch; they are
 intentionally bypassed when a signed VC is issued, because each VC has
@@ -218,7 +216,7 @@ embed it in a PR description.
 
 The config model accepts `signer.kind: kms`, but the in-tree V1 KMS
 backend is a test mock. Production-grade AWS KMS signing is reserved
-for a follow-up wave; do not deploy with `provider: aws_kms`. The
+for future work; do not deploy with `provider: aws_kms`. The
 `mock` provider is intentionally inaccessible to production configs
 through validation.
 

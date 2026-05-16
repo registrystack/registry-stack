@@ -2,11 +2,10 @@
 //! Phase C: HTTP issuance coverage for `/verify`, aggregate execute,
 //! and `/{entity}/{id}` routes.
 //!
-//! Each test asserts the dual contract of decision D11:
+//! Each test asserts the dual response contract:
 //!
-//! * Caller without `Accept: application/vc+jwt` receives the verbatim
-//!   wave-2 plain-JSON response (byte-for-byte identical to a build
-//!   that never wired Wave 3).
+//! * Caller without `Accept: application/vc+jwt` receives the normal
+//!   plain JSON response.
 //! * Caller with the opt-in media type receives a 200 response carrying
 //!   `Content-Type: application/vc+jwt` and a compact JWS body that
 //!   verifies against the configured signer's public key.
@@ -449,7 +448,7 @@ async fn verify_plain_path_does_not_emit_provenance_audit_block() {
     );
     assert!(
         record.get("provenance").is_none(),
-        "plain wave-2 path must not surface a provenance audit block; got {record}"
+        "plain JSON path must not surface a provenance audit block; got {record}"
     );
 }
 
@@ -565,8 +564,8 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
 
 #[tokio::test]
 async fn aggregate_vc_as_of_reflects_resource_registered_at() {
-    // Wave-3 staff review M4: the AggregateResult VC's `asOf` claim
-    // must reflect when the underlying ingest snapshot became visible
+    // The AggregateResult VC's `asOf` claim must reflect when the
+    // underlying ingest snapshot became visible
     // (`ReadinessSnapshot::ready.registered_at`), not when the query
     // happened to run (`AggregateResult::computed_at`). The two values
     // are produced at different points in time; collapsing them into
@@ -637,8 +636,8 @@ async fn aggregate_vc_as_of_reflects_resource_registered_at() {
 
 #[tokio::test]
 async fn aggregate_vc_subject_reflects_disclosure_suppression() {
-    // Wave-3 staff review M3: when disclosure control suppresses small
-    // groups, the signed `AggregateResult` VC must mirror that exact
+    // When disclosure control suppresses small groups, the signed
+    // `AggregateResult` VC must mirror that exact
     // shape. The credentialSubject should:
     //   * echo the configured `measures` list,
     //   * carry only the non-suppressed rows under `rows`, and
@@ -725,7 +724,7 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
 }
 
 // ---------------------------------------------------------------------------
-// Disabled / missing provenance state must not change the wave-2 contract.
+// Disabled / missing provenance state must not change the plain JSON contract.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -782,7 +781,7 @@ async fn verify_returns_plain_json_when_provenance_state_is_absent() {
         .to_string();
     assert!(
         content_type.starts_with("application/json"),
-        "without provenance state, opt-in must still serve wave-2 JSON; got {content_type}"
+        "without provenance state, opt-in must still serve plain JSON; got {content_type}"
     );
     let body: Value = resp.json();
     assert_eq!(body["exists"], true);

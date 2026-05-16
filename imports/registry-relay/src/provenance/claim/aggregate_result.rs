@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `AggregateResult` v1 credentialSubject builder.
 //!
-//! Wave-2 aggregate rows arrive flat: `{group_field: value, ...,
+//! Plain aggregate rows arrive flat: `{group_field: value, ...,
 //! measure_name: value}` (groups and measures merged into one object).
-//! The credential model in `decisions/wave-3-data-provenance.md` §8
-//! splits each row into `{group: {...}, values: {...}}` for clarity.
+//! The credential model splits each row into `{group: {...}, values:
+//! {...}}` for clarity.
 //! This module performs the split using the configured `group_by` and
 //! `measures` lists; anything else in the row is dropped on the floor
 //! (defence in depth: only public-visible columns reach the wire).
@@ -53,7 +53,7 @@ pub fn aggregate_result_subject(input: &AggregateResultInput) -> Value {
     })
 }
 
-/// Split a wave-2 aggregate row into `{group, values}` form. The
+/// Split a plain aggregate row into `{group, values}` form. The
 /// `group` object reflects the declared group-by fields (empty for a
 /// global aggregate); `values` reflects the declared measure ids.
 /// Anything else present in `row` is intentionally discarded.

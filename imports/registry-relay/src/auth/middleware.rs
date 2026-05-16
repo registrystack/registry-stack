@@ -3,25 +3,20 @@
 //!
 //! On success the layer inserts [`Principal`] into request extensions
 //! so handlers can extract it via `axum::Extension<Principal>` and so
-//! the audit middleware (Wave 0 Track 5) can project it into audit
-//! records. On failure it short-circuits with the RFC 9457 Problem
+//! the audit middleware can project it into audit records. On failure
+//! it short-circuits with the RFC 9457 Problem
 //! Details body produced by `crate::error::Error::into_response`.
 //!
 //! ## What this layer does NOT do
 //!
 //! * **No logging.** Audit owns request-level events; this module
 //!   emits at most `trace`/`debug` for verification outcomes inside
-//!   [`super::api_key::ApiKeyAuth`]. Per `decisions/wave-0.md`
-//!   Section 7 the auth middleware "annotates the request extension
-//!   with the error code so the audit middleware can still emit a
-//!   record"; that annotation will be wired in when audit lands. For
-//!   Wave 0 Track 4 in isolation the response carries the code in
-//!   its Problem Details body, which is sufficient to assert against
-//!   from integration tests.
+//!   [`super::api_key::ApiKeyAuth`]. Error responses carry stable
+//!   Problem Details codes and the audit layer records those codes
+//!   through response extensions.
 //! * **No scope check.** Scope authorisation is a handler-level
 //!   concern; handlers call [`super::scopes::require_scope`] on the
-//!   extracted principal. A middleware-level enforcement layer for
-//!   admin paths is in scope for Wave 4.
+//!   extracted principal.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -52,7 +47,7 @@ use super::AuthProvider;
 /// lets the server wiring call `auth_layer(router, provider)` in a
 /// single line.
 ///
-/// Usage in the server wiring (Wave 0 Track 6):
+/// Usage in the server wiring:
 /// ```ignore
 /// let provider = Arc::new(ApiKeyAuth::new(entries));
 /// let app = auth_layer(

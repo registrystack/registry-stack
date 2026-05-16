@@ -6,9 +6,8 @@
 //! through [`crate::format::FormatHints`] for type coercion;
 //! [`crate::ingest::validation`] reads it for the §4 rule table.
 //!
-//! `concept_uri / codelist / unit / language` are carried through even
-//! though they don't drive any Wave 1 behaviour: Wave 3's CSVW renderer
-//! consumes them off the registered schema (architect note §9 risk #9).
+//! `concept_uri`, `codelist`, `unit`, and `language` are carried
+//! through for downstream metadata and provenance renderers.
 
 use std::sync::Arc;
 
@@ -39,8 +38,8 @@ pub struct DeclaredField {
 }
 
 impl DeclaredSchema {
-    /// Empty placeholder used by the architect's precondition tests and
-    /// by decoder unit tests that don't care about declared types.
+    /// Empty placeholder used by decoder unit tests that don't care
+    /// about declared types.
     pub fn empty() -> Arc<Self> {
         Arc::new(Self {
             strict: false,
@@ -94,7 +93,7 @@ impl From<&SchemaConfig> for DeclaredSchema {
     /// Walk the [`SchemaConfig`] and lift it into a [`DeclaredSchema`].
     /// Field order is preserved; semantic annotations
     /// (`concept_uri / codelist / unit / language`) are cloned through
-    /// so Wave 3's CSVW renderer can read them.
+    /// so metadata and provenance renderers can read them.
     fn from(cfg: &SchemaConfig) -> Self {
         let fields = cfg
             .fields

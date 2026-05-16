@@ -4,8 +4,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use argon2::password_hash::SaltString;
-use argon2::{Argon2, PasswordHasher};
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use data_gate::audit::{AuditSink, InMemorySink};
@@ -17,6 +15,7 @@ use data_gate::ingest::{IngestRegistry, ReadinessSnapshot};
 use data_gate::server::build_admin_app;
 use datafusion::execution::context::SessionContext;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::watch;
 
@@ -36,13 +35,18 @@ fn fixture(name: &str) -> String {
         .into_owned()
 }
 
-fn make_phc(plain: &str) -> String {
-    let salt =
-        SaltString::from_b64("YWRtaW5yZWxvYWRmaXh0dXJl").expect("static test salt parses as b64");
-    Argon2::default()
-        .hash_password(plain.as_bytes(), &salt)
-        .expect("argon2 hash should succeed for a test fixture")
-        .to_string()
+fn make_fingerprint(plain: &str) -> String {
+    format!("sha256:{}", hex_lower(&Sha256::digest(plain.as_bytes())))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn write_config(tmp: &TempDir) -> std::path::PathBuf {
@@ -131,15 +135,15 @@ fn build_auth() -> Arc<ApiKeyAuth> {
         ApiKeyEntry::new(
             "admin".to_string(),
             ScopeSet::from_iter(["admin"]),
-            make_phc(ADMIN_KEY),
+            make_fingerprint(ADMIN_KEY),
         )
-        .expect("admin PHC parses"),
+        .expect("admin fingerprint parses"),
         ApiKeyEntry::new(
             "reader".to_string(),
             ScopeSet::from_iter(["social_registry:metadata"]),
-            make_phc(NON_ADMIN_KEY),
+            make_fingerprint(NON_ADMIN_KEY),
         )
-        .expect("reader PHC parses"),
+        .expect("reader fingerprint parses"),
     ];
     Arc::new(ApiKeyAuth::new(entries))
 }

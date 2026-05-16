@@ -407,6 +407,30 @@ async fn entity_collection_returns_etag_and_honors_if_none_match() {
 }
 
 #[tokio::test]
+async fn entity_collection_validates_query_before_cached_not_modified() {
+    let server = server_with_query().await;
+    let validator = serde_json::to_string(&std::collections::BTreeMap::from([("limit", "0")]))
+        .expect("validator serializes");
+    let etag = data_gate::api::entity::entity_etag(
+        "collection",
+        "social_registry",
+        "household",
+        Some("households_table=01J5K8M0000000000000000000"),
+        &validator,
+    )
+    .expect("etag");
+
+    let cached = server
+        .get("/datasets/social_registry/household?limit=0")
+        .add_header("if-none-match", &etag)
+        .await;
+
+    cached.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = cached.json();
+    assert_eq!(body["code"], "filter.limit_out_of_range");
+}
+
+#[tokio::test]
 async fn entity_collection_route_parses_allowed_filter_ops() {
     let resp = server_with_query()
         .await

@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Vocabulary prefix registry and URI expansion.
 //!
-//! Wave 0 declares the data model; Wave 3 consumes the registry to
-//! render DCAT-AP and CSVW outputs (`decisions/wave-0.md` Section 6).
-//! Behavior here is verbatim per Spec.md Section 11.bis: declare URIs,
-//! do not resolve or reason about them. No HTTP fetch, no SKOS, no
-//! validation against vocabulary contents.
+//! Behavior here is intentionally simple: declare URIs, do not resolve
+//! or reason about them. No HTTP fetch, no SKOS, no validation against
+//! vocabulary contents.
 //!
 //! The accepted shapes are:
 //!

@@ -1,6 +1,6 @@
 # data_gate Operations Runbook
 
-This runbook describes the intended V1 operating model and calls out current Wave 5 assumptions where runtime work is still landing.
+This runbook describes the intended V1 operating model and calls out current assumptions where runtime work is still landing.
 
 ## Deployment Model
 
@@ -74,13 +74,13 @@ Config reload is restart-only in V1. Dataset reload does not reload `config.yaml
 API-key config stores only:
 
 - a stable key id;
-- an environment variable name holding the Argon2id PHC hash;
+- an environment variable name holding the SHA-256 fingerprint of the raw key;
 - the key's scopes.
 
 Recommended rotation procedure:
 
 1. Generate a new random API key outside the gateway.
-2. Hash it with Argon2id and store the PHC string in the deployment secret store.
+2. Store `sha256:<sha256(raw key)>` in the deployment secret store.
 3. Add a new `auth.api_keys[]` entry or update the existing entry's `hash_env` reference.
 4. Restart or roll the gateway, because the current keyring is loaded at process startup.
 5. Confirm the new key can call the intended lowest-privilege endpoint.
@@ -89,11 +89,11 @@ Recommended rotation procedure:
 
 Live keyring reload is not wired in V1. Treat key rotation as a rolling restart operation.
 
-Never log raw keys, PHC strings, or full environment dumps. In issue reports, include only key ids and scope names.
+Never log raw keys, fingerprints, or full environment dumps. In issue reports, include only key ids and scope names.
 
 ## Provenance Signer Rotation
 
-The Wave 3 provenance feature (signed Verifiable Credentials, see [docs/provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
+The provenance feature (signed Verifiable Credentials, see [docs/provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
 
 The signing key never lives in YAML. It is injected through the env var named by `provenance.issuer.signer.jwk_env`, holding a JSON-encoded private JWK. The public half goes in the DID Document; the private half stays in the secret store.
 
@@ -109,7 +109,7 @@ Rotation procedure (gateway mode):
 
 Delegated mode follows the same steps, except the DID Document edits land on the ministry's side. Coordinate the cutover so the ministry publishes the new `verificationMethod` before the gateway starts signing with the corresponding private key.
 
-KMS-backed signing (`signer.kind: kms`) is a config-recognized stub in V1: the in-tree backend is a mock. Do not enable `provider: aws_kms` in production until the KMS wave lands; validation currently treats AWS KMS as a config error outside the test path.
+KMS-backed signing (`signer.kind: kms`) is a config-recognized stub in V1: the in-tree backend is a mock. Do not enable `provider: aws_kms` in production until the production KMS backend lands; validation currently treats AWS KMS as a config error outside the test path.
 
 Never log the JWK, the env var value, or any full environment dump. The provenance audit block intentionally records only `iss`, `kid`, `jti`, `claim_type`, `subject`, and the `iat`/`nbf`/`exp` triple, not the signed body or any signing material.
 
@@ -182,14 +182,14 @@ Config fails at startup:
 
 - Check YAML shape against [config/example.yaml](../config/example.yaml).
 - Confirm every `hash_env` variable is set.
-- Confirm each `hash_env` value is an Argon2id PHC string.
+- Confirm each `hash_env` value is a `sha256:<64 lowercase hex chars>` fingerprint.
 - Confirm ids are lower-snake and unique.
 - Check vocabulary prefixes used by `concept_uri` and `conforms_to`.
 
 Protected endpoint returns 401:
 
 - Confirm the request has `Authorization: Bearer <key>` or `X-Api-Key`.
-- Confirm the raw key matches one configured PHC hash.
+- Confirm the raw key hashes to one configured fingerprint.
 - Confirm the process was restarted after key changes.
 
 Protected endpoint returns 403:

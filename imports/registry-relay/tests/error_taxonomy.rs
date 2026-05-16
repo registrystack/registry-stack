@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration tests for the error taxonomy.
 //!
-//! These tests pin the stable wire contract from `decisions/wave-0.md`
-//! Section 4: every code's string, HTTP status, RFC 9457 rendering, and
-//! the bi-directional invariant that the documentation table and the
-//! enum variants stay in lock-step. They also assert that response
+//! These tests pin every code's string, HTTP status, RFC 9457 rendering,
+//! and response-extension behavior. They also assert that response
 //! payloads never leak internal paths, secrets, or stack traces.
-
-use std::collections::BTreeSet;
 
 use axum::body::to_bytes;
 use axum::http::{self, StatusCode};
@@ -22,8 +18,8 @@ use serde_json::Value;
 const PROBLEM_JSON: &str = "application/problem+json";
 const BASE_TYPE_URL: &str = "https://data.example.gov/problems/";
 
-/// Every variant the taxonomy defines. Order is deliberate: matches the
-/// taxonomy table in `decisions/wave-0.md` Section 4 top-to-bottom.
+/// Every variant the taxonomy defines. Order is deliberate: keep
+/// variants grouped by namespace for reviewability.
 fn all_variants() -> Vec<Error> {
     vec![
         // auth.*
@@ -146,7 +142,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
     ]
 }
 
-/// `code()` and `http_status()` match the architect taxonomy for every
+/// `code()` and `http_status()` match the public taxonomy for every
 /// variant.
 #[test]
 fn every_variant_matches_taxonomy_table() {
@@ -277,62 +273,6 @@ async fn snapshot_one_variant_per_namespace() {
     }
 }
 
-/// Parse `decisions/wave-0.md` Section 4 and extract every code in
-/// backticked table cells matching `[a-z_.]+`. Assert that the set of
-/// codes in the doc equals the set of `code()` strings on every
-/// variant.
-#[test]
-fn code_set_matches_decisions_doc() {
-    let doc = include_str!("../decisions/wave-0.md");
-    let section_start = doc
-        .find("## 4. Error Taxonomy")
-        .expect("Section 4 heading present");
-    let section_end = doc[section_start..]
-        .find("\n## 5.")
-        .map(|i| section_start + i)
-        .expect("Section 5 heading present");
-    let section = &doc[section_start..section_end];
-
-    let doc_codes: BTreeSet<String> = section
-        .lines()
-        .filter_map(extract_code_from_table_row)
-        .collect();
-
-    let variant_codes: BTreeSet<String> = all_variants()
-        .iter()
-        .map(|v| v.code().to_string())
-        .collect();
-
-    let only_in_doc: Vec<_> = doc_codes.difference(&variant_codes).collect();
-    let only_in_code: Vec<_> = variant_codes.difference(&doc_codes).collect();
-    assert!(
-        only_in_doc.is_empty() && only_in_code.is_empty(),
-        "taxonomy drift: doc-only={only_in_doc:?}, code-only={only_in_code:?}"
-    );
-}
-
-/// Pull the first backticked token out of a markdown table row whose
-/// first cell looks like `| \`auth.foo\` | 401 | ... |`.
-fn extract_code_from_table_row(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let rest = trimmed.strip_prefix("| `")?;
-    let end = rest.find('`')?;
-    let candidate = &rest[..end];
-    if candidate.is_empty() {
-        return None;
-    }
-    if !candidate
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_')
-    {
-        return None;
-    }
-    if !candidate.contains('.') {
-        return None;
-    }
-    Some(candidate.to_string())
-}
-
 /// `Error::into_response` must attach `ErrorCodeExt` to the response so
 /// the audit middleware can record the stable taxonomy code on every
 /// 4xx/5xx, including the auth short-circuit path that routes through
@@ -401,13 +341,11 @@ proptest::proptest! {
 
 /// Belt-and-suspenders: rendered payloads must not contain substrings
 /// that would indicate a leaked secret, path, or stack trace. The
-/// stable taxonomy strings (`code` and the `type` URI derived from
-/// it) are excluded from the substring check because they are pinned
-/// by `decisions/wave-0.md` Section 4: e.g. `config.missing_secret`
-/// is the taxonomy-mandated name and is verified in
-/// `code_set_matches_decisions_doc`. The substring filter targets
-/// leaked VALUES (paths, header content, stack traces), not the
-/// stable identifier vocabulary.
+/// stable taxonomy strings (`code` and the `type` URI derived from it)
+/// are excluded from the substring check because they are intentional
+/// public identifiers. The substring filter targets leaked values
+/// (paths, header content, stack traces), not the stable identifier
+/// vocabulary.
 #[tokio::test]
 async fn no_variant_leaks_forbidden_substrings() {
     let forbidden = [
