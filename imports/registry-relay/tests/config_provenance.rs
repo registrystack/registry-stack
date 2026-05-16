@@ -449,7 +449,7 @@ fn software_signer_with_es256_is_rejected_at_load_time() {
 }
 
 #[test]
-fn kms_signer_with_empty_key_id_is_rejected() {
+fn kms_signer_kind_is_rejected_for_now() {
     ensure_persona_env();
     let yaml = base_yaml(
         r#"  enabled: false
@@ -466,11 +466,11 @@ fn kms_signer_with_empty_key_id_is_rejected() {
     signer:
       kind: kms
       provider: aws_kms
-      key_id: ""
+      key_id: "arn:aws:kms:us-east-1:111122223333:key/example"
       signing_algorithm: EdDSA
 "#,
     );
     let path = write_yaml(&yaml);
-    let err = config::load(&path).expect_err("empty kms key_id must be rejected");
+    let err = config::load(&path).expect_err("kms signer kind must be rejected in V1");
     assert_eq!(err.code(), "provenance.config.signer_kind_invalid");
 }

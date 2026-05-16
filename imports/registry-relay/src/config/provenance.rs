@@ -83,13 +83,18 @@ pub struct DelegatedIssuerConfig {
     pub retired_keys: Vec<RetiredKeyConfig>,
 }
 
-/// Signer backend. `software` reads a private JWK from an env var;
-/// `kms` defers signing to a KMS provider.
+/// Signer backend. V1 supports only `software`, which reads a private
+/// JWK from an env var. Other variants are reserved so future remote
+/// signers can plug into the provenance signer boundary without
+/// changing the issuer model.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum SignerConfig {
     Software(SoftwareSignerConfig),
+    /// Reserved for a future remote signer backend. Config validation
+    /// rejects this variant in V1 so operators do not accidentally
+    /// deploy an unsupported KMS path.
     Kms(KmsSignerConfig),
 }
 
@@ -110,19 +115,18 @@ pub struct KmsSignerConfig {
     pub signing_algorithm: ProvenanceAlgorithm,
 }
 
-/// KMS provider tag. Only AWS KMS is named in V1, and only as an
-/// interface stub; the in-tree V1 impl is a mock used by tests.
+/// KMS provider tag reserved for future remote signer backends.
+/// Parsed for forward-compatible diagnostics, but rejected by V1
+/// validation.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum KmsProvider {
     AwsKms,
-    /// Test-only mock backend.
-    Mock,
 }
 
-/// JWS algorithm. EdDSA == Ed25519 (recommended default); ES256 ==
-/// NIST P-256.
+/// JWS algorithm. V1 production signing supports EdDSA == Ed25519.
+/// ES256 == NIST P-256 is reserved for a future signer backend.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProvenanceAlgorithm {

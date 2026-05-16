@@ -73,12 +73,6 @@ uuid = { version = "1", features = ["v4"] }
 mime = { version = "0.3" }
 # base64url encoding used by the VC-JWT compact serialization.
 base64 = { version = "0.22" }
-# Derives the Ed25519 public key from a raw seed so the mock KMS
-# signer's `public_jwk()` carries a usable `x`. `jsonwebtoken` only
-# exposes signing primitives and PKCS#8 envelopes; it does not expose the
-# raw `seed -> public point` scalar multiplication we need here. Kept
-# minimal: no random number generator features in the runtime build.
-ed25519-dalek = { version = "2" }
 
 # ─── time / ids ──────────────────────────────────────────────────────────────
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
@@ -113,11 +107,8 @@ zip = { version = "7", default-features = false, features = ["deflate"] }
 # Validates credentialSubject payloads against the JSON Schemas we
 # publish at /schemas/...
 jsonschema = { version = "0.18" }
-# Ed25519 key generation for tests. The runtime depends on
-# ed25519-dalek directly (see `[dependencies]`) for deriving public keys
-# from a seed; this entry layers on the `pkcs8` and `rand_core` features
-# so tests can mint fresh keypairs deterministically and convert them
-# to/from JWK without shelling out to openssl.
+# Ed25519 key generation for tests so they can mint fresh keypairs and
+# convert them to/from JWK without shelling out to openssl.
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 # rand for ed25519-dalek key generation in tests.
 rand_core = { version = "0.6", features = ["std"] }

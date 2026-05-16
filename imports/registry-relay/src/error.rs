@@ -717,9 +717,7 @@ impl ConfigError {
             ConfigError::ProvenanceIssuerDidMismatch => {
                 "configured issuer DID does not match the deployment host"
             }
-            ConfigError::ProvenanceSignerKindInvalid => {
-                "signer kind must be one of software or kms"
-            }
+            ConfigError::ProvenanceSignerKindInvalid => "signer kind must be software",
             ConfigError::ProvenanceJwkEnvMissing => {
                 "the signing JWK environment variable is unset or empty"
             }

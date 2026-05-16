@@ -211,9 +211,6 @@ fn build_p256(
 /// Wrap a raw Ed25519 32-byte seed in the standard PKCS#8 v1 envelope
 /// expected by `jsonwebtoken::EncodingKey::from_ed_der`.
 ///
-/// Shared with [`super::kms::MockKmsSigner`] which loads a raw seed
-/// from an env var rather than a JWK.
-///
 /// Layout:
 ///   30 2e                       SEQUENCE (46 bytes)
 ///   02 01 00                    INTEGER 0  (version)
@@ -221,7 +218,7 @@ fn build_p256(
 ///   06 03 2b 65 70              OID 1.3.101.112 (Ed25519)
 ///   04 22                       OCTET STRING (34 bytes)
 ///   04 20 <32-byte seed>        nested OCTET STRING (32 bytes)
-pub(super) fn ed25519_pkcs8_seed(seed: &[u8]) -> Vec<u8> {
+fn ed25519_pkcs8_seed(seed: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(48);
     out.extend_from_slice(&[
         0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,

@@ -234,8 +234,8 @@ audit:
 # provenance stays invisible: no Accept negotiation, no signing, no
 # extra audit events. Plain JSON responses stay unchanged.
 #
-# Opting in requires a signer (`software` for dev, `kms` for production
-# once the KMS backend lands) and an issuer DID. Two issuer modes:
+# Opting in requires a local software signer and an issuer DID. Two
+# issuer modes:
 #
 # * `gateway`: registry-relay self-issues under its own DID and hosts
 #   `/.well-known/did.json`.
@@ -263,5 +263,5 @@ audit:
 #     signer:
 #       kind: software
 #       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK   # private JWK (JSON), never logged
-#       signing_algorithm: EdDSA           # EdDSA | ES256
+#       signing_algorithm: EdDSA
 #     retired_keys: []                     # public JWKs of rotated-out keys

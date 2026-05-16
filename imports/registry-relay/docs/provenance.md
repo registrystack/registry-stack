@@ -233,8 +233,9 @@ omit the `provenance` block entirely.
 The signing key is referenced indirectly: the config names an env var,
 the env var holds the JWK. To rotate:
 
-1. Mint a new keypair. V1 software signing supports Ed25519 (`EdDSA`);
-   P-256 (`ES256`) is reserved for a future signer backend.
+1. Mint a new Ed25519 keypair. V1 production signing supports local
+   software EdDSA only; P-256 (`ES256`) is reserved for a future signer
+   backend.
 2. Add the new public JWK to the DID Document under a new
    `verificationMethod` id (gateway mode: edit the source the DID
    Document handler reads; delegated mode: coordinate with the
@@ -323,15 +324,24 @@ Before enabling delegated mode in production:
 4. Issue a VC from the gateway and verify it with the ministry-hosted
    DID Document plus the gateway-hosted schema.
 
-## KMS Backend
+## Future Signer Backends
 
-The config model accepts `signer.kind: kms`, but the in-tree V1 KMS
-backend is a test mock. Production-grade AWS KMS signing is reserved
-for future work; do not deploy with `provider: aws_kms`. The
-`mock` provider is intentionally inaccessible to production configs
-through validation.
+V1 production deployments support only the local software Ed25519 path:
 
-The production acceptance bar for a real KMS backend is:
+```yaml
+signer:
+  kind: software
+  jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
+  signing_algorithm: EdDSA
+```
+
+`signer.kind: kms` is reserved for future remote signing backends and
+is rejected by config validation today. The internal signer trait is
+kept narrow so an AWS KMS, GCP KMS, HSM, or out-of-process signer can
+be added later without changing the VC-JWT envelope, DID Web behavior,
+or issuer-mode model.
+
+The production acceptance bar for any future remote signer backend is:
 
 - The gateway never receives or logs private key material.
 - Startup can resolve the configured key id to a public JWK suitable
@@ -343,10 +353,6 @@ The production acceptance bar for a real KMS backend is:
   payloads or secret identifiers beyond operator-safe key ids.
 - Integration tests verify issued VCs with a third-party JOSE library
   using only the DID-published public JWK.
-
-Until that backend exists, the supported production signer is the
-software Ed25519 path with strict secret-store and host-hardening
-controls.
 
 ## Verifying a VC Externally
 

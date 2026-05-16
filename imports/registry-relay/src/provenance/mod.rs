@@ -5,7 +5,7 @@
 //! Module layout:
 //!
 //! * [`signer`]: [`Signer`] trait + error types.
-//! * [`signers`]: concrete implementations (software, mock KMS).
+//! * [`signers`]: concrete implementations (software in V1).
 //! * [`jwt_vc`]: VC-JWT envelope encoder (VCDM 2.0).
 //! * [`claim`]: per-claim-type `credentialSubject` builders.
 //! * [`did_web`]: gateway-mode DID Document builder.
@@ -418,11 +418,8 @@ fn build_signer(
                 signers::software::SoftwareSigner::from_config(software, verification_method_id)?;
             Ok(Arc::new(signer))
         }
-        SignerConfig::Kms(kms) => {
-            // V1 wires only the mock KMS path; the real AWS KMS backend
-            // lands behind a future `kms-aws` cargo feature.
-            let signer = signers::kms::MockKmsSigner::from_config(kms, verification_method_id)?;
-            Ok(Arc::new(signer))
-        }
+        SignerConfig::Kms(_) => Err(SignerError::KeyLoad {
+            reason: "kms signer unsupported in V1",
+        }),
     }
 }

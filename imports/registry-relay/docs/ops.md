@@ -99,7 +99,7 @@ The signing key never lives in YAML. It is injected through the env var named by
 
 Rotation procedure (gateway mode):
 
-1. Mint a new keypair matching `signing_algorithm` (Ed25519 for `EdDSA`, P-256 for `ES256`). Store the new private JWK in the deployment secret store.
+1. Mint a new Ed25519 keypair for `EdDSA`. Store the new private JWK in the deployment secret store.
 2. Add the new public JWK to the DID Document under a new `verificationMethod` id (e.g. `did:web:data.example.gov#issuance-2026q3`).
 3. Move the currently active verification method to `provenance.issuer.retired_keys[]`, recording the `retired_after` RFC 3339 timestamp and the public JWK in its own env var.
 4. Update `verification_method_id` to the new id and point `signer.jwk_env` at the new env var.
@@ -109,7 +109,7 @@ Rotation procedure (gateway mode):
 
 Delegated mode follows the same steps, except the DID Document edits land on the ministry's side. Coordinate the cutover so the ministry publishes the new `verificationMethod` before the gateway starts signing with the corresponding private key.
 
-KMS-backed signing (`signer.kind: kms`) is a config-recognized stub in V1: the in-tree backend is a mock. Do not enable `provider: aws_kms` in production until the production KMS backend lands; validation currently treats AWS KMS as a config error outside the test path.
+Remote signing (`signer.kind: kms`) is reserved for a future backend and is rejected by V1 config validation. The supported production path is local software Ed25519 signing with the private JWK loaded from the configured secret environment variable.
 
 Never log the JWK, the env var value, or any full environment dump. The provenance audit block intentionally records only `iss`, `kid`, `jti`, `claim_type`, `subject`, and the `iat`/`nbf`/`exp` triple, not the signed body or any signing material.
 

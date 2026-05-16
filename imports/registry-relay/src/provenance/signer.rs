@@ -65,7 +65,8 @@ pub enum SignerError {
     AlgorithmMismatch,
 }
 
-/// Trait implemented by software and KMS-backed signers.
+/// Trait implemented by the in-process software signer and future
+/// remote signer adapters.
 ///
 /// `sign` takes the JSON header and JSON payload, encodes both as
 /// base64url, signs the `header_b64.payload_b64` byte sequence, and

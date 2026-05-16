@@ -136,7 +136,7 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
             if s.signing_algorithm == super::provenance::ProvenanceAlgorithm::ES256 {
                 tracing::error!(
                     code = "provenance.config.algorithm_unsupported",
-                    "software signer does not yet support ES256; use EdDSA or a KMS-backed signer",
+                    "software signer does not yet support ES256; use EdDSA",
                 );
                 return Err(ConfigError::ProvenanceAlgorithmUnsupported);
             }
@@ -159,24 +159,13 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
             }
         }
         SignerConfig::Kms(k) => {
-            if !matches!(
-                k.signing_algorithm,
-                super::provenance::ProvenanceAlgorithm::EdDSA
-                    | super::provenance::ProvenanceAlgorithm::ES256
-            ) {
-                tracing::error!(
-                    code = "provenance.config.algorithm_unsupported",
-                    "signing_algorithm must be EdDSA or ES256",
-                );
-                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
-            }
-            if k.key_id.is_empty() {
-                tracing::error!(
-                    code = "provenance.config.signer_kind_invalid",
-                    "kms signer key_id is empty",
-                );
-                return Err(ConfigError::ProvenanceSignerKindInvalid);
-            }
+            tracing::error!(
+                code = "provenance.config.signer_kind_invalid",
+                provider = ?k.provider,
+                signing_algorithm = %k.signing_algorithm.as_str(),
+                "kms signer is reserved for future backends; V1 supports only software signing",
+            );
+            return Err(ConfigError::ProvenanceSignerKindInvalid);
         }
     }
 
