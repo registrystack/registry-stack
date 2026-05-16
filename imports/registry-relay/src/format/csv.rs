@@ -336,11 +336,11 @@ impl ColumnBuilder {
 // ── Value parsers ─────────────────────────────────────────────────────────────
 
 /// Parse boolean from common string variants, case-insensitive.
-/// Accepts: `true|false|1|0|yes|no`.
+/// Accepts: `true|false|1|0|yes|no|t|f`.
 fn parse_bool(s: &str) -> Option<bool> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Some(true),
-        "false" | "0" | "no" => Some(false),
+        "true" | "1" | "yes" | "t" => Some(true),
+        "false" | "0" | "no" | "f" => Some(false),
         _ => None,
     }
 }

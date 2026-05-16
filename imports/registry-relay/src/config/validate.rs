@@ -15,7 +15,8 @@ use crate::error::{ConfigError, Error};
 
 use super::{
     AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
-    EntityRelationshipConfig, FieldConfig, RelationshipKind, ResourceConfig, SourceConfig,
+    EntityRelationshipConfig, FieldConfig, MaterializationMode, RefreshConfig, RelationshipKind,
+    ResourceConfig, SourceConfig,
 };
 
 /// Prefix for the special `admin` scope. Spec.md Section 8.
@@ -478,7 +479,7 @@ fn validate_api_key_fingerprint(value: &str) -> Result<(), &'static str> {
 fn validate_resources(config: &Config) -> Result<(), ConfigError> {
     for dataset in &config.datasets {
         validate_dataset_uris(&config.vocabularies, dataset)?;
-        validate_source(dataset)?;
+        validate_sources(dataset)?;
         validate_format_overrides(dataset)?;
         for resource in dataset.table_configs() {
             validate_schema_uris(&config.vocabularies, dataset, resource)?;
@@ -493,22 +494,97 @@ fn validate_resources(config: &Config) -> Result<(), ConfigError> {
 }
 
 fn validate_format_overrides(dataset: &DatasetConfig) -> Result<(), ConfigError> {
+    if let Some(SourceConfig::File {
+        format: Some(format),
+        ..
+    }) = &dataset.source
+    {
+        validate_dataset_format_config(dataset, format, "dataset.source.format")?;
+    }
+
     for resource in dataset.table_configs() {
-        let Some(format) = &resource.format else {
-            continue;
-        };
-        let count = usize::from(format.csv.is_some())
-            + usize::from(format.xlsx.is_some())
-            + usize::from(format.parquet.is_some());
-        if count != 1 {
+        if let Some(format) = &resource.format {
+            validate_format_config(dataset, resource, format, "resource.format")?;
+        }
+        if let Some(SourceConfig::File {
+            format: Some(format),
+            ..
+        }) = &resource.source
+        {
+            validate_format_config(dataset, resource, format, "resource.source.format")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_dataset_format_config(
+    dataset: &DatasetConfig,
+    format: &super::ResourceFormatConfig,
+    field: &'static str,
+) -> Result<(), ConfigError> {
+    let count = usize::from(format.csv.is_some())
+        + usize::from(format.xlsx.is_some())
+        + usize::from(format.parquet.is_some());
+    if count != 1 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            field,
+            "format config must declare exactly one of csv, xlsx, parquet"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+fn validate_format_config(
+    dataset: &DatasetConfig,
+    resource: &ResourceConfig,
+    format: &super::ResourceFormatConfig,
+    field: &'static str,
+) -> Result<(), ConfigError> {
+    let count = usize::from(format.csv.is_some())
+        + usize::from(format.xlsx.is_some())
+        + usize::from(format.parquet.is_some());
+    if count != 1 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = %resource.id,
+            field,
+            "format config must declare exactly one of csv, xlsx, parquet"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+fn validate_sources(dataset: &DatasetConfig) -> Result<(), ConfigError> {
+    if let Some(source) = &dataset.source {
+        validate_source_config(dataset, None, source)?;
+    }
+
+    for resource in dataset.table_configs() {
+        let source = resource.effective_source(dataset).ok_or_else(|| {
             tracing::error!(
                 code = "config.validation_error",
                 dataset_id = %dataset.id,
                 resource_id = %resource.id,
-                "resource.format must declare exactly one of csv, xlsx, parquet"
+                "table source is required when dataset.source is absent"
             );
-            return Err(ConfigError::ValidationError);
-        }
+            ConfigError::ValidationError
+        })?;
+        let refresh = resource.effective_refresh(dataset).ok_or_else(|| {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                resource_id = %resource.id,
+                "table refresh is required when no dataset refresh/default is configured"
+            );
+            ConfigError::ValidationError
+        })?;
+        validate_source_config(dataset, Some(resource), source)?;
+        validate_materialization_refresh(dataset, resource, source, refresh)?;
     }
     Ok(())
 }
@@ -531,20 +607,231 @@ fn validate_dataset_uris(
     Ok(())
 }
 
-fn validate_source(dataset: &DatasetConfig) -> Result<(), ConfigError> {
-    match &dataset.source {
+fn validate_source_config(
+    dataset: &DatasetConfig,
+    resource: Option<&ResourceConfig>,
+    source: &SourceConfig,
+) -> Result<(), ConfigError> {
+    match source {
         SourceConfig::File { path, .. } => {
             if path.as_os_str().is_empty() {
+                log_table_validation_error(dataset, resource, "source.path is empty");
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        SourceConfig::Postgres {
+            connection_env,
+            table,
+            query,
+            change_token_sql,
+        } => {
+            if !is_valid_env_var_name(connection_env) {
                 tracing::error!(
                     code = "config.validation_error",
                     dataset_id = %dataset.id,
-                    "source.path is empty"
+                    resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+                    connection_env = %connection_env,
+                    "postgres connection_env must be a non-empty environment variable name"
                 );
                 return Err(ConfigError::ValidationError);
+            }
+
+            if table.is_some() == query.is_some() {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+                    "postgres source must declare exactly one of table or query"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+
+            if let Some(table) = table {
+                if !is_valid_postgres_identifier(&table.schema)
+                    || !is_valid_postgres_identifier(&table.name)
+                {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+                        connection_env = %connection_env,
+                        "postgres table schema and name must be simple identifiers"
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+            }
+
+            if query.as_deref().is_some_and(|sql| sql.trim().is_empty()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+                    connection_env = %connection_env,
+                    "postgres query must not be empty"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if let Some(sql) = query.as_deref() {
+                validate_configured_postgres_query(dataset, resource, connection_env, sql)?;
+            }
+
+            if change_token_sql
+                .as_deref()
+                .is_some_and(|sql| sql.trim().is_empty())
+            {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+                    connection_env = %connection_env,
+                    "postgres change_token_sql must not be empty when configured"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if let Some(sql) = change_token_sql.as_deref() {
+                validate_configured_postgres_query(dataset, resource, connection_env, sql)?;
             }
         }
     }
     Ok(())
+}
+
+fn validate_configured_postgres_query(
+    dataset: &DatasetConfig,
+    resource: Option<&ResourceConfig>,
+    connection_env: &str,
+    sql: &str,
+) -> Result<(), ConfigError> {
+    let trimmed = sql.trim();
+    if trimmed.contains(';') {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+            connection_env = %connection_env,
+            "postgres configured SQL must be a single statement without semicolons"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let first_word = trimmed
+        .split_whitespace()
+        .next()
+        .map(str::to_ascii_lowercase);
+    if !matches!(first_word.as_deref(), Some("select" | "with")) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
+            connection_env = %connection_env,
+            "postgres configured SQL must start with SELECT or WITH"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    Ok(())
+}
+
+fn validate_materialization_refresh(
+    dataset: &DatasetConfig,
+    resource: &ResourceConfig,
+    source: &SourceConfig,
+    refresh: &RefreshConfig,
+) -> Result<(), ConfigError> {
+    let materialization = resource.effective_materialization(dataset);
+
+    if materialization == MaterializationMode::Live && matches!(source, SourceConfig::File { .. }) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = %resource.id,
+            "file sources support only snapshot materialization"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if materialization == MaterializationMode::Live
+        && matches!(source, SourceConfig::Postgres { .. })
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = %resource.id,
+            "postgres sources support only snapshot materialization"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if materialization == MaterializationMode::Live
+        && matches!(refresh, RefreshConfig::Mtime { .. })
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = %resource.id,
+            "live materialization does not support mtime refresh"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if let (
+        SourceConfig::Postgres {
+            change_token_sql, ..
+        },
+        RefreshConfig::Mtime { .. },
+    ) = (source, refresh)
+    {
+        if change_token_sql.is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                resource_id = %resource.id,
+                "postgres mtime refresh requires change_token_sql"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+
+    Ok(())
+}
+
+fn log_table_validation_error(
+    dataset: &DatasetConfig,
+    resource: Option<&ResourceConfig>,
+    msg: &str,
+) {
+    if let Some(resource) = resource {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            resource_id = %resource.id,
+            "{msg}"
+        );
+    } else {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            "{msg}"
+        );
+    }
+}
+
+fn is_valid_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+fn is_valid_postgres_identifier(identifier: &str) -> bool {
+    let mut chars = identifier.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 fn validate_schema_uris(

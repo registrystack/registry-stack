@@ -234,14 +234,28 @@ pub struct DatasetConfig {
     pub update_frequency: UpdateFrequency,
     #[serde(default)]
     pub conforms_to: Vec<String>,
-    pub source: SourceConfig,
-    pub refresh: RefreshConfig,
+    #[serde(default)]
+    pub defaults: DatasetDefaultsConfig,
+    #[serde(default)]
+    pub source: Option<SourceConfig>,
+    #[serde(default)]
+    pub refresh: Option<RefreshConfig>,
     #[serde(default)]
     pub tables: Vec<ResourceConfig>,
     #[serde(default)]
     pub resources: Vec<ResourceConfig>,
     #[serde(default)]
     pub entities: Vec<EntityConfig>,
+}
+
+/// Optional table defaults for reducing repetition within one dataset.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatasetDefaultsConfig {
+    #[serde(default)]
+    pub refresh: Option<RefreshConfig>,
+    #[serde(default)]
+    pub materialization: Option<MaterializationMode>,
 }
 
 impl DatasetConfig {
@@ -261,10 +275,39 @@ pub enum SourceConfig {
     File {
         path: PathBuf,
         #[serde(default)]
+        format: Option<ResourceFormatConfig>,
+        #[serde(default)]
         header_row: Option<u32>,
         #[serde(default)]
         data_range: Option<String>,
     },
+    Postgres {
+        connection_env: String,
+        #[serde(default)]
+        table: Option<PostgresTableConfig>,
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        change_token_sql: Option<String>,
+    },
+}
+
+impl SourceConfig {
+    pub fn format(&self) -> Option<&ResourceFormatConfig> {
+        match self {
+            SourceConfig::File { format, .. } => format.as_ref(),
+            SourceConfig::Postgres { .. } => None,
+        }
+    }
+}
+
+/// Structured database table reference. Keeping schema/name separate
+/// avoids parsing dotted identifiers and leaves quoting to connectors.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostgresTableConfig {
+    pub schema: String,
+    pub name: String,
 }
 
 /// Refresh policy. Tagged on `mode:`.
@@ -291,6 +334,14 @@ fn default_mtime_interval() -> Duration {
     Duration::from_secs(60)
 }
 
+/// How a configured private table is registered for query planning.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterializationMode {
+    Snapshot,
+    Live,
+}
+
 /// One private storage table under a dataset.
 ///
 /// The public API should not expose these ids. Entity config maps one
@@ -300,6 +351,12 @@ fn default_mtime_interval() -> Duration {
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
     pub id: ResourceId,
+    #[serde(default)]
+    pub source: Option<SourceConfig>,
+    #[serde(default)]
+    pub refresh: Option<RefreshConfig>,
+    #[serde(default)]
+    pub materialization: Option<MaterializationMode>,
     #[serde(default)]
     pub format: Option<ResourceFormatConfig>,
     #[serde(default)]
@@ -342,6 +399,10 @@ pub struct CsvFormatConfig {
 pub struct XlsxFormatConfig {
     #[serde(default)]
     pub sheet: Option<String>,
+    #[serde(default)]
+    pub header_row: Option<u32>,
+    #[serde(default)]
+    pub data_range: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -350,7 +411,7 @@ pub struct ParquetFormatConfig {}
 
 impl ResourceConfig {
     pub fn format_name(&self) -> Option<&'static str> {
-        let format = self.format.as_ref()?;
+        let format = self.source_format().or(self.format.as_ref())?;
         if format.csv.is_some() {
             Some("csv")
         } else if format.xlsx.is_some() {
@@ -363,25 +424,63 @@ impl ResourceConfig {
     }
 
     pub fn xlsx_sheet(&self) -> Option<String> {
-        self.format
-            .as_ref()
+        self.source_format()
+            .or(self.format.as_ref())
             .and_then(|format| format.xlsx.as_ref())
             .and_then(|xlsx| xlsx.sheet.clone())
             .or_else(|| self.sheet.clone())
     }
 
+    pub fn xlsx_header_row(&self) -> Option<u32> {
+        self.source_format()
+            .or(self.format.as_ref())
+            .and_then(|format| format.xlsx.as_ref())
+            .and_then(|xlsx| xlsx.header_row)
+    }
+
+    pub fn xlsx_data_range(&self) -> Option<String> {
+        self.source_format()
+            .or(self.format.as_ref())
+            .and_then(|format| format.xlsx.as_ref())
+            .and_then(|xlsx| xlsx.data_range.clone())
+    }
+
     pub fn csv_delimiter(&self) -> Option<u8> {
-        self.format
-            .as_ref()
+        self.source_format()
+            .or(self.format.as_ref())
             .and_then(|format| format.csv.as_ref())
             .and_then(|csv| csv.delimiter)
     }
 
     pub fn csv_quote(&self) -> Option<u8> {
-        self.format
-            .as_ref()
+        self.source_format()
+            .or(self.format.as_ref())
             .and_then(|format| format.csv.as_ref())
             .and_then(|csv| csv.quote)
+    }
+
+    pub fn effective_refresh<'a>(
+        &'a self,
+        dataset: &'a DatasetConfig,
+    ) -> Option<&'a RefreshConfig> {
+        self.refresh
+            .as_ref()
+            .or(dataset.defaults.refresh.as_ref())
+            .or(dataset.refresh.as_ref())
+    }
+
+    pub fn effective_materialization(&self, dataset: &DatasetConfig) -> MaterializationMode {
+        self.materialization
+            .or(dataset.defaults.materialization)
+            .unwrap_or(MaterializationMode::Snapshot)
+    }
+
+    pub fn effective_source<'a>(&'a self, dataset: &'a DatasetConfig) -> Option<&'a SourceConfig> {
+        self.source.as_ref().or(dataset.source.as_ref())
+    }
+
+    fn source_format(&self) -> Option<&ResourceFormatConfig> {
+        self.source.as_ref().and_then(SourceConfig::format)
     }
 }
 

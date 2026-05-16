@@ -10,13 +10,11 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
-use crate::source::SourceMetadata;
-
 use super::IngestPlan;
 
 /// Refresh schedule policy parsed from `ResourceConfig.refresh`.
 pub enum RefreshPolicy {
-    /// Poll `Source::metadata` every `interval`; refresh if ETag changes.
+    /// Poll connector metadata every `interval`; refresh if the change token changes.
     Mtime { interval: Duration },
     /// Unconditionally refresh every `interval`.
     Interval { interval: Duration },
@@ -93,7 +91,7 @@ async fn run_mtime_loop(
     publish_readiness: Arc<dyn Fn() + Send + Sync>,
 ) {
     let mut backoff = BackoffState::new();
-    let mut last_etag: Option<String> = None;
+    let mut last_change_token: Option<String> = None;
 
     loop {
         let wait = backoff.next_wait(interval);
@@ -103,8 +101,8 @@ async fn run_mtime_loop(
             _ = sleep(wait) => {}
         }
 
-        // Sample the source metadata without reading the body.
-        let meta: SourceMetadata = match plan.source_metadata().await {
+        // Sample connector metadata without reading the full table.
+        let meta = match plan.connector_metadata().await {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!(
@@ -119,11 +117,11 @@ async fn run_mtime_loop(
             }
         };
 
-        let current_etag = meta.etag.clone();
-        let changed = match (&last_etag, &current_etag) {
+        let current_change_token = meta.change_token.clone();
+        let changed = match (&last_change_token, &current_change_token) {
             (None, _) => true, // First poll: treat as changed.
             (Some(prev), Some(cur)) => prev != cur,
-            (Some(_), None) => true, // Source lost its ETag: re-ingest.
+            (Some(_), None) => true, // Connector lost its token: re-ingest.
         };
 
         if !changed {
@@ -145,7 +143,7 @@ async fn run_mtime_loop(
 
         match plan.refresh().await {
             Ok(()) => {
-                last_etag = current_etag;
+                last_change_token = current_change_token;
                 backoff.reset();
                 publish_readiness();
             }

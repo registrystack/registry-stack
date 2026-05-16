@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::config::{FilterOp, RelationshipKind};
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{Error, FilterError, InternalError, SchemaError};
-use crate::ingest::{table_name, table_snapshot};
+use crate::table_provider::{table_name, table_snapshot};
 
 pub mod aggregates;
 pub use aggregates::{AggregateListItem, AggregateQueryEngine, AggregateResult, AggregateRows};

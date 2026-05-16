@@ -34,6 +34,9 @@ tower-http = { version = "0.6", features = [
 datafusion = { version = "53.1" }
 calamine = { version = "0.35" }
 csv = { version = "1" }
+tokio-postgres = { version = "0.7", features = ["with-time-0_3"] }
+postgres-native-tls = { version = "0.5" }
+native-tls = { version = "0.2" }
 # Used by Source/Format trait surfaces (BoxStream); also a transitive
 # of datafusion but pinned here so the public surface compiles without
 # relying on a re-export path.
