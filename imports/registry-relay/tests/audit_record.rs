@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -313,13 +313,11 @@ async fn header_map_keeps_no_raw_secret_in_record() {
         .layer(from_fn(audit_layer))
         .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
 
-    let mut headers = HeaderMap::new();
-    headers.insert("authorization", "Bearer SUPER_SECRET_42".parse().unwrap());
     let req = Request::builder()
         .method(Method::GET)
         .uri("/x")
         .header("authorization", "Bearer SUPER_SECRET_42")
-        .header("x-data-purpose", "qa")
+        .header("data-purpose", "qa")
         .body(Body::empty())
         .unwrap();
     let _resp = app.oneshot(req).await.unwrap();

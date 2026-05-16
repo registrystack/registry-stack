@@ -545,7 +545,7 @@ async fn entity_relationship_route_executes_query_when_state_installed() {
     let resp = server_with_query()
         .await
         .get("/datasets/social_registry/individual/p-1/household")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -564,7 +564,7 @@ async fn entity_relationship_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
         .get("/datasets/social_registry/individual/p-1/household")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -572,7 +572,7 @@ async fn entity_relationship_returns_etag_and_honors_if_none_match() {
 
     let cached = server
         .get("/datasets/social_registry/individual/p-1/household")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -586,7 +586,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
 
     let first = server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -609,7 +609,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
     let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
     let second = server
         .get(&url)
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     second.assert_status(StatusCode::OK);
     let body: Value = second.json();
@@ -628,7 +628,7 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -636,7 +636,7 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
 
     let cached = server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -655,7 +655,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
             .await;
     let first = old_server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -669,7 +669,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
     let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
     let resp = new_server
         .get(&url)
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     resp.assert_status(StatusCode::CONFLICT);
     let body: Value = resp.json();
@@ -682,7 +682,7 @@ async fn entity_verify_uses_verify_scope_and_returns_one_bit() {
 
     let present = server
         .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     present.assert_status(StatusCode::OK);
     let body: Value = present.json();
@@ -696,7 +696,7 @@ async fn entity_verify_uses_verify_scope_and_returns_one_bit() {
 
     let absent = server
         .get("/datasets/social_registry/individual/verify?id=missing")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     absent.assert_status(StatusCode::OK);
     let body: Value = absent.json();
@@ -717,7 +717,7 @@ async fn entity_verify_uses_table_snapshot_version_not_stale_readiness() {
 
     let resp = server
         .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
@@ -731,7 +731,7 @@ async fn entity_verify_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
         .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -739,7 +739,7 @@ async fn entity_verify_returns_etag_and_honors_if_none_match() {
 
     let cached = server
         .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -759,7 +759,7 @@ async fn entity_verify_requires_exposed_primary_key_only() {
     ] {
         let resp = server
             .get(url)
-            .add_header("x-data-purpose", "route-test")
+            .add_header("data-purpose", "route-test")
             .await;
         resp.assert_status(StatusCode::BAD_REQUEST);
         let body: Value = resp.json();
@@ -859,7 +859,7 @@ async fn entity_collection_route_expands_relationships() {
     let resp = server_with_query()
         .await
         .get("/datasets/social_registry/household?region=north&expand=members")
-        .add_header("x-data-purpose", "route-test")
+        .add_header("data-purpose", "route-test")
         .await;
 
     resp.assert_status(StatusCode::OK);

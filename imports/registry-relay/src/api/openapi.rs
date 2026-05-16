@@ -144,7 +144,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             );
             paths.insert(
                 format!("/datasets/{}/{}/verify", dataset.dataset_id, entity.name),
-                entity_verify_path_item(entity),
+                entity_verify_path_item(entity, entity_config),
             );
             paths.insert(
                 format!(
@@ -171,7 +171,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                         "/datasets/{}/{}/{{id}}/{}",
                         dataset.dataset_id, entity.name, relationship.name
                     ),
-                    entity_relationship_path_item(dataset, relationship),
+                    entity_relationship_path_item(config, dataset, entity_config, relationship),
                 );
             }
             paths.insert(
@@ -538,7 +538,8 @@ fn path_item_with_params(
 }
 
 fn entity_collection_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
-    let mut parameters = pagination_parameters();
+    let mut parameters = purpose_parameters(entity.api.require_purpose_header);
+    parameters.extend(pagination_parameters());
     parameters.push(query_parameter(
         "fields",
         "Comma-separated entity field projection",
@@ -560,7 +561,8 @@ fn entity_collection_path_item(summary: &str, schema: &str, entity: &EntityConfi
 }
 
 fn entity_record_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
-    let mut parameters = vec![path_parameter("id", "Entity primary key")];
+    let mut parameters = purpose_parameters(entity.api.require_purpose_header);
+    parameters.push(path_parameter("id", "Entity primary key"));
     parameters.push(query_parameter(
         "fields",
         "Comma-separated entity field projection",
@@ -580,20 +582,24 @@ fn entity_record_path_item(summary: &str, schema: &str, entity: &EntityConfig) -
     path_item_with_params("get", summary, schema, parameters)
 }
 
-fn entity_verify_path_item(entity: &EntityMetadata) -> Value {
+fn entity_verify_path_item(entity: &EntityMetadata, entity_config: &EntityConfig) -> Value {
+    let mut parameters = purpose_parameters(entity_config.api.require_purpose_header);
+    parameters.push(query_parameter(
+        &entity.primary_key,
+        "Entity primary key value to verify",
+    ));
     path_item_with_params(
         "get",
         "Entity record existence check",
         "VerifyResponse",
-        vec![query_parameter(
-            &entity.primary_key,
-            "Entity primary key value to verify",
-        )],
+        parameters,
     )
 }
 
 fn entity_relationship_path_item(
+    config: &Config,
     dataset: &DatasetMetadata,
+    current_entity_config: &EntityConfig,
     relationship: &RelationshipMetadata,
 ) -> Value {
     let target_component = dataset
@@ -625,10 +631,17 @@ fn entity_relationship_path_item(
         }
         _ => json!({ "type": "object", "additionalProperties": true }),
     };
+    let target_requires_purpose = entity_config(config, &dataset.dataset_id, &relationship.target)
+        .is_some_and(|target| target.api.require_purpose_header);
+    let mut parameters = purpose_parameters(
+        current_entity_config.api.require_purpose_header || target_requires_purpose,
+    );
+    parameters.extend(relationship_parameters(relationship.kind));
+
     json!({
         "get": {
             "summary": "Entity relationship",
-            "parameters": relationship_parameters(relationship.kind),
+            "parameters": parameters,
             "responses": {
                 "200": {
                     "description": "Successful response",
@@ -649,6 +662,14 @@ fn entity_relationship_path_item(
             }
         }
     })
+}
+
+fn purpose_parameters(required: bool) -> Vec<Value> {
+    if required {
+        vec![purpose_header_parameter()]
+    } else {
+        Vec::new()
+    }
 }
 
 fn pagination_parameters() -> Vec<Value> {
@@ -713,6 +734,17 @@ fn query_parameter(name: &str, description: &str) -> Value {
         "required": false,
         "description": description,
         "schema": { "type": "string" },
+    })
+}
+
+fn purpose_header_parameter() -> Value {
+    json!({
+        "name": "Data-Purpose",
+        "in": "header",
+        "required": true,
+        "description": "Free-form purpose-of-use label recorded in the audit trail. Required by this entity's policy; any non-empty value is accepted.",
+        "schema": { "type": "string", "minLength": 1 },
+        "example": "demo-review",
     })
 }
 

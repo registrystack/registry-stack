@@ -15,7 +15,7 @@ auth:bearer {
 }
 
 docs {
-  Reads a subject row with a valid linkage_service key but without the X-Data-Purpose header.
+  Reads a subject row with a valid linkage_service key but without the Data-Purpose header.
   subject_registry rows require require_purpose_header=true.
   expected: 400 auth.purpose_required
   Demonstrates that purpose tagging is enforced at the platform level, not left to callers.

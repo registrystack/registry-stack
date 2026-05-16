@@ -518,7 +518,7 @@ pub struct ResourceAccessConfig {
 }
 
 /// Resource-level API knobs: per-field filter allowlist, limit caps,
-/// and the `X-Data-Purpose` requirement.
+/// and the `Data-Purpose` requirement.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceApiConfig {

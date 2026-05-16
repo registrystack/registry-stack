@@ -255,10 +255,10 @@ Use `min_group_size: 5`. Use `omit` for person and case counts, and `mask` for p
 - read `household/schema`;
 - filter households by `district`;
 - read one household with `expand=members`;
-- verify `person?id=per-2001` with `X-Data-Purpose`;
+- verify `person?id=per-2001` with `Data-Purpose`;
 - run `payment/aggregates/by_district_cycle`;
 - demonstrate that a verify-only key cannot read `person/schema` or `person` rows;
-- demonstrate that missing `X-Data-Purpose` fails for `person/verify`.
+- demonstrate that missing `Data-Purpose` fails for `person/verify`.
 
 ## Demo 2: Clinic Capacity
 
@@ -594,10 +594,10 @@ Use `min_group_size: 5`. Use `omit` for student and support counts, and `mask` f
 ### Bruno Requests
 
 - read `student/schema`;
-- filter students by `school_id` and `grade_level` with `X-Data-Purpose`;
+- filter students by `school_id` and `grade_level` with `Data-Purpose`;
 - read one student with `expand=school`;
 - read one student guardians relationship;
-- verify `student?id=stu-2001` with `X-Data-Purpose`;
+- verify `student?id=stu-2001` with `Data-Purpose`;
 - run `student/aggregates/by_school_grade_status`;
 - run `support_need/aggregates/by_type_district`;
 - demonstrate that a planning aggregate key cannot read student rows;
@@ -658,11 +658,11 @@ Use `min_group_size: 5`. Rationale: the linkage table is the most sensitive surf
 
 - read `subject/schema` with the linkage key;
 - attempt to read `subject` with no filters using the linkage key and expect `400 entity.filter_required`;
-- read one `subject` filtered by `?education_student_alias={{studentAlias}}` with `X-Data-Purpose` and observe the matching benefits aliases in the row body;
+- read one `subject` filtered by `?education_student_alias={{studentAlias}}` with `Data-Purpose` and observe the matching benefits aliases in the row body;
 - read one `subject` filtered by `?canonical_id={{canonicalId}}` and confirm the same row is returned;
 - run `subject/aggregates/by_linkage_method_confidence` with the planning key;
 - demonstrate that `casework_system` cannot read `subject` rows (missing `subject_registry:rows` scope returns 403);
-- demonstrate that missing `X-Data-Purpose` on a `subject` row read returns `auth.purpose_required`;
+- demonstrate that missing `Data-Purpose` on a `subject` row read returns `auth.purpose_required`;
 - demonstrate that a verify-only key cannot read `subject` rows, schema, or aggregates.
 
 ## Bruno Collection Requirements
@@ -699,7 +699,7 @@ or the correct least-privilege equivalent for the scenario.
 Requests that touch personal row or verify endpoints should include:
 
 ```http
-X-Data-Purpose: {{purpose}}
+Data-Purpose: {{purpose}}
 ```
 
 The `Auth Boundaries` folder should include negative checks for:
@@ -742,7 +742,7 @@ The README must not include real API keys, PHC hashes, secrets, or production-lo
 - Five source workbooks are generated deterministically by `demo/scripts/generate_demo_data.py` from a single seeded RNG, and the generator asserts that disclosure-control aggregates produce a mix of suppressed, masked, and shown groups.
 - The generator coordinates aliases across files: every non-null alias column in `subject_registry.Subjects` resolves to an existing row in the referenced demo's primary sheet, and overlap is realistic (not full join).
 - Public entity fields never expose columns marked non-public in this spec.
-- Personal-data row and verify endpoints require `X-Data-Purpose`; `subject_registry` row reads do too.
+- Personal-data row and verify endpoints require `Data-Purpose`; `subject_registry` row reads do too.
 - Required filters are enforced on `subject_registry.subject`, `benefits_casework.person`, and `education_registry.student`; unfiltered reads return `400 entity.filter_required`.
 - Each dataset's `min_group_size` choice has a one-line rationale documented in its config.
 - `<dataset>:bulk_export` does not appear in any V1 config's key access blocks.

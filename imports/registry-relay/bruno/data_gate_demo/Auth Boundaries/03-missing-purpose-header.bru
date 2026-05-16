@@ -15,7 +15,7 @@ auth:bearer {
 }
 
 docs {
-  Reads benefits_casework person rows with a valid key but no X-Data-Purpose header.
+  Reads benefits_casework person rows with a valid key but no Data-Purpose header.
   person has require_purpose_header=true.
   expected: 400 auth.purpose_required
   Demonstrates that purpose tagging enforcement is automatic and cannot be bypassed

@@ -16,7 +16,7 @@ Three new findings rise to the top:
 
 Two of the three previously "Addressed" file/format remediations are partial: the pre-decode size guard caps on-disk bytes but does not bound decompressed expansion (XLSX, Parquet); and the stat/open race was fixed in `LocalFileSource::open` but `LocalFileSource::metadata` still path-stats, leaving the mtime polling loop on the original race.
 
-Beyond those, a cluster of medium-severity issues relate to audit completeness (path PK leakage, unredacted `x-data-purpose`, syslog datagram truncation), config validation gaps (Argon2 minimums, CORS `*` literal, unknown-field swallow on `AuditConfig`), and DoS hardening (no filter-count cap, no cache content integrity check).
+Beyond those, a cluster of medium-severity issues relate to audit completeness (path PK leakage, unredacted `Data-Purpose`, syslog datagram truncation), config validation gaps (Argon2 minimums, CORS `*` literal, unknown-field swallow on `AuditConfig`), and DoS hardening (no filter-count cap, no cache content integrity check).
 
 ## Spot-Verified Findings
 
@@ -134,13 +134,13 @@ Files:
 
 Recommendation: store a path template alongside the matched parameters, or hash PK segments using the same `sensitive_value_hash` mechanism when the entity's PK is configured sensitive.
 
-### Medium: `x-data-purpose` Header Is Echoed Unredacted With No Length Cap
+### Medium: `Data-Purpose` Header Is Echoed Unredacted With No Length Cap
 
 Files:
 
 - `/Users/jeremi/Projects/204-programs-delivery-commons/apps/data_gate/src/audit/mod.rs:515`
 
-`extract_purpose` reads `x-data-purpose` verbatim into `AuditRecord.purpose` with no validation, allowlist, or length cap. A client paste error (token in the purpose header) lands unredacted in audit logs.
+`extract_purpose` reads `Data-Purpose` verbatim into `AuditRecord.purpose` with no validation, allowlist, or length cap. A client paste error (token in the purpose header) lands unredacted in audit logs.
 
 Recommendation: cap at 512 chars and log a warning on truncation; optionally validate against a configured allowlist of purpose strings.
 
@@ -315,7 +315,7 @@ Newly added by this review:
 - Footer-size cap for Parquet before constructing the record-batch reader.
 - Content-hash sidecar for cache files and verification on read.
 - Audit path-segment redaction for entity primary keys.
-- Length cap (and optional allowlist) for the `x-data-purpose` header.
+- Length cap (and optional allowlist) for the `Data-Purpose` header.
 - Pre-send size check on the syslog datagram sink with a truncation strategy.
 - Argon2 PHC parameter minimums enforced at config-load time.
 - CORS origin syntax validation (reject `*` and malformed entries).

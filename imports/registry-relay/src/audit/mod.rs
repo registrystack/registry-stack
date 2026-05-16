@@ -183,7 +183,7 @@ pub struct AuditRecord {
     pub scopes_used: Vec<String>,
     /// Redacted parameter inventory (names + ops, never values).
     pub query_params: Value,
-    /// Verbatim `X-Data-Purpose` header value when present.
+    /// Verbatim `Data-Purpose` header value when present.
     pub purpose: Option<String>,
     /// HTTP status returned.
     pub status_code: u16,
@@ -587,7 +587,7 @@ pub struct RequestIdExt(pub String);
 
 fn extract_purpose(headers: &HeaderMap) -> Option<String> {
     headers
-        .get("x-data-purpose")
+        .get("data-purpose")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())

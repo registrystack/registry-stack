@@ -429,7 +429,7 @@ impl AuthError {
                 truncate(format!("required scope: {safe}"), MAX_DETAIL_LEN)
             }
             AuthError::PurposeRequired => {
-                "X-Data-Purpose header is required for this resource".to_string()
+                "Data-Purpose header is required for this resource".to_string()
             }
             AuthError::AdminRequired => "admin scope is required for this endpoint".to_string(),
         }

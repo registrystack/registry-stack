@@ -298,7 +298,7 @@ Stable codes. They appear verbatim in audit `error_code` and in the `code` exten
 | `auth.invalid_credential` | 401 | Credential present but does not match any configured key/hash. |
 | `auth.malformed_credential` | 401 | Header present but not parseable (wrong scheme, empty). |
 | `auth.scope_denied` | 403 | Authenticated, but principal lacks the required scope. |
-| `auth.purpose_required` | 400 | `X-Data-Purpose` header required by config but missing/empty. |
+| `auth.purpose_required` | 400 | `Data-Purpose` header required by config but missing/empty. |
 | `auth.admin_required` | 403 | `/admin/*` reached without `admin` scope. |
 
 ### `filter.*`
@@ -388,7 +388,7 @@ One record per authenticated request, written **after** response (per spec 13.1)
 | `aggregate_id` | string \| null | conditional | Set on `aggregate` only. |
 | `scopes_used` | string[] | yes | Scopes actually checked on this request (post-authz), in declaration order. Empty for `health`/`ready`. |
 | `query_params` | object | yes | Redacted parameter inventory; see below. `{}` when none. |
-| `purpose` | string \| null | yes | Verbatim `X-Data-Purpose` header value when `require_purpose_header: true`. Opaque to the gateway. `null` otherwise. |
+| `purpose` | string \| null | yes | Verbatim `Data-Purpose` header value when `require_purpose_header: true`. Opaque to the gateway. `null` otherwise. |
 | `status_code` | integer | yes | HTTP status returned. |
 | `row_count` | integer \| null | conditional | Rows on `rows`, group count on `aggregate`. `null` elsewhere. |
 | `suppressed_groups` | integer \| null | conditional | Groups removed/masked by disclosure control. `null` outside aggregate. |
@@ -513,7 +513,7 @@ Copied from Spec Section 18.4 and made testable. Each line names the command and
   - Expected: process binds within 2s; `/health` returns `200`; `/ready` returns `200` in Wave 0 (no datasets registered yet, so the readiness handle is trivially ready; Wave 1 makes it dataset-gated).
 - [ ] **An authenticated request produces one well-formed audit record on stdout.**
   - Setup: export `STATS_OFFICE_API_KEY_HASH` to a known Argon2id PHC string whose plaintext is in a test env var.
-  - Command: `curl -sS -H "Authorization: Bearer $TEST_KEY" -H "X-Data-Purpose: ci-smoke" http://127.0.0.1:8080/datasets`
+  - Command: `curl -sS -H "Authorization: Bearer $TEST_KEY" -H "Data-Purpose: ci-smoke" http://127.0.0.1:8080/datasets`
   - Expected: stdout contains exactly one JSON line; `jq -e '.api_key_id == "statistics_office" and .request_id | test("^[0-9A-HJKMNP-TV-Z]{26}$")'` exits 0; `.scopes_used` is a non-empty array; no field contains the raw key.
 - [ ] **`/ready` returns 503 with JSON body when readiness handle is not ready.**
   - Test asserts via in-process integration test (`tests/e2e_health.rs`) that flipping the readiness handle to "not ready" produces `503` with `application/problem+json` and `code: schema.resource_unavailable` in the response.

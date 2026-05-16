@@ -23,7 +23,7 @@ holds the contract-reserved `bulk_export` scope.
 
 The subject registry is the only place where personal-data identifiers from
 two datasets are knowingly tied together. Reading its rows is scoped to a
-single persona (`linkage_service`), requires `X-Data-Purpose`, and audits per
+single persona (`linkage_service`), requires `Data-Purpose`, and audits per
 call. The registry has no relationships into personal datasets; cross-dataset
 composition happens client-side, with separate audited calls per dataset.
 
@@ -165,7 +165,7 @@ The environment file pre-fills the cross-demo defaults the requests reference:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:4242` | Server bind in every config |
-| `purpose` | a short identifier | `X-Data-Purpose` value used by personal-data reads |
+| `purpose` | a short identifier | `Data-Purpose` value used by personal-data reads |
 | `district` | `riverbend` | Shared district id used by district-planning flow |
 | `schoolId` | `sch-3001` | School id used by school-construction flow |
 | `facilityId` | `fac-4001` | Facility id used by clinic-rehab flow |

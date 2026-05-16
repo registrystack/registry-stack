@@ -196,7 +196,7 @@ Protected endpoint returns 403:
 
 - Confirm the key has the exact scope named by the entity access block.
 - Remember that verify, metadata, aggregate, rows, bulk export, and admin scopes do not imply one another.
-- For row or verify endpoints on entities with `require_purpose_header: true`, include `X-Data-Purpose`.
+- For row or verify endpoints on entities with `require_purpose_header: true`, include `Data-Purpose`.
 
 Dataset or entity returns unknown-resource errors:
 

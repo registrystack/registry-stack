@@ -15,7 +15,7 @@ auth:bearer {
 }
 
 docs {
-  Calls person verify with a valid verifyKey but no X-Data-Purpose header.
+  Calls person verify with a valid verifyKey but no Data-Purpose header.
   person has require_purpose_header=true, which applies to verify as well as rows.
   expected: 400 auth.purpose_required
   Confirms purpose enforcement is symmetric across verify and row surfaces.

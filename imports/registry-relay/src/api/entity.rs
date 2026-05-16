@@ -38,6 +38,7 @@ use crate::query::{
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const QUERY_UNAVAILABLE_CODE: &str = "entity.query_unavailable";
 const CURSOR_INVALIDATED_CODE: &str = "pagination.cursor_invalidated";
+const DATA_PURPOSE_HEADER: &str = "data-purpose";
 
 /// Defensive cap on the number of filter parameters accepted on a
 /// single entity-collection request. Pairs with the URI length cap in
@@ -386,7 +387,7 @@ async fn entity_verify(
                 {
                     return error.into_response();
                 }
-                if entity.api.require_purpose_header && !headers.contains_key("x-data-purpose") {
+                if entity.api.require_purpose_header && !has_purpose_header(&headers) {
                     return Error::from(AuthError::PurposeRequired).into_response();
                 }
             }
@@ -752,7 +753,7 @@ fn require_read_access(
     headers: &HeaderMap,
 ) -> Result<(), Error> {
     require_principal_scope(principal, &entity.access.read_scope)?;
-    if entity.api.require_purpose_header && !headers.contains_key("x-data-purpose") {
+    if entity.api.require_purpose_header && !has_purpose_header(headers) {
         return Err(AuthError::PurposeRequired.into());
     }
     Ok(())
@@ -804,10 +805,21 @@ fn require_relationship_target_access(
         .ok_or(crate::error::FilterError::NotAllowed)?;
     let target = entity_from_registry(registry, dataset_id, &relationship.target)?;
     require_principal_scope(principal, &target.access.read_scope)?;
-    if target.api.require_purpose_header && !headers.contains_key("x-data-purpose") {
+    if target.api.require_purpose_header && !has_purpose_header(headers) {
         return Err(AuthError::PurposeRequired.into());
     }
     Ok(())
+}
+
+fn has_purpose_header(headers: &HeaderMap) -> bool {
+    purpose_header_value(headers, DATA_PURPOSE_HEADER).is_some()
+}
+
+fn purpose_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
 }
 
 fn field_name_by_table_column(entity: &EntityModel, table_column: &str) -> Result<String, Error> {
