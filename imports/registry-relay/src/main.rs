@@ -180,8 +180,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None => None,
     };
 
-    let main_serve =
-        axum::serve(listener, app.into_make_service()).with_graceful_shutdown(shutdown_signal());
+    let main_serve = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
 
     // Run both servers concurrently. `tokio::select!` is the natural
     // fit because either listener exiting (clean or not) tears down
@@ -195,8 +198,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 readiness_rx.clone(),
                 Arc::clone(&ingest),
             );
-            let admin_serve = axum::serve(admin_listener, admin_app.into_make_service())
-                .with_graceful_shutdown(shutdown_signal());
+            let admin_serve = axum::serve(
+                admin_listener,
+                admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal());
             tokio::select! {
                 r = main_serve => r.map_err(Into::into),
                 r = admin_serve => r.map_err(Into::into),

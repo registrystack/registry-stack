@@ -424,12 +424,20 @@ async fn admin_bind_serves_health_on_second_listener() {
     // Serve both routers in background tasks. We do not bother with
     // graceful shutdown here because the test process tears them down
     // when it exits.
-    let main_handle =
-        tokio::spawn(async move { axum::serve(main_listener, main_app.into_make_service()).await });
-    let admin_handle =
-        tokio::spawn(
-            async move { axum::serve(admin_listener, admin_app.into_make_service()).await },
-        );
+    let main_handle = tokio::spawn(async move {
+        axum::serve(
+            main_listener,
+            main_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
+    let admin_handle = tokio::spawn(async move {
+        axum::serve(
+            admin_listener,
+            admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
 
     let client = reqwest_lite_get(main_addr, "/health").await;
     assert_eq!(client.0, 200, "main /health responded");
@@ -451,15 +459,71 @@ async fn admin_bind_serves_health_on_second_listener() {
     admin_handle.abort();
 }
 
+#[tokio::test]
+async fn trusted_proxy_forwarded_for_reaches_audit_on_real_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr: SocketAddr = listener.local_addr().expect("listener addr");
+
+    let mut cfg = load_example_config();
+    cfg.audit.include_health = true;
+    cfg.server.trust_proxy.enabled = true;
+    cfg.server.trust_proxy.trusted_proxies = vec!["127.0.0.1/32".to_string()];
+    let config = Arc::new(cfg);
+
+    let inmem = InMemorySink::new();
+    let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+    let app = build_test_app_with_config(config, sink);
+
+    let handle = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
+
+    let response = reqwest_lite_get_with_headers(
+        addr,
+        "/health",
+        &[("X-Forwarded-For", "203.0.113.10, 127.0.0.1")],
+    )
+    .await;
+    assert_eq!(response.0, 200, "/health responded through listener");
+
+    let records = inmem.snapshot();
+    assert_eq!(records.len(), 1);
+    let record: Value = serde_json::from_str(records[0].trim_end()).expect("valid audit JSON");
+    assert_eq!(record["remote_addr"], "203.0.113.10");
+
+    handle.abort();
+}
+
 /// Minimal HTTP/1.1 GET client. We avoid pulling reqwest into
 /// dev-deps for one test; this just opens a TCP connection, writes a
 /// request line + Host header, and returns `(status, body)`.
 async fn reqwest_lite_get(addr: SocketAddr, path: &str) -> (u16, String) {
+    reqwest_lite_get_with_headers(addr, path, &[]).await
+}
+
+async fn reqwest_lite_get_with_headers(
+    addr: SocketAddr,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> (u16, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    let mut req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n");
+    for (name, value) in headers {
+        req.push_str(name);
+        req.push_str(": ");
+        req.push_str(value);
+        req.push_str("\r\n");
+    }
+    req.push_str("\r\n");
     stream
         .write_all(req.as_bytes())
         .await
