@@ -77,7 +77,7 @@ zeroize = { version = "1" }
 # JWS compact serialization and EdDSA / ES256 signing primitives.
 # We build the VC-JWT payload by hand to control the VCDM 2.0 envelope
 # shape; jsonwebtoken provides the signing/verification primitives only.
-jsonwebtoken = { version = "9" }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # urn:uuid:* identifiers for VC jti / id.
 uuid = { version = "1", features = ["v4"] }
 # Robust Accept media-type parsing for provenance content negotiation.

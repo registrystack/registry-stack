@@ -19,6 +19,16 @@ ignore = [
     # apply that upgrade here without forking cel-mapper-core. Re-evaluate
     # when cel-mapper-core upgrades phonenumber/postcard/heapless.
     "RUSTSEC-2023-0089",
+    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in the `rsa`
+    # crate. Pulled in transitively by jsonwebtoken 10's rust_crypto
+    # backend, which bundles every JWS algorithm family. This project
+    # only wires EdDSA and ES256 (see src/provenance/signers/software.rs);
+    # no RS256/PS256 code path exists, so the vulnerable RSA primitives
+    # are unreachable. jsonwebtoken 10 has no feature to drop RSA;
+    # switching to aws_lc_rs would avoid it but adds a C build. Re-evaluate
+    # when either rsa publishes a constant-time fix or jsonwebtoken adds
+    # finer-grained feature gating.
+    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
