@@ -20,7 +20,7 @@ fn sample_record() -> AuditRecord {
     AuditRecord {
         ts: registry_relay::audit::now_iso8601_millis(),
         request_id: "01HZXK3PQJR8M2N4WVBT6SCDE7".to_string(),
-        api_key_id: Some("statistics_office".to_string()),
+        principal_id: Some("statistics_office".to_string()),
         auth_mode: Some("api_key".to_string()),
         remote_addr: "127.0.0.1".to_string(),
         method: "GET".to_string(),
@@ -49,7 +49,7 @@ fn benchmark_record_construction(c: &mut Criterion) {
             black_box(AuditRecord {
                 ts: registry_relay::audit::now_iso8601_millis(),
                 request_id: "01HZXK3PQJR8M2N4WVBT6SCDE7".to_string(),
-                api_key_id: Some("statistics_office".to_string()),
+                principal_id: Some("statistics_office".to_string()),
                 auth_mode: Some("api_key".to_string()),
                 remote_addr: "127.0.0.1".to_string(),
                 method: "GET".to_string(),

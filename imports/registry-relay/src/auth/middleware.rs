@@ -11,7 +11,7 @@
 //!
 //! * **No logging.** Audit owns request-level events; this module
 //!   emits at most `trace`/`debug` for verification outcomes inside
-//!   [`super::api_key::ApiKeyAuth`]. Error responses carry stable
+//!   the active provider implementation. Error responses carry stable
 //!   Problem Details codes and the audit layer records those codes
 //!   through response extensions.
 //! * **No scope check.** Scope authorisation is a handler-level
@@ -30,16 +30,21 @@ use crate::error::Error;
 
 use super::AuthProvider;
 
+/// Type alias for the boxed, shared auth provider passed through the
+/// layer. Held by `Arc<dyn>` so startup picks one implementation
+/// (API-key or OIDC) and the rest of the wiring is provider-agnostic.
+/// The dyn dispatch cost is one virtual call per request, dominated by
+/// SHA-256 hashing (API-key path) or JWT signature verification plus
+/// occasional JWKS fetches (OIDC path).
+pub type AuthProviderRef = Arc<dyn AuthProvider>;
+
 /// Attach an authentication layer to `router`.
 ///
-/// The provider is held in an `Arc` so the layer is cheap to clone
-/// per request without duplicating the keyring. The function is
-/// generic on the provider type to avoid `dyn` dispatch on the hot
-/// path; callers stamp one `auth_layer::<ApiKeyAuth>(...)` site at
-/// startup.
-///
-/// This function is shaped as `(Router, Arc<P>) -> Router` rather
-/// than `Arc<P> -> impl Layer` because axum's
+/// The provider is held in an `Arc<dyn AuthProvider>` so the startup
+/// branch on `config::AuthMode` produces a single value that flows
+/// through every router builder unchanged. The function is shaped as
+/// `(Router, AuthProviderRef) -> Router` rather than
+/// `AuthProviderRef -> impl Layer` because axum's
 /// [`axum::middleware::FromFnLayer`] has a fistful of internal type
 /// parameters (function pointer, state, extractor tuple) that are
 /// awkward to spell in a return type without a public type alias.
@@ -49,18 +54,17 @@ use super::AuthProvider;
 ///
 /// Usage in the server wiring:
 /// ```ignore
-/// let provider = Arc::new(ApiKeyAuth::new(entries));
+/// let provider: AuthProviderRef = Arc::new(ApiKeyAuth::new(entries));
 /// let app = auth_layer(
 ///     Router::new().route("/datasets", get(list_datasets)),
 ///     provider,
 /// );
 /// ```
-pub fn auth_layer<P, S>(router: Router<S>, provider: Arc<P>) -> Router<S>
+pub fn auth_layer<S>(router: Router<S>, provider: AuthProviderRef) -> Router<S>
 where
-    P: AuthProvider,
     S: Clone + Send + Sync + 'static,
 {
-    router.layer(from_fn_with_state(provider, run::<P>))
+    router.layer(from_fn_with_state(provider, run))
 }
 
 /// Middleware body. Reads the bearer token, calls the provider, and
@@ -72,13 +76,10 @@ where
 /// *outside* this layer in the production stack (`crate::server`), so
 /// it cannot observe extensions that this layer attaches to the
 /// request. The response-side copy is the channel by which the outer
-/// audit layer reads `api_key_id`, `auth_mode`, and `scopes_used` for
+/// audit layer reads `principal_id`, `auth_mode`, and `scopes_used` for
 /// the `AuditRecord`. Mirrors the `ErrorCodeExt` pattern in
 /// `crate::error::Error::into_response`.
-async fn run<P>(State(provider): State<Arc<P>>, mut req: Request, next: Next) -> Response
-where
-    P: AuthProvider,
-{
+async fn run(State(provider): State<AuthProviderRef>, mut req: Request, next: Next) -> Response {
     let remote = remote_addr(&req);
     let principal = match provider.authenticate(req.headers(), remote).await {
         Ok(p) => p,

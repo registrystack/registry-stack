@@ -97,7 +97,7 @@ mod tests {
         S: Into<String>,
     {
         Principal {
-            api_key_id: "tester".to_string(),
+            principal_id: "tester".to_string(),
             scopes: scopes.into_iter().collect(),
             auth_mode: AuthMode::ApiKey,
         }

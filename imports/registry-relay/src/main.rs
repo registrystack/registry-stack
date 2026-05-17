@@ -35,6 +35,7 @@ use std::sync::Arc;
 use datafusion::execution::context::SessionContext;
 use registry_relay::audit::{AuditSink, ChainingSink, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+use registry_relay::auth::middleware::AuthProviderRef;
 use registry_relay::auth::ScopeSet;
 use registry_relay::config::{self, ApiKeyConfig, AuditSinkConfig, Config};
 use registry_relay::entity::EntityRegistry;
@@ -83,7 +84,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let config = Arc::new(config::load(&config_path)?);
 
-    let auth = Arc::new(build_auth(&config)?);
+    let auth = build_auth(&config)?;
     let audit_sink = build_audit_sink(&config);
     let bind: SocketAddr = config.server.bind;
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
@@ -115,7 +116,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Arc::clone(&ingest).spawn_refresh_tasks_with_config(&config, readiness_tx);
 
     let dataset_count = config.datasets.len();
-    let keyring_size = auth.len();
+    // Operational startup log: a per-mode size hint. For `api_key` this
+    // is the configured key count; future OIDC mode reports issuer/jwks
+    // freshness instead. Read off the config rather than the provider so
+    // the wiring layer doesn't need a `len()` method on the trait.
+    let auth_size_hint = match config.auth.mode {
+        config::AuthMode::ApiKey => config.auth.api_keys.len(),
+    };
     // Build provenance state from the parsed config.
     // `build_resolved_provenance_config` returns:
     //   * `Ok(None)` when the operator omitted the `provenance:` block
@@ -164,7 +171,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bind = %bind,
                 admin_bind = ?admin_bind,
                 datasets = dataset_count,
-                api_keys = keyring_size,
+                api_keys = auth_size_hint,
                 audit_sink = audit_kind,
                 provenance_enabled = *enabled,
                 provenance_mode = ?mode,
@@ -177,7 +184,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bind = %bind,
                 admin_bind = ?admin_bind,
                 datasets = dataset_count,
-                api_keys = keyring_size,
+                api_keys = auth_size_hint,
                 audit_sink = audit_kind,
                 provenance_enabled = false,
                 "registry-relay listening"
@@ -264,24 +271,34 @@ fn resolve_config_path() -> PathBuf {
     PathBuf::from(DEFAULT_CONFIG_PATH)
 }
 
-/// Build the V1 API-key provider from `auth.api_keys[]`.
+/// Build the configured authentication provider.
+///
+/// Returns an [`AuthProviderRef`] so the same call site serves both
+/// the V1 API-key provider and future OIDC provider without further
+/// branching at the wiring layer. Today only [`ApiKeyAuth`] is wired;
+/// OIDC will land as an additional arm on [`config::AuthMode`].
 ///
 /// The config validator (`crate::config::validate`) already enforced
-/// that every `hash_env` is set and parses as a SHA-256 API key fingerprint,
-/// so the only failures we expect here are TOCTOU env var removals
-/// between validation and now. Those propagate as
+/// that every `hash_env` is set and parses as a SHA-256 API key
+/// fingerprint, so the only failures we expect here are TOCTOU env var
+/// removals between validation and now. Those propagate as
 /// `ConfigError::MissingSecret` so the binary exits with the same
 /// stable code as the validator does.
 ///
-/// The keyring is immutable for the process lifetime. Key rotation is a
-/// restart operation unless a future provider adds live keyring reload.
-fn build_auth(config: &Config) -> Result<ApiKeyAuth, Error> {
-    let mut entries = Vec::with_capacity(config.auth.api_keys.len());
-    for key in &config.auth.api_keys {
-        let entry = build_api_key_entry(key)?;
-        entries.push(entry);
+/// The provider is immutable for the process lifetime. Key/JWKS
+/// rotation is a restart operation unless a future provider adds live
+/// reload.
+fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
+    match config.auth.mode {
+        config::AuthMode::ApiKey => {
+            let mut entries = Vec::with_capacity(config.auth.api_keys.len());
+            for key in &config.auth.api_keys {
+                let entry = build_api_key_entry(key)?;
+                entries.push(entry);
+            }
+            Ok(Arc::new(ApiKeyAuth::new(entries)))
+        }
     }
-    Ok(ApiKeyAuth::new(entries))
 }
 
 /// Resolve one `ApiKeyConfig` into an `ApiKeyEntry`.

@@ -93,7 +93,7 @@ impl ApiKeyAuth {
                 (
                     entry.fingerprint,
                     Principal {
-                        api_key_id: entry.id,
+                        principal_id: entry.id,
                         scopes: entry.scopes,
                         auth_mode: AuthMode::ApiKey,
                     },
@@ -126,7 +126,7 @@ impl ApiKeyAuth {
         if let Some(principal) = self.principals.get(&fingerprint).cloned() {
             tracing::debug!(
                 target: "registry_relay::auth",
-                api_key_id = %principal.api_key_id,
+                principal_id = %principal.principal_id,
                 "api key verified",
             );
             return Ok(principal);
@@ -314,7 +314,7 @@ mod tests {
     fn verify_succeeds_for_matching_secret() {
         let provider = provider_with("correct-secret");
         let principal = provider.verify("correct-secret").expect("verified");
-        assert_eq!(principal.api_key_id, "tester");
+        assert_eq!(principal.principal_id, "tester");
         assert!(principal.scopes.contains("rows"));
     }
 

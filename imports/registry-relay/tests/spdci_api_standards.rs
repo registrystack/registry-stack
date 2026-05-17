@@ -63,7 +63,7 @@ fn demo_config(name: &str) -> PathBuf {
 
 fn principal(scopes: &[&str]) -> Principal {
     Principal {
-        api_key_id: "test".to_string(),
+        principal_id: "test".to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
@@ -1155,7 +1155,7 @@ mod full_stack {
         let record = audit_record_for(&harness.audit_sink, "/dci/dr/registry/sync/search");
         assert_eq!(record["status_code"], 401);
         assert_eq!(record["error_code"], "auth.missing_credential");
-        assert_eq!(record["api_key_id"], Value::Null);
+        assert_eq!(record["principal_id"], Value::Null);
     }
 
     /// Authenticated POST with a key that lacks the entity's `read_scope`
@@ -1189,7 +1189,7 @@ mod full_stack {
         let record = audit_record_for(&harness.audit_sink, "/dci/dr/registry/sync/search");
         assert_eq!(record["status_code"], 403);
         assert_eq!(record["error_code"], "auth.scope_denied");
-        assert_eq!(record["api_key_id"], CLIENT_ID);
+        assert_eq!(record["principal_id"], CLIENT_ID);
     }
 
     /// Authenticated POST with the correct read scope must reach the SP
@@ -1214,7 +1214,7 @@ mod full_stack {
 
         let record = audit_record_for(&harness.audit_sink, "/dci/dr/registry/sync/search");
         assert_eq!(record["status_code"], 200);
-        assert_eq!(record["api_key_id"], CLIENT_ID);
+        assert_eq!(record["principal_id"], CLIENT_ID);
         assert_eq!(record["auth_mode"], "api_key");
         // The SP DCI handlers attach `AuditContextExt` so the audit
         // layer can record which dataset and entity served the row.
@@ -1271,7 +1271,7 @@ mod full_stack {
         let record = audit_record_for(&harness.audit_sink, "/dci/dr/registry/sync/search");
         assert_eq!(record["status_code"], 400);
         assert_eq!(record["error_code"], "spdci.request.invalid_header");
-        assert_eq!(record["api_key_id"], CLIENT_ID);
+        assert_eq!(record["principal_id"], CLIENT_ID);
         // Finding 3 regression guard: audit context must be present on
         // the error path, not only on the 200 path.
         assert_eq!(

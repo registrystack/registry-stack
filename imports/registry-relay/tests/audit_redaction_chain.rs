@@ -14,7 +14,7 @@ fn sample_record(request_id: usize) -> AuditRecord {
     AuditRecord {
         ts: "2026-05-15T10:00:00.123Z".to_string(),
         request_id: format!("REQ-{request_id:05}"),
-        api_key_id: Some("statistics_office".to_string()),
+        principal_id: Some("statistics_office".to_string()),
         auth_mode: Some("api_key".to_string()),
         remote_addr: "127.0.0.1".to_string(),
         method: "GET".to_string(),

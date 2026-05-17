@@ -167,7 +167,7 @@ mod tests {
         AuditRecord {
             ts: "2026-05-15T10:00:00.123Z".to_string(),
             request_id: format!("REQ-{id:05}"),
-            api_key_id: None,
+            principal_id: None,
             auth_mode: None,
             remote_addr: "127.0.0.1".to_string(),
             method: "GET".to_string(),

@@ -11,7 +11,7 @@
 //!
 //! Integration:
 //! - The middleware reads `Principal` from request extensions when
-//!   present and projects its identity into `api_key_id`, `auth_mode`,
+//!   present and projects its identity into `principal_id`, `auth_mode`,
 //!   and `scopes_used`.
 //! - The error module attaches a stable error code on failure
 //!   responses via the `ErrorCodeExt` response extension defined in
@@ -148,10 +148,13 @@ pub struct AuditRecord {
     pub ts: String,
     /// ULID, 26 chars Crockford Base32; identical to `X-Request-Id`.
     pub request_id: String,
-    /// `null` only when auth failed before identification.
-    pub api_key_id: Option<String>,
-    /// `api_key` in V1; future `jwt`, `dataspace`. `None` matches
-    /// `api_key_id = None` to preserve null-coupling.
+    /// Stable identifier of the authenticated caller. Source depends
+    /// on the provider that authenticated the request (`auth_mode`):
+    /// the API-key entry id for `api_key`, the JWT `sub`/`client_id`
+    /// for `oidc`. `null` only when auth failed before identification.
+    pub principal_id: Option<String>,
+    /// `api_key` or `oidc`. `None` matches `principal_id = None` to
+    /// preserve null-coupling.
     pub auth_mode: Option<String>,
     /// Client IP textual form (post-proxy when the trust policy resolves).
     pub remote_addr: String,
@@ -509,7 +512,7 @@ pub async fn audit_layer(
         .get::<crate::auth::Principal>()
         .cloned()
         .or(principal_on_req);
-    let api_key_id = principal.as_ref().map(|p| p.api_key_id.clone());
+    let principal_id = principal.as_ref().map(|p| p.principal_id.clone());
     let auth_mode = principal
         .as_ref()
         .map(|p| auth_mode_label(p.auth_mode).to_string());
@@ -531,7 +534,7 @@ pub async fn audit_layer(
     let record = AuditRecord {
         ts: now_iso8601_millis(),
         request_id,
-        api_key_id,
+        principal_id,
         auth_mode,
         remote_addr,
         method,

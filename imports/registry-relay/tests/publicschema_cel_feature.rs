@@ -55,7 +55,7 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 
 fn principal(scopes: &[&str]) -> Principal {
     Principal {
-        api_key_id: "test".to_string(),
+        principal_id: "test".to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }

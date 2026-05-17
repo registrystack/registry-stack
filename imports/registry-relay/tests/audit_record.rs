@@ -29,7 +29,7 @@ fn sample_record() -> AuditRecord {
     AuditRecord {
         ts: "2026-05-15T10:00:00.123Z".to_string(),
         request_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-        api_key_id: Some("statistics_office".to_string()),
+        principal_id: Some("statistics_office".to_string()),
         auth_mode: Some("api_key".to_string()),
         remote_addr: "127.0.0.1".to_string(),
         method: "GET".to_string(),
@@ -63,7 +63,7 @@ fn record_serialises_to_expected_field_shape() {
     let expected: BTreeSet<&'static str> = [
         "ts",
         "request_id",
-        "api_key_id",
+        "principal_id",
         "auth_mode",
         "remote_addr",
         "method",
@@ -101,7 +101,7 @@ fn record_field_types_match_contract() {
     let json = serde_json::to_value(&record).unwrap();
     assert!(json["ts"].is_string());
     assert!(json["request_id"].is_string());
-    assert!(json["api_key_id"].is_string());
+    assert!(json["principal_id"].is_string());
     assert!(json["auth_mode"].is_string());
     assert!(json["remote_addr"].is_string());
     assert!(json["method"].is_string());
@@ -354,13 +354,13 @@ async fn response_body_unaffected_by_audit_middleware() {
 }
 
 /// BLK-1: the audit middleware reads `Principal` from request extensions
-/// when present and projects `api_key_id`, `auth_mode`, and `scopes_used`
+/// when present and projects `principal_id`, `auth_mode`, and `scopes_used`
 /// into the captured `AuditRecord`.
 #[tokio::test]
 async fn middleware_projects_principal_into_record() {
     async fn inject_principal(mut req: Request<Body>, next: Next) -> axum::response::Response {
         req.extensions_mut().insert(Principal {
-            api_key_id: "test_client".to_string(),
+            principal_id: "test_client".to_string(),
             scopes: ScopeSet::from_iter(["scope.a", "scope.b"]),
             auth_mode: AuthMode::ApiKey,
         });
@@ -391,7 +391,7 @@ async fn middleware_projects_principal_into_record() {
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
     let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
-    assert_eq!(parsed["api_key_id"], "test_client");
+    assert_eq!(parsed["principal_id"], "test_client");
     assert_eq!(parsed["auth_mode"], "api_key");
     let scopes: BTreeSet<&str> = parsed["scopes_used"]
         .as_array()
@@ -562,7 +562,7 @@ async fn middleware_projects_principal_when_auth_runs_inside_audit() {
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
     let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
-    assert_eq!(parsed["api_key_id"], "statistics_office");
+    assert_eq!(parsed["principal_id"], "statistics_office");
     assert_eq!(parsed["auth_mode"], "api_key");
     let scopes: BTreeSet<&str> = parsed["scopes_used"]
         .as_array()
@@ -621,7 +621,7 @@ async fn middleware_captures_error_code_from_auth_short_circuit() {
     assert_eq!(records.len(), 1);
     let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
     assert_eq!(parsed["error_code"], "auth.missing_credential");
-    assert_eq!(parsed["api_key_id"], Value::Null);
+    assert_eq!(parsed["principal_id"], Value::Null);
 }
 
 #[tokio::test]

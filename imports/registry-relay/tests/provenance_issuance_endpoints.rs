@@ -59,7 +59,7 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 
 fn principal(scopes: &[&str]) -> Principal {
     Principal {
-        api_key_id: "test".to_string(),
+        principal_id: "test".to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
@@ -859,7 +859,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
     );
 
     let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/verify");
-    assert_eq!(record["api_key_id"], "vc-full-stack");
+    assert_eq!(record["principal_id"], "vc-full-stack");
     assert_eq!(record["auth_mode"], "api_key");
     assert_eq!(record["provenance"]["event"], "provenance.vc.issued");
 }

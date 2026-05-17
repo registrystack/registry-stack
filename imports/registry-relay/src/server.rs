@@ -68,7 +68,7 @@ use ulid::Ulid;
 
 use crate::api::{self, CursorSigner};
 use crate::audit::{self, AuditSettings, AuditSink};
-use crate::auth::{middleware::auth_layer, AuthProvider};
+use crate::auth::middleware::{auth_layer, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
@@ -105,31 +105,28 @@ impl MakeRequestId for UlidMakeRequestId {
 
 /// Assemble the full HTTP application for the main listener.
 ///
-/// The function is generic over the [`AuthProvider`] type so the
-/// middleware compiles to a single monomorphisation per binary, no
-/// `dyn` dispatch on the hot path. The audit sink is held as
-/// `Arc<dyn AuditSink>` because the sink is selected from config at
-/// startup and we don't want to force the whole router to be generic on
-/// that choice.
-pub fn build_app<P>(config: Arc<Config>, auth: Arc<P>, audit_sink: Arc<dyn AuditSink>) -> Router
-where
-    P: AuthProvider,
-{
+/// The auth provider and audit sink are both passed as `Arc<dyn _>`:
+/// startup branches on `config::AuthMode` and `config::AuditSinkConfig`
+/// once and the rest of the wiring is provider-agnostic. The per-request
+/// virtual call cost is negligible against SHA-256 hashing (API-key) or
+/// JWT signature verification (OIDC).
+pub fn build_app(
+    config: Arc<Config>,
+    auth: AuthProviderRef,
+    audit_sink: Arc<dyn AuditSink>,
+) -> Router {
     build_app_with_provenance(config, auth, audit_sink, None)
 }
 
 /// Same as [`build_app`] but lets a caller install a pre-built
 /// [`ProvenanceState`]. Tests that don't exercise provenance keep the
 /// smaller [`build_app`] entry.
-pub fn build_app_with_provenance<P>(
+pub fn build_app_with_provenance(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     build_app_with_provenance_and_metrics(
         config,
         auth,
@@ -141,16 +138,13 @@ where
 
 /// Same as [`build_app_with_provenance`] but lets callers supply the
 /// request metrics collector installed in the cross-cutting stack.
-pub fn build_app_with_provenance_and_metrics<P>(
+pub fn build_app_with_provenance_and_metrics(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     // Health/ready routes: unauthenticated sub-router. Merged onto the
     // top-level router *outside* the auth layer. The Scalar viewer
     // (`/docs` + `/docs/scalar.js`) is a static HTML+JS shell with no
@@ -221,32 +215,26 @@ fn merge_spdci_routes(router: Router) -> Router {
 ///
 /// [`build_app`] remains as a tiny compatibility wrapper for tests that
 /// only need the HTTP shell without live readiness state.
-pub fn build_app_with_readiness<P>(
+pub fn build_app_with_readiness(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     build_app(config, auth, audit_sink).layer(Extension(readiness))
 }
 
 /// Assemble the main app with readiness plus entity/query state installed
 /// for entity-shaped API routes.
-pub fn build_app_with_entity_query<P>(
+pub fn build_app_with_entity_query(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     build_app_with_readiness(config, auth, audit_sink, readiness)
         .layer(Extension(aggregate_query))
         .layer(Extension(query))
@@ -258,19 +246,16 @@ where
 /// built from the parsed config; tests that need provenance plus query
 /// call this directly with their own handles.
 #[allow(clippy::too_many_arguments)]
-pub fn build_app_with_entity_query_and_provenance<P>(
+pub fn build_app_with_entity_query_and_provenance(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     build_app_with_entity_query_and_provenance_and_metrics(
         config,
         auth,
@@ -289,9 +274,9 @@ where
 /// The binary uses this to expose data-plane and admin traffic through
 /// the admin-only `/metrics` route.
 #[allow(clippy::too_many_arguments)]
-pub fn build_app_with_entity_query_and_provenance_and_metrics<P>(
+pub fn build_app_with_entity_query_and_provenance_and_metrics(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
@@ -299,10 +284,7 @@ pub fn build_app_with_entity_query_and_provenance_and_metrics<P>(
     aggregate_query: Arc<AggregateQueryEngine>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     build_app_with_provenance_and_metrics(config, auth, audit_sink, provenance, metrics)
         .layer(Extension(readiness))
         .layer(Extension(aggregate_query))
@@ -316,16 +298,13 @@ where
 /// can probe the second port without authentication. Admin reload
 /// routes are mounted behind authentication and their handlers enforce
 /// the `admin` scope.
-pub fn build_admin_app<P>(
+pub fn build_admin_app(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     build_admin_app_with_metrics(
         config,
         auth,
@@ -338,17 +317,14 @@ where
 
 /// Same as [`build_admin_app`] but shares a request metrics collector
 /// with another listener.
-pub fn build_admin_app_with_metrics<P>(
+pub fn build_admin_app_with_metrics(
     config: Arc<Config>,
-    auth: Arc<P>,
+    auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
     metrics: Arc<RequestMetrics>,
-) -> Router
-where
-    P: AuthProvider,
-{
+) -> Router {
     let public = api::health_router()
         .merge(crate::observability::router())
         .layer(Extension(metrics.clone()));

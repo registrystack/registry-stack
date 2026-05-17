@@ -32,14 +32,11 @@ pub use scopes::ScopeSet;
 /// Authentication mode tag. Carried on every authenticated
 /// [`Principal`]; surfaced into audit records as `auth_mode`.
 ///
-/// `#[non_exhaustive]` so JWT/dataspace variants can land additively
-/// without breaking exhaustive match sites; the small handful of sites
-/// that exhaustively match (audit serialisation, scope checks) get a
-/// compile-time nudge when V2 lands.
+/// New variants force the compiler to flag every exhaustive match
+/// site (audit serialisation, label lookup); that's the point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum AuthMode {
-    /// V1: high-entropy API key verified against a stored SHA-256
+    /// High-entropy API key verified against a stored SHA-256
     /// fingerprint. The mirror of `config::AuthMode::ApiKey`.
     ApiKey,
 }
@@ -52,9 +49,13 @@ pub enum AuthMode {
 /// fields directly on every protected request.
 #[derive(Debug, Clone)]
 pub struct Principal {
-    /// Stable identifier from `auth.api_keys[].id`. Never the secret,
-    /// never the hash; safe to log and surface in audit records.
-    pub api_key_id: String,
+    /// Stable identifier of the authenticated caller. Source depends on
+    /// the provider that produced it: for API keys, it is the configured
+    /// `auth.api_keys[].id`; for OIDC, it is the JWT `sub` (or
+    /// `client_id` for client-credentials tokens). Never the secret,
+    /// never the hash, never a JWT; safe to log and surface in audit
+    /// records.
+    pub principal_id: String,
 
     /// Resolved scopes; gates authorisation in handlers via
     /// [`scopes::require_scope`].

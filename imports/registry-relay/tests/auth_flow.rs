@@ -78,14 +78,9 @@ async fn whoami_handler(Extension(principal): Extension<Principal>) -> impl Into
     let scopes: Vec<&str> = principal.scopes.iter().collect();
     let mode = match principal.auth_mode {
         AuthMode::ApiKey => "api_key",
-        // AuthMode is #[non_exhaustive]; falling through here is a
-        // V2 problem, not a V1 one. Default to a string the test
-        // assertion does not match against so V2 wiring forces an
-        // explicit decision.
-        _ => "unknown",
     };
     axum::Json(serde_json::json!({
-        "api_key_id": principal.api_key_id,
+        "principal_id": principal.principal_id,
         "scopes": scopes,
         "auth_mode": mode,
     }))
@@ -247,7 +242,7 @@ async fn valid_key_admits_request_and_populates_principal() {
         "successful response body must not contain the raw credential"
     );
     let value: Value = serde_json::from_str(&body_str).expect("JSON");
-    assert_eq!(value["api_key_id"].as_str(), Some(CLIENT_ID));
+    assert_eq!(value["principal_id"].as_str(), Some(CLIENT_ID));
     assert_eq!(value["auth_mode"].as_str(), Some("api_key"));
     let scopes: Vec<&str> = value["scopes"]
         .as_array()
@@ -282,7 +277,7 @@ async fn x_api_key_admits_request_and_populates_principal() {
         "successful response body must not contain the raw credential"
     );
     let value: Value = serde_json::from_str(&body_str).expect("JSON");
-    assert_eq!(value["api_key_id"].as_str(), Some(CLIENT_ID));
+    assert_eq!(value["principal_id"].as_str(), Some(CLIENT_ID));
     assert_eq!(value["auth_mode"].as_str(), Some("api_key"));
 }
 
@@ -315,7 +310,7 @@ async fn missing_scope_returns_scope_denied() {
 #[tokio::test]
 async fn require_scope_unit_returns_scope_denied_error() {
     let principal = Principal {
-        api_key_id: "test".to_string(),
+        principal_id: "test".to_string(),
         scopes: ScopeSet::from_iter(["a", "b"]),
         auth_mode: AuthMode::ApiKey,
     };
@@ -326,7 +321,7 @@ async fn require_scope_unit_returns_scope_denied_error() {
 #[tokio::test]
 async fn require_scope_unit_admits_present_scope() {
     let principal = Principal {
-        api_key_id: "test".to_string(),
+        principal_id: "test".to_string(),
         scopes: ScopeSet::from_iter(["a", "b"]),
         auth_mode: AuthMode::ApiKey,
     };
@@ -347,7 +342,7 @@ async fn provider_directly_authenticates_valid_bearer() {
         .authenticate(&headers, IpAddr::V4(Ipv4Addr::LOCALHOST))
         .await
         .expect("valid bearer authenticates");
-    assert_eq!(principal.api_key_id, CLIENT_ID);
+    assert_eq!(principal.principal_id, CLIENT_ID);
 }
 
 #[tokio::test]

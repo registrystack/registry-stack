@@ -239,11 +239,10 @@ pub struct AuthConfig {
     pub api_keys: Vec<ApiKeyConfig>,
 }
 
-/// Authentication mode tag. Non-exhaustive so JWT/dataspace variants
-/// land additively in V2.
+/// Authentication mode tag. Drives the provider built at startup in
+/// `crate::auth`.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum AuthMode {
     /// Hashed shared secret in an environment variable.
     ApiKey,
