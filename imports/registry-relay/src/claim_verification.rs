@@ -54,10 +54,8 @@ impl ClaimVerificationHasher {
         let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(self.key.as_ref())
             .expect("HMAC-SHA256 accepts any key length");
         mac.update(canonical.as_bytes());
-        Ok(format!(
-            "hmac-sha256:{}",
-            hex_lower(mac.finalize().into_bytes().as_slice())
-        ))
+        let bytes = mac.finalize().into_bytes();
+        Ok(format!("hmac-sha256:{}", hex_lower(&bytes)))
     }
 }
 
