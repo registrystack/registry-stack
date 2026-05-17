@@ -1517,6 +1517,7 @@ mod tests {
                 aggregate_scope: "aggregate".to_string(),
                 read_scope: "rows".to_string(),
                 verify_scope: "verify".to_string(),
+                claim_verification_scope: None,
                 bulk_export_scope: "bulk_export".to_string(),
             },
             api: EntityApiConfig {
@@ -1528,6 +1529,7 @@ mod tests {
                 allowed_expansions: Vec::new(),
             },
             spatial: None,
+            claim_verification: None,
         }
     }
 

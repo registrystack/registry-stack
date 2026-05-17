@@ -2298,6 +2298,8 @@ mod tests {
                         schema:
                             "https://data.example.test/datasets/social_registry/individual/schema"
                                 .to_string(),
+                        ogc_collection: None,
+                        ogc_items: None,
                     },
                 }],
             }],
