@@ -61,6 +61,11 @@ pub enum JwksFetchError {
     /// Response body did not parse as a JWKS document.
     #[error("jwks response did not parse")]
     Parse,
+    /// The `issuer` field in the OIDC discovery document does not match
+    /// the operator-configured issuer. Required by RFC 8414 §3 to
+    /// prevent a DNS-hijack from substituting a foreign JWKS endpoint.
+    #[error("discovery issuer mismatch: expected {expected:?}, got {actual:?}")]
+    IssuerMismatch { expected: String, actual: String },
 }
 
 /// Pluggable fetcher contract. The cache calls `fetch` whenever a
@@ -176,6 +181,16 @@ impl JwksCache {
         // Re-read state inside the lock: another task may have already
         // refreshed past our snapshot.
         let current = self.state.load_full();
+
+        // Exit early if another task already attempted a refresh (success or
+        // failure) while we were waiting on the lock. Comparing
+        // `last_attempt_at` covers both outcomes: a successful refresh bumps
+        // `fetched_at` (caught below) and a failed refresh only bumps
+        // `last_attempt_at` (this check).
+        if current.last_attempt_at != prior.last_attempt_at {
+            return;
+        }
+
         if let (Some(prior_at), Some(current_at)) = (prior.fetched_at, current.fetched_at) {
             if current_at > prior_at {
                 return;
@@ -417,5 +432,56 @@ mod tests {
             Err(e) => e,
         };
         assert!(matches!(err, JwksError::Unavailable(_)));
+    }
+
+    // --- Fix S-M4: double-checked-locking guard on failed-fetch case ---
+
+    struct CountingFailingFetcher {
+        calls: AtomicUsize,
+    }
+
+    impl JwksFetcher for CountingFailingFetcher {
+        fn fetch<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<JwksFetchResult, JwksFetchError>> + Send + 'a>>
+        {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Err(JwksFetchError::Transport("simulated failure".to_string())) })
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_unknown_kid_triggers_exactly_one_fetch_on_failure() {
+        // Use a very long refresh interval so rate-limiting does not mask
+        // the double-fetch bug: without the guard fix, each waiter that
+        // races past the lock would attempt its own fetch.
+        let fetcher = Arc::new(CountingFailingFetcher {
+            calls: AtomicUsize::new(0),
+        });
+        let cache = Arc::new(JwksCache::with_refresh_interval(
+            fetcher.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(3600), // rate-limit far in the future
+        ));
+
+        // Spawn N concurrent get() calls; all will miss the (empty) cache.
+        let n = 4usize;
+        let mut handles = Vec::with_capacity(n);
+        for _ in 0..n {
+            let cache = Arc::clone(&cache);
+            handles.push(tokio::spawn(async move {
+                let _ = cache.get("unknown-kid").await;
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert_eq!(
+            fetcher.calls.load(Ordering::SeqCst),
+            1,
+            "fetcher must be called exactly once despite {} concurrent waiters",
+            n,
+        );
     }
 }

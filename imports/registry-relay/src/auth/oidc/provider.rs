@@ -67,7 +67,13 @@ pub struct OidcAuth {
     scope_claim: String,
     scope_map: BTreeMap<String, String>,
     /// `None` means no allowlist (any client accepted). `Some(set)`
-    /// means the token's `azp` or `client_id` must be in the set.
+    /// means the token's `azp` (preferred) or `client_id` must be in the set.
+    ///
+    /// Note: `principal_id` is taken from `sub` first (step 6 of the
+    /// verification flow), so an authenticated principal's `principal_id` may
+    /// differ from the client identifier that satisfied the allowlist. This is
+    /// intentional: `sub` identifies the end entity (human or service account)
+    /// while `azp`/`client_id` identifies the OAuth client application.
     allowed_clients: Option<HashSet<String>>,
     /// Accepted JOSE `typ` values, normalised to lowercase for the
     /// case-insensitive match RFC 7515 prescribes.
@@ -225,10 +231,10 @@ impl OidcAuth {
         })?;
         let claims = token_data.claims;
 
-        if let Some(allowed) = &self.allowed_clients {
+        let matched_client = if let Some(allowed) = &self.allowed_clients {
             let candidate = claims.azp.as_deref().or(claims.client_id.as_deref());
             match candidate {
-                Some(c) if allowed.contains(c) => {}
+                Some(c) if allowed.contains(c) => Some(c.to_string()),
                 _ => {
                     tracing::debug!(
                         target: "registry_relay::auth",
@@ -237,7 +243,9 @@ impl OidcAuth {
                     return Err(AuthError::ClientNotAllowed);
                 }
             }
-        }
+        } else {
+            None
+        };
 
         let principal_id = claims
             .sub
@@ -250,6 +258,18 @@ impl OidcAuth {
                 );
                 AuthError::MalformedCredential
             })?;
+
+        // Log the relationship between the matched client identifier (if an
+        // allowlist was enforced) and the resolved principal_id. These may
+        // differ when a service token carries both `azp` and `sub`.
+        if let Some(client) = matched_client {
+            tracing::debug!(
+                target: "registry_relay::auth",
+                matched_client = %client,
+                principal_id = %principal_id,
+                "oidc: allowlist passed",
+            );
+        }
 
         let scopes: ScopeSet = extract_scopes(&claims.extra, &self.scope_claim)
             .into_iter()
@@ -301,11 +321,26 @@ fn extract_bearer(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
         .get(header::AUTHORIZATION)
         .ok_or(AuthError::MissingCredential)?;
     let raw = value.to_str().map_err(|_| AuthError::MalformedCredential)?;
-    let token = raw
-        .strip_prefix(BEARER_SCHEME)
-        .and_then(|rest| rest.strip_prefix(' '))
-        .ok_or(AuthError::MalformedCredential)?;
+    // RFC 7235 §2.1: auth scheme is case-insensitive. RFC 6750 §2.1 requires
+    // exactly one SP between the scheme and the token.
+    let scheme_len = BEARER_SCHEME.len();
+    if raw.len() <= scheme_len
+        || !raw[..scheme_len].eq_ignore_ascii_case(BEARER_SCHEME)
+        || raw.as_bytes()[scheme_len] != b' '
+    {
+        return Err(AuthError::MalformedCredential);
+    }
+    let token = &raw[scheme_len + 1..];
     if token.is_empty() {
+        return Err(AuthError::MalformedCredential);
+    }
+    // Reject two-space separators (scheme + two spaces + token). The check
+    // above already ensured byte[scheme_len] == b' '; a second space would
+    // mean the "token" starts with a space, which is not a valid token char.
+    // This is implicitly handled: token is non-empty and the caller passes it
+    // verbatim to JWT decode which will reject a leading-space value.
+    // For explicitness, reject any token that starts with a space.
+    if token.starts_with(' ') {
         return Err(AuthError::MalformedCredential);
     }
     Ok(Zeroizing::new(token.to_string()))
@@ -849,5 +884,63 @@ mod tests {
         );
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         provider.verify(&token).await.expect("intersecting aud ok");
+    }
+
+    // --- Fix S-M3: case-insensitive Bearer scheme ---
+
+    fn bearer_headers(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, value.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn bearer_lowercase_scheme_is_accepted() {
+        let headers = bearer_headers("bearer sometoken");
+        let token = extract_bearer(&headers).expect("lowercase bearer accepted");
+        assert_eq!(token.as_str(), "sometoken");
+    }
+
+    #[test]
+    fn bearer_uppercase_scheme_is_accepted() {
+        let headers = bearer_headers("BEARER sometoken");
+        let token = extract_bearer(&headers).expect("uppercase bearer accepted");
+        assert_eq!(token.as_str(), "sometoken");
+    }
+
+    #[test]
+    fn bearer_mixed_case_scheme_is_accepted() {
+        let headers = bearer_headers("Bearer sometoken");
+        let token = extract_bearer(&headers).expect("mixed-case bearer accepted");
+        assert_eq!(token.as_str(), "sometoken");
+    }
+
+    #[test]
+    fn bearer_two_spaces_is_malformed() {
+        // RFC 6750 §2.1 requires exactly one SP; two spaces is not valid.
+        let headers = bearer_headers("Bearer  sometoken");
+        let err = extract_bearer(&headers).expect_err("double space must be rejected");
+        assert!(matches!(err, AuthError::MalformedCredential));
+    }
+
+    #[test]
+    fn bearer_no_space_is_malformed() {
+        let headers = bearer_headers("Bearersometoken");
+        let err = extract_bearer(&headers).expect_err("no space must be rejected");
+        assert!(matches!(err, AuthError::MalformedCredential));
+    }
+
+    #[test]
+    fn bearer_empty_token_is_malformed() {
+        let headers = bearer_headers("Bearer ");
+        let err = extract_bearer(&headers).expect_err("empty token must be rejected");
+        assert!(matches!(err, AuthError::MalformedCredential));
+    }
+
+    #[test]
+    fn missing_authorization_header_returns_missing_credential() {
+        let headers = HeaderMap::new();
+        let err = extract_bearer(&headers).expect_err("missing header");
+        assert!(matches!(err, AuthError::MissingCredential));
     }
 }

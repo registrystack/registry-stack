@@ -15,6 +15,7 @@
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use serde::Deserialize;
 
 use super::jwks::{JwksFetchError, JwksFetchResult, JwksFetcher};
@@ -27,6 +28,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// discovery and JWKS fetches. Sized for the typical sub-second JWKS
 /// response with generous headroom for a slow IdP.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum response body size for both discovery and JWKS fetches.
+/// Prevents a runaway IdP response from exhausting heap before the
+/// 30s overall timeout fires.
+const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
 
 /// HTTP JWKS fetcher. One instance per OIDC provider; cloning is cheap
 /// because the inner [`reqwest::Client`] is internally `Arc`d.
@@ -51,8 +57,14 @@ impl ReqwestJwksFetcher {
     /// Resolve a JWKS URL from an OIDC discovery document, then build a
     /// fetcher that points at it. One network round-trip; intended for
     /// startup, not the verify hot path.
+    ///
+    /// RFC 8414 §3 requires that the discovery document's `issuer` field
+    /// equals `expected_issuer`. A mismatch is returned as
+    /// [`JwksFetchError::IssuerMismatch`] so startup fails fast rather than
+    /// silently accepting keys from a foreign issuer.
     pub async fn from_discovery_url(
         discovery_url: impl AsRef<str>,
+        expected_issuer: &str,
     ) -> Result<Self, JwksFetchError> {
         let client = build_client()?;
         let discovery_url = discovery_url.as_ref();
@@ -67,11 +79,14 @@ impl ReqwestJwksFetcher {
                 response.status().as_u16()
             )));
         }
-        let document: DiscoveryDocument =
-            response.json().await.map_err(|_| JwksFetchError::Parse)?;
+        let body = response
+            .bytes()
+            .await
+            .map_err(|err| JwksFetchError::Transport(redact_url(err.to_string())))?;
+        let jwks_uri = validate_discovery_document_bytes(&body, expected_issuer)?;
         Ok(Self {
             client,
-            jwks_url: document.jwks_uri,
+            jwks_url: jwks_uri,
         })
     }
 
@@ -101,7 +116,11 @@ impl JwksFetcher for ReqwestJwksFetcher {
                     response.status().as_u16()
                 )));
             }
-            let jwks = response.json().await.map_err(|_| JwksFetchError::Parse)?;
+            let body = response
+                .bytes()
+                .await
+                .map_err(|err| JwksFetchError::Transport(redact_url(err.to_string())))?;
+            let jwks = parse_response_bytes(&body, MAX_RESPONSE_BYTES)?;
             Ok(JwksFetchResult { jwks })
         })
     }
@@ -129,10 +148,126 @@ fn redact_url(message: String) -> String {
     }
 }
 
-/// Minimal projection of the OIDC discovery document. Only `jwks_uri` is
-/// load-bearing for the relay; other fields (`issuer`, `authorization_endpoint`,
-/// ...) are intentionally ignored.
+/// Minimal projection of the OIDC discovery document. Both `issuer` and
+/// `jwks_uri` are load-bearing: `issuer` is validated against the
+/// operator-configured value (RFC 8414 §3); `jwks_uri` is the key-set URL.
+/// Other fields (`authorization_endpoint`, ...) are intentionally ignored.
 #[derive(Debug, Deserialize)]
 struct DiscoveryDocument {
+    issuer: String,
     jwks_uri: String,
+}
+
+/// Parse `bytes` as type `T` after asserting the body fits within `limit`.
+/// Returns [`JwksFetchError::Transport`] when the limit is exceeded and
+/// [`JwksFetchError::Parse`] when deserialisation fails.
+fn parse_response_bytes<T: serde::de::DeserializeOwned>(
+    bytes: &Bytes,
+    limit: usize,
+) -> Result<T, JwksFetchError> {
+    if bytes.len() > limit {
+        return Err(JwksFetchError::Transport(format!(
+            "response body too large: {} bytes (limit {})",
+            bytes.len(),
+            limit,
+        )));
+    }
+    serde_json::from_slice(bytes).map_err(|_| JwksFetchError::Parse)
+}
+
+/// Parse and validate an OIDC discovery document body.
+///
+/// Checks the body size, deserialises the document, and compares
+/// `document.issuer` against `expected_issuer` (RFC 8414 §3).
+/// Returns the `jwks_uri` on success.
+fn validate_discovery_document_bytes(
+    bytes: &Bytes,
+    expected_issuer: &str,
+) -> Result<String, JwksFetchError> {
+    let document: DiscoveryDocument = parse_response_bytes(bytes, MAX_RESPONSE_BYTES)?;
+    if document.issuer != expected_issuer {
+        return Err(JwksFetchError::IssuerMismatch {
+            expected: expected_issuer.to_string(),
+            actual: document.issuer,
+        });
+    }
+    Ok(document.jwks_uri)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn discovery_bytes(issuer: &str, jwks_uri: &str) -> Bytes {
+        Bytes::from(
+            serde_json::to_vec(&json!({
+                "issuer": issuer,
+                "jwks_uri": jwks_uri,
+                "authorization_endpoint": "https://idp.example/auth",
+            }))
+            .unwrap(),
+        )
+    }
+
+    // --- Fix S-H1: issuer validation ---
+
+    #[test]
+    fn discovery_issuer_mismatch_is_rejected() {
+        let body = discovery_bytes("https://attacker.example", "https://attacker.example/jwks");
+        let err = validate_discovery_document_bytes(&body, "https://idp.example.gov")
+            .expect_err("mismatch must fail");
+        assert!(
+            matches!(
+                err,
+                JwksFetchError::IssuerMismatch {
+                    ref expected,
+                    ref actual,
+                } if expected == "https://idp.example.gov"
+                    && actual == "https://attacker.example"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn discovery_issuer_match_returns_jwks_uri() {
+        let body = discovery_bytes("https://idp.example.gov", "https://idp.example.gov/jwks");
+        let jwks_uri = validate_discovery_document_bytes(&body, "https://idp.example.gov")
+            .expect("matching issuer accepted");
+        assert_eq!(jwks_uri, "https://idp.example.gov/jwks");
+    }
+
+    // --- Fix S-H2: response body size cap ---
+
+    #[test]
+    fn parse_response_bytes_rejects_oversized_body() {
+        // Build a valid JWKS JSON body just over the 1-byte limit we pass.
+        let body: Bytes = Bytes::from(br#"{"keys":[]}"#.to_vec());
+        let err = parse_response_bytes::<serde_json::Value>(&body, 5)
+            .expect_err("oversized body must fail");
+        assert!(
+            matches!(err, JwksFetchError::Transport(_)),
+            "expected Transport, got {err}"
+        );
+    }
+
+    #[test]
+    fn parse_response_bytes_accepts_body_within_limit() {
+        let body: Bytes = Bytes::from(br#"{"keys":[]}"#.to_vec());
+        let value: serde_json::Value =
+            parse_response_bytes(&body, 1024).expect("body within limit parses");
+        assert!(value.get("keys").is_some());
+    }
+
+    #[test]
+    fn parse_response_bytes_rejects_invalid_json() {
+        let body: Bytes = Bytes::from(b"not json".to_vec());
+        let err =
+            parse_response_bytes::<serde_json::Value>(&body, 1024).expect_err("bad json fails");
+        assert!(
+            matches!(err, JwksFetchError::Parse),
+            "expected Parse, got {err}"
+        );
+    }
 }

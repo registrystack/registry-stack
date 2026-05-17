@@ -333,16 +333,18 @@ async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
             );
             Error::from(ConfigError::ValidationError)
         })?,
-        (None, Some(discovery_url)) => ReqwestJwksFetcher::from_discovery_url(discovery_url)
-            .await
-            .map_err(|err| {
-                tracing::error!(
-                    code = "config.validation_error",
-                    error = %err,
-                    "failed to resolve OIDC discovery document"
-                );
-                Error::from(ConfigError::ValidationError)
-            })?,
+        (None, Some(discovery_url)) => {
+            ReqwestJwksFetcher::from_discovery_url(discovery_url, &oidc.issuer)
+                .await
+                .map_err(|err| {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        error = %err,
+                        "failed to resolve OIDC discovery document"
+                    );
+                    Error::from(ConfigError::ValidationError)
+                })?
+        }
         _ => {
             tracing::error!(
                 code = "config.validation_error",

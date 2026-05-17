@@ -187,7 +187,7 @@ async fn build_provider(cfg: &OidcConfig) -> Arc<OidcAuth> {
         .discovery_url
         .as_deref()
         .expect("discovery_url is set in test config");
-    let fetcher = ReqwestJwksFetcher::from_discovery_url(discovery_url)
+    let fetcher = ReqwestJwksFetcher::from_discovery_url(discovery_url, &cfg.issuer)
         .await
         .expect("discovery resolves");
     Arc::new(OidcAuth::new(cfg, Arc::new(fetcher)))
