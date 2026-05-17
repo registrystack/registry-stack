@@ -39,6 +39,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::{header, HeaderMap};
+use jsonwebtoken::errors::ErrorKind as JwtErrorKind;
 use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -166,7 +167,7 @@ impl OidcAuth {
                 alg = ?header.alg,
                 "oidc: rejected token by alg",
             );
-            return Err(AuthError::InvalidCredential);
+            return Err(AuthError::AlgorithmNotAllowed);
         }
 
         let kid = header.kid.ok_or_else(|| {
@@ -185,7 +186,7 @@ impl OidcAuth {
                     kid = %kid,
                     "oidc: kid not present in jwks",
                 );
-                return Err(AuthError::InvalidCredential);
+                return Err(AuthError::KidUnknown);
             }
             Err(JwksError::Unavailable(msg)) => {
                 tracing::warn!(
@@ -193,7 +194,7 @@ impl OidcAuth {
                     error = %msg,
                     "oidc: jwks unavailable; rejecting token",
                 );
-                return Err(AuthError::InvalidCredential);
+                return Err(AuthError::JwksUnavailable);
             }
         };
 
@@ -212,15 +213,16 @@ impl OidcAuth {
             .map(|s| (*s).to_string())
             .collect();
 
-        let token_data =
-            decode::<Claims>(presented, &key, &validation).map_err(|err| {
-                tracing::debug!(
-                    target: "registry_relay::auth",
-                    error = %err,
-                    "oidc: jwt validation failed",
-                );
-                AuthError::InvalidCredential
-            })?;
+        let token_data = decode::<Claims>(presented, &key, &validation).map_err(|err| {
+            let mapped = map_jwt_error(err.kind());
+            tracing::debug!(
+                target: "registry_relay::auth",
+                error = %err,
+                mapped = ?mapped,
+                "oidc: jwt validation failed",
+            );
+            mapped
+        })?;
         let claims = token_data.claims;
 
         if let Some(allowed) = &self.allowed_clients {
@@ -232,7 +234,7 @@ impl OidcAuth {
                         target: "registry_relay::auth",
                         "oidc: client not in allowed_clients",
                     );
-                    return Err(AuthError::InvalidCredential);
+                    return Err(AuthError::ClientNotAllowed);
                 }
             }
         }
@@ -307,6 +309,29 @@ fn extract_bearer(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
         return Err(AuthError::MalformedCredential);
     }
     Ok(Zeroizing::new(token.to_string()))
+}
+
+/// Map a [`jsonwebtoken`] decode error into the closest stable
+/// [`AuthError`] variant. The mapping is intentionally explicit so the
+/// audit pipeline records a granular `error_code` per failure mode (e.g.
+/// `auth.token_expired` vs `auth.audience_mismatch`) instead of a
+/// generic `auth.invalid_credential`.
+fn map_jwt_error(kind: &JwtErrorKind) -> AuthError {
+    match kind {
+        JwtErrorKind::ExpiredSignature => AuthError::TokenExpired,
+        JwtErrorKind::ImmatureSignature => AuthError::TokenNotYetValid,
+        JwtErrorKind::InvalidSignature => AuthError::TokenSignatureInvalid,
+        JwtErrorKind::InvalidIssuer => AuthError::IssuerMismatch,
+        JwtErrorKind::InvalidAudience => AuthError::AudienceMismatch,
+        JwtErrorKind::InvalidAlgorithm | JwtErrorKind::InvalidAlgorithmName => {
+            AuthError::AlgorithmNotAllowed
+        }
+        JwtErrorKind::MissingRequiredClaim(_)
+        | JwtErrorKind::Json(_)
+        | JwtErrorKind::Base64(_)
+        | JwtErrorKind::Utf8(_) => AuthError::MalformedCredential,
+        _ => AuthError::InvalidCredential,
+    }
 }
 
 /// Read scopes off the configured claim. RFC 8693 / RFC 9068 specify a
@@ -398,9 +423,7 @@ mod tests {
     }
 
     fn signing_to_encoding_key(signing: &SigningKey) -> EncodingKey {
-        let der = signing
-            .to_pkcs8_der()
-            .expect("ed25519 pkcs8 encoding");
+        let der = signing.to_pkcs8_der().expect("ed25519 pkcs8 encoding");
         EncodingKey::from_ed_der(der.as_bytes())
     }
 
@@ -465,8 +488,7 @@ mod tests {
         }
 
         let encoding_key = signing_to_encoding_key(signing);
-        encode(&header, &Value::Object(claims_map), &encoding_key)
-            .expect("encode jwt")
+        encode(&header, &Value::Object(claims_map), &encoding_key).expect("encode jwt")
     }
 
     #[tokio::test]
@@ -477,9 +499,7 @@ mod tests {
             TokenOpts {
                 extra: Map::from_iter([(
                     "scope".to_string(),
-                    Value::String(
-                        "social_registry:rows social_registry:metadata".to_string(),
-                    ),
+                    Value::String("social_registry:rows social_registry:metadata".to_string()),
                 )]),
                 ..Default::default()
             },
@@ -487,7 +507,10 @@ mod tests {
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
 
         let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
 
         let principal = provider
             .authenticate(&headers, std::net::IpAddr::from([127, 0, 0, 1]))
@@ -505,10 +528,7 @@ mod tests {
         let token = mint(
             &sk,
             TokenOpts {
-                extra: Map::from_iter([(
-                    "scope".to_string(),
-                    json!(["a", "b", "c"]),
-                )]),
+                extra: Map::from_iter([("scope".to_string(), json!(["a", "b", "c"]))]),
                 ..Default::default()
             },
         );
@@ -533,9 +553,10 @@ mod tests {
             },
         );
         let mut config = base_config();
-        config
-            .scope_map
-            .insert("role:reader".to_string(), "social_registry:rows".to_string());
+        config.scope_map.insert(
+            "role:reader".to_string(),
+            "social_registry:rows".to_string(),
+        );
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let principal = provider.verify(&token).await.expect("ok");
         assert!(principal.scopes.contains("social_registry:rows"));
@@ -548,10 +569,7 @@ mod tests {
         let token = mint(
             &sk,
             TokenOpts {
-                extra: Map::from_iter([(
-                    "scp".to_string(),
-                    json!(["one", "two"]),
-                )]),
+                extra: Map::from_iter([("scp".to_string(), json!(["one", "two"]))]),
                 ..Default::default()
             },
         );
@@ -564,7 +582,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expired_token_is_rejected_as_invalid_credential() {
+    async fn expired_token_is_rejected_as_token_expired() {
         let (sk, vk) = fresh_keypair();
         // Far enough in the past that no leeway in [0, 5m] saves it.
         let token = mint(
@@ -576,11 +594,11 @@ mod tests {
         );
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("expired");
-        assert!(matches!(err, AuthError::InvalidCredential));
+        assert!(matches!(err, AuthError::TokenExpired), "got {err:?}");
     }
 
     #[tokio::test]
-    async fn audience_mismatch_is_rejected_as_invalid_credential() {
+    async fn audience_mismatch_is_rejected_as_audience_mismatch() {
         let (sk, vk) = fresh_keypair();
         let token = mint(
             &sk,
@@ -591,11 +609,11 @@ mod tests {
         );
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("aud mismatch");
-        assert!(matches!(err, AuthError::InvalidCredential));
+        assert!(matches!(err, AuthError::AudienceMismatch), "got {err:?}");
     }
 
     #[tokio::test]
-    async fn issuer_mismatch_is_rejected_as_invalid_credential() {
+    async fn issuer_mismatch_is_rejected_as_issuer_mismatch() {
         let (sk, vk) = fresh_keypair();
         let token = mint(
             &sk,
@@ -606,11 +624,11 @@ mod tests {
         );
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("iss mismatch");
-        assert!(matches!(err, AuthError::InvalidCredential));
+        assert!(matches!(err, AuthError::IssuerMismatch), "got {err:?}");
     }
 
     #[tokio::test]
-    async fn unknown_kid_is_rejected_as_invalid_credential() {
+    async fn unknown_kid_is_rejected_as_kid_unknown() {
         let (sk, vk) = fresh_keypair();
         let token = mint(
             &sk,
@@ -621,7 +639,7 @@ mod tests {
         );
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("unknown kid");
-        assert!(matches!(err, AuthError::InvalidCredential));
+        assert!(matches!(err, AuthError::KidUnknown), "got {err:?}");
     }
 
     #[tokio::test]
@@ -721,7 +739,7 @@ mod tests {
         config.allowed_clients = vec!["statistics-office".to_string()];
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("denied");
-        assert!(matches!(err, AuthError::InvalidCredential));
+        assert!(matches!(err, AuthError::ClientNotAllowed), "got {err:?}");
     }
 
     #[tokio::test]
@@ -766,7 +784,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bad_signature_is_rejected_as_invalid_credential() {
+    async fn bad_signature_is_rejected_as_token_signature_invalid() {
         let (sk_real, vk_real) = fresh_keypair();
         let (sk_other, _vk_other) = fresh_keypair();
         // Token signed by sk_other but JWKS only has vk_real.
@@ -774,7 +792,10 @@ mod tests {
         let token = mint(&sk_other, TokenOpts::default());
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk_real));
         let err = provider.verify(&token).await.expect_err("bad signature");
-        assert!(matches!(err, AuthError::InvalidCredential));
+        assert!(
+            matches!(err, AuthError::TokenSignatureInvalid),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]

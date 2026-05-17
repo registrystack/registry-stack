@@ -86,6 +86,10 @@ uuid = { version = "1", features = ["v4"] }
 mime = { version = "0.3" }
 # base64url encoding used by the VC-JWT compact serialization.
 base64 = { version = "0.22" }
+# Used by the OIDC auth provider to fetch JWKS documents and resolve
+# `.well-known/openid-configuration`. native-tls keeps the TLS stack
+# consistent with the postgres-native-tls path already in this binary.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 
 # ─── time / ids ──────────────────────────────────────────────────────────────
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }

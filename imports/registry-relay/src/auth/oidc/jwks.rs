@@ -33,14 +33,12 @@ use tokio::sync::Mutex;
 pub enum JwksError {
     /// The requested `kid` is not present in the cache and a fresh
     /// fetch did not yield it (or the fetch attempt was rate-limited).
-    /// Mapped to `auth.invalid_credential` (401) until Stage 4 adds a
-    /// dedicated taxonomy code.
+    /// The provider maps this to `auth.kid_unknown` (401).
     #[error("unknown key id")]
     UnknownKid,
-    /// The cache is empty and the most recent fetch failed. Mapped to
-    /// `auth.invalid_credential` (401) for V1; Stage 4 promotes this
-    /// to a 503 with a dedicated code so operators can distinguish
-    /// transport outages from genuine bad tokens.
+    /// The cache is empty and the most recent fetch failed. The
+    /// provider maps this to `auth.jwks_unavailable` (503) so
+    /// operators can distinguish IdP outages from genuine bad tokens.
     #[error("jwks unavailable: {0}")]
     Unavailable(String),
 }
@@ -267,9 +265,7 @@ impl JwksFetcher for StaticFetcher {
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<JwksFetchResult, JwksFetchError>> + Send + 'a>> {
         let jwks = self.jwks.clone();
-        Box::pin(async move {
-            Ok(JwksFetchResult { jwks })
-        })
+        Box::pin(async move { Ok(JwksFetchResult { jwks }) })
     }
 }
 

@@ -107,6 +107,43 @@ pub enum AuthError {
     PurposeRequired,
     #[error("admin scope required")]
     AdminRequired,
+    /// OIDC: the bearer JWT's `exp` is in the past (beyond the
+    /// configured leeway).
+    #[error("token expired")]
+    TokenExpired,
+    /// OIDC: the bearer JWT's `nbf` is in the future (beyond the
+    /// configured leeway).
+    #[error("token not yet valid")]
+    TokenNotYetValid,
+    /// OIDC: the bearer JWT signature did not verify against the
+    /// resolved JWKS key.
+    #[error("token signature invalid")]
+    TokenSignatureInvalid,
+    /// OIDC: the bearer JWT's `iss` does not equal the configured
+    /// issuer.
+    #[error("issuer mismatch")]
+    IssuerMismatch,
+    /// OIDC: the bearer JWT's `aud` does not intersect the configured
+    /// audience set.
+    #[error("audience mismatch")]
+    AudienceMismatch,
+    /// OIDC: the bearer JWT's `kid` is not in the JWKS document
+    /// (after one rate-limited refresh).
+    #[error("kid unknown")]
+    KidUnknown,
+    /// OIDC: the bearer JWT's `alg` is not in the configured
+    /// algorithm allowlist.
+    #[error("algorithm not allowed")]
+    AlgorithmNotAllowed,
+    /// OIDC: the bearer JWT's `azp` / `client_id` is not in the
+    /// configured `allowed_clients` list.
+    #[error("client not allowed")]
+    ClientNotAllowed,
+    /// OIDC: the configured JWKS endpoint is not reachable and the
+    /// cache is empty. Mapped to 503 so operators can distinguish IdP
+    /// outages from bad tokens.
+    #[error("jwks unavailable")]
+    JwksUnavailable,
 }
 
 /// `filter.*` codes.
@@ -430,6 +467,15 @@ impl AuthError {
             AuthError::ScopeDenied { .. } => "auth.scope_denied",
             AuthError::PurposeRequired => "auth.purpose_required",
             AuthError::AdminRequired => "auth.admin_required",
+            AuthError::TokenExpired => "auth.token_expired",
+            AuthError::TokenNotYetValid => "auth.token_not_yet_valid",
+            AuthError::TokenSignatureInvalid => "auth.token_signature_invalid",
+            AuthError::IssuerMismatch => "auth.issuer_mismatch",
+            AuthError::AudienceMismatch => "auth.audience_mismatch",
+            AuthError::KidUnknown => "auth.kid_unknown",
+            AuthError::AlgorithmNotAllowed => "auth.algorithm_not_allowed",
+            AuthError::ClientNotAllowed => "auth.client_not_allowed",
+            AuthError::JwksUnavailable => "auth.jwks_unavailable",
         }
     }
 
@@ -437,9 +483,19 @@ impl AuthError {
         match self {
             AuthError::MissingCredential
             | AuthError::InvalidCredential
-            | AuthError::MalformedCredential => StatusCode::UNAUTHORIZED,
-            AuthError::ScopeDenied { .. } | AuthError::AdminRequired => StatusCode::FORBIDDEN,
+            | AuthError::MalformedCredential
+            | AuthError::TokenExpired
+            | AuthError::TokenNotYetValid
+            | AuthError::TokenSignatureInvalid
+            | AuthError::IssuerMismatch
+            | AuthError::AudienceMismatch
+            | AuthError::KidUnknown
+            | AuthError::AlgorithmNotAllowed => StatusCode::UNAUTHORIZED,
+            AuthError::ScopeDenied { .. }
+            | AuthError::AdminRequired
+            | AuthError::ClientNotAllowed => StatusCode::FORBIDDEN,
             AuthError::PurposeRequired => StatusCode::BAD_REQUEST,
+            AuthError::JwksUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -451,6 +507,15 @@ impl AuthError {
             AuthError::ScopeDenied { .. } => "Scope denied",
             AuthError::PurposeRequired => "Purpose header required",
             AuthError::AdminRequired => "Admin scope required",
+            AuthError::TokenExpired => "Token expired",
+            AuthError::TokenNotYetValid => "Token not yet valid",
+            AuthError::TokenSignatureInvalid => "Token signature invalid",
+            AuthError::IssuerMismatch => "Issuer mismatch",
+            AuthError::AudienceMismatch => "Audience mismatch",
+            AuthError::KidUnknown => "Unknown signing key",
+            AuthError::AlgorithmNotAllowed => "Algorithm not allowed",
+            AuthError::ClientNotAllowed => "Client not allowed",
+            AuthError::JwksUnavailable => "JWKS unavailable",
         }
     }
 
@@ -471,6 +536,25 @@ impl AuthError {
                 "Data-Purpose header is required for this resource".to_string()
             }
             AuthError::AdminRequired => "admin scope is required for this endpoint".to_string(),
+            AuthError::TokenExpired => "bearer token has expired".to_string(),
+            AuthError::TokenNotYetValid => "bearer token is not yet valid".to_string(),
+            AuthError::TokenSignatureInvalid => "bearer token signature did not verify".to_string(),
+            AuthError::IssuerMismatch => {
+                "bearer token issuer does not match the configured issuer".to_string()
+            }
+            AuthError::AudienceMismatch => {
+                "bearer token audience does not match the configured audience".to_string()
+            }
+            AuthError::KidUnknown => "bearer token key id is not in the JWKS document".to_string(),
+            AuthError::AlgorithmNotAllowed => {
+                "bearer token algorithm is not in the configured allowlist".to_string()
+            }
+            AuthError::ClientNotAllowed => {
+                "bearer token client is not in the configured allowed_clients list".to_string()
+            }
+            AuthError::JwksUnavailable => {
+                "the JWKS endpoint is unreachable and no cached keys are available".to_string()
+            }
         }
     }
 }

@@ -36,8 +36,9 @@ use datafusion::execution::context::SessionContext;
 use registry_relay::audit::{AuditSink, ChainingSink, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::middleware::AuthProviderRef;
+use registry_relay::auth::oidc::{OidcAuth, ReqwestJwksFetcher};
 use registry_relay::auth::ScopeSet;
-use registry_relay::config::{self, ApiKeyConfig, AuditSinkConfig, Config};
+use registry_relay::config::{self, ApiKeyConfig, AuditSinkConfig, Config, OidcConfig};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use registry_relay::format::FormatRegistry;
@@ -84,7 +85,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let config = Arc::new(config::load(&config_path)?);
 
-    let auth = build_auth(&config)?;
+    let auth = build_auth(&config).await?;
     let audit_sink = build_audit_sink(&config);
     let bind: SocketAddr = config.server.bind;
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
@@ -290,7 +291,7 @@ fn resolve_config_path() -> PathBuf {
 /// The provider is immutable for the process lifetime. Key/JWKS
 /// rotation is a restart operation unless a future provider adds live
 /// reload.
-fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
+async fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
     match config.auth.mode {
         config::AuthMode::ApiKey => {
             let mut entries = Vec::with_capacity(config.auth.api_keys.len());
@@ -301,15 +302,64 @@ fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
             Ok(Arc::new(ApiKeyAuth::new(entries)))
         }
         config::AuthMode::Oidc => {
-            // OIDC validation accepts the config block; the actual
-            // provider wiring lands with the JWKS cache implementation.
-            tracing::error!(
-                code = "config.validation_error",
-                "auth.mode = oidc is configured but this binary does not yet include the OIDC provider"
-            );
-            Err(Error::from(ConfigError::ValidationError))
+            let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    "auth.mode = oidc but no oidc block resolved"
+                );
+                Error::from(ConfigError::ValidationError)
+            })?;
+            build_oidc_auth(oidc).await
         }
     }
+}
+
+/// Build the [`OidcAuth`] provider from its config block.
+///
+/// Resolves the JWKS URL from `discovery_url` if set; otherwise uses
+/// the explicit `jwks_url`. The discovery fetch happens once at startup
+/// and is not retried: a failure here aborts the binary so an operator
+/// sees the IdP wiring problem instead of a process that runs but
+/// silently rejects every token. The JWKS document itself is fetched
+/// lazily by the cache on first verify, so a transient JWKS outage at
+/// boot does not block startup.
+async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
+    let fetcher = match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
+        (Some(jwks_url), None) => ReqwestJwksFetcher::from_jwks_url(jwks_url).map_err(|err| {
+            tracing::error!(
+                code = "config.validation_error",
+                error = %err,
+                "failed to build OIDC JWKS HTTP client"
+            );
+            Error::from(ConfigError::ValidationError)
+        })?,
+        (None, Some(discovery_url)) => ReqwestJwksFetcher::from_discovery_url(discovery_url)
+            .await
+            .map_err(|err| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    error = %err,
+                    "failed to resolve OIDC discovery document"
+                );
+                Error::from(ConfigError::ValidationError)
+            })?,
+        _ => {
+            tracing::error!(
+                code = "config.validation_error",
+                "auth.oidc must declare exactly one of jwks_url or discovery_url"
+            );
+            return Err(Error::from(ConfigError::ValidationError));
+        }
+    };
+    let jwks_url = fetcher.jwks_url().to_string();
+    let provider = OidcAuth::new(oidc, Arc::new(fetcher));
+    tracing::info!(
+        issuer = %oidc.issuer,
+        jwks_url = %jwks_url,
+        algorithms = ?oidc.algorithms,
+        "oidc auth provider wired"
+    );
+    Ok(Arc::new(provider))
 }
 
 /// Resolve one `ApiKeyConfig` into an `ApiKeyEntry`.
