@@ -72,8 +72,11 @@ jobs:
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2   # pinned to major v2
         with:
+          # `arguments` defaults to `--all-features` and is interpolated
+          # BEFORE the subcommand. The check types are positional args of
+          # `check`, so they belong in `command-arguments`.
           command: check
-          arguments: licenses advisories bans sources
+          command-arguments: licenses advisories bans sources
 
   # ── Postgres-backed datasource integration ───────────────────────────────
   postgres-integration:
