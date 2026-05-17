@@ -78,6 +78,7 @@ async fn whoami_handler(Extension(principal): Extension<Principal>) -> impl Into
     let scopes: Vec<&str> = principal.scopes.iter().collect();
     let mode = match principal.auth_mode {
         AuthMode::ApiKey => "api_key",
+        AuthMode::Oidc => "oidc",
     };
     axum::Json(serde_json::json!({
         "principal_id": principal.principal_id,

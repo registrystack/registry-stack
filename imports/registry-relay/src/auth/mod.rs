@@ -25,6 +25,7 @@ use crate::error::AuthError;
 
 pub mod api_key;
 pub mod middleware;
+pub mod oidc;
 pub mod scopes;
 
 pub use scopes::ScopeSet;
@@ -39,6 +40,9 @@ pub enum AuthMode {
     /// High-entropy API key verified against a stored SHA-256
     /// fingerprint. The mirror of `config::AuthMode::ApiKey`.
     ApiKey,
+    /// Bearer JWT verified against an external OIDC / OAuth2 IdP.
+    /// The mirror of `config::AuthMode::Oidc`.
+    Oidc,
 }
 
 /// Result of successful authentication. Inserted into request

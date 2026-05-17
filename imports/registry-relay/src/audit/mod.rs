@@ -651,6 +651,7 @@ fn trusted_proxy_spec_matches(peer: IpAddr, spec: &str) -> bool {
 fn auth_mode_label(mode: crate::auth::AuthMode) -> &'static str {
     match mode {
         crate::auth::AuthMode::ApiKey => "api_key",
+        crate::auth::AuthMode::Oidc => "oidc",
     }
 }
 
