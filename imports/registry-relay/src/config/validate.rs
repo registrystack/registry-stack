@@ -17,8 +17,9 @@ use crate::error::{ConfigError, Error};
 use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
-    EntityRelationshipConfig, FieldConfig, OidcConfig, RefreshConfig, RelationshipKind,
-    ResourceConfig, SourceConfig,
+    EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, OidcConfig,
+    RefreshConfig, RelationshipKind, ResourceConfig, SourceConfig, SpatialBboxFieldsConfig,
+    SpatialGeometryConfig, CRS84,
 };
 
 /// Prefix for the special `admin` scope.
@@ -1660,6 +1661,7 @@ fn validate_entities(
         .iter()
         .map(|entity| (entity.name.as_str(), entity))
         .collect();
+    let mut collection_ids = HashSet::new();
 
     for entity in &dataset.entities {
         validate_entity_uris(registry, dataset, entity)?;
@@ -1678,6 +1680,7 @@ fn validate_entities(
         validate_entity_primary_key(dataset, entity, table, &exposed_fields)?;
         validate_entity_filters(dataset, entity, &exposed_fields)?;
         validate_entity_aggregates(dataset, entity, &exposed_fields)?;
+        validate_entity_spatial(dataset, entity, table, &exposed_fields, &mut collection_ids)?;
         validate_entity_relationships(dataset, entity, table, &tables, &entities)?;
     }
 
@@ -1951,6 +1954,232 @@ fn validate_entity_aggregates(
         }
     }
     Ok(())
+}
+
+fn validate_entity_spatial(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    collection_ids: &mut HashSet<String>,
+) -> Result<(), ConfigError> {
+    let Some(spatial) = &entity.spatial else {
+        return Ok(());
+    };
+
+    let collection_id = spatial
+        .collection_id
+        .as_deref()
+        .unwrap_or(entity.name.as_str());
+    if !is_valid_id(collection_id) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            collection_id = %collection_id,
+            "spatial collection_id is not a valid lower-snake id"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if !collection_ids.insert(collection_id.to_string()) {
+        tracing::error!(
+            code = "config.duplicate_id",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            collection_id = %collection_id,
+            "duplicate spatial collection_id within dataset"
+        );
+        return Err(ConfigError::DuplicateId);
+    }
+
+    if !spatial.max_bbox_degrees.is_finite() || spatial.max_bbox_degrees <= 0.0 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            collection_id = %collection_id,
+            "spatial max_bbox_degrees must be a positive finite number"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if spatial.max_geometry_vertices == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            collection_id = %collection_id,
+            "spatial max_geometry_vertices must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    validate_spatial_geometry(dataset, entity, table, exposed_fields, spatial)?;
+    if let Some(bbox_fields) = &spatial.bbox_fields {
+        validate_spatial_bbox_fields(dataset, entity, table, exposed_fields, bbox_fields)?;
+    }
+    if let Some(datetime_field) = &spatial.datetime_field {
+        let field_type =
+            exposed_field_type(table, exposed_fields, datetime_field).ok_or_else(|| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    field = %datetime_field,
+                    "spatial datetime_field references a non-exposed field"
+                );
+                ConfigError::ValidationError
+            })?;
+        if !matches!(field_type, FieldType::Date | FieldType::Timestamp) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %datetime_field,
+                "spatial datetime_field must be a date or timestamp field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_spatial_geometry(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    spatial: &EntitySpatialConfig,
+) -> Result<(), ConfigError> {
+    match &spatial.geometry {
+        SpatialGeometryConfig::Point {
+            longitude_field,
+            latitude_field,
+            crs,
+        } => {
+            validate_spatial_crs(dataset, entity, crs)?;
+            validate_numeric_exposed_field(
+                dataset,
+                entity,
+                table,
+                exposed_fields,
+                longitude_field,
+            )?;
+            validate_numeric_exposed_field(dataset, entity, table, exposed_fields, latitude_field)?;
+        }
+        SpatialGeometryConfig::Geojson { field, crs } => {
+            validate_spatial_crs(dataset, entity, crs)?;
+            validate_exposed_spatial_field(dataset, entity, table, exposed_fields, field)?;
+        }
+        SpatialGeometryConfig::Wkt { field, crs } | SpatialGeometryConfig::Wkb { field, crs } => {
+            validate_spatial_crs(dataset, entity, crs)?;
+            validate_exposed_spatial_field(dataset, entity, table, exposed_fields, field)?;
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %field,
+                "spatial geometry kind is reserved for a later OGC implementation phase"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
+fn validate_spatial_crs(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    crs: &str,
+) -> Result<(), ConfigError> {
+    if crs != CRS84 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            crs = %crs,
+            "spatial CRS must be CRS84 in Phase 1"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+fn validate_spatial_bbox_fields(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    bbox_fields: &SpatialBboxFieldsConfig,
+) -> Result<(), ConfigError> {
+    for field in [
+        &bbox_fields.min_x,
+        &bbox_fields.min_y,
+        &bbox_fields.max_x,
+        &bbox_fields.max_y,
+    ] {
+        validate_numeric_exposed_field(dataset, entity, table, exposed_fields, field)?;
+    }
+    Ok(())
+}
+
+fn validate_exposed_spatial_field(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    field: &str,
+) -> Result<(), ConfigError> {
+    if exposed_field_type(table, exposed_fields, field).is_none() {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            field = %field,
+            "spatial geometry field references a non-exposed field"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+fn validate_numeric_exposed_field(
+    dataset: &DatasetConfig,
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    field: &str,
+) -> Result<(), ConfigError> {
+    let field_type = exposed_field_type(table, exposed_fields, field).ok_or_else(|| {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            field = %field,
+            "spatial numeric field references a non-exposed field"
+        );
+        ConfigError::ValidationError
+    })?;
+    if !matches!(field_type, FieldType::Number | FieldType::Integer) {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            field = %field,
+            "spatial field must be numeric"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    Ok(())
+}
+
+fn exposed_field_type(
+    table: &ResourceConfig,
+    exposed_fields: &BTreeMap<String, String>,
+    field: &str,
+) -> Option<FieldType> {
+    let source = exposed_fields.get(field)?;
+    field_by_name(table, source).map(|field| field.r#type)
 }
 
 fn validate_entity_relationships(

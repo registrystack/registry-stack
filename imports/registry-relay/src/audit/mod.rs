@@ -112,6 +112,8 @@ pub enum EndpointKind {
     Rows,
     AggregateList,
     Aggregate,
+    OgcCollectionItems,
+    OgcFeature,
     Admin,
     Openapi,
     /// Catch-all for routes that don't match a documented family.
@@ -668,10 +670,25 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Admin
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
+    } else if path.starts_with("/ogc/v1/") {
+        classify_ogc_endpoint(path)
     } else if path.starts_with("/datasets/") {
         classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
+    }
+}
+
+fn classify_ogc_endpoint(path: &str) -> EndpointKind {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["ogc", "v1", "datasets", _dataset, "collections", _collection, "items"] => {
+            EndpointKind::OgcCollectionItems
+        }
+        ["ogc", "v1", "datasets", _dataset, "collections", _collection, "items", _feature] => {
+            EndpointKind::OgcFeature
+        }
+        _ => EndpointKind::Catalog,
     }
 }
 
@@ -727,6 +744,14 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
             entity_name: Some((*entity).to_string()),
             ..AuditContextExt::default()
         },
+        ["ogc", "v1", "datasets", dataset, "collections", collection, "items"]
+        | ["ogc", "v1", "datasets", dataset, "collections", collection, "items", _] => {
+            AuditContextExt {
+                dataset_id: Some((*dataset).to_string()),
+                entity_name: Some((*collection).to_string()),
+                ..AuditContextExt::default()
+            }
+        }
         _ => AuditContextExt::default(),
     }
 }
@@ -767,6 +792,14 @@ mod tests {
             EndpointKind::Schema
         );
         assert_eq!(classify_endpoint("/admin/reload"), EndpointKind::Admin);
+        assert_eq!(
+            classify_endpoint("/ogc/v1/datasets/civic/collections/facilities/items"),
+            EndpointKind::OgcCollectionItems
+        );
+        assert_eq!(
+            classify_endpoint("/ogc/v1/datasets/civic/collections/facilities/items/FAC-1"),
+            EndpointKind::OgcFeature
+        );
         assert_eq!(
             classify_endpoint("/datasets/x/individual/verify"),
             EndpointKind::Verify

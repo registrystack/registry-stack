@@ -1,0 +1,12 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "spatial.filter_unsupported",
+  "detail": "parameter cannot be evaluated: bbox",
+  "parameter": "bbox",
+  "status": 400,
+  "title": "Spatial filter unsupported",
+  "type": "https://data.example.gov/problems/spatial/filter_unsupported"
+}

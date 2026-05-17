@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use registry_relay::audit::ErrorCodeExt;
 use registry_relay::error::{
     AdminError, AggregateError, AuthError, ConfigError, Error, FilterError, IngestError,
-    InternalError, SchemaError,
+    InternalError, OgcError, QueryError, SchemaError, SpatialError,
 };
 use serde_json::Value;
 
@@ -73,6 +73,19 @@ fn all_variants() -> Vec<Error> {
         Error::Config(ConfigError::ValidationError),
         Error::Config(ConfigError::MissingSecret),
         Error::Config(ConfigError::DuplicateId),
+        // ogc.*
+        Error::Ogc(OgcError::CollectionNotFound),
+        Error::Ogc(OgcError::FeatureNotFound),
+        // spatial.*
+        Error::Spatial(SpatialError::GeometryInvalid),
+        Error::Spatial(SpatialError::GeometryTooLarge),
+        Error::Spatial(SpatialError::BboxInvalid),
+        Error::Spatial(SpatialError::FilterUnsupported {
+            parameter: "bbox".to_string(),
+        }),
+        Error::Spatial(SpatialError::CrsUnsupported),
+        // query.*
+        Error::Query(QueryError::CursorInvalid),
         // internal.*
         Error::Internal(InternalError::Timeout),
         Error::Internal(InternalError::PayloadTooLarge),
@@ -153,6 +166,20 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("config.validation_error", StatusCode::INTERNAL_SERVER_ERROR),
         ("config.missing_secret", StatusCode::INTERNAL_SERVER_ERROR),
         ("config.duplicate_id", StatusCode::INTERNAL_SERVER_ERROR),
+        ("ogc.collection_not_found", StatusCode::NOT_FOUND),
+        ("ogc.feature_not_found", StatusCode::NOT_FOUND),
+        (
+            "spatial.geometry_invalid",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "spatial.geometry_too_large",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        ("spatial.bbox_invalid", StatusCode::BAD_REQUEST),
+        ("spatial.filter_unsupported", StatusCode::BAD_REQUEST),
+        ("spatial.crs_unsupported", StatusCode::BAD_REQUEST),
+        ("query.cursor_invalid", StatusCode::BAD_REQUEST),
         ("internal.timeout", StatusCode::GATEWAY_TIMEOUT),
         ("internal.payload_too_large", StatusCode::PAYLOAD_TOO_LARGE),
         ("internal.uri_too_long", StatusCode::URI_TOO_LONG),
@@ -281,6 +308,14 @@ async fn snapshot_one_variant_per_namespace() {
         ),
         ("admin", Error::Admin(AdminError::ReloadFailed)),
         ("config", Error::Config(ConfigError::MissingSecret)),
+        ("ogc", Error::Ogc(OgcError::CollectionNotFound)),
+        (
+            "spatial",
+            Error::Spatial(SpatialError::FilterUnsupported {
+                parameter: "bbox".into(),
+            }),
+        ),
+        ("query", Error::Query(QueryError::CursorInvalid)),
         ("internal", Error::Internal(InternalError::Timeout)),
     ];
     for (namespace, err) in samples {
@@ -326,6 +361,20 @@ async fn error_into_response_attaches_error_code_extension() {
             "config.missing_secret",
             Error::Config(ConfigError::MissingSecret),
         ),
+        (
+            "ogc.collection_not_found",
+            Error::Ogc(OgcError::CollectionNotFound),
+        ),
+        (
+            "spatial.filter_unsupported",
+            Error::Spatial(SpatialError::FilterUnsupported {
+                parameter: "bbox".into(),
+            }),
+        ),
+        (
+            "query.cursor_invalid",
+            Error::Query(QueryError::CursorInvalid),
+        ),
         ("internal.timeout", Error::Internal(InternalError::Timeout)),
     ];
     for (expected, err) in samples {
@@ -336,6 +385,17 @@ async fn error_into_response_attaches_error_code_extension() {
             .expect("ErrorCodeExt attached to response");
         assert_eq!(ext.0, expected, "wrong error code for {expected}");
     }
+}
+
+#[tokio::test]
+async fn spatial_filter_unsupported_renders_parameter_extension() {
+    let (_, _, body) = render(Error::Spatial(SpatialError::FilterUnsupported {
+        parameter: "bbox".to_string(),
+    }))
+    .await;
+
+    assert_eq!(body["code"], "spatial.filter_unsupported");
+    assert_eq!(body["parameter"], "bbox");
 }
 
 proptest::proptest! {

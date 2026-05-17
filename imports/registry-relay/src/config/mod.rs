@@ -737,6 +737,69 @@ pub struct EntityConfig {
     pub aggregates: Vec<AggregateConfig>,
     #[serde(default)]
     pub publicschema: Option<EntityPublicSchemaConfig>,
+    #[serde(default)]
+    pub spatial: Option<EntitySpatialConfig>,
+}
+
+pub const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntitySpatialConfig {
+    #[serde(default)]
+    pub collection_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub geometry: SpatialGeometryConfig,
+    #[serde(default)]
+    pub bbox_fields: Option<SpatialBboxFieldsConfig>,
+    #[serde(default)]
+    pub datetime_field: Option<String>,
+    #[serde(default = "default_max_bbox_degrees")]
+    pub max_bbox_degrees: f64,
+    #[serde(default = "default_max_geometry_vertices")]
+    pub max_geometry_vertices: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SpatialGeometryConfig {
+    Point {
+        longitude_field: String,
+        latitude_field: String,
+        crs: String,
+    },
+    Geojson {
+        field: String,
+        crs: String,
+    },
+    Wkt {
+        field: String,
+        crs: String,
+    },
+    Wkb {
+        field: String,
+        crs: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpatialBboxFieldsConfig {
+    pub min_x: String,
+    pub min_y: String,
+    pub max_x: String,
+    pub max_y: String,
+}
+
+fn default_max_bbox_degrees() -> f64 {
+    5.0
+}
+
+fn default_max_geometry_vertices() -> u32 {
+    10_000
 }
 
 #[derive(Debug, Clone, Deserialize)]

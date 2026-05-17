@@ -69,6 +69,10 @@ pub struct EntityMetadata {
 pub struct EntityLinks {
     pub collection: String,
     pub schema: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ogc_collection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ogc_items: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -262,6 +266,26 @@ pub fn entity_metadata(
         })
         .collect();
 
+    #[cfg(feature = "ogcapi-features")]
+    let (ogc_collection, ogc_items) = entity
+        .spatial
+        .as_ref()
+        .map(|spatial| {
+            (
+                Some(format!(
+                    "{base_url}/ogc/v1/datasets/{dataset_id}/collections/{}",
+                    spatial.collection_id
+                )),
+                Some(format!(
+                    "{base_url}/ogc/v1/datasets/{dataset_id}/collections/{}/items",
+                    spatial.collection_id
+                )),
+            )
+        })
+        .unwrap_or((None, None));
+    #[cfg(not(feature = "ogcapi-features"))]
+    let (ogc_collection, ogc_items) = (None, None);
+
     Some(EntityMetadata {
         name: entity.name.clone(),
         title: entity_config.and_then(|cfg| cfg.title.clone()),
@@ -278,6 +302,8 @@ pub fn entity_metadata(
                 "{base_url}/catalog/datasets/{dataset_id}/{}/schema.jsonld",
                 entity.name
             ),
+            ogc_collection,
+            ogc_items,
         },
     })
 }

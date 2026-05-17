@@ -11,6 +11,7 @@ default = []
 standards-cel-mapping = ["dep:cel-mapper-core"]
 publicschema-cel = ["standards-cel-mapping", "dep:jsonschema"]
 spdci-api-standards = ["dep:jsonschema"]
+ogcapi-features = ["dep:ogcapi-types", "dep:geojson"]
 
 # ─── runtime ─────────────────────────────────────────────────────────────────
 [dependencies]
@@ -107,6 +108,8 @@ http-api-problem = { version = "0.60" }
 # ─── openapi ─────────────────────────────────────────────────────────────────
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = { version = "0.2" }
+ogcapi-types = { version = "0.3.0", optional = true, features = ["features"] }
+geojson = { version = "0.24", optional = true }
 
 # ─── dev / test ──────────────────────────────────────────────────────────────
 [dev-dependencies]

@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "ogc.collection_not_found",
+  "detail": "collection is not registered, spatially exposed, or visible to the caller",
+  "status": 404,
+  "title": "OGC collection not found",
+  "type": "https://data.example.gov/problems/ogc/collection_not_found"
+}

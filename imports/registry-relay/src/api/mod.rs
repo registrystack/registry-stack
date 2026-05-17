@@ -20,6 +20,8 @@ pub mod did;
 pub mod docs;
 pub mod entity;
 pub mod health;
+#[cfg(feature = "ogcapi-features")]
+pub mod ogc;
 pub mod openapi;
 pub(crate) mod provenance_issuance;
 pub mod schemas;
@@ -36,6 +38,8 @@ pub use docs::router as docs_router;
 pub use entity::router as entity_router;
 pub use entity::CursorSigner;
 pub use health::router as health_router;
+#[cfg(feature = "ogcapi-features")]
+pub use ogc::router as ogc_router;
 pub use openapi::router as openapi_router;
 pub use schemas::router as schemas_router;
 #[cfg(feature = "spdci-api-standards")]

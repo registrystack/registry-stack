@@ -32,6 +32,11 @@ pub struct EntityCollectionQuery {
     pub limit: Option<usize>,
     pub after_primary_key: Option<Value>,
     pub filters: Vec<EntityFilter>,
+    /// Gateway-owned filters derived from trusted route semantics rather
+    /// than caller-controlled entity filters. OGC uses this for spatial
+    /// bbox predicates and primary-key item lookup while still applying
+    /// `allowed_filters` to normal query parameters.
+    pub trusted_filters: Vec<EntityFilter>,
     pub expansions: Vec<String>,
 }
 
@@ -107,6 +112,7 @@ impl EntityQueryEngine {
             _ => {}
         }
         validate_allowed_filters(entity, &query.filters)?;
+        validate_filter_fields_exist(entity, &query.trusted_filters)?;
         Ok(())
     }
 
@@ -135,12 +141,15 @@ impl EntityQueryEngine {
             None => Some(entity.api.default_limit as usize),
         };
         validate_allowed_filters(entity, &query.filters)?;
+        validate_filter_fields_exist(entity, &query.trusted_filters)?;
+        let mut filters = query.filters;
+        filters.extend(query.trusted_filters);
         let mut result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
                 &projected_fields,
-                query.filters,
+                filters,
                 limit.map(|limit| limit.saturating_add(1)),
                 query.after_primary_key,
             )
@@ -637,6 +646,11 @@ impl EntityCollectionQuery {
         self
     }
 
+    pub fn with_trusted_filter(mut self, filter: EntityFilter) -> Self {
+        self.trusted_filters.push(filter);
+        self
+    }
+
     pub fn with_expansions(
         mut self,
         expansions: impl IntoIterator<Item = impl Into<String>>,
@@ -812,6 +826,16 @@ fn validate_allowed_filters(entity: &EntityModel, filters: &[EntityFilter]) -> R
         if !allowed {
             return Err(FilterError::NotAllowed.into());
         }
+    }
+    Ok(())
+}
+
+fn validate_filter_fields_exist(
+    entity: &EntityModel,
+    filters: &[EntityFilter],
+) -> Result<(), Error> {
+    for filter in filters {
+        entity_field(entity, &filter.field)?;
     }
     Ok(())
 }

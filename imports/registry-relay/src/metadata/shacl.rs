@@ -119,30 +119,7 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
     let distributions = dataset
         .entities
         .iter()
-        .map(|entity| {
-            let access_service = format!("{}#data-service", entity.links.collection);
-            json!({
-                "@id": entity.links.collection,
-                "@type": "dcat:Distribution",
-                "dcterms:title": entity.title.as_deref().unwrap_or(entity.name.as_str()),
-                "dct:format": {
-                    "@id": "registry_relay:HttpData-PULL",
-                },
-                "dcat:accessURL": entity.links.collection,
-                "dcat:accessService": {
-                    "@id": access_service,
-                    "@type": "dcat:DataService",
-                    "dcterms:title": format!(
-                        "{} REST access service",
-                        entity.title.as_deref().unwrap_or(entity.name.as_str())
-                    ),
-                    "dspace:dataServiceType": "registry_relay:entity-rest",
-                    "dcat:endpointURL": entity.links.collection,
-                    "dcterms:conformsTo": entity.links.schema,
-                },
-                "dcterms:conformsTo": entity.links.schema,
-            })
-        })
+        .flat_map(entity_distributions)
         .collect::<Vec<_>>();
 
     json!({
@@ -159,6 +136,81 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
         "odrl:hasPolicy": dataset_offer(dataset),
         "dcat:distribution": distributions,
     })
+}
+
+fn entity_distributions(entity: &EntityMetadata) -> Vec<Value> {
+    #[cfg(not(feature = "ogcapi-features"))]
+    {
+        vec![entity_rest_distribution(entity)]
+    }
+    #[cfg(feature = "ogcapi-features")]
+    {
+        let mut distributions = vec![entity_rest_distribution(entity)];
+        if let Some(distribution) = entity_ogc_distribution(entity) {
+            distributions.push(distribution);
+        }
+        distributions
+    }
+}
+
+fn entity_rest_distribution(entity: &EntityMetadata) -> Value {
+    let access_service = format!("{}#data-service", entity.links.collection);
+    json!({
+        "@id": entity.links.collection,
+        "@type": "dcat:Distribution",
+        "dcterms:title": entity.title.as_deref().unwrap_or(entity.name.as_str()),
+        "dct:format": {
+            "@id": "registry_relay:HttpData-PULL",
+        },
+        "dcat:accessURL": entity.links.collection,
+        "dcat:accessService": {
+            "@id": access_service,
+            "@type": "dcat:DataService",
+            "dcterms:title": format!(
+                "{} REST access service",
+                entity.title.as_deref().unwrap_or(entity.name.as_str())
+            ),
+            "dspace:dataServiceType": "registry_relay:entity-rest",
+            "dcat:endpointURL": entity.links.collection,
+            "dcterms:conformsTo": entity.links.schema,
+        },
+        "dcterms:conformsTo": entity.links.schema,
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn entity_ogc_distribution(entity: &EntityMetadata) -> Option<Value> {
+    let collection = entity.links.ogc_collection.as_ref()?;
+    let items = entity.links.ogc_items.as_ref()?;
+    let access_service = format!("{collection}#ogc-api-features-service");
+    Some(json!({
+        "@id": collection,
+        "@type": "dcat:Distribution",
+        "dcterms:title": format!(
+            "{} OGC API Features collection",
+            entity.title.as_deref().unwrap_or(entity.name.as_str())
+        ),
+        "dct:format": {
+            "@id": "registry_relay:OGCAPI-Features",
+        },
+        "dcat:accessURL": collection,
+        "dcat:downloadURL": items,
+        "dcat:accessService": {
+            "@id": access_service,
+            "@type": "dcat:DataService",
+            "dcterms:title": format!(
+                "{} OGC API Features service",
+                entity.title.as_deref().unwrap_or(entity.name.as_str())
+            ),
+            "dspace:dataServiceType": "registry_relay:ogc-api-features",
+            "dcat:endpointURL": collection,
+            "dcterms:conformsTo": "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+        },
+        "dcterms:conformsTo": [
+            "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+            "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+        ],
+    }))
 }
 
 fn dataset_offer(dataset: &DatasetMetadata) -> Value {
@@ -342,6 +394,7 @@ fn context() -> Value {
         "dcat:accessURL": { "@type": "@id" },
         "dcat:accessService": { "@type": "@id" },
         "dcat:distribution": { "@type": "@id" },
+        "dcat:downloadURL": { "@type": "@id" },
         "dcat:endpointURL": { "@type": "@id" },
         "dct:format": { "@type": "@id" },
         "dcterms:accessRights": { "@type": "@id" },

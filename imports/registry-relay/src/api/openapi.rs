@@ -25,6 +25,8 @@ const OPENAPI_UNAVAILABLE_CODE: &str = "openapi.generation_unavailable";
 
 const TAG_SERVICE: &str = "Service";
 const TAG_CATALOG: &str = "Catalog";
+#[cfg(feature = "ogcapi-features")]
+const TAG_OGC: &str = "OGC API Features";
 
 const INFO_SUMMARY: &str = "Read-only data gateway exposing entity records, \
     catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.";
@@ -157,6 +159,9 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         ),
     );
     tag(&mut paths, "/catalog/dcat-ap.jsonld", "get", TAG_CATALOG);
+
+    #[cfg(feature = "ogcapi-features")]
+    insert_ogc_paths(&mut paths);
 
     insert_json_path(
         &mut paths,
@@ -544,6 +549,11 @@ fn tag_definitions(catalog: &CatalogDocument) -> Value {
             "description": "Catalog discovery: dataset listing, dataset metadata, DCAT-AP export.",
         }),
     ];
+    #[cfg(feature = "ogcapi-features")]
+    tags.push(json!({
+        "name": TAG_OGC,
+        "description": "OGC API Features discovery and dataset-scoped feature collections.",
+    }));
     for dataset in &catalog.datasets {
         for entity in &dataset.entities {
             let display = entity.title.as_deref().unwrap_or(&entity.name);
@@ -577,6 +587,8 @@ fn tag_groups(catalog: &CatalogDocument) -> Value {
         json!({ "name": "Service", "tags": [TAG_SERVICE] }),
         json!({ "name": "Catalog", "tags": [TAG_CATALOG] }),
     ];
+    #[cfg(feature = "ogcapi-features")]
+    groups.push(json!({ "name": "OGC", "tags": [TAG_OGC] }));
     for dataset in &catalog.datasets {
         let entity_tags: Vec<String> = dataset
             .entities
@@ -745,6 +757,8 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     schemas.insert("VerifyResponse".to_string(), verify_response_schema());
     schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
+    #[cfg(feature = "ogcapi-features")]
+    insert_ogc_schemas(&mut schemas);
 
     for dataset in &catalog.datasets {
         for entity in &dataset.entities {
@@ -843,6 +857,120 @@ fn problem_details_schema() -> Value {
             "detail": "no credential provided in Authorization or X-Api-Key header",
             "code": "auth.missing_credential",
         }],
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn insert_ogc_schemas(schemas: &mut Map<String, Value>) {
+    schemas.insert("OgcLink".to_string(), ogc_link_schema());
+    schemas.insert("OgcLandingPage".to_string(), ogc_landing_page_schema());
+    schemas.insert("OgcConformance".to_string(), ogc_conformance_schema());
+    schemas.insert("OgcCollections".to_string(), ogc_collections_schema());
+    schemas.insert("OgcCollection".to_string(), ogc_collection_schema());
+    schemas.insert(
+        "GeoJsonFeatureCollection".to_string(),
+        geojson_feature_collection_schema(),
+    );
+    schemas.insert("GeoJsonFeature".to_string(), geojson_feature_schema());
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_link_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["href", "rel"],
+        "properties": {
+            "href": { "type": "string" },
+            "rel": { "type": "string" },
+            "type": { "type": "string" },
+            "title": { "type": "string" },
+        },
+        "additionalProperties": true,
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_landing_page_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["title", "links"],
+        "properties": {
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_conformance_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["conformsTo"],
+        "properties": {
+            "conformsTo": { "type": "array", "items": { "type": "string", "format": "uri" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_collections_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["links", "collections"],
+        "properties": {
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+            "collections": { "type": "array", "items": { "$ref": "#/components/schemas/OgcCollection" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_collection_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "itemType", "links"],
+        "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "itemType": { "type": "string", "enum": ["feature"] },
+            "crs": { "type": "array", "items": { "type": "string", "format": "uri" } },
+            "storageCrs": { "type": "string", "format": "uri" },
+            "extent": { "type": "object", "additionalProperties": true },
+            "properties": { "type": "object", "additionalProperties": true },
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn geojson_feature_collection_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "features"],
+        "properties": {
+            "type": { "type": "string", "enum": ["FeatureCollection"] },
+            "timeStamp": { "type": "string", "format": "date-time" },
+            "numberReturned": { "type": "integer", "minimum": 0 },
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+            "features": { "type": "array", "items": { "$ref": "#/components/schemas/GeoJsonFeature" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn geojson_feature_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "id", "geometry", "properties"],
+        "properties": {
+            "type": { "type": "string", "enum": ["Feature"] },
+            "id": { "type": "string" },
+            "geometry": { "type": ["object", "null"], "additionalProperties": true },
+            "properties": { "type": "object", "additionalProperties": true },
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+        },
     })
 }
 
@@ -1201,6 +1329,182 @@ fn entity_config<'a>(
 }
 
 // --- path-item builders --------------------------------------------
+
+#[cfg(feature = "ogcapi-features")]
+fn insert_ogc_paths(paths: &mut Map<String, Value>) {
+    paths.insert(
+        "/ogc/v1".to_string(),
+        ogc_json_path_item("get_ogc_landing_page", "OGC landing page", "OgcLandingPage"),
+    );
+    tag(paths, "/ogc/v1", "get", TAG_OGC);
+
+    paths.insert(
+        "/ogc/v1/conformance".to_string(),
+        ogc_json_path_item("get_ogc_conformance", "OGC conformance", "OgcConformance"),
+    );
+    tag(paths, "/ogc/v1/conformance", "get", TAG_OGC);
+
+    paths.insert(
+        "/ogc/v1/collections".to_string(),
+        ogc_json_path_item(
+            "list_ogc_collections",
+            "List OGC collections",
+            "OgcCollections",
+        ),
+    );
+    tag(paths, "/ogc/v1/collections", "get", TAG_OGC);
+
+    paths.insert(
+        "/ogc/v1/datasets/{dataset_id}/collections".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "List dataset OGC collections",
+            "OgcCollections",
+            "application/json",
+            vec![path_parameter("dataset_id", "Dataset identifier")],
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections",
+        "get",
+        TAG_OGC,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections",
+        "get",
+        "list_dataset_ogc_collections",
+    );
+
+    paths.insert(
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "Get OGC collection",
+            "OgcCollection",
+            "application/json",
+            vec![
+                path_parameter("dataset_id", "Dataset identifier"),
+                path_parameter("collection_id", "OGC collection identifier"),
+            ],
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}",
+        "get",
+        TAG_OGC,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}",
+        "get",
+        "get_dataset_ogc_collection",
+    );
+
+    let item_query_parameters = vec![
+        path_parameter("dataset_id", "Dataset identifier"),
+        path_parameter("collection_id", "OGC collection identifier"),
+        query_parameter("limit", "Maximum features to return."),
+        query_parameter("after", "Opaque signed pagination cursor."),
+        query_parameter("bbox", "CRS84 bbox in minx,miny,maxx,maxy order."),
+        query_parameter("bbox-crs", "Bbox CRS. Phase 1 accepts CRS84 only."),
+        query_parameter("datetime", "Instant or closed/half-open datetime interval."),
+    ];
+    paths.insert(
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "List OGC features",
+            "GeoJsonFeatureCollection",
+            "application/geo+json",
+            item_query_parameters,
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items",
+        "get",
+        TAG_OGC,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items",
+        "get",
+        "list_dataset_ogc_features",
+    );
+
+    paths.insert(
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "Get OGC feature",
+            "GeoJsonFeature",
+            "application/geo+json",
+            vec![
+                path_parameter("dataset_id", "Dataset identifier"),
+                path_parameter("collection_id", "OGC collection identifier"),
+                path_parameter("feature_id", "Feature identifier"),
+            ],
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
+        "get",
+        TAG_OGC,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
+        "get",
+        "get_dataset_ogc_feature",
+    );
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_json_path_item(op_id: &str, summary: &str, schema: &str) -> Value {
+    let mut item =
+        ogc_path_item_with_params("get", summary, schema, "application/json", Vec::new());
+    if let Some(op) = item.get_mut("get").and_then(Value::as_object_mut) {
+        op.insert("operationId".to_string(), json!(op_id));
+    }
+    item
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_path_item_with_params(
+    method: &str,
+    summary: &str,
+    schema: &str,
+    media_type: &str,
+    parameters: Vec<Value>,
+) -> Value {
+    json!({
+        method: {
+            "summary": summary,
+            "parameters": parameters,
+            "responses": {
+                "200": {
+                    "description": "Successful response",
+                    "content": {
+                        media_type: {
+                            "schema": { "$ref": format!("#/components/schemas/{schema}") }
+                        }
+                    }
+                },
+                "400": problem_response("Invalid OGC or spatial query parameter."),
+                "401": problem_response("Missing or invalid bearer credential."),
+                "403": problem_response(
+                    "Authenticated principal lacks the scope required for this operation."
+                ),
+                "404": problem_response("OGC collection or feature not found."),
+                "default": problem_response("Problem Details error response."),
+            }
+        }
+    })
+}
 
 fn insert_json_path(
     paths: &mut Map<String, Value>,

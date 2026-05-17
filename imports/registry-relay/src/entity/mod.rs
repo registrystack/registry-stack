@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::config::{
     Config, DatasetConfig, EntityAccessConfig, EntityApiConfig, EntityConfig,
-    EntityRelationshipConfig, ResourceConfig,
+    EntityRelationshipConfig, ResourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig,
 };
 use crate::error::{ConfigError, Error};
 
@@ -32,12 +32,25 @@ pub struct EntityModel {
     pub relationships: BTreeMap<String, EntityRelationshipConfig>,
     pub access: EntityAccessConfig,
     pub api: EntityApiConfig,
+    pub spatial: Option<EntitySpatialModel>,
 }
 
 #[derive(Clone, Debug)]
 pub struct EntityField {
     pub name: String,
     pub table_column: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct EntitySpatialModel {
+    pub collection_id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub geometry: SpatialGeometryConfig,
+    pub bbox_fields: Option<SpatialBboxFieldsConfig>,
+    pub datetime_field: Option<String>,
+    pub max_bbox_degrees: f64,
+    pub max_geometry_vertices: u32,
 }
 
 impl EntityRegistry {
@@ -94,6 +107,7 @@ fn compile_dataset(dataset: &DatasetConfig) -> Result<DatasetEntities, Error> {
                 relationships,
                 access: entity.access.clone(),
                 api: entity.api.clone(),
+                spatial: compile_spatial(entity),
             },
         );
     }
@@ -134,4 +148,21 @@ fn primary_key_field(table: &ResourceConfig, fields: &[EntityField]) -> Result<E
         .find(|field| field.table_column == primary_key)
         .cloned()
         .ok_or_else(|| ConfigError::ValidationError.into())
+}
+
+fn compile_spatial(entity: &EntityConfig) -> Option<EntitySpatialModel> {
+    let spatial = entity.spatial.as_ref()?;
+    Some(EntitySpatialModel {
+        collection_id: spatial
+            .collection_id
+            .clone()
+            .unwrap_or_else(|| entity.name.clone()),
+        title: spatial.title.clone(),
+        description: spatial.description.clone(),
+        geometry: spatial.geometry.clone(),
+        bbox_fields: spatial.bbox_fields.clone(),
+        datetime_field: spatial.datetime_field.clone(),
+        max_bbox_degrees: spatial.max_bbox_degrees,
+        max_geometry_vertices: spatial.max_geometry_vertices,
+    })
 }

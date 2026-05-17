@@ -204,7 +204,11 @@ fn server() -> TestServer {
 
 fn server_with_scopes(scopes: &[&str]) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
-    let cfg = Arc::new(config::load(&write_config(&tmp)).expect("config loads"));
+    server_from_config(write_config(&tmp), scopes)
+}
+
+fn server_from_config(path: std::path::PathBuf, scopes: &[&str]) -> TestServer {
+    let cfg = Arc::new(config::load(&path).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry compiles"));
 
     TestServer::new(
@@ -214,6 +218,22 @@ fn server_with_scopes(scopes: &[&str]) -> TestServer {
             .layer(Extension(cfg))
             .layer(Extension(principal(scopes))),
     )
+}
+
+fn spatial_catalog_server() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "            - name: region_code\n              type: string\n              nullable: true\n              concept_uri: ex:properties/regionCode\n              codelist: ex:codelists/Region\n",
+        "            - name: region_code\n              type: string\n              nullable: true\n              concept_uri: ex:properties/regionCode\n              codelist: ex:codelists/Region\n            - name: lon\n              type: number\n              nullable: true\n            - name: lat\n              type: number\n              nullable: true\n",
+    );
+    body = body.replace(
+        "          - name: region\n            from: region_code\n            concept_uri: ex:properties/region\n",
+        "          - name: region\n            from: region_code\n            concept_uri: ex:properties/region\n          - name: lon\n          - name: lat\n        spatial:\n          collection_id: households\n          title: Household locations\n          geometry:\n            kind: point\n            longitude_field: lon\n            latitude_field: lat\n            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84\n",
+    );
+    std::fs::write(&path, body).expect("write spatial config");
+    server_from_config(path, &["social_registry:metadata"])
 }
 
 fn principal(scopes: &[&str]) -> Principal {
@@ -252,6 +272,7 @@ fn assert_structural_dcat_shacl(body: &Value) {
     assert_eq!(body["@context"]["sh:path"]["@type"], "@id");
     assert_eq!(body["@context"]["sh:targetClass"]["@type"], "@id");
     assert_eq!(body["@context"]["dcat:accessURL"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:downloadURL"]["@type"], "@id");
     assert!(body["dcat:dataset"]
         .as_array()
         .expect("datasets")
@@ -338,6 +359,71 @@ async fn catalog_lists_entity_grain_metadata_without_hidden_columns() {
         .all(|field| field["name"] != "internal_note"));
     assert_eq!(household["relationships"][0]["kind"], "has_many");
     assert_eq!(household["relationships"][0]["target"], "individual");
+}
+
+#[cfg(not(feature = "ogcapi-features"))]
+#[tokio::test]
+async fn catalog_does_not_advertise_ogc_links_when_feature_is_disabled() {
+    let server = spatial_catalog_server();
+
+    let catalog_resp = server.get("/catalog").await;
+    catalog_resp.assert_status(StatusCode::OK);
+    let catalog: Value = catalog_resp.json();
+    let household = entity(&catalog, "household");
+    assert!(household["links"].get("ogc_collection").is_none());
+    assert!(household["links"].get("ogc_items").is_none());
+
+    let dcat_resp = server.get("/catalog/dcat-ap.jsonld").await;
+    dcat_resp.assert_status(StatusCode::OK);
+    let dcat: Value = dcat_resp.json();
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("distributions");
+    assert!(distributions.iter().all(|distribution| {
+        distribution["dcat:accessService"]["dspace:dataServiceType"]
+            != "registry_relay:ogc-api-features"
+    }));
+}
+
+#[cfg(feature = "ogcapi-features")]
+#[tokio::test]
+async fn catalog_and_dcat_advertise_ogc_links_for_spatial_entities() {
+    let server = spatial_catalog_server();
+    let catalog_resp = server.get("/catalog").await;
+
+    catalog_resp.assert_status(StatusCode::OK);
+    let catalog: Value = catalog_resp.json();
+    let household = entity(&catalog, "household");
+    assert_eq!(
+        household["links"]["ogc_collection"],
+        "https://data.example.test/ogc/v1/datasets/social_registry/collections/households"
+    );
+    assert_eq!(
+        household["links"]["ogc_items"],
+        "https://data.example.test/ogc/v1/datasets/social_registry/collections/households/items"
+    );
+
+    let dcat_resp = server.get("/catalog/dcat-ap.jsonld").await;
+    dcat_resp.assert_status(StatusCode::OK);
+    let dcat: Value = dcat_resp.json();
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("distributions");
+    let ogc = distributions
+        .iter()
+        .find(|distribution| {
+            distribution["dcat:accessService"]["dspace:dataServiceType"]
+                == "registry_relay:ogc-api-features"
+        })
+        .expect("OGC distribution");
+    assert_eq!(
+        ogc["dcat:accessURL"],
+        "https://data.example.test/ogc/v1/datasets/social_registry/collections/households"
+    );
+    assert_eq!(
+        ogc["dcat:downloadURL"],
+        "https://data.example.test/ogc/v1/datasets/social_registry/collections/households/items"
+    );
 }
 
 #[tokio::test]
@@ -671,6 +757,40 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
     );
     assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
+}
+
+#[cfg(feature = "ogcapi-features")]
+#[tokio::test]
+async fn openapi_json_includes_ogc_api_features_surface_when_feature_enabled() {
+    let resp = server().get("/openapi.json").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    for path in [
+        "/ogc/v1",
+        "/ogc/v1/conformance",
+        "/ogc/v1/collections",
+        "/ogc/v1/datasets/{dataset_id}/collections",
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}",
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items",
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
+    ] {
+        assert!(body["paths"][path]["get"].is_object(), "missing {path}");
+        assert_eq!(
+            body["paths"][path]["get"]["tags"],
+            serde_json::json!(["OGC API Features"]),
+            "{path} should be grouped under the OGC tag"
+        );
+    }
+
+    assert_eq!(
+        body["paths"]["/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items"]["get"]
+            ["responses"]["200"]["content"]["application/geo+json"]["schema"]["$ref"],
+        "#/components/schemas/GeoJsonFeatureCollection"
+    );
+    assert!(body["components"]["schemas"]["OgcCollection"].is_object());
+    assert!(body["components"]["schemas"]["GeoJsonFeature"].is_object());
 }
 
 #[tokio::test]

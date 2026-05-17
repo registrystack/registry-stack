@@ -90,6 +90,11 @@ impl CursorSigner {
         tag
     }
 
+    #[cfg(feature = "ogcapi-features")]
+    pub(crate) fn sign_payload(&self, message: &[u8]) -> [u8; CURSOR_MAC_LEN] {
+        self.tag(message)
+    }
+
     /// Constant-time verify that `tag` is the MAC of `message`.
     fn verify(&self, message: &[u8], tag: &[u8]) -> bool {
         if tag.len() != CURSOR_MAC_LEN {
@@ -97,6 +102,11 @@ impl CursorSigner {
         }
         let expected = self.tag(message);
         expected.ct_eq(tag).into()
+    }
+
+    #[cfg(feature = "ogcapi-features")]
+    pub(crate) fn verify_payload(&self, message: &[u8], tag: &[u8]) -> bool {
+        self.verify(message, tag)
     }
 }
 

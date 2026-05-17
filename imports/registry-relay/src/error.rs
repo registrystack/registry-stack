@@ -76,6 +76,15 @@ pub enum Error {
     /// SP DCI request and runtime errors.
     #[error("{0}")]
     Spdci(#[from] SpdciError),
+    /// OGC API Features request errors.
+    #[error("{0}")]
+    Ogc(#[from] OgcError),
+    /// Spatial parameter and geometry errors.
+    #[error("{0}")]
+    Spatial(#[from] SpatialError),
+    /// Query cursor and context errors.
+    #[error("{0}")]
+    Query(#[from] QueryError),
 }
 
 /// `entity.*` codes.
@@ -316,6 +325,51 @@ pub enum SpdciError {
     MapperUnavailable,
 }
 
+/// `ogc.*` runtime codes.
+#[derive(Debug, Error)]
+pub enum OgcError {
+    /// Dataset or collection does not exist, is not spatially exposed,
+    /// or is not visible to the caller.
+    #[error("ogc collection not found")]
+    CollectionNotFound,
+    /// Feature does not exist, is not visible, or does not match the
+    /// filter context required by the collection policy.
+    #[error("ogc feature not found")]
+    FeatureNotFound,
+}
+
+/// `spatial.*` runtime codes.
+#[derive(Debug, Error)]
+pub enum SpatialError {
+    /// Geometry value is malformed at runtime.
+    #[error("spatial geometry invalid")]
+    GeometryInvalid,
+    /// Geometry exceeds the configured vertex cap.
+    #[error("spatial geometry too large")]
+    GeometryTooLarge,
+    /// Bbox parameter is malformed or uses an unsupported shape such
+    /// as a Phase 1 antimeridian-crossing bbox.
+    #[error("spatial bbox invalid")]
+    BboxInvalid,
+    /// A supported parameter name cannot be evaluated for this
+    /// collection. `parameter` is client-visible and sanitized before
+    /// rendering.
+    #[error("spatial filter unsupported")]
+    FilterUnsupported { parameter: String },
+    /// Requested CRS is not supported by Phase 1 OGC routes.
+    #[error("spatial crs unsupported")]
+    CrsUnsupported,
+}
+
+/// `query.*` runtime codes.
+#[derive(Debug, Error)]
+pub enum QueryError {
+    /// Cursor is malformed, expired, or bound to a different query
+    /// context, principal, collection, or filter set.
+    #[error("query cursor invalid")]
+    CursorInvalid,
+}
+
 /// `internal.*` codes.
 #[derive(Debug, Error)]
 pub enum InternalError {
@@ -346,6 +400,9 @@ impl Error {
             Error::Internal(e) => e.code(),
             Error::Provenance(e) => e.code(),
             Error::Spdci(e) => e.code(),
+            Error::Ogc(e) => e.code(),
+            Error::Spatial(e) => e.code(),
+            Error::Query(e) => e.code(),
         }
     }
 
@@ -369,6 +426,9 @@ impl Error {
             Error::Internal(e) => e.http_status(),
             Error::Provenance(e) => e.http_status(),
             Error::Spdci(e) => e.http_status(),
+            Error::Ogc(e) => e.http_status(),
+            Error::Spatial(e) => e.http_status(),
+            Error::Query(e) => e.http_status(),
         }
     }
 
@@ -388,6 +448,9 @@ impl Error {
             Error::Internal(e) => e.title(),
             Error::Provenance(e) => e.title(),
             Error::Spdci(e) => e.title(),
+            Error::Ogc(e) => e.title(),
+            Error::Spatial(e) => e.title(),
+            Error::Query(e) => e.title(),
         }
     }
 
@@ -409,6 +472,9 @@ impl Error {
             Error::Internal(e) => e.detail().to_string(),
             Error::Provenance(e) => e.detail().to_string(),
             Error::Spdci(e) => e.detail().to_string(),
+            Error::Ogc(e) => e.detail().to_string(),
+            Error::Spatial(e) => e.detail(),
+            Error::Query(e) => e.detail().to_string(),
         }
     }
 
@@ -421,11 +487,18 @@ impl Error {
     /// Render the error as an [`HttpApiProblem`] with all required
     /// RFC 9457 fields and the stable `code` extension.
     fn to_problem(&self) -> HttpApiProblem {
-        HttpApiProblem::new(self.http_status())
+        let problem = HttpApiProblem::new(self.http_status())
             .type_url(self.type_uri())
             .title(self.title())
             .detail(self.detail())
-            .value("code", &json!(self.code()))
+            .value("code", &json!(self.code()));
+        match self {
+            Error::Spatial(SpatialError::FilterUnsupported { parameter }) => problem.value(
+                "parameter",
+                &json!(sanitise_operator_string(parameter, MAX_SCOPE_NAME_LEN)),
+            ),
+            _ => problem,
+        }
     }
 }
 
@@ -1009,6 +1082,116 @@ impl SpdciError {
             }
             SpdciError::MapperUnavailable => {
                 "response mapping is configured but the mapper extension is not installed"
+            }
+        }
+    }
+}
+
+impl OgcError {
+    fn code(&self) -> &'static str {
+        match self {
+            OgcError::CollectionNotFound => "ogc.collection_not_found",
+            OgcError::FeatureNotFound => "ogc.feature_not_found",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        StatusCode::NOT_FOUND
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            OgcError::CollectionNotFound => "OGC collection not found",
+            OgcError::FeatureNotFound => "OGC feature not found",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            OgcError::CollectionNotFound => {
+                "collection is not registered, spatially exposed, or visible to the caller"
+            }
+            OgcError::FeatureNotFound => {
+                "feature is not registered, visible, or within the required filter context"
+            }
+        }
+    }
+}
+
+impl SpatialError {
+    fn code(&self) -> &'static str {
+        match self {
+            SpatialError::GeometryInvalid => "spatial.geometry_invalid",
+            SpatialError::GeometryTooLarge => "spatial.geometry_too_large",
+            SpatialError::BboxInvalid => "spatial.bbox_invalid",
+            SpatialError::FilterUnsupported { .. } => "spatial.filter_unsupported",
+            SpatialError::CrsUnsupported => "spatial.crs_unsupported",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            SpatialError::GeometryInvalid | SpatialError::GeometryTooLarge => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+            SpatialError::BboxInvalid
+            | SpatialError::FilterUnsupported { .. }
+            | SpatialError::CrsUnsupported => StatusCode::BAD_REQUEST,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            SpatialError::GeometryInvalid => "Spatial geometry invalid",
+            SpatialError::GeometryTooLarge => "Spatial geometry too large",
+            SpatialError::BboxInvalid => "Spatial bbox invalid",
+            SpatialError::FilterUnsupported { .. } => "Spatial filter unsupported",
+            SpatialError::CrsUnsupported => "Spatial CRS unsupported",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            SpatialError::GeometryInvalid => "geometry field is malformed".to_string(),
+            SpatialError::GeometryTooLarge => {
+                "geometry exceeds the configured vertex limit".to_string()
+            }
+            SpatialError::BboxInvalid => {
+                "bbox parameter is malformed or uses an unsupported shape".to_string()
+            }
+            SpatialError::FilterUnsupported { parameter } => {
+                let safe = sanitise_operator_string(parameter, MAX_SCOPE_NAME_LEN);
+                truncate(
+                    format!("parameter cannot be evaluated: {safe}"),
+                    MAX_DETAIL_LEN,
+                )
+            }
+            SpatialError::CrsUnsupported => "requested CRS is not supported".to_string(),
+        }
+    }
+}
+
+impl QueryError {
+    fn code(&self) -> &'static str {
+        match self {
+            QueryError::CursorInvalid => "query.cursor_invalid",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            QueryError::CursorInvalid => "Query cursor invalid",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            QueryError::CursorInvalid => {
+                "cursor is malformed, expired, or bound to a different query context"
             }
         }
     }

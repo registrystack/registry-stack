@@ -554,6 +554,8 @@ fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::Rows => "rows",
         EndpointKind::AggregateList => "aggregate_list",
         EndpointKind::Aggregate => "aggregate",
+        EndpointKind::OgcCollectionItems => "ogc_collection_items",
+        EndpointKind::OgcFeature => "ogc_feature",
         EndpointKind::Admin => "admin",
         EndpointKind::Openapi => "openapi",
         EndpointKind::Other => "other",

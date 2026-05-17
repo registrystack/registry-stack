@@ -300,6 +300,39 @@ async fn collection_supports_exposed_base_field_eq_filter() {
 }
 
 #[tokio::test]
+async fn collection_applies_trusted_filters_without_allowed_filter_entry() {
+    let engine = query_engine().await;
+    let rows = engine
+        .read_collection(
+            "social_registry",
+            "household",
+            EntityCollectionQuery::new()
+                .with_trusted_filter(EntityFilter::eq("id", "hh-2"))
+                .with_limit(10),
+        )
+        .await
+        .expect("trusted filter is route-owned")
+        .rows;
+
+    assert_eq!(rows, vec![json!({"id": "hh-2", "region": "south"})]);
+}
+
+#[tokio::test]
+async fn collection_rejects_trusted_filter_unknown_field() {
+    let engine = query_engine().await;
+    let error = engine
+        .read_collection(
+            "social_registry",
+            "household",
+            EntityCollectionQuery::new().with_trusted_filter(EntityFilter::eq("unknown", "x")),
+        )
+        .await
+        .expect_err("unknown trusted field is rejected");
+
+    assert_eq!(error.code(), "filter.unknown_field");
+}
+
+#[tokio::test]
 async fn collection_supports_allowed_in_filter() {
     let engine = query_engine().await;
     let rows = engine

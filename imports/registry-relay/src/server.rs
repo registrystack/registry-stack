@@ -179,6 +179,8 @@ pub fn build_app_with_provenance_and_metrics(
         .merge(api::aggregates_router())
         .merge(api::catalog_router())
         .merge(api::openapi_router());
+    #[cfg(feature = "ogcapi-features")]
+    let protected = protected.merge(api::ogc_router());
     let protected = merge_spdci_routes(protected);
     let protected = auth_layer(protected, auth);
 

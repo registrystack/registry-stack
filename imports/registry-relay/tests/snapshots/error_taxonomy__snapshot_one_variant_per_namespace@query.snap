@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "query.cursor_invalid",
+  "detail": "cursor is malformed, expired, or bound to a different query context",
+  "status": 400,
+  "title": "Query cursor invalid",
+  "type": "https://data.example.gov/problems/query/cursor_invalid"
+}
