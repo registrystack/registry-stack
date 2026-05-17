@@ -89,6 +89,24 @@ X-Api-Key: <api-key>
 
 Use dataset scopes narrowly. `metadata`, `aggregate`, `rows`, `verify`, `bulk_export`, and `admin` are independent. A verify-only key cannot list metadata, run aggregates, read rows, or reload data.
 
+Alternatively, set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. The relay is a resource server: it validates tokens against the IdP's JWKS but never mints, refreshes, or stores them.
+
+```yaml
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.gov
+    audience:
+      - registry-relay
+    discovery_url: https://idp.example.gov/.well-known/openid-configuration
+    algorithms:
+      - RS256
+    scope_map:
+      "role:social-registry-reader": "social_registry:rows"
+```
+
+See [config/example.oidc.yaml](config/example.oidc.yaml) for a complete drop-in alternative targeting a local Zitadel and [docs/configuration.md](docs/configuration.md#oidc-oauth2) for the full field reference plus the granular `auth.*` failure-code taxonomy. The publicschema.com dev compose stack provisions a Zitadel instance you can point at directly; `scripts/mint-zitadel-token.sh` and `tests/oidc_zitadel.rs` exercise the path end-to-end.
+
 ## Run Locally
 
 The example config references data under `./data/social_registry.xlsx`, so either adapt the path or copy a fixture into place:

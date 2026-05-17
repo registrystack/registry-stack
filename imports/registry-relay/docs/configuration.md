@@ -138,6 +138,102 @@ printf 'sha256:%s\n' "$(printf '%s' "$RAW_KEY" | shasum -a 256 | awk '{print $1}
 
 Store the fingerprint in the platform secret store under the configured `hash_env` name. Give the raw key only to the authorized client.
 
+## OIDC (OAuth2)
+
+Set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. The relay is a resource server: it validates inbound tokens against the IdP's JWKS but never mints, refreshes, or stores tokens. A given deployment runs in exactly one auth mode at a time; mixed-mode operation is not supported.
+
+```yaml
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.gov
+    audience:
+      - registry-relay
+    discovery_url: https://idp.example.gov/.well-known/openid-configuration
+    algorithms:
+      - RS256
+    jwks_cache_ttl: 10m
+    leeway: 60s
+    scope_claim: scope
+    scope_map:
+      "role:social-registry-reader": "social_registry:rows"
+    allowed_clients: []
+    token_types:
+      - JWT
+      - at+jwt
+```
+
+A full drop-in alternative to `config/example.yaml` lives at `config/example.oidc.yaml`. It targets a local Zitadel instance and is what the integration test consumes.
+
+| Field             | Purpose                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `issuer`          | Compared verbatim against the JWT `iss` claim. Must match the IdP's published issuer URL.                                                                     |
+| `audience`        | One or more accepted `aud` values. Tokens whose `aud` does not intersect this list are rejected.                                                              |
+| `jwks_url`        | Explicit JWKS endpoint. Exactly one of `jwks_url` and `discovery_url` is required; the validator rejects both.                                                |
+| `discovery_url`   | OIDC discovery document (`.well-known/openid-configuration`). The JWKS URL is resolved from `jwks_uri` at startup.                                            |
+| `algorithms`      | Signature algorithms accepted by the verifier. RS256, ES256, EdDSA. HS\* and `none` are intentionally absent.                                                 |
+| `jwks_cache_ttl`  | Steady-state JWKS cache TTL. The cache also refreshes on unknown `kid` (rate-limited), so this is the rotation pickup latency, not the upper bound.           |
+| `leeway`          | Clock skew tolerance on `exp` and `nbf`. Bounded at 5 minutes by validation.                                                                                  |
+| `scope_claim`     | JWT claim to read scopes from. Defaults to `scope` (RFC 8693 / RFC 9068 space-separated string). May be a string or an array of strings.                      |
+| `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.                               |
+| `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
+| `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default.                     |
+
+### Discovery vs explicit JWKS
+
+`discovery_url` triggers a single discovery fetch at startup to resolve `jwks_uri`; a failure here aborts the binary so an operator sees the IdP wiring problem instead of a process that runs but silently rejects every token. The JWKS document itself is fetched lazily on first verify, so a transient JWKS outage at boot does not block startup.
+
+### Resource-server semantics
+
+The relay never mints or refreshes tokens. Operators are responsible for provisioning OIDC applications, machine users, and grant types on the IdP. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`; `auth_mode=oidc` is recorded on every audit record.
+
+### Granular failure codes
+
+Token verification failures map to specific `auth.*` codes so audit pipelines can distinguish IdP outages from bad tokens from policy denials:
+
+| Code                            | HTTP | Meaning                                                       |
+| ------------------------------- | ---- | ------------------------------------------------------------- |
+| `auth.missing_credential`       | 401  | No `Authorization` header                                     |
+| `auth.malformed_credential`     | 401  | Wrong scheme, empty bearer, or unparseable JWT structure      |
+| `auth.token_expired`            | 401  | `exp` claim is in the past (after `leeway`)                   |
+| `auth.token_not_yet_valid`      | 401  | `nbf` claim is in the future (after `leeway`)                 |
+| `auth.token_signature_invalid`  | 401  | JWKS key found but signature did not verify                   |
+| `auth.issuer_mismatch`          | 401  | `iss` claim does not match `oidc.issuer`                      |
+| `auth.audience_mismatch`        | 401  | `aud` claim does not intersect `oidc.audience`                |
+| `auth.kid_unknown`              | 401  | Header `kid` is absent from the JWKS even after one refresh   |
+| `auth.algorithm_not_allowed`    | 401  | Header `alg` is not in the configured allowlist               |
+| `auth.client_not_allowed`       | 403  | `azp` / `client_id` is not in the configured `allowed_clients`|
+| `auth.jwks_unavailable`         | 503  | JWKS fetch failed; the relay cannot verify any token          |
+
+### Running against a local IdP
+
+The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, and machine service account on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created and the env-file shape.
+
+To exercise the relay end-to-end against that Zitadel:
+
+```sh
+# 1. Bring up Zitadel from the sibling stack.
+cd ../publicschema.com
+docker compose -f compose/dev.compose.yaml up -d zitadel zitadel-init
+
+# 2. Mint a test access token (requires the `client_credentials`
+#    grant on the OIDC application; toggle it via the Zitadel console).
+cd ../registry_relay
+TOKEN="$(./scripts/mint-zitadel-token.sh)"
+
+# 3. Run the relay against the OIDC example.
+cargo run -- --config config/example.oidc.yaml
+
+# 4. Hit a protected endpoint with the minted bearer.
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/catalog
+```
+
+The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. Run with:
+
+```sh
+cargo test --test oidc_zitadel -- --ignored --nocapture
+```
+
 ## Audit
 
 ```yaml

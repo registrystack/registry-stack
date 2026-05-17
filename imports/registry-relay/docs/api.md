@@ -48,6 +48,13 @@ POST /admin/reload
 
 ## Authentication
 
+The gateway runs in one of two auth modes, fixed at startup by `auth.mode`:
+
+* `api_key`: high-entropy shared secret with a SHA-256 fingerprint loaded from an environment variable.
+* `oidc`: bearer JWT verified against an external OpenID Connect / OAuth2 IdP's JWKS.
+
+### API key
+
 Clients send either header:
 
 ```http
@@ -61,6 +68,16 @@ X-Api-Key: <api-key>
 ```
 
 When both are present, `Authorization` wins. The gateway hashes the presented raw key with SHA-256 and compares it to fingerprints loaded from the environment variables named by `auth.api_keys[].hash_env`.
+
+### OIDC bearer JWT
+
+Clients send:
+
+```http
+Authorization: Bearer <jwt>
+```
+
+The OIDC mode does not accept `X-Api-Key`. The gateway validates the standard claims (`iss`, `aud`, `exp`, optional `nbf`) against the configured `auth.oidc` block, looks up the signing key in the cached JWKS (refreshed on unknown `kid`), and verifies the signature. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`. Token verification failures map to granular `auth.*` codes (`token_expired`, `audience_mismatch`, `kid_unknown`, etc.) so audit pipelines can distinguish IdP outages from policy denials; see `docs/configuration.md` for the full table.
 
 Scopes are independent. Grant the narrowest scope that lets the caller do its job:
 

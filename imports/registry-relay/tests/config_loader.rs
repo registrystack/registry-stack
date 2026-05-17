@@ -42,6 +42,11 @@ fn example_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml")
 }
 
+/// Path to the OIDC variant of the canonical example.
+fn example_oidc_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.oidc.yaml")
+}
+
 /// Path to a fixture under `tests/fixtures/config/<name>`.
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1145,6 +1150,44 @@ audit:
     assert_eq!(
         oidc.discovery_url.as_deref(),
         Some("https://idp.example.test/.well-known/openid-configuration")
+    );
+}
+
+#[test]
+fn example_oidc_config_loads_and_validates() {
+    let config = config::load(&example_oidc_path()).expect("oidc example config must load");
+
+    assert_eq!(config.auth.mode, AuthMode::Oidc);
+    assert!(config.auth.api_keys.is_empty());
+
+    let oidc = config.auth.oidc.as_ref().expect("oidc block present");
+    assert_eq!(oidc.issuer, "http://localhost:8080");
+    assert_eq!(oidc.audience, vec!["registry-relay".to_string()]);
+    assert!(oidc.jwks_url.is_none());
+    assert_eq!(
+        oidc.discovery_url.as_deref(),
+        Some("http://localhost:8080/.well-known/openid-configuration")
+    );
+    assert_eq!(oidc.algorithms, vec![OidcAlgorithm::Rs256]);
+    assert_eq!(oidc.jwks_cache_ttl.as_secs(), 600);
+    assert_eq!(oidc.leeway.as_secs(), 60);
+    assert_eq!(oidc.scope_claim, "scope");
+    assert_eq!(
+        oidc.scope_map
+            .get("role:social-registry-reader")
+            .map(String::as_str),
+        Some("social_registry:rows"),
+    );
+    assert_eq!(
+        oidc.scope_map
+            .get("role:social-registry-aggregate")
+            .map(String::as_str),
+        Some("social_registry:aggregate"),
+    );
+    assert!(oidc.allowed_clients.is_empty());
+    assert_eq!(
+        oidc.token_types,
+        vec!["JWT".to_string(), "at+jwt".to_string()]
     );
 }
 
