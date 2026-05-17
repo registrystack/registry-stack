@@ -12,6 +12,13 @@ ignore = [
     # RUSTSEC-2025-0068: serde_yml flagged as unmaintained by advisory db.
     # Tracked: re-evaluate at Wave 3 per architect note Section 9 risk #2.
     "RUSTSEC-2025-0068",
+    # RUSTSEC-2023-0089: atomic-polyfill (unmaintained) reaches us only via
+    # the optional standards-cel-mapping feature, pulled in through
+    # cel-mapper-core -> phonenumber -> postcard -> heapless.
+    # heapless 0.8+ drops atomic-polyfill for portable-atomic; we cannot
+    # apply that upgrade here without forking cel-mapper-core. Re-evaluate
+    # when cel-mapper-core upgrades phonenumber/postcard/heapless.
+    "RUSTSEC-2023-0089",
 ]
 
 [licenses]

@@ -63,7 +63,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 # Optional PublicSchema.org entity-VC mapping support. Disabled by default so
 # the core VC path does not pull in the CEL mapper dependency graph.
-cel-mapper-core = { git = "https://github.com/PublicSchema/cel-mapping", rev = "fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b", optional = true }
+cel-mapper-core = { version = "0.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b", optional = true }
 jsonschema = { version = "0.18", optional = true }
 # serde_yml: maintained community fork of the archived serde_yaml.
 # Version is pinned to the exact minor as it is a young fork; re-evaluate

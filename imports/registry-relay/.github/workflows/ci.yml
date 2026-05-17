@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: ["**"]
 
+# Cancel superseded runs on the same ref so a fast-follow push does not
+# keep an outdated build alive next to the new one. Main is kept (we want
+# every merged commit's CI result), branches are racy and can be cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
@@ -119,5 +126,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Buildx + GHA cache backend persists the Dockerfile's
+      # `RUN --mount=type=cache` cargo registry and target directories
+      # across runs. First run is a cold compile; subsequent runs reuse
+      # the cargo caches and only rebuild changed crates.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build container image
-        run: docker build -t registry-relay:ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: registry-relay:ci
+          load: false
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
