@@ -210,7 +210,7 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 
 The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, machine service account, and the relay-facing project roles on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created, the env-file shape, and the claim that carries roles in minted access tokens.
 
-**Prerequisites.** The bootstrap must have completed against a fresh Zitadel volume so the OIDC application has the `client_credentials` grant enabled and the project roles (`social-registry-reader`, `social-registry-aggregate`) are granted to the machine user. If you are pointing at an older snapshot of the stack, enable the grant via the Zitadel console and grant the roles manually before running the steps below; otherwise the token mint will fail with `invalid_grant` and every protected request will return 403.
+**Prerequisites.** The bootstrap must have completed against a current Zitadel volume so the `publicschema-api` machine user has `accessTokenType: JWT` and a generated client secret (Section 7b of `compose/seed/zitadel-init.sh`). Token minting uses the SA's `client_credentials` grant rather than the `workbench-dev` OIDC app's, because Zitadel WEB-typed OIDC applications silently drop the `client_credentials` grant at write time. If you are pointing at an older snapshot of the stack that predates the SA hardening, re-run `docker compose -f compose/dev.compose.yaml up zitadel-init` against the publicschema.com stack to regenerate the SA credentials and refresh `compose/seed/zitadel.env`; otherwise the token mint will fail with `invalid_grant` or produce an opaque bearer that the relay cannot verify.
 
 To exercise the relay end-to-end:
 
@@ -230,9 +230,10 @@ cargo run -- --config config/example.oidc.yaml
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/catalog
 ```
 
-The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. Run with:
+The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. The test reads `OIDC_ISSUER`, `OIDC_SA_CLIENT_ID`, and `OIDC_SA_CLIENT_SECRET` from the environment, so source the bootstrap env file first:
 
 ```sh
+source ../publicschema.com/compose/seed/zitadel.env
 cargo test --test oidc_zitadel -- --ignored --nocapture
 ```
 
