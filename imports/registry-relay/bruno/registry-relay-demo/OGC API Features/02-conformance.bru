@@ -1,0 +1,20 @@
+meta {
+  name: OGC conformance
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/conformance
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the OGC conformance declaration.
+  Expected: 200 with conformsTo entries for core, GeoJSON, and OpenAPI 3.0.
+}

@@ -2072,13 +2072,12 @@ fn validate_spatial_geometry(
             validate_exposed_spatial_field(dataset, entity, table, exposed_fields, field)?;
         }
         SpatialGeometryConfig::Wkt { field, crs } | SpatialGeometryConfig::Wkb { field, crs } => {
-            validate_spatial_crs(dataset, entity, crs)?;
-            validate_exposed_spatial_field(dataset, entity, table, exposed_fields, field)?;
             tracing::error!(
                 code = "config.validation_error",
                 dataset_id = %dataset.id,
                 entity = %entity.name,
                 field = %field,
+                crs = %crs,
                 "spatial geometry kind is reserved for a later OGC implementation phase"
             );
             return Err(ConfigError::ValidationError);

@@ -40,11 +40,16 @@ fn sample_record() -> AuditRecord {
         table_id: None,
         relationship: None,
         aggregate_id: None,
+        underlying_kind: None,
+        collection_id: None,
+        primary_key: None,
         scopes_used: vec!["catalog".to_string()],
         query_params: serde_json::json!({}),
         purpose: Some("ci-smoke".to_string()),
         status_code: 200,
         row_count: None,
+        null_geometry_count: None,
+        invalid_geometry_count: None,
         suppressed_groups: None,
         duration_ms: 7,
         error_code: None,
@@ -74,11 +79,16 @@ fn record_serialises_to_expected_field_shape() {
         "table_id",
         "relationship",
         "aggregate_id",
+        "underlying_kind",
+        "collection_id",
+        "primary_key",
         "scopes_used",
         "query_params",
         "purpose",
         "status_code",
         "row_count",
+        "null_geometry_count",
+        "invalid_geometry_count",
         "suppressed_groups",
         "duration_ms",
         "error_code",
@@ -117,7 +127,12 @@ fn record_field_types_match_contract() {
     assert!(json["table_id"].is_null());
     assert!(json["relationship"].is_null());
     assert!(json["aggregate_id"].is_null());
+    assert!(json["underlying_kind"].is_null());
+    assert!(json["collection_id"].is_null());
+    assert!(json["primary_key"].is_null());
     assert!(json["row_count"].is_null());
+    assert!(json["null_geometry_count"].is_null());
+    assert!(json["invalid_geometry_count"].is_null());
     assert!(json["suppressed_groups"].is_null());
     assert!(json["error_code"].is_null());
 }

@@ -163,6 +163,17 @@ datasets together:
 cargo run -- --config demo/config/all_demos.yaml
 ```
 
+To exercise the OGC API Features demo surface over the clinic facilities
+collection, enable the feature flag:
+
+```bash
+cargo run --features ogcapi-features -- --config demo/config/all_demos.yaml
+```
+
+The same works with `demo/config/clinic_capacity.yaml` if you only want the
+clinic dataset. The OGC surface uses generalized public map points for
+facilities; exact operational coordinates remain unprojected.
+
 For the optional SP DCI sync demos, use the feature-gated config:
 
 ```bash
@@ -245,6 +256,7 @@ The environment file pre-fills the cross-demo defaults the requests reference:
 | `baseUrl` | `http://127.0.0.1:4242` | Server bind in every config |
 | `purpose` | a short identifier | `Data-Purpose` value used by personal-data reads |
 | `district` | `riverbend` | Shared district id used by district-planning flow |
+| `clinicBbox` | `38.5,10.5,39.5,11.5` | CRS84 bbox around the demo riverbend clinic map points |
 | `schoolId` | `sch-3001` | School id used by school-construction flow |
 | `facilityId` | `fac-4001` | Facility id used by clinic-rehab flow |
 | `studentAlias` | `stu-2001` | Student id used by scholarship + subject lookups |
@@ -259,6 +271,8 @@ The collection is grouped by capability and dataset:
   positive flows plus the spec-listed dataset-local negative checks;
 - `Auth Boundaries` is the canonical cross-cutting suite of denial cases
   (401, 403, 400 `auth.purpose_required`, 400 `entity.filter_required`);
+- `OGC API Features` exercises the feature-gated `/ogc/v1` surface over
+  `clinic_capacity.facilities`;
 - `Cross-Demo Workflows` contains the four spec-required sequences plus
   emergency planning, and assumes `all_demos.yaml` is running.
 

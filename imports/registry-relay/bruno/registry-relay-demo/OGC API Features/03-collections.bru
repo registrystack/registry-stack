@@ -1,0 +1,20 @@
+meta {
+  name: OGC collections
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/collections
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Lists spatial collections visible to the metadata persona.
+  Expected: 200 with the clinic_capacity.facilities collection.
+}

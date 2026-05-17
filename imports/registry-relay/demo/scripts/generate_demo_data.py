@@ -56,6 +56,14 @@ MONTHS = [f"2026-{m:02d}" for m in range(1, 13)]
 SCHOOL_YEAR = "2026"
 FISCAL_YEAR = "FY2026"
 QUARTERS = ["Q1", "Q2", "Q3", "Q4"]
+DISTRICT_MAP_POINTS = {
+    "north": (35.0, 5.0),
+    "central": (37.0, 8.0),
+    "riverbend": (39.0, 11.0),
+    "highlands": (41.0, 14.0),
+    "coast": (43.0, 17.0),
+    "south": (33.0, 3.0),
+}
 
 # Program / support categories shared between benefits and education.
 SUPPORT_CATEGORIES = [
@@ -91,6 +99,12 @@ def maybe(rng: random.Random, value: Any, probability_present: float) -> Any:
 def daterange(rng: random.Random, start: dt.date, end: dt.date) -> dt.date:
     span = (end - start).days
     return start + dt.timedelta(days=rng.randint(0, span))
+
+
+def stable_jitter(key: str, salt: str, radius: float = 0.35) -> float:
+    digest = hashlib.sha256(f"{salt}:{key}".encode("utf-8")).digest()
+    unit = int.from_bytes(digest[:4], "big") / 0xFFFF_FFFF
+    return (unit * 2.0 - 1.0) * radius
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +324,8 @@ def build_clinics(
         "service_level",
         "latitude_band",
         "longitude_band",
+        "map_latitude",
+        "map_longitude",
         "exact_latitude",
         "exact_longitude",
     ]
@@ -334,6 +350,11 @@ def build_clinics(
         name = f"{pick(rng, name_prefixes)} {pick(rng, name_suffixes)}"
         lat_b = pick(rng, lat_bands)
         lon_b = pick(rng, lon_bands)
+        map_lon, map_lat = DISTRICT_MAP_POINTS[district]
+        # Generalized public map points: enough for OGC discovery without
+        # exposing operationally sensitive exact coordinates.
+        map_lat = round(map_lat + stable_jitter(fid, "lat"), 4)
+        map_lon = round(map_lon + stable_jitter(fid, "lon"), 4)
         # Exact lat/lon are sensitive: only roughly inside the band.
         exact_lat = round(rng.uniform(0.0, 20.0), 4)
         exact_lon = round(rng.uniform(30.0, 45.0), 4)
@@ -347,6 +368,8 @@ def build_clinics(
                 level,
                 lat_b,
                 lon_b,
+                map_lat,
+                map_lon,
                 exact_lat,
                 exact_lon,
             ]

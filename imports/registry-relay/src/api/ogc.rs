@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
@@ -21,7 +21,7 @@ use crate::api::CursorSigner;
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84};
+use crate::config::{FieldType, SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84};
 use crate::entity::{EntityModel, EntityRegistry, EntitySpatialModel};
 use crate::error::{
     AuthError, Error, FilterError, InternalError, OgcError, QueryError, SpatialError,
@@ -32,6 +32,7 @@ const GEOJSON: HeaderValue = HeaderValue::from_static("application/geo+json");
 const JSON: &str = "application/json";
 const GEOJSON_MIME: &str = "application/geo+json";
 const OGC_BASE: &str = "/ogc/v1";
+const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const MAX_FILTERS_PER_REQUEST: usize = 20;
 const CURSOR_MAC_LEN: usize = 16;
 
@@ -179,9 +180,6 @@ async fn dataset_collections(
     let Some(Extension(principal)) = principal else {
         return Error::from(AuthError::MissingCredential).into_response();
     };
-    if registry.dataset(&path.dataset_id).is_none() {
-        return Error::from(OgcError::CollectionNotFound).into_response();
-    }
 
     let collections = spatial_collections(&config, &registry, &principal, Some(&path.dataset_id));
     if collections.is_empty() {
@@ -226,13 +224,14 @@ async fn collection_detail(
 async fn collection_items(
     Path(path): Path<CollectionPath>,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
     config: Option<Extension<Arc<crate::config::Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
     signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
-    let Some((_config, registry)) = ogc_state(config, registry) else {
+    let Some((_, registry)) = ogc_state(config, registry) else {
         return query_unavailable("OGC items route matched, but state is not installed");
     };
     let Some(Extension(query)) = query else {
@@ -251,6 +250,9 @@ async fn collection_items(
     ) else {
         return Error::from(OgcError::CollectionNotFound).into_response();
     };
+    if let Err(error) = require_read_purpose_header(entity, &headers) {
+        return error.into_response();
+    }
 
     let parsed = match parse_items_query(entity, spatial, params, None) {
         Ok(parsed) => parsed,
@@ -264,6 +266,7 @@ async fn collection_items(
         &path.collection_id,
         principal_ref,
         &parsed,
+        projection_context(entity, spatial),
     );
     let mut entity_query = parsed.entity_query;
     let mut decoded_cursor = None;
@@ -286,7 +289,7 @@ async fn collection_items(
                     return Error::from(QueryError::CursorInvalid).into_response();
                 }
             }
-            let features = match rows_to_features(
+            let feature_rows = match rows_to_features(
                 &path.dataset_id,
                 entity,
                 spatial,
@@ -294,9 +297,26 @@ async fn collection_items(
                 rows.rows,
             ) {
                 Ok(features) => features,
-                Err(error) => return error.into_response(),
+                Err(error) => {
+                    let response = error.error.into_response();
+                    return with_audit_context(
+                        response,
+                        audit_context(
+                            entity,
+                            spatial,
+                            &path.dataset_id,
+                            OgcAuditContext {
+                                underlying_kind: "entity_collection",
+                                primary_key: None,
+                                row_count: None,
+                                null_geometry_count: Some(error.null_geometry_count),
+                                invalid_geometry_count: Some(error.invalid_geometry_count),
+                            },
+                        ),
+                    );
+                }
             };
-            let row_count = features.len() as u64;
+            let row_count = feature_rows.features.len() as u64;
             let next = rows.next_primary_key.map(|position| OgcCursor {
                 version: 1,
                 context: query_context,
@@ -314,14 +334,25 @@ async fn collection_items(
                 &path.dataset_id,
                 &path.collection_id,
                 &parsed.link_params,
-                features,
+                feature_rows.features,
                 next.as_deref(),
             );
             let mut response = Json(body).into_response();
             response.headers_mut().insert(header::CONTENT_TYPE, GEOJSON);
             with_audit_context(
                 response,
-                audit_context(entity, &path.dataset_id, Some(row_count)),
+                audit_context(
+                    entity,
+                    spatial,
+                    &path.dataset_id,
+                    OgcAuditContext {
+                        underlying_kind: "entity_collection",
+                        primary_key: None,
+                        row_count: Some(row_count),
+                        null_geometry_count: Some(feature_rows.null_geometry_count),
+                        invalid_geometry_count: Some(feature_rows.invalid_geometry_count),
+                    },
+                ),
             )
         }
         Err(error) => error.into_response(),
@@ -332,6 +363,7 @@ async fn collection_items(
 async fn feature_item(
     Path(path): Path<FeaturePath>,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
@@ -351,6 +383,9 @@ async fn feature_item(
     ) else {
         return Error::from(OgcError::FeatureNotFound).into_response();
     };
+    if let Err(error) = require_read_purpose_header(entity, &headers) {
+        return error.into_response();
+    }
 
     let parsed = match parse_items_query(entity, spatial, params, Some(&path.feature_id)) {
         Ok(parsed) => parsed,
@@ -371,7 +406,7 @@ async fn feature_item(
         .await
     {
         Ok(rows) => {
-            let features = match rows_to_features(
+            let feature_rows = match rows_to_features(
                 &path.dataset_id,
                 entity,
                 spatial,
@@ -379,14 +414,45 @@ async fn feature_item(
                 rows.rows,
             ) {
                 Ok(features) => features,
-                Err(error) => return error.into_response(),
+                Err(error) => {
+                    let response = error.error.into_response();
+                    return with_audit_context(
+                        response,
+                        audit_context(
+                            entity,
+                            spatial,
+                            &path.dataset_id,
+                            OgcAuditContext {
+                                underlying_kind: "entity_record",
+                                primary_key: Some(path.feature_id),
+                                row_count: None,
+                                null_geometry_count: Some(error.null_geometry_count),
+                                invalid_geometry_count: Some(error.invalid_geometry_count),
+                            },
+                        ),
+                    );
+                }
             };
-            let Some(feature) = features.into_iter().next() else {
+            let Some(feature) = feature_rows.features.into_iter().next() else {
                 return Error::from(OgcError::FeatureNotFound).into_response();
             };
             let mut response = Json(feature).into_response();
             response.headers_mut().insert(header::CONTENT_TYPE, GEOJSON);
-            with_audit_context(response, audit_context(entity, &path.dataset_id, Some(1)))
+            with_audit_context(
+                response,
+                audit_context(
+                    entity,
+                    spatial,
+                    &path.dataset_id,
+                    OgcAuditContext {
+                        underlying_kind: "entity_record",
+                        primary_key: Some(path.feature_id),
+                        row_count: Some(1),
+                        null_geometry_count: Some(feature_rows.null_geometry_count),
+                        invalid_geometry_count: Some(feature_rows.invalid_geometry_count),
+                    },
+                ),
+            )
         }
         Err(error) => error.into_response(),
     }
@@ -454,6 +520,21 @@ fn require_spatial_entity<'a>(
     Ok((entity, spatial))
 }
 
+fn require_read_purpose_header(entity: &EntityModel, headers: &HeaderMap) -> Result<(), Error> {
+    if !entity.api.require_purpose_header || purpose_header_value(headers).is_some() {
+        return Ok(());
+    }
+    Err(AuthError::PurposeRequired.into())
+}
+
+fn purpose_header_value(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(DATA_PURPOSE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn spatial_collections(
     config: &crate::config::Config,
     registry: &EntityRegistry,
@@ -519,15 +600,15 @@ fn collection_json(
 }
 
 fn supported_query_parameters(entity: &EntityModel, spatial: &EntitySpatialModel) -> Vec<String> {
-    let mut params = vec![
-        "limit".to_string(),
-        "bbox".to_string(),
-        "bbox-crs".to_string(),
-        "after".to_string(),
-    ];
+    let mut params = vec!["limit".to_string()];
+    if supports_bbox(spatial) {
+        params.push("bbox".to_string());
+        params.push("bbox-crs".to_string());
+    }
     if spatial.datetime_field.is_some() {
         params.push("datetime".to_string());
     }
+    params.push("after".to_string());
     params.extend(
         entity
             .api
@@ -535,9 +616,12 @@ fn supported_query_parameters(entity: &EntityModel, spatial: &EntitySpatialModel
             .iter()
             .map(|filter| filter.field.clone()),
     );
-    params.sort();
     params.dedup();
     params
+}
+
+fn supports_bbox(spatial: &EntitySpatialModel) -> bool {
+    matches!(spatial.geometry, SpatialGeometryConfig::Point { .. }) || spatial.bbox_fields.is_some()
 }
 
 fn property_names(entity: &EntityModel, spatial: &EntitySpatialModel) -> Vec<String> {
@@ -738,7 +822,7 @@ fn enforce_required_filters(entity: &EntityModel, filters: &[EntityFilter]) -> R
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Bbox {
     min_x: f64,
     min_y: f64,
@@ -839,7 +923,10 @@ fn parse_bbox(value: &str, max_degrees: f64) -> Result<Bbox, Error> {
         max_x: parts[2],
         max_y: parts[3],
     };
-    if bbox.min_x > bbox.max_x || bbox.min_y > bbox.max_y {
+    if bbox.min_x > bbox.max_x {
+        return Err(SpatialError::BboxAntimeridianUnsupported.into());
+    }
+    if bbox.min_y > bbox.max_y {
         return Err(SpatialError::BboxInvalid.into());
     }
     if bbox.max_x - bbox.min_x > max_degrees || bbox.max_y - bbox.min_y > max_degrees {
@@ -869,7 +956,7 @@ fn apply_datetime(
             return Err(FilterError::InvalidRange.into());
         }
         if has_start {
-            validate_datetime_value(start)?;
+            let start = normalize_datetime_filter_value(spatial, start)?;
             query = query.with_trusted_filter(EntityFilter::with_op(
                 field.clone(),
                 EntityFilterOp::Gte,
@@ -877,7 +964,7 @@ fn apply_datetime(
             ));
         }
         if has_end {
-            validate_datetime_value(end)?;
+            let end = normalize_datetime_filter_value(spatial, end)?;
             query = query.with_trusted_filter(EntityFilter::with_op(
                 field.clone(),
                 EntityFilterOp::Lte,
@@ -885,10 +972,28 @@ fn apply_datetime(
             ));
         }
     } else {
-        validate_datetime_value(value)?;
+        let value = normalize_datetime_filter_value(spatial, value)?;
         query = query.with_trusted_filter(EntityFilter::eq(field.clone(), value));
     }
     Ok(query)
+}
+
+fn normalize_datetime_filter_value(
+    spatial: &EntitySpatialModel,
+    value: &str,
+) -> Result<String, Error> {
+    validate_datetime_value(value)?;
+    if !matches!(spatial.datetime_field_type, Some(FieldType::Date)) {
+        return Ok(value.to_string());
+    }
+    if let Ok(date) = Date::parse(
+        value,
+        &time::macros::format_description!("[year]-[month]-[day]"),
+    ) {
+        return Ok(date.to_string());
+    }
+    let instant = OffsetDateTime::parse(value, &Rfc3339).map_err(|_| FilterError::InvalidValue)?;
+    Ok(instant.date().to_string())
 }
 
 fn validate_datetime_value(value: &str) -> Result<(), Error> {
@@ -905,16 +1010,55 @@ fn validate_datetime_value(value: &str) -> Result<(), Error> {
     }
 }
 
+struct FeatureRows {
+    features: Vec<Value>,
+    null_geometry_count: u64,
+    invalid_geometry_count: u64,
+}
+
+struct FeatureRowsError {
+    error: Error,
+    null_geometry_count: u64,
+    invalid_geometry_count: u64,
+}
+
 fn rows_to_features(
     dataset_id: &str,
     entity: &EntityModel,
     spatial: &EntitySpatialModel,
     link_params: &BTreeMap<String, String>,
     rows: Vec<Value>,
-) -> Result<Vec<Value>, Error> {
-    rows.into_iter()
-        .map(|row| row_to_feature(dataset_id, entity, spatial, link_params, row))
-        .collect()
+) -> Result<FeatureRows, FeatureRowsError> {
+    let mut features = Vec::with_capacity(rows.len());
+    let mut null_geometry_count = 0;
+    for row in rows {
+        let feature = match row_to_feature(dataset_id, entity, spatial, link_params, row) {
+            Ok(feature) => feature,
+            Err(error) => {
+                return Err(FeatureRowsError {
+                    invalid_geometry_count: u64::from(is_geometry_row_error(&error)),
+                    error,
+                    null_geometry_count,
+                });
+            }
+        };
+        if feature.get("geometry").is_some_and(Value::is_null) {
+            null_geometry_count += 1;
+        }
+        features.push(feature);
+    }
+    Ok(FeatureRows {
+        features,
+        null_geometry_count,
+        invalid_geometry_count: 0,
+    })
+}
+
+fn is_geometry_row_error(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Spatial(SpatialError::GeometryInvalid | SpatialError::GeometryTooLarge)
+    )
 }
 
 fn row_to_feature(
@@ -1013,10 +1157,7 @@ fn geometry_from_row(
             serde_json::to_value(geometry).map_err(|_| Error::from(InternalError::Unhandled))
         }
         SpatialGeometryConfig::Wkt { .. } | SpatialGeometryConfig::Wkb { .. } => {
-            Err(SpatialError::FilterUnsupported {
-                parameter: "geometry".to_string(),
-            }
-            .into())
+            Err(SpatialError::GeometryInvalid.into())
         }
     }
 }
@@ -1185,6 +1326,7 @@ struct OgcCursorContext {
     dataset_id: String,
     collection_id: String,
     principal_id: Option<String>,
+    projection: Vec<String>,
     params: BTreeMap<String, String>,
 }
 
@@ -1193,13 +1335,22 @@ fn cursor_context(
     collection_id: &str,
     principal: Option<&Principal>,
     parsed: &ParsedItemsQuery,
+    projection: Vec<String>,
 ) -> OgcCursorContext {
     OgcCursorContext {
         dataset_id: dataset_id.to_string(),
         collection_id: collection_id.to_string(),
         principal_id: principal.map(|principal| principal.principal_id.clone()),
+        projection,
         params: parsed.cursor_params.clone(),
     }
+}
+
+fn projection_context(entity: &EntityModel, spatial: &EntitySpatialModel) -> Vec<String> {
+    // This is currently the config-level entity projection. Keep it in
+    // the cursor context so future per-principal field visibility can
+    // tighten cursor replay without changing the cursor schema.
+    property_names(entity, spatial)
 }
 
 fn encode_ogc_cursor(signer: &CursorSigner, cursor: &OgcCursor) -> Result<String, Error> {
@@ -1274,16 +1425,30 @@ fn link_json(href: &str, rel: &str, media_type: &str, title: Option<&str>) -> Va
     value
 }
 
+struct OgcAuditContext {
+    underlying_kind: &'static str,
+    primary_key: Option<String>,
+    row_count: Option<u64>,
+    null_geometry_count: Option<u64>,
+    invalid_geometry_count: Option<u64>,
+}
+
 fn audit_context(
     entity: &EntityModel,
+    spatial: &EntitySpatialModel,
     dataset_id: &str,
-    row_count: Option<u64>,
+    context: OgcAuditContext,
 ) -> AuditContextExt {
     AuditContextExt {
         dataset_id: Some(dataset_id.to_string()),
         entity_name: Some(entity.name.clone()),
         table_id: Some(entity.table_id.clone()),
-        row_count,
+        underlying_kind: Some(context.underlying_kind.to_string()),
+        collection_id: Some(spatial.collection_id.clone()),
+        primary_key: context.primary_key,
+        null_geometry_count: context.null_geometry_count,
+        invalid_geometry_count: context.invalid_geometry_count,
+        row_count: context.row_count,
         ..AuditContextExt::default()
     }
 }
@@ -1306,6 +1471,47 @@ fn query_unavailable(message: &'static str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{EntityAccessConfig, EntityApiConfig};
+
+    fn test_entity() -> EntityModel {
+        let primary_key = crate::entity::EntityField {
+            name: "id".to_string(),
+            table_column: "id".to_string(),
+        };
+        EntityModel {
+            name: "facility".to_string(),
+            table_id: "facilities_table".to_string(),
+            primary_key: primary_key.clone(),
+            fields: vec![
+                primary_key,
+                crate::entity::EntityField {
+                    name: "geom".to_string(),
+                    table_column: "geom".to_string(),
+                },
+                crate::entity::EntityField {
+                    name: "updated_at".to_string(),
+                    table_column: "updated_at".to_string(),
+                },
+            ],
+            relationships: BTreeMap::new(),
+            access: EntityAccessConfig {
+                metadata_scope: "metadata".to_string(),
+                aggregate_scope: "aggregate".to_string(),
+                read_scope: "rows".to_string(),
+                verify_scope: "verify".to_string(),
+                bulk_export_scope: "bulk_export".to_string(),
+            },
+            api: EntityApiConfig {
+                default_limit: 100,
+                max_limit: 1000,
+                require_purpose_header: false,
+                required_filters: Vec::new(),
+                allowed_filters: Vec::new(),
+                allowed_expansions: Vec::new(),
+            },
+            spatial: None,
+        }
+    }
 
     fn geojson_spatial(max_geometry_vertices: u32) -> EntitySpatialModel {
         EntitySpatialModel {
@@ -1318,6 +1524,7 @@ mod tests {
             },
             bbox_fields: None,
             datetime_field: None,
+            datetime_field_type: None,
             max_bbox_degrees: 5.0,
             max_geometry_vertices,
         }
@@ -1325,7 +1532,9 @@ mod tests {
 
     #[test]
     fn rejects_antimeridian_bbox() {
-        assert!(parse_bbox("170,-10,-170,10", 100.0).is_err());
+        let error = parse_bbox("170,-10,-170,10", 100.0).expect_err("antimeridian rejected");
+        assert_eq!(error.code(), "spatial.bbox_invalid");
+        assert!(error.detail().contains("antimeridian"));
     }
 
     #[test]
@@ -1341,6 +1550,7 @@ mod tests {
             },
             bbox_fields: None,
             datetime_field: Some("updated_at".to_string()),
+            datetime_field_type: Some(FieldType::Timestamp),
             max_bbox_degrees: 5.0,
             max_geometry_vertices: 100,
         };
@@ -1355,6 +1565,70 @@ mod tests {
         let query = apply_datetime(&spatial, EntityCollectionQuery::new(), "../2026-01-31")
             .expect("open-ended end is accepted");
         assert_eq!(query.trusted_filters.len(), 1);
+    }
+
+    #[test]
+    fn date_datetime_field_compares_at_date_precision() {
+        let spatial = EntitySpatialModel {
+            collection_id: "facilities".to_string(),
+            title: None,
+            description: None,
+            geometry: SpatialGeometryConfig::Point {
+                longitude_field: "lon".to_string(),
+                latitude_field: "lat".to_string(),
+                crs: CRS84.to_string(),
+            },
+            bbox_fields: None,
+            datetime_field: Some("updated_on".to_string()),
+            datetime_field_type: Some(FieldType::Date),
+            max_bbox_degrees: 5.0,
+            max_geometry_vertices: 100,
+        };
+        let query = apply_datetime(
+            &spatial,
+            EntityCollectionQuery::new(),
+            "2026-01-01T23:30:00Z",
+        )
+        .expect("RFC3339 instant normalizes to UTC date for date fields");
+        assert_eq!(query.trusted_filters.len(), 1);
+        assert_eq!(query.trusted_filters[0].value, json!("2026-01-01"));
+    }
+
+    #[test]
+    fn collection_discovery_only_advertises_supported_bbox_parameters() {
+        let entity = test_entity();
+        let spatial = geojson_spatial(10);
+        let params = supported_query_parameters(&entity, &spatial);
+
+        assert_eq!(params, vec!["limit".to_string(), "after".to_string()]);
+    }
+
+    #[test]
+    fn ogc_audit_context_includes_spatial_fields() {
+        let entity = test_entity();
+        let spatial = geojson_spatial(10);
+        let context = audit_context(
+            &entity,
+            &spatial,
+            "civic_registry",
+            OgcAuditContext {
+                underlying_kind: "entity_record",
+                primary_key: Some("FAC-001".to_string()),
+                row_count: Some(1),
+                null_geometry_count: Some(1),
+                invalid_geometry_count: Some(0),
+            },
+        );
+
+        assert_eq!(context.dataset_id.as_deref(), Some("civic_registry"));
+        assert_eq!(context.entity_name.as_deref(), Some("facility"));
+        assert_eq!(context.table_id.as_deref(), Some("facilities_table"));
+        assert_eq!(context.underlying_kind.as_deref(), Some("entity_record"));
+        assert_eq!(context.collection_id.as_deref(), Some("parcels"));
+        assert_eq!(context.primary_key.as_deref(), Some("FAC-001"));
+        assert_eq!(context.row_count, Some(1));
+        assert_eq!(context.null_geometry_count, Some(1));
+        assert_eq!(context.invalid_geometry_count, Some(0));
     }
 
     #[test]

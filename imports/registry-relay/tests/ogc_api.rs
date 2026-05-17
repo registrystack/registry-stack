@@ -31,7 +31,7 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
     serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
 }
 
-fn write_config(tmp: &TempDir) -> std::path::PathBuf {
+fn write_config(tmp: &TempDir, require_purpose_header: bool) -> std::path::PathBuf {
     let path = tmp.path().join("ogc_api.yaml");
     std::fs::write(
         &path,
@@ -104,6 +104,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          require_purpose_header: {require_purpose_header}
           required_filters: [facility_type]
           allowed_filters:
             - field: facility_type
@@ -129,9 +130,10 @@ audit:
     path
 }
 
-async fn server(scopes: &[&str]) -> TestServer {
+async fn server_with_purpose(scopes: &[&str], require_purpose_header: bool) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
-    let cfg = Arc::new(config::load(&write_config(&tmp)).expect("config loads"));
+    let cfg =
+        Arc::new(config::load(&write_config(&tmp, require_purpose_header)).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry compiles"));
     let ctx = Arc::new(SessionContext::new());
 
@@ -190,6 +192,10 @@ async fn server(scopes: &[&str]) -> TestServer {
             .layer(Extension(cfg))
             .layer(Extension(principal(scopes))),
     )
+}
+
+async fn server(scopes: &[&str]) -> TestServer {
+    server_with_purpose(scopes, false).await
 }
 
 #[tokio::test]
@@ -312,6 +318,36 @@ async fn item_by_id_preserves_required_filter_context_and_null_geometry() {
 }
 
 #[tokio::test]
+async fn ogc_items_and_features_enforce_required_purpose_header() {
+    let server =
+        server_with_purpose(&["civic_registry:metadata", "civic_registry:rows"], true).await;
+
+    let response = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
+        .await;
+    response.assert_status_bad_request();
+    assert_eq!(response.json::<Value>()["code"], "auth.purpose_required");
+
+    let response = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+    response.assert_status_ok();
+
+    let response = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items/FAC-001?facility_type=clinic")
+        .await;
+    response.assert_status_bad_request();
+    assert_eq!(response.json::<Value>()["code"], "auth.purpose_required");
+
+    let response = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items/FAC-001?facility_type=clinic")
+        .add_header("data-purpose", "capacity planning")
+        .await;
+    response.assert_status_ok();
+}
+
+#[tokio::test]
 async fn bbox_crs_and_antimeridian_errors_are_problem_json() {
     let server = server(&["civic_registry:metadata", "civic_registry:rows"]).await;
 
@@ -325,7 +361,9 @@ async fn bbox_crs_and_antimeridian_errors_are_problem_json() {
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic&bbox=170,-10,-170,10")
         .await;
     response.assert_status_bad_request();
-    assert_eq!(response.json::<Value>()["code"], "spatial.bbox_invalid");
+    let body: Value = response.json();
+    assert_eq!(body["code"], "spatial.bbox_invalid");
+    assert!(body["detail"].as_str().unwrap().contains("antimeridian"));
 }
 
 #[tokio::test]

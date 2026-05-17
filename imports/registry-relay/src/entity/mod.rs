@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 
 use crate::config::{
     Config, DatasetConfig, EntityAccessConfig, EntityApiConfig, EntityConfig,
-    EntityRelationshipConfig, ResourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig,
+    EntityRelationshipConfig, FieldType, ResourceConfig, SpatialBboxFieldsConfig,
+    SpatialGeometryConfig,
 };
 use crate::error::{ConfigError, Error};
 
@@ -49,6 +50,7 @@ pub struct EntitySpatialModel {
     pub geometry: SpatialGeometryConfig,
     pub bbox_fields: Option<SpatialBboxFieldsConfig>,
     pub datetime_field: Option<String>,
+    pub datetime_field_type: Option<FieldType>,
     pub max_bbox_degrees: f64,
     pub max_geometry_vertices: u32,
 }
@@ -96,6 +98,7 @@ fn compile_dataset(dataset: &DatasetConfig) -> Result<DatasetEntities, Error> {
             .cloned()
             .map(|rel| (rel.name.clone(), rel))
             .collect();
+        let spatial = compile_spatial(entity, table, &fields);
 
         entities.insert(
             entity.name.clone(),
@@ -107,7 +110,7 @@ fn compile_dataset(dataset: &DatasetConfig) -> Result<DatasetEntities, Error> {
                 relationships,
                 access: entity.access.clone(),
                 api: entity.api.clone(),
-                spatial: compile_spatial(entity),
+                spatial,
             },
         );
     }
@@ -150,8 +153,28 @@ fn primary_key_field(table: &ResourceConfig, fields: &[EntityField]) -> Result<E
         .ok_or_else(|| ConfigError::ValidationError.into())
 }
 
-fn compile_spatial(entity: &EntityConfig) -> Option<EntitySpatialModel> {
+fn compile_spatial(
+    entity: &EntityConfig,
+    table: &ResourceConfig,
+    fields: &[EntityField],
+) -> Option<EntitySpatialModel> {
     let spatial = entity.spatial.as_ref()?;
+    let datetime_field_type = spatial
+        .datetime_field
+        .as_deref()
+        .and_then(|datetime_field| {
+            let table_column = fields
+                .iter()
+                .find(|field| field.name == datetime_field)?
+                .table_column
+                .as_str();
+            table
+                .schema
+                .fields
+                .iter()
+                .find(|field| field.name == table_column)
+                .map(|field| field.r#type)
+        });
     Some(EntitySpatialModel {
         collection_id: spatial
             .collection_id
@@ -162,6 +185,7 @@ fn compile_spatial(entity: &EntityConfig) -> Option<EntitySpatialModel> {
         geometry: spatial.geometry.clone(),
         bbox_fields: spatial.bbox_fields.clone(),
         datetime_field: spatial.datetime_field.clone(),
+        datetime_field_type,
         max_bbox_degrees: spatial.max_bbox_degrees,
         max_geometry_vertices: spatial.max_geometry_vertices,
     })

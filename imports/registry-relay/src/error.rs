@@ -347,10 +347,14 @@ pub enum SpatialError {
     /// Geometry exceeds the configured vertex cap.
     #[error("spatial geometry too large")]
     GeometryTooLarge,
-    /// Bbox parameter is malformed or uses an unsupported shape such
-    /// as a Phase 1 antimeridian-crossing bbox.
+    /// Bbox parameter is malformed.
     #[error("spatial bbox invalid")]
     BboxInvalid,
+    /// Bbox crosses the antimeridian. Phase 1 rejects these with the
+    /// same stable code as other invalid bbox shapes, but a clearer
+    /// client-facing detail.
+    #[error("spatial bbox crosses antimeridian")]
+    BboxAntimeridianUnsupported,
     /// A supported parameter name cannot be evaluated for this
     /// collection. `parameter` is client-visible and sanitized before
     /// rendering.
@@ -1123,7 +1127,9 @@ impl SpatialError {
         match self {
             SpatialError::GeometryInvalid => "spatial.geometry_invalid",
             SpatialError::GeometryTooLarge => "spatial.geometry_too_large",
-            SpatialError::BboxInvalid => "spatial.bbox_invalid",
+            SpatialError::BboxInvalid | SpatialError::BboxAntimeridianUnsupported => {
+                "spatial.bbox_invalid"
+            }
             SpatialError::FilterUnsupported { .. } => "spatial.filter_unsupported",
             SpatialError::CrsUnsupported => "spatial.crs_unsupported",
         }
@@ -1135,6 +1141,7 @@ impl SpatialError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             SpatialError::BboxInvalid
+            | SpatialError::BboxAntimeridianUnsupported
             | SpatialError::FilterUnsupported { .. }
             | SpatialError::CrsUnsupported => StatusCode::BAD_REQUEST,
         }
@@ -1144,7 +1151,9 @@ impl SpatialError {
         match self {
             SpatialError::GeometryInvalid => "Spatial geometry invalid",
             SpatialError::GeometryTooLarge => "Spatial geometry too large",
-            SpatialError::BboxInvalid => "Spatial bbox invalid",
+            SpatialError::BboxInvalid | SpatialError::BboxAntimeridianUnsupported => {
+                "Spatial bbox invalid"
+            }
             SpatialError::FilterUnsupported { .. } => "Spatial filter unsupported",
             SpatialError::CrsUnsupported => "Spatial CRS unsupported",
         }
@@ -1158,6 +1167,10 @@ impl SpatialError {
             }
             SpatialError::BboxInvalid => {
                 "bbox parameter is malformed or uses an unsupported shape".to_string()
+            }
+            SpatialError::BboxAntimeridianUnsupported => {
+                "bbox crosses the antimeridian; antimeridian bboxes are not supported in Phase 1"
+                    .to_string()
             }
             SpatialError::FilterUnsupported { parameter } => {
                 let safe = sanitise_operator_string(parameter, MAX_SCOPE_NAME_LEN);

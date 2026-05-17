@@ -556,6 +556,13 @@ datasets:
             - name: longitude_band
               type: string
               nullable: false
+            # generalized public map points used by OGC; exact coordinates stay hidden
+            - name: map_latitude
+              type: number
+              nullable: false
+            - name: map_longitude
+              type: number
+              nullable: false
             # exact coordinates are operationally sensitive; not projected publicly
             - name: exact_latitude
               type: number
@@ -646,6 +653,10 @@ datasets:
             from: latitude_band
           - name: longitude_band
             from: longitude_band
+          - name: map_latitude
+            from: map_latitude
+          - name: map_longitude
+            from: map_longitude
         relationships:
           - name: service_capacity
             kind: has_many
@@ -676,6 +687,16 @@ datasets:
             - field: service_level
               ops: [eq, in]
           allowed_expansions: [service_capacity, stock_events]
+        spatial:
+          collection_id: facilities
+          title: Health facility map
+          description: Generalized public map points for clinic-capacity facilities
+          geometry:
+            kind: point
+            longitude_field: map_longitude
+            latitude_field: map_latitude
+            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
+          max_bbox_degrees: 5
         aggregates:
           - id: by_district_type
             description: Count of facilities by district and facility type

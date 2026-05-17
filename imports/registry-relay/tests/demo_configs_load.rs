@@ -71,6 +71,9 @@ fn core_demo_configs_load_and_validate() {
             matches!(config.audit.sink, AuditSinkConfig::Stdout {}),
             "{name}: single-dataset configs should keep audit on stdout"
         );
+        if name == "clinic_capacity.yaml" {
+            assert_clinic_facility_spatial_demo(&config);
+        }
     }
 
     let combined_path = demo_config("all_demos.yaml");
@@ -103,6 +106,37 @@ fn core_demo_configs_load_and_validate() {
             );
         }
         other => panic!("all_demos.yaml expected file audit sink, got {other:?}"),
+    }
+    assert_clinic_facility_spatial_demo(&combined);
+}
+
+fn assert_clinic_facility_spatial_demo(config: &config::Config) {
+    let clinic = config
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id.as_ref() == "clinic_capacity")
+        .expect("clinic_capacity dataset is present");
+    let facility = clinic
+        .entities
+        .iter()
+        .find(|entity| entity.name == "facility")
+        .expect("facility entity is present");
+    let spatial = facility
+        .spatial
+        .as_ref()
+        .expect("facility entity should expose an OGC spatial collection");
+    assert_eq!(spatial.collection_id.as_deref(), Some("facilities"));
+    match &spatial.geometry {
+        config::SpatialGeometryConfig::Point {
+            longitude_field,
+            latitude_field,
+            crs,
+        } => {
+            assert_eq!(longitude_field, "map_longitude");
+            assert_eq!(latitude_field, "map_latitude");
+            assert_eq!(crs, config::CRS84);
+        }
+        _ => panic!("clinic facility demo should use point geometry"),
     }
 }
 

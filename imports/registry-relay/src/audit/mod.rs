@@ -76,6 +76,11 @@ pub struct AuditContextExt {
     pub table_id: Option<String>,
     pub relationship: Option<String>,
     pub aggregate_id: Option<String>,
+    pub underlying_kind: Option<String>,
+    pub collection_id: Option<String>,
+    pub primary_key: Option<String>,
+    pub null_geometry_count: Option<u64>,
+    pub invalid_geometry_count: Option<u64>,
     pub row_count: Option<u64>,
     pub suppressed_groups: Option<u64>,
 }
@@ -176,6 +181,13 @@ pub struct AuditRecord {
     pub relationship: Option<String>,
     /// Set on aggregate only.
     pub aggregate_id: Option<String>,
+    /// Underlying entity route family for compatibility with row-read
+    /// alerting, e.g. `entity_collection` for OGC collection reads.
+    pub underlying_kind: Option<String>,
+    /// OGC collection id when a request resolves a spatial collection.
+    pub collection_id: Option<String>,
+    /// Primary key for single-record reads when known.
+    pub primary_key: Option<String>,
     /// Scopes actually checked on this request, in declaration order.
     pub scopes_used: Vec<String>,
     /// Redacted parameter inventory (names + ops, never values).
@@ -186,6 +198,10 @@ pub struct AuditRecord {
     pub status_code: u16,
     /// Rows on `rows`, group count on `aggregate`.
     pub row_count: Option<u64>,
+    /// Features returned with `geometry: null`.
+    pub null_geometry_count: Option<u64>,
+    /// Features rejected because their geometry was malformed.
+    pub invalid_geometry_count: Option<u64>,
     /// Groups removed/masked by disclosure control.
     pub suppressed_groups: Option<u64>,
     /// Server-side handling time, milliseconds.
@@ -547,11 +563,16 @@ pub async fn audit_layer(
         table_id: context.table_id,
         relationship: context.relationship,
         aggregate_id: context.aggregate_id,
+        underlying_kind: context.underlying_kind,
+        collection_id: context.collection_id,
+        primary_key: context.primary_key,
         scopes_used,
         query_params,
         purpose,
         status_code,
         row_count: context.row_count,
+        null_geometry_count: context.null_geometry_count,
+        invalid_geometry_count: context.invalid_geometry_count,
         suppressed_groups: context.suppressed_groups,
         duration_ms,
         error_code,
@@ -744,11 +765,18 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
             entity_name: Some((*entity).to_string()),
             ..AuditContextExt::default()
         },
-        ["ogc", "v1", "datasets", dataset, "collections", collection, "items"]
-        | ["ogc", "v1", "datasets", dataset, "collections", collection, "items", _] => {
+        ["ogc", "v1", "datasets", dataset, "collections", collection, "items"] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            collection_id: Some((*collection).to_string()),
+            underlying_kind: Some("entity_collection".to_string()),
+            ..AuditContextExt::default()
+        },
+        ["ogc", "v1", "datasets", dataset, "collections", collection, "items", feature] => {
             AuditContextExt {
                 dataset_id: Some((*dataset).to_string()),
-                entity_name: Some((*collection).to_string()),
+                collection_id: Some((*collection).to_string()),
+                primary_key: Some((*feature).to_string()),
+                underlying_kind: Some("entity_record".to_string()),
                 ..AuditContextExt::default()
             }
         }

@@ -80,6 +80,7 @@ fn all_variants() -> Vec<Error> {
         Error::Spatial(SpatialError::GeometryInvalid),
         Error::Spatial(SpatialError::GeometryTooLarge),
         Error::Spatial(SpatialError::BboxInvalid),
+        Error::Spatial(SpatialError::BboxAntimeridianUnsupported),
         Error::Spatial(SpatialError::FilterUnsupported {
             parameter: "bbox".to_string(),
         }),
@@ -176,6 +177,9 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
             "spatial.geometry_too_large",
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
+        // BboxInvalid and BboxAntimeridianUnsupported intentionally share
+        // the stable public code while rendering different details.
+        ("spatial.bbox_invalid", StatusCode::BAD_REQUEST),
         ("spatial.bbox_invalid", StatusCode::BAD_REQUEST),
         ("spatial.filter_unsupported", StatusCode::BAD_REQUEST),
         ("spatial.crs_unsupported", StatusCode::BAD_REQUEST),

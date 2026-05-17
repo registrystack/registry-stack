@@ -1,0 +1,23 @@
+meta {
+  name: Clinic facilities by bbox
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/datasets/clinic_capacity/collections/facilities/items?bbox={{clinicBbox}}&limit=10
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Reads clinic facilities as GeoJSON features inside the demo bbox.
+  Uses casework_system persona (rowsKey). No purpose header required;
+  clinic_capacity has no personal data.
+  Expected: 200 application/geo+json FeatureCollection with Point geometry.
+  The generalized map point is in geometry, not duplicated in properties.
+}

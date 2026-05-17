@@ -847,6 +847,7 @@ fn purpose_header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a st
     headers
         .get(name)
         .and_then(|v| v.to_str().ok())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
 }
 

@@ -288,6 +288,52 @@ fn geojson_bbox_and_datetime_fields_are_validated() {
 }
 
 #[test]
+fn spatial_caps_must_be_positive() {
+    let invalid_bbox =
+        valid_point_spatial().replace("max_bbox_degrees: 5.0", "max_bbox_degrees: 0");
+    let err = load_config(&civic_dataset("civic_registry", "facility", &invalid_bbox))
+        .expect_err("zero bbox cap rejected");
+    assert_eq!(err.code(), "config.validation_error");
+
+    let invalid_vertices =
+        valid_point_spatial().replace("max_geometry_vertices: 10000", "max_geometry_vertices: 0");
+    let err = load_config(&civic_dataset(
+        "civic_registry",
+        "facility",
+        &invalid_vertices,
+    ))
+    .expect_err("zero geometry vertex cap rejected");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn spatial_config_rejects_unknown_fields() {
+    let invalid = valid_point_spatial().replace(
+        "max_geometry_vertices: 10000",
+        "max_geometry_vertices: 10000\n          unexpected: true",
+    );
+    let err = load_config(&civic_dataset("civic_registry", "facility", &invalid))
+        .expect_err("unknown spatial field rejected by serde");
+    assert_eq!(err.code(), "config.parse_error");
+}
+
+#[test]
+fn tagged_geometry_rejects_extra_or_missing_source_fields() {
+    let extra = valid_point_spatial().replace(
+        "latitude_field: lat",
+        "latitude_field: lat\n            field: geometry",
+    );
+    let err = load_config(&civic_dataset("civic_registry", "facility", &extra))
+        .expect_err("extra point geometry source rejected");
+    assert_eq!(err.code(), "config.parse_error");
+
+    let missing = valid_point_spatial().replace("            longitude_field: lon\n", "");
+    let err = load_config(&civic_dataset("civic_registry", "facility", &missing))
+        .expect_err("missing point geometry source rejected");
+    assert_eq!(err.code(), "config.parse_error");
+}
+
+#[test]
 fn wkt_and_wkb_parse_but_are_rejected_for_phase_one() {
     for kind in ["wkt", "wkb"] {
         let spatial = format!(
