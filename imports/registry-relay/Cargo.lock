@@ -4062,7 +4062,7 @@ dependencies = [
  "datafusion",
  "ed25519-dalek",
  "futures",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "hmac 0.12.1",
  "http-api-problem",
  "humantime-serde",
