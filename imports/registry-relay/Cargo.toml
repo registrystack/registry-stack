@@ -42,10 +42,7 @@ calamine = { version = "0.35" }
 csv = { version = "1" }
 tokio-postgres = { version = "0.7", features = ["with-time-0_3"] }
 postgres-native-tls = { version = "0.5" }
-# `vendored` builds a static OpenSSL from source so the binary cross-compiles
-# to x86_64-unknown-linux-musl (and any host that lacks system OpenSSL headers)
-# without needing PKG_CONFIG_SYSROOT_DIR plumbing in CI.
-native-tls = { version = "0.2", features = ["vendored"] }
+native-tls = { version = "0.2" }
 # Used by Source/Format trait surfaces (BoxStream); also a transitive
 # of datafusion but pinned here so the public surface compiles without
 # relying on a re-export path.
