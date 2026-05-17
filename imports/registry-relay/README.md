@@ -9,6 +9,10 @@ V1 is built around two layers:
 
 This is not an open-data portal and not a spreadsheet wrapper. It publishes restricted consultation APIs for authorized systems.
 
+## Background
+
+Registry Relay is an experiment toward a redesigned [GovStack](https://govstack.global/) Digital Registries Building Block. The current BB spec defines a single uniform CRUD platform; this project explores the BB instead as a set of optional API families (consultation, verify, aggregates) over a shared payload envelope and pluggable semantic models (DCAT-AP, JSON-LD, SP DCI, PublicSchema). Provisioning and Write are intentionally out of scope for V1; conformance is by capability, not by a single mandatory interface.
+
 ## Current Status
 
 0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, JSON operational logs, stdout/file/syslog audit sinks, optional audit chaining, admin table reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD includes DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener. A few surfaces remain intentionally deferred:
