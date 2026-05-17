@@ -59,6 +59,7 @@ tokio-util = { version = "0.7" }
 # ─── serialization / config ──────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+ryu = { version = "1" }
 # Optional PublicSchema.org entity-VC mapping support. Disabled by default so
 # the core VC path does not pull in the CEL mapper dependency graph.
 cel-mapper-core = { version = "0.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b", optional = true }

@@ -8,6 +8,9 @@ Each persona gets a freshly generated raw key (32 random bytes, base64url-encode
 no padding) and a SHA-256 fingerprint of that key. The fingerprint is what goes
 in the registry-relay config's hash_env; the raw key is what Bruno sends as Bearer.
 
+The script also emits the claim-verification HMAC binding key required by the
+demo disability registry config.
+
 Re-running always generates fresh keys. Old keys are not preserved.
 """
 
@@ -50,6 +53,11 @@ def generate_raw_key() -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
+def generate_claim_verification_binding_key() -> str:
+    """Return the configured hex: form expected by claim verification."""
+    return f"hex:{secrets.token_bytes(32).hex()}"
+
+
 def env_var_name(persona: str) -> str:
     return persona.upper()
 
@@ -78,12 +86,17 @@ def self_verify(pairs: list[tuple[str, str, str]]) -> None:
             )
 
 
-def format_export_block(pairs: list[tuple[str, str, str]]) -> str:
+def format_export_block(
+    pairs: list[tuple[str, str, str]], claim_verification_binding_key: str
+) -> str:
     lines = []
     for persona, raw, fingerprint in pairs:
         var = env_var_name(persona)
         lines.append(f"export {var}_RAW='{raw}'")
         lines.append(f"export {var}_HASH='{fingerprint}'")
+    lines.append(
+        f"export CLAIM_VERIFICATION_BINDING_KEY='{claim_verification_binding_key}'"
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -129,18 +142,22 @@ def main() -> int:
     try:
         pairs = generate_pairs()
         self_verify(pairs)
+        claim_verification_binding_key = generate_claim_verification_binding_key()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    export_block = format_export_block(pairs)
+    export_block = format_export_block(pairs, claim_verification_binding_key)
     bruno_env_block = format_bruno_env_block(pairs)
 
     if args.env_file:
         dest = Path(args.env_file)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(export_block, encoding="utf-8")
-        print(f"wrote {len(pairs)} key pairs to {dest}", file=sys.stderr)
+        print(
+            f"wrote {len(pairs)} key pairs and claim-verification binding key to {dest}",
+            file=sys.stderr,
+        )
 
         BRUNO_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
         BRUNO_ENV_PATH.write_text(bruno_env_block, encoding="utf-8")

@@ -49,6 +49,7 @@
 //! * Route handlers live in `crate::api`; this module only wires those
 //!   routers together with shared state and cross-cutting middleware.
 
+use std::env;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -69,6 +70,7 @@ use ulid::Ulid;
 use crate::api::{self, CursorSigner};
 use crate::audit::{self, AuditSettings, AuditSink};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
+use crate::claim_verification::{decode_binding_key, ClaimVerificationHasher};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
@@ -189,18 +191,35 @@ pub fn build_app_with_provenance_and_metrics(
     // layers installed below.
     let merged: Router<()> = Router::new().merge(public).merge(protected);
 
-    // Pagination cursor signer: ephemeral, generated per process.
-    // A restart invalidates outstanding cursors, which is acceptable
-    // for opaque pagination tokens.
+    // Ephemeral per-process signing key for opaque cursors. Claim
+    // verification uses a configured stable HMAC key so audit hashes
+    // survive process restarts.
     let cursor_signer = Arc::new(CursorSigner::new_random());
+    let claim_verification_hasher = claim_verification_hasher_from_config(&config).map(Arc::new);
 
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
         .layer(Extension(cursor_signer))
         .layer(Extension(config));
+    if let Some(hasher) = claim_verification_hasher {
+        router = router.layer(Extension(hasher));
+    }
     if let Some(state) = provenance {
         router = router.layer(Extension(state));
     }
     router
+}
+
+fn claim_verification_hasher_from_config(config: &Config) -> Option<ClaimVerificationHasher> {
+    let Some(binding) = &config.claim_verification else {
+        return None;
+    };
+    let key = env::var(&binding.binding_key_env)
+        .expect("config validation ensures claim_verification.binding_key_env is set");
+    let key = decode_binding_key(&key).expect("config validation ensures HMAC key format is valid");
+    Some(ClaimVerificationHasher::new(
+        binding.binding_key_id.clone(),
+        key,
+    ))
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -507,6 +526,10 @@ mod tests {
             std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
             std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
             std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
+            std::env::set_var(
+                "CLAIM_VERIFICATION_BINDING_KEY",
+                "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            );
         }
         crate::config::load(&path).expect("example config loads")
     }

@@ -82,10 +82,27 @@ impl SoftwareSigner {
             reason: "jwk_env unset",
         })?;
         let raw = Zeroizing::new(raw);
-        let jwk: PrivateJwk = serde_json::from_str(&raw).map_err(|_| SignerError::KeyLoad {
+        Self::from_jwk_str(&raw, cfg.signing_algorithm.into(), verification_method_id)
+    }
+
+    /// Build a [`SoftwareSigner`] from an in-memory private JWK string.
+    /// Secret-store adapters should use this when the key material is
+    /// already available in process and should not round-trip through
+    /// environment variables.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignerError::KeyLoad`] if the JWK does not parse, or
+    /// [`SignerError::AlgorithmMismatch`] if the JWK's `alg` conflicts
+    /// with `algorithm`.
+    pub fn from_jwk_str(
+        raw: &str,
+        algorithm: SigningAlgorithm,
+        verification_method_id: String,
+    ) -> Result<Self, SignerError> {
+        let jwk: PrivateJwk = serde_json::from_str(raw).map_err(|_| SignerError::KeyLoad {
             reason: "jwk parse failed",
         })?;
-        let algorithm: SigningAlgorithm = cfg.signing_algorithm.into();
         // If the JWK explicitly declares `alg`, it must match.
         if let Some(jwk_alg) = jwk.alg.as_deref() {
             if jwk_alg != algorithm.jws_alg() {

@@ -29,6 +29,7 @@ Keep deployment docs and examples aligned with the operator and API guides, and 
 - [config/example.yaml](config/example.yaml): canonical example config.
 - [docs/configuration.md](docs/configuration.md): operator-facing configuration reference.
 - [docs/api.md](docs/api.md): authentication, endpoint, filtering, pagination, and error contract.
+- [docs/claim-verification.md](docs/claim-verification.md): submitted-claims verification guide, examples, privacy model, and signed receipts.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
@@ -154,6 +155,9 @@ GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
 GET /datasets/{dataset_id}/{entity}/verify
+POST /datasets/{dataset_id}/{entity}/claim-verifications
+GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets
+GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets/{ruleset}
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```

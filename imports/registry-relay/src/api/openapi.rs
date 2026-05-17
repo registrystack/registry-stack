@@ -360,6 +360,93 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             }
             tag(&mut paths, &verify_path, "get", &entity_tag);
 
+            // Claim verification
+            let claim_verifications_path = format!(
+                "/datasets/{}/{}/claim-verifications",
+                dataset.dataset_id, entity.name
+            );
+            paths.insert(
+                claim_verifications_path.clone(),
+                claim_verification_path_item(),
+            );
+            set_op_id(
+                &mut paths,
+                &claim_verifications_path,
+                "post",
+                &format!("create_{stem}_claim_verification"),
+            );
+            set_description(
+                &mut paths,
+                &claim_verifications_path,
+                "post",
+                &format!(
+                    "Verifies submitted claims against `{}` records in `{}` under a configured \
+                     ruleset. V1 supports `normalized_exact` matching only. The default response \
+                     is JSON; callers may request a signed server-to-server JWT receipt with \
+                     `Accept: application/vnd.registry-relay.claim-verification+jwt`. Responses \
+                     are not cacheable and vary on `Authorization` and `Accept`.",
+                    entity.name, dataset.dataset_id,
+                ),
+            );
+            if entity_config.api.require_purpose_header {
+                add_purpose_header_parameter(&mut paths, &claim_verifications_path, "post");
+            }
+            tag(&mut paths, &claim_verifications_path, "post", &entity_tag);
+
+            let rulesets_path = format!(
+                "/datasets/{}/{}/claim-verification-rulesets",
+                dataset.dataset_id, entity.name
+            );
+            paths.insert(
+                rulesets_path.clone(),
+                claim_verification_discovery_path_item(
+                    "get",
+                    "List claim verification rulesets",
+                    "ClaimVerificationRulesetList",
+                    Vec::new(),
+                ),
+            );
+            set_op_id(
+                &mut paths,
+                &rulesets_path,
+                "get",
+                &format!("list_{stem}_claim_verification_rulesets"),
+            );
+            set_description(
+                &mut paths,
+                &rulesets_path,
+                "get",
+                "Lists claim-verification rulesets visible to the caller, including a broad claims schema for each ruleset.",
+            );
+            tag(&mut paths, &rulesets_path, "get", &entity_tag);
+
+            let ruleset_path = format!(
+                "/datasets/{}/{}/claim-verification-rulesets/{{ruleset}}",
+                dataset.dataset_id, entity.name
+            );
+            paths.insert(
+                ruleset_path.clone(),
+                claim_verification_discovery_path_item(
+                    "get",
+                    "Get claim verification ruleset",
+                    "ClaimVerificationRuleset",
+                    vec![path_parameter("ruleset", "Claim verification ruleset id.")],
+                ),
+            );
+            set_op_id(
+                &mut paths,
+                &ruleset_path,
+                "get",
+                &format!("get_{stem}_claim_verification_ruleset"),
+            );
+            set_description(
+                &mut paths,
+                &ruleset_path,
+                "get",
+                "Returns one visible claim-verification ruleset schema. Unknown and hidden rulesets both return `claim_verification.ruleset_not_allowed`.",
+            );
+            tag(&mut paths, &ruleset_path, "get", &entity_tag);
+
             // List aggregates
             let aggregates_path = format!(
                 "/datasets/{}/{}/aggregates",
@@ -755,6 +842,22 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     schemas.insert("Pagination".to_string(), pagination_schema());
     schemas.insert("ProblemDetails".to_string(), problem_details_schema());
     schemas.insert("VerifyResponse".to_string(), verify_response_schema());
+    schemas.insert(
+        "ClaimVerificationRequest".to_string(),
+        claim_verification_request_schema(),
+    );
+    schemas.insert(
+        "ClaimVerificationResponse".to_string(),
+        claim_verification_response_schema(),
+    );
+    schemas.insert(
+        "ClaimVerificationRulesetList".to_string(),
+        claim_verification_ruleset_list_schema(),
+    );
+    schemas.insert(
+        "ClaimVerificationRuleset".to_string(),
+        claim_verification_ruleset_schema(),
+    );
     schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
     #[cfg(feature = "ogcapi-features")]
@@ -989,6 +1092,162 @@ fn verify_response_schema() -> Value {
             },
         },
         "examples": [{ "exists": true, "ingest_version": "2026-05-01" }],
+    })
+}
+
+fn claim_verification_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["ruleset", "claims"],
+        "properties": {
+            "ruleset": {
+                "type": "string",
+                "description": "Configured entity-scoped claim verification ruleset to apply.",
+                "examples": ["identity-match-v1"],
+            },
+            "subject": {
+                "type": "object",
+                "description": "Optional targeted registry subject. Rulesets must explicitly allow targeted verification.",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Known entity primary key to verify against.",
+                    },
+                },
+                "additionalProperties": false,
+            },
+            "claims": {
+                "type": "object",
+                "description": "Caller-submitted facts. Per-ruleset shape is configured by the deployment; V1 matching is `normalized_exact` only.",
+                "additionalProperties": true,
+                "examples": [{
+                    "given_name": "Camille",
+                    "family_name": "Durand",
+                    "date_of_birth": "1992-04-18",
+                }],
+            },
+            "evidence": {
+                "type": "array",
+                "description": "Optional metadata about external documents or artifacts the caller already holds. Raw evidence is not echoed by default.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                },
+            },
+        },
+        "additionalProperties": false,
+        "examples": [{
+            "ruleset": "identity-match-v1",
+            "claims": {
+                "given_name": "Camille",
+                "family_name": "Durand",
+                "date_of_birth": "1992-04-18",
+            },
+        }],
+    })
+}
+
+fn claim_verification_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "verification_id",
+            "decision",
+            "dataset_id",
+            "entity",
+            "ruleset",
+            "checked_at",
+            "ingest_version",
+            "claim_hash"
+        ],
+        "properties": {
+            "verification_id": {
+                "type": "string",
+                "description": "Server-generated verification event id.",
+                "examples": ["01J5K8M0000000000000000ABC"],
+            },
+            "decision": {
+                "type": "string",
+                "description": "Completed verification decision. `match`, `mismatch`, and `ambiguous` are defined in v1; clients must tolerate additional values in later compatible versions.",
+                "examples": ["match"],
+            },
+            "dataset_id": { "type": "string" },
+            "entity": { "type": "string" },
+            "ruleset": { "type": "string" },
+            "checked_at": { "type": "string", "format": "date-time" },
+            "ingest_version": {
+                "type": ["string", "null"],
+                "description": "Registry ingest version used for the decision, or null when unavailable.",
+            },
+            "claim_hash": {
+                "type": "string",
+                "pattern": "^hmac-sha256:[0-9a-f]+$",
+                "description": "HMAC binding for the normalized submitted claims and verification context.",
+            },
+            "evidence_hash": {
+                "type": "string",
+                "pattern": "^hmac-sha256:[0-9a-f]+$",
+                "description": "Present when evidence metadata was supplied.",
+            },
+        },
+        "additionalProperties": false,
+        "examples": [{
+            "verification_id": "01J5K8M0000000000000000ABC",
+            "decision": "match",
+            "dataset_id": "civil_registry",
+            "entity": "birth_record",
+            "ruleset": "identity-match-v1",
+            "checked_at": "2026-05-17T10:30:00Z",
+            "ingest_version": "01J5K8M0000000000000000000",
+            "claim_hash": "hmac-sha256:4a1f9c2b8d7e0f",
+        }],
+    })
+}
+
+fn claim_verification_ruleset_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ClaimVerificationRuleset" },
+            },
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn claim_verification_ruleset_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "ruleset",
+            "mode",
+            "required_claims",
+            "optional_claims",
+            "candidate_lookup",
+            "claims_schema",
+            "subject_id_targeting",
+            "expose_ambiguous",
+            "diagnostics"
+        ],
+        "properties": {
+            "ruleset": { "type": "string" },
+            "mode": { "type": "string", "enum": ["normalized_exact"] },
+            "required_claims": { "type": "array", "items": { "type": "string" } },
+            "optional_claims": { "type": "array", "items": { "type": "string" } },
+            "candidate_lookup": { "type": "array", "items": { "type": "string" } },
+            "claims_schema": {
+                "type": "object",
+                "description": "Ruleset-specific JSON Schema for submitted `claims`. Scalar values only in v1.",
+                "additionalProperties": true,
+            },
+            "subject_id_targeting": { "type": "boolean" },
+            "expose_ambiguous": { "type": "boolean" },
+            "diagnostics": { "type": "boolean" },
+        },
+        "additionalProperties": false,
     })
 }
 
@@ -1597,6 +1856,49 @@ fn problem_response(description: &str) -> Value {
     })
 }
 
+fn claim_verification_response_headers() -> Value {
+    json!({
+        "Cache-Control": {
+            "description": "`no-store`; claim verification responses must not be cached.",
+            "schema": { "type": "string", "const": "no-store" },
+        },
+        "Vary": {
+            "description": "At least `Authorization, Accept`.",
+            "schema": { "type": "string", "examples": ["Authorization, Accept"] },
+        },
+    })
+}
+
+fn claim_verification_discovery_path_item(
+    method: &str,
+    summary: &str,
+    schema: &str,
+    parameters: Vec<Value>,
+) -> Value {
+    json!({
+        method: {
+            "summary": summary,
+            "parameters": parameters,
+            "responses": {
+                "200": {
+                    "description": "Successful authorization-filtered claim-verification discovery response.",
+                    "headers": claim_verification_response_headers(),
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": format!("#/components/schemas/{schema}") }
+                        }
+                    }
+                },
+                "401": problem_response("Missing or invalid bearer credential."),
+                "403": problem_response(
+                    "Authenticated principal lacks claim-verification discovery access, or the dataset, entity, ruleset, or ruleset catalog is hidden. Runtime code is `claim_verification.ruleset_not_allowed`."
+                ),
+                "default": problem_response("Problem Details error response."),
+            }
+        }
+    })
+}
+
 fn entity_collection_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
     let mut parameters = pagination_parameters();
     parameters.push(query_parameter(
@@ -1652,6 +1954,65 @@ fn entity_verify_path_item(entity: &EntityMetadata) -> Value {
             "Primary key value to verify.",
         )],
     )
+}
+
+fn claim_verification_path_item() -> Value {
+    json!({
+        "post": {
+            "summary": "Create claim verification",
+            "parameters": [
+                {
+                    "name": "Accept",
+                    "in": "header",
+                    "required": false,
+                    "description": "Use `application/json` or omit for the default JSON response. Use `application/vnd.registry-relay.claim-verification+jwt` to request a signed server-to-server JWT receipt when enabled by policy.",
+                    "schema": {
+                        "type": "string",
+                        "enum": [
+                            "application/json",
+                            "application/vnd.registry-relay.claim-verification+jwt"
+                        ],
+                    },
+                }
+            ],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/ClaimVerificationRequest" }
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Completed verification decision. The endpoint does not use 200 for malformed requests, missing claims, unavailable resources, or hidden rulesets.",
+                    "headers": claim_verification_response_headers(),
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/ClaimVerificationResponse" }
+                        },
+                        "application/vnd.registry-relay.claim-verification+jwt": {
+                            "schema": {
+                                "type": "string",
+                                "description": "Compact JWS signed receipt.",
+                                "examples": ["eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..."],
+                            }
+                        }
+                    }
+                },
+                "400": problem_response(
+                    "Malformed request body, missing required claims, or missing required `Data-Purpose` header. Expected codes include `claim_verification.invalid_request`, `claim_verification.insufficient_claims`, and `auth.purpose_required`."
+                ),
+                "401": problem_response("Missing or invalid bearer credential."),
+                "403": problem_response(
+                    "Authenticated principal lacks claim verification scope or ruleset authorization. Rulesets that are unknown or hidden return `claim_verification.ruleset_not_allowed` after entity-level authorization."
+                ),
+                "413": problem_response("Request body exceeds the configured claim verification limit (`internal.payload_too_large`)."),
+                "503": problem_response("Configured entity resource is unavailable."),
+                "default": problem_response("Problem Details error response."),
+            }
+        }
+    })
 }
 
 fn entity_relationship_path_item(
@@ -1805,7 +2166,9 @@ fn purpose_header_parameter() -> Value {
         "in": "header",
         "required": true,
         "description": "Free-form purpose-of-use label recorded in the audit trail. \
-                        Required by this entity's policy; any non-empty value is accepted.",
+                        Required by this entity's policy; any non-empty value is accepted. \
+                        Header names are case-insensitive, so `Data-Purpose` and \
+                        `data-purpose` are equivalent.",
         "schema": { "type": "string", "minLength": 1 },
         "example": "demo-review",
     })
@@ -1863,4 +2226,174 @@ fn openapi_unavailable(detail: &'static str) -> Response {
         .extensions_mut()
         .insert(ErrorCodeExt(OPENAPI_UNAVAILABLE_CODE.to_string()));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::path::PathBuf;
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
+
+    fn load_example_config() -> Config {
+        let fingerprint = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        unsafe {
+            env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
+            env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
+            env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
+            env::set_var(
+                "CLAIM_VERIFICATION_BINDING_KEY",
+                "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            );
+        }
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
+        crate::config::load(&path).expect("example config loads")
+    }
+
+    fn catalog_with_individual() -> CatalogDocument {
+        CatalogDocument {
+            title: "Test Catalog".to_string(),
+            publisher: "Test Publisher".to_string(),
+            base_url: "https://data.example.test".to_string(),
+            participant_id: "did:web:data.example.test".to_string(),
+            links: CatalogLinks {
+                self_url: "https://data.example.test/catalog".to_string(),
+                dcat_ap: "https://data.example.test/catalog/dcat-ap.jsonld".to_string(),
+            },
+            datasets: vec![DatasetMetadata {
+                dataset_id: "social_registry".to_string(),
+                title: "Social Registry".to_string(),
+                description: "Test dataset".to_string(),
+                owner: "Test Owner".to_string(),
+                publisher: "Test Publisher".to_string(),
+                sensitivity: "personal",
+                access_rights: "restricted",
+                update_frequency: "monthly",
+                conforms_to: Vec::new(),
+                links: DatasetLinks {
+                    self_url: "https://data.example.test/datasets/social_registry".to_string(),
+                },
+                entities: vec![EntityMetadata {
+                    name: "individual".to_string(),
+                    title: Some("Individual".to_string()),
+                    description: Some("A person enrolled in Program X".to_string()),
+                    concept_uri: Some("https://publicschema.org/concepts/Person".to_string()),
+                    primary_key: "id".to_string(),
+                    fields: vec![FieldMetadata {
+                        name: "id".to_string(),
+                        r#type: "string",
+                        nullable: false,
+                        concept_uri: None,
+                        codelist: None,
+                        unit: None,
+                        language: None,
+                    }],
+                    relationships: Vec::new(),
+                    links: EntityLinks {
+                        collection: "https://data.example.test/datasets/social_registry/individual"
+                            .to_string(),
+                        schema:
+                            "https://data.example.test/datasets/social_registry/individual/schema"
+                                .to_string(),
+                    },
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn claim_verification_openapi_path_documents_contract() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        let op = &doc["paths"]["/datasets/social_registry/individual/claim-verifications"]["post"];
+
+        assert_eq!(
+            op["operationId"],
+            "create_social_registry_individual_claim_verification"
+        );
+        assert_eq!(
+            op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ClaimVerificationRequest"
+        );
+        assert_eq!(
+            op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ClaimVerificationResponse"
+        );
+        assert!(
+            op["responses"]["200"]["content"]
+                .as_object()
+                .expect("content object")
+                .contains_key("application/vnd.registry-relay.claim-verification+jwt"),
+            "signed receipt media type should be documented"
+        );
+        assert_eq!(
+            op["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"],
+            "no-store"
+        );
+        assert_eq!(
+            op["responses"]["413"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails"
+        );
+        assert!(op["description"]
+            .as_str()
+            .expect("description")
+            .contains("normalized_exact"));
+
+        let discovery = &doc["paths"]
+            ["/datasets/social_registry/individual/claim-verification-rulesets"]["get"];
+        assert_eq!(
+            discovery["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"],
+            "no-store"
+        );
+        assert!(discovery["responses"]["403"]["description"]
+            .as_str()
+            .expect("403 description")
+            .contains("claim_verification.ruleset_not_allowed"));
+    }
+
+    #[test]
+    fn claim_verification_openapi_declares_data_purpose_when_entity_requires_it() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        let parameters = doc["paths"]["/datasets/social_registry/individual/claim-verifications"]
+            ["post"]["parameters"]
+            .as_array()
+            .expect("parameters array");
+
+        let purpose = parameters
+            .iter()
+            .find(|parameter| {
+                parameter["in"] == "header"
+                    && parameter["name"]
+                        .as_str()
+                        .is_some_and(|name| name.eq_ignore_ascii_case("data-purpose"))
+            })
+            .expect("Data-Purpose header parameter");
+        assert_eq!(purpose["required"], Value::Bool(true));
+    }
+
+    #[test]
+    fn claim_verification_components_are_registered() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        let schemas = doc["components"]["schemas"]
+            .as_object()
+            .expect("schemas object");
+
+        assert!(schemas.contains_key("ClaimVerificationRequest"));
+        assert!(schemas.contains_key("ClaimVerificationResponse"));
+        assert!(
+            schemas["ClaimVerificationResponse"]["properties"]["decision"]
+                .get("enum")
+                .is_none(),
+            "decision stays open for append-only compatibility"
+        );
+        assert_eq!(
+            schemas["ClaimVerificationResponse"]["properties"]["decision"]["examples"],
+            json!(["match"])
+        );
+    }
 }

@@ -53,11 +53,27 @@ pub struct Config {
     /// deployments without this block load unchanged.
     #[serde(default)]
     pub provenance: Option<ProvenanceConfig>,
+    /// Optional claim-verification runtime secret configuration. Required
+    /// when any entity declares `claim_verification`.
+    #[serde(default)]
+    pub claim_verification: Option<ClaimVerificationConfig>,
     /// Optional external standards adapters. The config model is parsed
     /// in every build so feature-disabled binaries can reject it with a
     /// stable taxonomy code.
     #[serde(default)]
     pub standards: StandardsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimVerificationConfig {
+    #[serde(default = "default_claim_verification_binding_key_id")]
+    pub binding_key_id: String,
+    pub binding_key_env: String,
+}
+
+fn default_claim_verification_binding_key_id() -> String {
+    "v1".to_string()
 }
 
 /// External standards adapters layered over configured entities.
@@ -739,6 +755,47 @@ pub struct EntityConfig {
     pub publicschema: Option<EntityPublicSchemaConfig>,
     #[serde(default)]
     pub spatial: Option<EntitySpatialConfig>,
+    #[serde(default)]
+    pub claim_verification: Option<EntityClaimVerificationConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityClaimVerificationConfig {
+    #[serde(default)]
+    pub rulesets: BTreeMap<String, ClaimVerificationRulesetConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimVerificationRulesetConfig {
+    pub mode: String,
+    pub required_claims: Vec<String>,
+    pub candidate_lookup: Vec<String>,
+    pub match_fields: BTreeMap<String, String>,
+    #[serde(default)]
+    pub subject_id_claim: Option<String>,
+    #[serde(default)]
+    pub allow_subject_id_targeting: bool,
+    #[serde(default)]
+    pub expose_ambiguous: bool,
+    #[serde(default)]
+    pub diagnostics: bool,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+impl ClaimVerificationRulesetConfig {
+    pub const NORMALIZED_EXACT_MODE: &'static str = "normalized_exact";
+
+    /// Scope required to use this ruleset. A ruleset-specific scope
+    /// overrides the entity-level claim verification scope. If neither
+    /// is configured, callers are denied by default.
+    pub fn required_scope<'a>(&'a self, access: &'a EntityAccessConfig) -> Option<&'a str> {
+        self.scope
+            .as_deref()
+            .or_else(|| access.claim_verification_required_scope())
+    }
 }
 
 pub const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
@@ -871,7 +928,18 @@ pub struct EntityAccessConfig {
     pub aggregate_scope: String,
     pub read_scope: String,
     pub verify_scope: String,
+    #[serde(default)]
+    pub claim_verification_scope: Option<String>,
     pub bulk_export_scope: String,
+}
+
+impl EntityAccessConfig {
+    /// Entity-level scope for submitted-claim verification. Older
+    /// configs omit this field; absence intentionally means the
+    /// feature is denied unless a ruleset declares its own scope.
+    pub fn claim_verification_required_scope(&self) -> Option<&str> {
+        self.claim_verification_scope.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

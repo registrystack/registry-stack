@@ -498,6 +498,7 @@ entities:
       aggregate_scope: social_registry:aggregate
       read_scope: social_registry:rows
       verify_scope: social_registry:verify
+      claim_verification_scope: social_registry:claim_verification
       bulk_export_scope: social_registry:bulk_export
     api:
       default_limit: 100
@@ -519,6 +520,42 @@ entities:
 When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list.
 
 Relationships are dataset-local in V1. Cross-dataset workflows should compose client-side with separate scoped calls and separate audit records.
+
+### Claim Verification
+
+Claim verification rulesets are entity-scoped policies for:
+
+```http
+POST /datasets/{dataset_id}/{entity}/claim-verifications
+```
+
+The expected config shape is:
+
+```yaml
+claim_verification:
+  binding_key_id: social-registry-v1
+  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
+
+access:
+  claim_verification_scope: social_registry:claim_verification
+
+claim_verification:
+  rulesets:
+    identity-match-v1:
+      mode: normalized_exact
+      required_claims: [given_name, family_name, date_of_birth]
+      candidate_lookup: [family_name, date_of_birth]
+      match_fields:
+        given_name: given_name
+        family_name: family_name
+        date_of_birth: date_of_birth
+      allow_subject_id_targeting: false
+      diagnostics: false
+      expose_ambiguous: false
+      scope: social_registry:claim_verification
+```
+
+V1 supports `normalized_exact` only. `binding_key_env` must point at a stable high-entropy secret encoded as `hex:<64-or-more-lowercase-hex-chars>`, where the decoded key is at least 32 bytes. For example, generate it with `printf 'hex:%s\n' "$(openssl rand -hex 32)"`. The same decoded key must remain available after process restarts so `claim_hash` and `evidence_hash` remain interpretable. The endpoint defaults to JSON and uses `application/vnd.registry-relay.claim-verification+jwt` for signed JWT receipts. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent. See [claim-verification.md](claim-verification.md) for request and response examples.
 
 `publicschema` is optional and requires a binary built with
 `--features publicschema-cel`. When present, entity-record VC issuance

@@ -7,6 +7,7 @@
 //! * [`signer`]: [`Signer`] trait + error types.
 //! * [`signers`]: concrete implementations (software in V1).
 //! * [`jwt_vc`]: VC-JWT envelope encoder (VCDM 2.0).
+//! * [`jwt_receipt`]: claim-verification compact JWT receipt encoder.
 //! * [`claim`]: per-claim-type `credentialSubject` builders.
 //! * [`did_web`]: gateway-mode DID Document builder.
 //! * [`resources`]: in-tree bytes for schemas and JSON-LD contexts.
@@ -27,6 +28,7 @@ use crate::config::{IssuerConfig, ProvenanceConfig, RetiredKeyConfig, SignerConf
 
 pub mod claim;
 pub mod did_web;
+pub mod jwt_receipt;
 pub mod jwt_vc;
 pub mod negotiate;
 pub mod publicschema;
@@ -34,6 +36,10 @@ pub mod resources;
 pub mod signer;
 pub mod signers;
 
+pub use jwt_receipt::{
+    ClaimVerificationReceiptInputs, SignedReceipt, CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE,
+    CLAIM_VERIFICATION_RECEIPT_TYPE,
+};
 pub use jwt_vc::{ClaimType, SignedEnvelope, VcCredentialProfile, VcEnvelopeInputs};
 pub use negotiate::{negotiate, NegotiationOutcome};
 pub use signer::{Signer, SignerError, SigningAlgorithm};
@@ -185,6 +191,24 @@ pub struct IssuanceContext {
     pub issued_at: OffsetDateTime,
 }
 
+/// Per-request inputs gathered by the claim-verification HTTP handler
+/// when the caller negotiated a signed receipt.
+#[derive(Debug, Clone)]
+pub struct ClaimVerificationReceiptContext {
+    pub subject: String,
+    pub audience: String,
+    pub verification_id: String,
+    pub dataset: String,
+    pub entity: String,
+    pub decision: String,
+    pub ruleset: String,
+    pub purpose_declared: Option<String>,
+    pub checked_at: String,
+    pub claim_hash: String,
+    pub evidence_hash: Option<String>,
+    pub issued_at: OffsetDateTime,
+}
+
 /// Output of [`ProvenanceState::issue`]. The handler emits the
 /// compact JWS on the wire and forwards the metadata to the audit
 /// layer via [`crate::audit::ProvenanceIssuanceExt`].
@@ -281,6 +305,59 @@ impl ProvenanceState {
             exp: envelope.exp,
         })
     }
+
+    /// Issue a signed claim-verification JWT receipt.
+    ///
+    /// The v1 receipt uses the existing verify-result validity window,
+    /// keeping the server-to-server receipt short-lived without adding
+    /// a separate configuration surface.
+    pub fn issue_claim_verification_receipt(
+        &self,
+        ctx: ClaimVerificationReceiptContext,
+    ) -> Result<SignedReceipt, IssueError> {
+        let cfg = &self.inner;
+        let valid_until = ctx
+            .issued_at
+            .checked_add(time::Duration::try_from(cfg.claim_validity.verify_result).map_err(
+                |err| {
+                    tracing::error!(error = %err, "provenance.claim_verification.validity_overflow");
+                    IssueError::IssuanceFailed
+                },
+            )?)
+            .ok_or_else(|| {
+                tracing::error!("provenance.claim_verification.validity_add_overflow");
+                IssueError::IssuanceFailed
+            })?;
+        let receipt = jwt_receipt::encode(
+            cfg.signer.as_ref(),
+            ClaimVerificationReceiptInputs {
+                issuer: cfg.issuer_did.clone(),
+                subject: ctx.subject,
+                audience: ctx.audience,
+                issued_at: ctx.issued_at,
+                valid_until,
+                verification_id: ctx.verification_id,
+                dataset: ctx.dataset,
+                entity: ctx.entity,
+                decision: ctx.decision,
+                ruleset: ctx.ruleset,
+                purpose_declared: ctx.purpose_declared,
+                checked_at: ctx.checked_at,
+                claim_hash: ctx.claim_hash,
+                evidence_hash: ctx.evidence_hash,
+            },
+        )
+        .map_err(|err| {
+            map_receipt_encode_error(&err);
+            match err {
+                jwt_receipt::EncodeError::Signer(SignerError::Unavailable) => {
+                    IssueError::SignerUnavailable
+                }
+                _ => IssueError::IssuanceFailed,
+            }
+        })?;
+        Ok(receipt)
+    }
 }
 
 fn map_encode_error(err: &jwt_vc::EncodeError) {
@@ -293,6 +370,20 @@ fn map_encode_error(err: &jwt_vc::EncodeError) {
         }
         jwt_vc::EncodeError::TimestampFormat => {
             tracing::error!(event = "provenance.timestamp_format_failed");
+        }
+    }
+}
+
+fn map_receipt_encode_error(err: &jwt_receipt::EncodeError) {
+    match err {
+        jwt_receipt::EncodeError::Signer(SignerError::Unavailable) => {
+            tracing::warn!(event = "provenance.claim_verification.signer_unavailable");
+        }
+        jwt_receipt::EncodeError::Signer(other) => {
+            tracing::error!(
+                event = "provenance.claim_verification.sign_failed",
+                error = %other
+            );
         }
     }
 }

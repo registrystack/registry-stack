@@ -30,6 +30,9 @@ GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
 GET /datasets/{dataset_id}/{entity}/verify
+POST /datasets/{dataset_id}/{entity}/claim-verifications
+GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets
+GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets/{ruleset}
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
@@ -86,6 +89,7 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 | `metadata` | Catalog, dataset summaries, entity schema, and OpenAPI visibility for that dataset |
 | `rows` | Entity collection, single-record, and relationship reads |
 | `verify` | Existence checks through `/verify` only |
+| `claim_verification` | Submitted-claims matching through `/claim-verifications` only |
 | `aggregate` | Aggregate discovery and configured aggregate execution |
 | `bulk_export` | Reserved for the V1.x contract, not implemented in 1.0 |
 | `admin` | Admin listener operations |
@@ -149,6 +153,29 @@ Verify routes answer existence checks without returning row content:
 ```text
 GET /datasets/social_registry/individual/verify?id=ind-123
 ```
+
+Claim verification is a separate POST resource for comparing submitted facts against a configured ruleset. V1 supports `normalized_exact` matching with configured `candidate_lookup` fields only. JSON is the default response, and signed server-to-server receipts use `application/vnd.registry-relay.claim-verification+jwt`, not `application/vc+jwt`:
+
+```http
+POST /datasets/social_registry/individual/claim-verifications HTTP/1.1
+Authorization: Bearer <api-key>
+Content-Type: application/json
+Accept: application/json
+Data-Purpose: eligibility-check
+
+{
+  "ruleset": "identity-match-v1",
+  "claims": {
+    "given_name": "Camille",
+    "family_name": "Durand",
+    "date_of_birth": "1992-04-18"
+  }
+}
+```
+
+Responses include `Cache-Control: no-store` and `Vary: Authorization, Accept`. They return `decision`, `verification_id`, `claim_hash`, and metadata, but they do not echo raw submitted claims. Unknown claim keys are rejected. `Data-Purpose` header names are case-insensitive; examples use this casing for readability.
+
+Ruleset discovery is available through `GET /claim-verification-rulesets`. It is authorization-filtered and returns broad scalar JSON Schemas for the caller-visible rulesets. Discovery responses also include `Cache-Control: no-store` and `Vary: Authorization, Accept`. Unknown, hidden, or unauthorized discovery targets return `403 claim_verification.ruleset_not_allowed` so callers cannot distinguish unavailable rulesets or entities by probing. See [claim-verification.md](claim-verification.md) for full request, response, privacy, and signed-receipt examples.
 
 Aggregates are predeclared in config. Clients can list available aggregates and execute one by id:
 

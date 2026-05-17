@@ -1,6 +1,6 @@
 # registry-relay Development Guide
 
-This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), and [provenance.md](provenance.md).
+This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [claim-verification.md](claim-verification.md), and [provenance.md](provenance.md).
 
 ## Local Setup
 
@@ -101,6 +101,6 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 ## Documentation Style
 
-Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, and `docs/ops.md` operationally current.
+Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, `docs/claim-verification.md`, and `docs/ops.md` operationally current.
 
 Inline Rust docs should explain invariants and boundaries that are easy to break while editing. Avoid comments that repeat obvious field names or preserve obsolete implementation scaffolding after the code has matured.

@@ -18,6 +18,7 @@
 pub mod api;
 pub mod audit;
 pub mod auth;
+pub mod claim_verification;
 pub mod config;
 pub mod connector;
 pub mod entity;

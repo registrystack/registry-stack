@@ -57,6 +57,8 @@ pub enum Error {
     #[error("{0}")]
     Entity(#[from] EntityError),
     #[error("{0}")]
+    ClaimVerification(#[from] ClaimVerificationError),
+    #[error("{0}")]
     Filter(#[from] FilterError),
     #[error("{0}")]
     Schema(#[from] SchemaError),
@@ -96,6 +98,17 @@ pub enum EntityError {
     /// would satisfy the requirement.
     #[error("filter required")]
     FilterRequired { required: Vec<String> },
+}
+
+/// `claim_verification.*` codes.
+#[derive(Debug, Error)]
+pub enum ClaimVerificationError {
+    #[error("ruleset not allowed")]
+    RulesetNotAllowed,
+    #[error("insufficient claims")]
+    InsufficientClaims,
+    #[error("invalid claim verification request")]
+    InvalidRequest,
 }
 
 /// `auth.*` codes.
@@ -395,6 +408,7 @@ impl Error {
         match self {
             Error::Auth(e) => e.code(),
             Error::Entity(e) => e.code(),
+            Error::ClaimVerification(e) => e.code(),
             Error::Filter(e) => e.code(),
             Error::Schema(e) => e.code(),
             Error::Ingest(e) => e.code(),
@@ -421,6 +435,7 @@ impl Error {
         match self {
             Error::Auth(e) => e.http_status(),
             Error::Entity(e) => e.http_status(),
+            Error::ClaimVerification(e) => e.http_status(),
             Error::Filter(e) => e.http_status(),
             Error::Schema(e) => e.http_status(),
             Error::Ingest(e) => e.http_status(),
@@ -443,6 +458,7 @@ impl Error {
         match self {
             Error::Auth(e) => e.title(),
             Error::Entity(e) => e.title(),
+            Error::ClaimVerification(e) => e.title(),
             Error::Filter(e) => e.title(),
             Error::Schema(e) => e.title(),
             Error::Ingest(e) => e.title(),
@@ -467,6 +483,7 @@ impl Error {
         match self {
             Error::Auth(e) => e.detail(),
             Error::Entity(e) => e.detail(),
+            Error::ClaimVerification(e) => e.detail().to_string(),
             Error::Filter(e) => e.detail().to_string(),
             Error::Schema(e) => e.detail().to_string(),
             Error::Ingest(e) => e.detail().to_string(),
@@ -530,6 +547,47 @@ impl EntityError {
             EntityError::FilterRequired { required } => {
                 let fields = required.join(", ");
                 truncate(format!("one of: {fields}"), MAX_DETAIL_LEN)
+            }
+        }
+    }
+}
+
+impl ClaimVerificationError {
+    fn code(&self) -> &'static str {
+        match self {
+            ClaimVerificationError::RulesetNotAllowed => "claim_verification.ruleset_not_allowed",
+            ClaimVerificationError::InsufficientClaims => "claim_verification.insufficient_claims",
+            ClaimVerificationError::InvalidRequest => "claim_verification.invalid_request",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            ClaimVerificationError::RulesetNotAllowed => StatusCode::FORBIDDEN,
+            ClaimVerificationError::InsufficientClaims | ClaimVerificationError::InvalidRequest => {
+                StatusCode::BAD_REQUEST
+            }
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            ClaimVerificationError::RulesetNotAllowed => "Ruleset not allowed",
+            ClaimVerificationError::InsufficientClaims => "Insufficient claims",
+            ClaimVerificationError::InvalidRequest => "Invalid claim verification request",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            ClaimVerificationError::RulesetNotAllowed => {
+                "the requested ruleset is not available to this caller"
+            }
+            ClaimVerificationError::InsufficientClaims => {
+                "the request did not include every claim required by the ruleset"
+            }
+            ClaimVerificationError::InvalidRequest => {
+                "the request body is not valid for claim verification"
             }
         }
     }

@@ -290,6 +290,10 @@ fn disability_registry_demo_config_loads_with_spdci_feature() {
     ] {
         env::set_var(name, make_fingerprint(name.as_bytes()));
     }
+    env::set_var(
+        "CLAIM_VERIFICATION_BINDING_KEY",
+        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
 
     let config_path = demo_config("disability_registry.yaml");
     let config = config::load(&config_path).expect("disability_registry.yaml failed to load");

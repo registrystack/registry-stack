@@ -34,17 +34,25 @@ auth:
         - disability_registry:metadata
         - disability_registry:rows
         - disability_registry:verify
+        - disability_registry:claim_verification
 
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
         - disability_registry:verify
+        - disability_registry:claim_verification
 
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_HASH
       scopes:
         - admin
         - disability_registry:metadata
+
+claim_verification:
+  binding_key_id: demo-disability-v1
+  # Env value format: hex:<64+ lowercase hex chars>
+  # demo/scripts/generate_demo_keys.py emits this value for local review.
+  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
 standards:
   spdci:
@@ -426,6 +434,7 @@ datasets:
           aggregate_scope:   disability_registry:aggregate
           read_scope:        disability_registry:rows
           verify_scope:      disability_registry:verify
+          claim_verification_scope: disability_registry:claim_verification
           bulk_export_scope: disability_registry:bulk_export
         api:
           default_limit: 100
@@ -441,6 +450,16 @@ datasets:
               ops: [eq, in]
             - field: home_district
               ops: [eq, in]
+        claim_verification:
+          rulesets:
+            disability-status-v1:
+              mode: normalized_exact
+              required_claims: [member_identifier, disability_status]
+              candidate_lookup: [member_identifier]
+              match_fields:
+                member_identifier: member_identifier
+                disability_status: disability_status
+              expose_ambiguous: false
 
       - name: civil_person
         title: Civil Person

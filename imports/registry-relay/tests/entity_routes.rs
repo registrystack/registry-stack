@@ -1,24 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Focused route-shape tests for the entity API slice.
 
+use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
+use rand_core::OsRng;
 use registry_relay::api::{aggregates_router, entity_router, CursorSigner};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
+use registry_relay::claim_verification::ClaimVerificationHasher;
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::ingest::{
     register_versioned_table, table_name, ReadinessSnapshot, ReadyResource,
 };
+use registry_relay::provenance::signers::software::SoftwareSigner;
+use registry_relay::provenance::{
+    IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig, ResolvedUrls,
+    Signer, SigningAlgorithm, CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE,
+};
 use registry_relay::query::EntityQueryEngine;
 use serde_json::Value;
+use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::watch;
 use ulid::Ulid;
@@ -37,6 +50,62 @@ fn principal(scopes: &[&str]) -> Principal {
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
+}
+
+const ENTITY_ROUTE_SCOPES: &[&str] = &[
+    "social_registry:metadata",
+    "social_registry:rows",
+    "social_registry:verify",
+    "social_registry:claim_verification",
+];
+
+fn claim_verification_provenance_state(env_name: &str) -> Arc<ProvenanceState> {
+    claim_verification_provenance_state_with_media_types(
+        env_name,
+        vec![CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
+    )
+}
+
+fn claim_verification_provenance_state_with_media_types(
+    _env_name: &str,
+    accepted_media_types: Vec<String>,
+) -> Arc<ProvenanceState> {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+    let secret_bytes: [u8; SECRET_KEY_LENGTH] = signing_key.to_bytes();
+    let jwk = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": URL_SAFE_NO_PAD.encode(secret_bytes),
+        "x": URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
+        "alg": "EdDSA",
+    });
+    let signer = SoftwareSigner::from_jwk_str(
+        &serde_json::to_string(&jwk).expect("jwk serializes"),
+        SigningAlgorithm::EdDSA,
+        "did:web:data.example.test#key-1".to_string(),
+    )
+    .expect("software signer");
+    let signer: Arc<dyn Signer> = Arc::new(signer);
+    Arc::new(ProvenanceState::new(ResolvedProvenanceConfig {
+        enabled: true,
+        mode: IssuerMode::Gateway,
+        issuer_did: "did:web:data.example.test".to_string(),
+        verification_method_id: "did:web:data.example.test#key-1".to_string(),
+        accepted_media_types,
+        claim_validity: ResolvedClaimValidity {
+            verify_result: Duration::from_secs(300),
+            aggregate_result: Duration::from_secs(3600),
+            entity_record: Duration::from_secs(3600),
+        },
+        urls: ResolvedUrls {
+            provenance_context_url: "https://data.example.test/contexts/provenance/v1.jsonld"
+                .to_string(),
+            schema_base_url: "https://data.example.test/schemas".to_string(),
+        },
+        signer,
+        retired_keys: vec![],
+    }))
 }
 
 async fn server_with_query() -> TestServer {
@@ -76,8 +145,51 @@ async fn server_with_query_versions_and_signer(
     readiness_ingest_version: &str,
     signer: Arc<CursorSigner>,
 ) -> TestServer {
+    server_with_query_versions_signer_and_provenance(
+        table_ingest_version,
+        readiness_ingest_version,
+        signer,
+        None,
+        ENTITY_ROUTE_SCOPES,
+    )
+    .await
+}
+
+async fn server_with_query_and_provenance(provenance: Arc<ProvenanceState>) -> TestServer {
+    server_with_query_versions_signer_and_provenance(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        Some(provenance),
+        ENTITY_ROUTE_SCOPES,
+    )
+    .await
+}
+
+async fn server_with_query_and_scopes(scopes: &[&str]) -> TestServer {
+    server_with_query_versions_signer_and_provenance(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        None,
+        scopes,
+    )
+    .await
+}
+
+async fn server_with_query_versions_signer_and_provenance(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    provenance: Option<Arc<ProvenanceState>>,
+    principal_scopes: &[&str],
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
+    env::set_var(
+        "ENTITY_ROUTES_CLAIM_VERIFICATION_BINDING_KEY",
+        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
     std::fs::write(
         &config_path,
         r#"
@@ -96,6 +208,10 @@ vocabularies:
 auth:
   mode: api_key
   api_keys: []
+
+claim_verification:
+  binding_key_id: test-v1
+  binding_key_env: ENTITY_ROUTES_CLAIM_VERIFICATION_BINDING_KEY
 
 datasets:
   - id: social_registry
@@ -162,6 +278,7 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
+          claim_verification_scope: social_registry:claim_verification
           bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
@@ -189,6 +306,7 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
+          claim_verification_scope: social_registry:claim_verification
           bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
@@ -200,6 +318,36 @@ datasets:
             - field: household_id
               ops: [eq]
           allowed_expansions: [household]
+        claim_verification:
+          rulesets:
+            exact-name:
+              mode: normalized_exact
+              required_claims: [given_name]
+              candidate_lookup: [given_name]
+              match_fields:
+                given_name: given_name
+              expose_ambiguous: true
+            hidden-name:
+              mode: normalized_exact
+              required_claims: [given_name]
+              candidate_lookup: [given_name]
+              match_fields:
+                given_name: given_name
+              scope: social_registry:claim_verification:hidden
+            exact-name-targeted:
+              mode: normalized_exact
+              required_claims: [given_name]
+              candidate_lookup: [given_name]
+              match_fields:
+                given_name: given_name
+              allow_subject_id_targeting: true
+            exact-name-private:
+              mode: normalized_exact
+              required_claims: [given_name]
+              candidate_lookup: [given_name]
+              match_fields:
+                given_name: given_name
+              expose_ambiguous: false
 
 audit:
   sink: stdout
@@ -242,9 +390,9 @@ audit:
     let individual_batch = RecordBatch::try_new(
         Arc::clone(&individual_schema),
         vec![
-            Arc::new(StringArray::from(vec!["p-1", "p-2"])),
-            Arc::new(StringArray::from(vec!["hh-1", "hh-1"])),
-            Arc::new(StringArray::from(vec!["Ada", "Ben"])),
+            Arc::new(StringArray::from(vec!["p-1", "p-2", "p-3"])),
+            Arc::new(StringArray::from(vec!["hh-1", "hh-1", "hh-2"])),
+            Arc::new(StringArray::from(vec!["Ada", "Ben", "Ada"])),
         ],
     )
     .expect("individual batch");
@@ -276,19 +424,26 @@ audit:
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
-    TestServer::new(
-        entity_router::<()>()
-            .layer(Extension(query))
-            .layer(Extension(registry))
-            .layer(Extension(cfg))
-            .layer(Extension(readiness))
-            .layer(Extension(signer))
-            .layer(Extension(principal(&[
-                "social_registry:metadata",
-                "social_registry:rows",
-                "social_registry:verify",
-            ]))),
-    )
+    let app = entity_router::<()>()
+        .layer(Extension(query))
+        .layer(Extension(registry))
+        .layer(Extension(cfg))
+        .layer(Extension(readiness))
+        .layer(Extension(signer))
+        .layer(Extension(Arc::new(
+            ClaimVerificationHasher::from_encoded_key(
+                "test-v1".to_string(),
+                "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("claim verification HMAC key decodes"),
+        )))
+        .layer(Extension(principal(principal_scopes)));
+    let app = if let Some(provenance) = provenance {
+        app.layer(Extension(provenance))
+    } else {
+        app
+    };
+    TestServer::new(app)
 }
 
 #[tokio::test]
@@ -920,6 +1075,470 @@ async fn entity_verify_requires_purpose_header_when_entity_requires_it() {
     resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
     assert_eq!(body["code"], "auth.purpose_required");
+}
+
+#[tokio::test]
+async fn claim_verification_returns_match_mismatch_and_ambiguous_decisions() {
+    let server = server_with_query().await;
+
+    let matched = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    matched.assert_status(StatusCode::OK);
+    assert_eq!(matched.header("cache-control"), "no-store");
+    assert_eq!(matched.header("vary"), "Authorization, Accept");
+    let body: Value = matched.json();
+    assert_eq!(body["decision"], "match");
+    assert_eq!(body["dataset_id"], "social_registry");
+    assert_eq!(body["entity"], "individual");
+    assert_eq!(body["ruleset"], "exact-name");
+    assert!(
+        body.get("claims").is_none(),
+        "raw claims must not be echoed"
+    );
+    assert_eq!(body["ingest_version"], "01J5K8M0000000000000000000");
+    assert!(body["verified"].is_null(), "verified must not be emitted");
+    assert!(body["claim_hash"]
+        .as_str()
+        .is_some_and(|hash| hash.starts_with("hmac-sha256:")));
+
+    let missing = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Missing"
+            }
+        }))
+        .await;
+    missing.assert_status(StatusCode::OK);
+    let body: Value = missing.json();
+    assert_eq!(body["decision"], "mismatch");
+
+    let ambiguous = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+    ambiguous.assert_status(StatusCode::OK);
+    let body: Value = ambiguous.json();
+    assert_eq!(body["decision"], "ambiguous");
+
+    let collapsed = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name-private",
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+    collapsed.assert_status(StatusCode::OK);
+    let body: Value = collapsed.json();
+    assert_eq!(body["decision"], "mismatch");
+}
+
+#[tokio::test]
+async fn claim_verification_ruleset_discovery_is_scope_filtered() {
+    let server = server_with_query().await;
+
+    let list = server
+        .get("/datasets/social_registry/individual/claim-verification-rulesets")
+        .await;
+    list.assert_status(StatusCode::OK);
+    assert_eq!(list.header("cache-control"), "no-store");
+    assert_eq!(list.header("vary"), "Authorization, Accept");
+    let body: Value = list.json();
+    let rulesets = body["data"].as_array().expect("data array");
+    assert_eq!(rulesets.len(), 3);
+    assert!(rulesets
+        .iter()
+        .any(|ruleset| ruleset["ruleset"] == "exact-name"));
+    assert!(!rulesets
+        .iter()
+        .any(|ruleset| ruleset["ruleset"] == "hidden-name"));
+    assert_eq!(rulesets[0]["claims_schema"]["additionalProperties"], false);
+
+    let detail = server
+        .get("/datasets/social_registry/individual/claim-verification-rulesets/exact-name")
+        .await;
+    detail.assert_status(StatusCode::OK);
+    assert_eq!(detail.header("cache-control"), "no-store");
+    assert_eq!(detail.header("vary"), "Authorization, Accept");
+    let body: Value = detail.json();
+    assert_eq!(body["mode"], "normalized_exact");
+    assert_eq!(body["required_claims"], serde_json::json!(["given_name"]));
+    assert_eq!(body["expose_ambiguous"], true);
+
+    let hidden = server
+        .get("/datasets/social_registry/individual/claim-verification-rulesets/hidden-name")
+        .await;
+    hidden.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(hidden.header("cache-control"), "no-store");
+    assert_eq!(hidden.header("vary"), "Authorization, Accept");
+    let body: Value = hidden.json();
+    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+
+    let unknown_entity = server
+        .get("/datasets/social_registry/missing/claim-verification-rulesets")
+        .await;
+    unknown_entity.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(unknown_entity.header("cache-control"), "no-store");
+    assert_eq!(unknown_entity.header("vary"), "Authorization, Accept");
+    let body: Value = unknown_entity.json();
+    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+}
+
+#[tokio::test]
+async fn claim_verification_subject_targeting_requires_targeted_scope() {
+    let without_targeted = server_with_query().await;
+
+    let denied = without_targeted
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name-targeted",
+            "subject": { "id": "p-1" },
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = denied.json();
+    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+
+    let targeted_scope_without_ruleset_opt_in = server_with_query_and_scopes(&[
+        "social_registry:metadata",
+        "social_registry:rows",
+        "social_registry:verify",
+        "social_registry:claim_verification",
+        "social_registry:claim_verification:targeted",
+    ])
+    .await;
+    let denied_by_ruleset = targeted_scope_without_ruleset_opt_in
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "subject": { "id": "p-1" },
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+    denied_by_ruleset.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = denied_by_ruleset.json();
+    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+
+    let with_targeted = server_with_query_and_scopes(&[
+        "social_registry:metadata",
+        "social_registry:rows",
+        "social_registry:verify",
+        "social_registry:claim_verification",
+        "social_registry:claim_verification:targeted",
+    ])
+    .await;
+
+    let matched = with_targeted
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name-targeted",
+            "subject": { "id": "p-1" },
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+    matched.assert_status(StatusCode::OK);
+    let body: Value = matched.json();
+    assert_eq!(body["decision"], "match");
+
+    let mismatched_subject = with_targeted
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name-targeted",
+            "subject": { "id": "p-2" },
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+    mismatched_subject.assert_status(StatusCode::OK);
+    let body: Value = mismatched_subject.json();
+    assert_eq!(body["decision"], "mismatch");
+}
+
+#[tokio::test]
+async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_purpose() {
+    let unauthenticated = server()
+        .post("/datasets/missing/ghost/claim-verifications")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
+    let body: Value = unauthenticated.json();
+    assert_eq!(body["code"], "auth.missing_credential");
+
+    let scoped_server = server_with_query().await;
+    let unknown_entity = scoped_server
+        .post("/datasets/social_registry/missing/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    unknown_entity.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(unknown_entity.header("cache-control"), "no-store");
+    assert_eq!(unknown_entity.header("vary"), "Authorization, Accept");
+    let body: Value = unknown_entity.json();
+    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+
+    let server = server_with_query().await;
+
+    let insufficient = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {}
+        }))
+        .await;
+    insufficient.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(insufficient.header("cache-control"), "no-store");
+    assert_eq!(insufficient.header("vary"), "Authorization, Accept");
+    let body: Value = insufficient.json();
+    assert_eq!(body["code"], "claim_verification.insufficient_claims");
+
+    let unknown_claim = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben",
+                "family_name": "Durand"
+            }
+        }))
+        .await;
+    unknown_claim.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = unknown_claim.json();
+    assert_eq!(body["code"], "claim_verification.invalid_request");
+
+    let non_scalar_claim = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": ["Ben"]
+            }
+        }))
+        .await;
+    non_scalar_claim.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = non_scalar_claim.json();
+    assert_eq!(body["code"], "claim_verification.invalid_request");
+
+    let malformed_evidence = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            },
+            "evidence": ["birth-certificate"]
+        }))
+        .await;
+    malformed_evidence.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = malformed_evidence.json();
+    assert_eq!(body["code"], "claim_verification.invalid_request");
+
+    let hidden = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "ruleset": "hidden-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    hidden.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = hidden.json();
+    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+
+    let missing_purpose = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    missing_purpose.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = missing_purpose.json();
+    assert_eq!(body["code"], "auth.purpose_required");
+}
+
+#[tokio::test]
+async fn claim_verification_can_return_signed_jwt_receipt() {
+    let server = server_with_query_and_provenance(claim_verification_provenance_state(
+        "ENTITY_ROUTE_CLAIM_VERIFICATION_RECEIPT_JWK",
+    ))
+    .await;
+
+    let resp = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .add_header("accept", CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE)
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(
+        resp.header("content-type"),
+        CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE
+    );
+    assert_eq!(resp.header("cache-control"), "no-store");
+    let compact = resp.text();
+    let parts = compact.split('.').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 3);
+    let header: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .expect("header is base64url"),
+    )
+    .expect("header is json");
+    let payload: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("payload is base64url"),
+    )
+    .expect("payload is json");
+
+    assert_eq!(header["typ"], "claim-verification-receipt+jwt");
+    assert!(header.get("cty").is_none());
+    assert_eq!(
+        payload["receipt_type"],
+        "registry-relay.claim-verification.v1"
+    );
+    assert_eq!(payload["decision"], "match");
+    assert_eq!(payload["ruleset"], "exact-name");
+    assert!(payload.get("credentialSubject").is_none());
+    assert!(payload["claim_hash"]
+        .as_str()
+        .is_some_and(|hash| hash.starts_with("hmac-sha256:")));
+}
+
+#[tokio::test]
+async fn claim_verification_receipt_respects_accept_q_and_configured_media() {
+    let q_zero = server_with_query_and_provenance(claim_verification_provenance_state(
+        "ENTITY_ROUTE_CLAIM_VERIFICATION_Q_ZERO_JWK",
+    ))
+    .await;
+    let resp = q_zero
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .add_header(
+            "accept",
+            "application/vnd.registry-relay.claim-verification+jwt;q=0, application/json",
+        )
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/json"));
+    let body: Value = resp.json();
+    assert_eq!(body["decision"], "match");
+
+    let not_configured =
+        server_with_query_and_provenance(claim_verification_provenance_state_with_media_types(
+            "ENTITY_ROUTE_CLAIM_VERIFICATION_MEDIA_NOT_CONFIGURED_JWK",
+            vec!["application/vc+jwt".to_string()],
+        ))
+        .await;
+    let resp = not_configured
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .add_header("accept", CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE)
+        .json(&serde_json::json!({
+            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("application/json"));
+}
+
+#[tokio::test]
+async fn claim_verification_rejects_body_over_64_kib_before_json_parse() {
+    let unauthenticated = server()
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .add_header("content-type", "application/json")
+        .bytes(Bytes::from(vec![b' '; (64 * 1024) + 1]))
+        .await;
+    unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
+    let body: Value = unauthenticated.json();
+    assert_eq!(body["code"], "auth.missing_credential");
+
+    let server = server_with_query().await;
+    let oversized = Bytes::from(vec![b' '; (64 * 1024) + 1]);
+
+    let resp = server
+        .post("/datasets/social_registry/individual/claim-verifications")
+        .add_header("data-purpose", "route-test")
+        .add_header("content-type", "application/json")
+        .bytes(oversized)
+        .await;
+
+    resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "internal.payload_too_large");
 }
 
 #[tokio::test]

@@ -146,6 +146,10 @@ fn spdci_demo_configs_load_and_validate() {
     for name in PERSONA_HASH_ENVS {
         env::set_var(name, make_fingerprint(name.as_bytes()));
     }
+    env::set_var(
+        "CLAIM_VERIFICATION_BINDING_KEY",
+        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
 
     let demo_dir = demo_config("");
     let mut spdci_configs = Vec::new();
