@@ -71,7 +71,7 @@ serde_yml = { version = "0.0.12" }
 humantime-serde = { version = "1" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
-getrandom = { version = "0.3" }
+getrandom = { version = "0.4" }
 hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 subtle = { version = "2" }
@@ -79,7 +79,7 @@ zeroize = { version = "1" }
 # JWS compact serialization and EdDSA / ES256 signing primitives.
 # We build the VC-JWT payload by hand to control the VCDM 2.0 envelope
 # shape; jsonwebtoken provides the signing/verification primitives only.
-jsonwebtoken = { version = "9" }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # urn:uuid:* identifiers for VC jti / id.
 uuid = { version = "1", features = ["v4"] }
 # Robust Accept media-type parsing for provenance content negotiation.
@@ -134,7 +134,7 @@ ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 # rand for ed25519-dalek key generation in tests.
 rand_core = { version = "0.6", features = ["std"] }
 # Parses `resources/MANIFEST.toml` in the resource pinning test.
-toml = { version = "0.8" }
+toml = { version = "1.1" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI only smoke-checks `cargo bench --no-run`.
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
