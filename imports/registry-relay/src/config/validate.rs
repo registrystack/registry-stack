@@ -178,11 +178,21 @@ fn validate_spdci_registry(
         &registry.entity,
         "standards.spdci.registries",
     )?;
-    for field in registry
+    for (query_name, field) in registry
         .identifiers
-        .values()
-        .chain(registry.expression_fields.values())
+        .iter()
+        .chain(registry.expression_fields.iter())
     {
+        if query_name.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                "standards.spdci.registries query mapping keys must not be empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
         if field.trim().is_empty() || !fields.contains_key(field.as_str()) {
             tracing::error!(
                 code = "config.validation_error",
@@ -211,6 +221,178 @@ fn validate_spdci_registry(
             return Err(ConfigError::ValidationError);
         }
     }
+    validate_spdci_response_fields(name, registry, &fields)?;
+    validate_spdci_response_mapping(name, registry)?;
+    validate_spdci_response_schema(name, registry)?;
+    Ok(())
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn validate_spdci_response_fields(
+    name: &str,
+    registry: &super::SpdciRegistryConfig,
+    fields: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    for (target_path, source_field) in &registry.response_fields {
+        if !is_valid_spdci_response_path(target_path) {
+            tracing::error!(
+                code = "config.validation_error",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                target_path = %target_path,
+                "standards.spdci.registries response_fields target paths must not be empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if source_field.trim().is_empty() || !fields.contains_key(source_field.as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                field = %source_field,
+                target_path = %target_path,
+                "standards.spdci.registries response_fields references an unknown entity field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn is_valid_spdci_response_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    !trimmed.is_empty()
+        && trimmed == path
+        && trimmed
+            .split('.')
+            .all(|segment| !segment.trim().is_empty() && segment.trim() == segment)
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn validate_spdci_response_mapping(
+    name: &str,
+    registry: &super::SpdciRegistryConfig,
+) -> Result<(), ConfigError> {
+    let Some(path) = &registry.response_mapping_path else {
+        return Ok(());
+    };
+
+    #[cfg(not(feature = "standards-cel-mapping"))]
+    {
+        tracing::error!(
+            code = "spdci.config.mapping_feature_disabled",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            path = %path.display(),
+            "standards.spdci.registries response_mapping_path requires the standards-cel-mapping feature"
+        );
+        Err(ConfigError::SpdciMappingFeatureDisabled)
+    }
+
+    #[cfg(feature = "standards-cel-mapping")]
+    {
+        if path.as_os_str().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                "standards.spdci.registries response_mapping_path must not be empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+
+        let mapping_text = std::fs::read_to_string(path).map_err(|err| {
+            tracing::error!(
+                code = "spdci.config.mapping_read_failed",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                path = %path.display(),
+                error = %err,
+                "failed to read SP DCI response mapping",
+            );
+            ConfigError::ValidationError
+        })?;
+
+        let rt = cel_mapper_core::MappingRuntime::new(cel_mapper_core::RuntimeOptions::default());
+        rt.compile_mapping(&mapping_text).map_err(|err| {
+            tracing::error!(
+                code = "spdci.config.mapping_compile_failed",
+                registry = name,
+                dataset_id = %registry.dataset,
+                entity = %registry.entity,
+                path = %path.display(),
+                error = %err,
+                "failed to compile SP DCI response mapping",
+            );
+            ConfigError::ValidationError
+        })?;
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn validate_spdci_response_schema(
+    name: &str,
+    registry: &super::SpdciRegistryConfig,
+) -> Result<(), ConfigError> {
+    let Some(path) = &registry.response_schema_path else {
+        return Ok(());
+    };
+    if path.as_os_str().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            "standards.spdci.registries response_schema_path must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let raw_schema = std::fs::read_to_string(path).map_err(|err| {
+        tracing::error!(
+            code = "spdci.config.schema_read_failed",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            path = %path.display(),
+            error = %err,
+            "failed to read SP DCI response schema",
+        );
+        ConfigError::ValidationError
+    })?;
+    let schema_json: serde_json::Value = serde_json::from_str(&raw_schema).map_err(|err| {
+        tracing::error!(
+            code = "spdci.config.schema_parse_failed",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            path = %path.display(),
+            error = %err,
+            "failed to parse SP DCI response schema",
+        );
+        ConfigError::ValidationError
+    })?;
+    jsonschema::JSONSchema::compile(&schema_json).map_err(|err| {
+        tracing::error!(
+            code = "spdci.config.schema_compile_failed",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            path = %path.display(),
+            error = %err,
+            "failed to compile SP DCI response schema",
+        );
+        ConfigError::ValidationError
+    })?;
+
     Ok(())
 }
 

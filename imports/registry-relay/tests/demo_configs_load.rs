@@ -105,3 +105,65 @@ fn core_demo_configs_load_and_validate() {
         other => panic!("all_demos.yaml expected file audit sink, got {other:?}"),
     }
 }
+
+#[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
+#[test]
+fn spdci_demo_configs_load_and_validate() {
+    for name in PERSONA_HASH_ENVS {
+        env::set_var(name, make_fingerprint(name.as_bytes()));
+    }
+
+    let demo_dir = demo_config("");
+    let mut spdci_configs = Vec::new();
+    for entry in std::fs::read_dir(&demo_dir).expect("demo config dir should be readable") {
+        let path = entry.expect("demo config entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
+            continue;
+        }
+        let contents = std::fs::read_to_string(&path).expect("demo config should be readable");
+        if contents.contains("  spdci:") {
+            spdci_configs.push(path);
+        }
+    }
+    spdci_configs.sort();
+
+    assert!(
+        spdci_configs
+            .iter()
+            .any(|path| path.file_name().and_then(|name| name.to_str())
+                == Some("disability_registry.yaml")),
+        "disability_registry.yaml should remain part of the SP DCI demo pack"
+    );
+
+    for path in spdci_configs {
+        let config = config::load(&path).unwrap_or_else(|err| {
+            panic!("{} failed to load: {err}", path.display());
+        });
+        let spdci = config
+            .standards
+            .spdci
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} should configure SP DCI", path.display()));
+        assert!(
+            spdci.disability_registry.is_some() || !spdci.registries.is_empty(),
+            "{} should declare at least one SP DCI adapter",
+            path.display()
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "spdci-api-standards",
+    not(feature = "standards-cel-mapping")
+))]
+#[test]
+fn mapped_spdci_demo_configs_require_mapping_feature() {
+    for name in PERSONA_HASH_ENVS {
+        env::set_var(name, make_fingerprint(name.as_bytes()));
+    }
+
+    let path = demo_config("disability_registry.yaml");
+    let err =
+        config::load(&path).expect_err("mapped SP DCI demo should require standards-cel-mapping");
+    assert_eq!(err.code(), "spdci.config.mapping_feature_disabled");
+}

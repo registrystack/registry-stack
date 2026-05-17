@@ -8,8 +8,9 @@ publish = false
 
 [features]
 default = []
-publicschema-cel = ["dep:cel-mapper-core", "dep:jsonschema"]
-spdci-api-standards = []
+standards-cel-mapping = ["dep:cel-mapper-core"]
+publicschema-cel = ["standards-cel-mapping", "dep:jsonschema"]
+spdci-api-standards = ["dep:jsonschema"]
 
 # ─── runtime ─────────────────────────────────────────────────────────────────
 [dependencies]

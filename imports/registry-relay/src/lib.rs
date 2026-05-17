@@ -30,4 +30,6 @@ pub mod provenance;
 pub mod query;
 pub mod server;
 pub mod source;
+#[cfg(feature = "spdci-api-standards")]
+pub mod spdci;
 pub mod table_provider;

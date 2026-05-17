@@ -24,16 +24,19 @@ holds the contract-reserved `bulk_export` scope.
 | `education_registry` | personal | Students, guardians, schools, enrolments, support needs, attendance. Scholarship, transport, meals, planning. | `casework_system` |
 | `subject_registry` | confidential | Canonical subject identifiers and per-dataset aliases that point to the same human. Contains no personal fields; only ids. | `linkage_service` only |
 
-## Optional Social Protection Digital Convergence Initiative (SP DCI) Disability Registry
+## Optional Social Protection Digital Convergence Initiative (SP DCI) registries
 
 | Dataset | Sensitivity | What it covers | Persona that owns row access |
 | --- | --- | --- | --- |
-| `disability_registry` | personal | Disabled-person status, details, and support fields exposed through the SP DCI Disability Registry sync adapter. | `casework_system` |
+| `disability_registry` | personal | Disabled-person status, details, support fields, plus small synthetic SR, CRVS, and FR sync-search records exposed through the SP DCI adapter. | `casework_system` |
 
 This demo is separate from `all_demos.yaml` because it requires the optional
-`spdci-api-standards` feature. The sample workbook includes `DR-MEMBER-001`
-through `DR-MEMBER-080`; `DR-MEMBER-001` has an approved disability status and
-is useful for quick sync API checks.
+`spdci-api-standards` feature and, for response shaping, the optional CEL
+mapping feature. The sample workbook includes `DR-MEMBER-001` through
+`DR-MEMBER-080`, `SR-GROUP-001` through `SR-GROUP-080`, `FAKE-810001` through
+`FAKE-810080` for CRVS, and `FR-MEMBER-001` through `FR-MEMBER-080`;
+`DR-MEMBER-001` has an approved disability status and is useful for quick sync
+API checks.
 
 The subject registry is the only place where personal-data identifiers from
 two datasets are knowingly tied together. Reading its rows is scoped to a
@@ -92,8 +95,8 @@ chance:
   school-construction and clinic-rehabilitation flows resolve to real rows;
 - about one third of benefits persons in the registry sample are matched to
   an education student, mirroring a realistic partial-overlap population.
-- the optional disability registry sample is generated in the same run and
-  uses member ids `DR-MEMBER-001+` for the SP DCI sync request examples.
+- the optional SP DCI workbook is generated in the same run and uses
+  deterministic demo identifiers for DR, SR, CRVS, and FR sync request examples.
 
 The registry is a sample, not a universe: it covers a subset of subjects in
 each dataset (currently ~263 rows for the seed). This keeps the primary sheet
@@ -160,11 +163,10 @@ datasets together:
 cargo run -- --config demo/config/all_demos.yaml
 ```
 
-For the optional SP DCI Disability Registry sync demo, use the feature-gated
-config:
+For the optional SP DCI sync demos, use the feature-gated config:
 
 ```bash
-cargo run --features spdci-api-standards -- --config demo/config/disability_registry.yaml
+cargo run --features spdci-api-standards,standards-cel-mapping -- --config demo/config/disability_registry.yaml
 ```
 
 Example sync status request:
@@ -180,14 +182,44 @@ For disability details and support, call
 `/dci/dr/registry/sync/get-disability-details` and
 `/dci/dr/registry/sync/get-disability-support` with `$CASEWORK_SYSTEM_RAW`.
 
-The same config also exposes generic DCI sync search under the named `dr`
-registry route:
+The same config exposes generic DCI sync search under named registry routes.
+All examples use `casework_system` because sync search requires the entity read
+scope.
+
+Disability Registry (`dr`):
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4242/dci/dr/registry/sync/search \
   -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
   -H "Content-Type: application/json" \
   -d '{"message":{"transaction_id":"demo-search-001","search_request":[{"reference_id":"ref-demo-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"DISABILITY_ID","value":"DR-MEMBER-001"}}}]}}}'
+```
+
+Social Registry (`sr`):
+
+```bash
+curl -sS -X POST http://127.0.0.1:4242/dci/sr/registry/sync/search \
+  -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Content-Type: application/json" \
+  -d '{"message":{"transaction_id":"demo-sr-search-001","search_request":[{"reference_id":"ref-demo-sr-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"GROUP_ID","value":"SR-GROUP-001"}}}]}}}'
+```
+
+Civil Registration and Vital Statistics (`crvs`):
+
+```bash
+curl -sS -X POST http://127.0.0.1:4242/dci/crvs/registry/sync/search \
+  -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Content-Type: application/json" \
+  -d '{"message":{"transaction_id":"demo-crvs-search-001","search_request":[{"reference_id":"ref-demo-crvs-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"UIN","value":"FAKE-810001"}}}]}}}'
+```
+
+Farmer Registry (`fr`):
+
+```bash
+curl -sS -X POST http://127.0.0.1:4242/dci/fr/registry/sync/search \
+  -H "Authorization: Bearer $CASEWORK_SYSTEM_RAW" \
+  -H "Content-Type: application/json" \
+  -d '{"message":{"transaction_id":"demo-fr-search-001","search_request":[{"reference_id":"ref-demo-fr-search-001","timestamp":"2026-01-01T00:00:00Z","search_criteria":{"query_type":"idtype-value","query":{"type":"FARMER_ID","value":"FR-MEMBER-001"}}}]}}}'
 ```
 
 You can also point to a config via env var instead of `--config`:

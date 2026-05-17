@@ -1,0 +1,14 @@
+version: "0.1"
+name: registry_relay_spdci_fr_farmer
+source_system: registry-relay.farmer
+target_model: spdci.fr.FRPerson
+
+records:
+  record:
+    emit: "present(source.id)"
+    fields:
+      famer_personal_details: '{"member_identifier": {"identifier_type": "FARMER_ID", "identifier_value": source.id}, "demographic_info": {"identifier": {"identifier_type": "UIN", "identifier_value": source.national_id}, "name": {"given_name": source.given_name, "surname": source.surname}, "date_of_birth": source.birth_date, "gender": source.sex == "male" ? "Male" : source.sex == "female" ? "Female" : "Other"}}'
+      family_details: '{"group_identifier": [{"identifier_type": "FAMILY_ID", "identifier_value": source.family_id}], "group_type": "family"}'
+      farm_details: '[{"place": {"name": source.farm_place_name, "address": source.district}, "farm_type": source.farm_type, "farming_activities": [{"crop_production": [{"crop_type": source.crop_type, "irrigation": source.irrigation}], "animal_production": [{"type": source.livestock_type, "count": source.livestock_count}]}]}]'
+      registration_date: "source.registration_date"
+      last_updated: "source.last_updated"

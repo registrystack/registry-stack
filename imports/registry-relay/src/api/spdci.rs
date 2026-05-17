@@ -24,8 +24,19 @@ use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::{Config, SpdciDisabilityRegistryConfig, SpdciRegistryConfig};
 use crate::entity::{EntityModel, EntityRegistry};
-use crate::error::{AuthError, Error, FilterError, SchemaError};
+use crate::error::{AuthError, Error, FilterError, InternalError, SchemaError, SpdciError};
 use crate::query::{EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine};
+use crate::spdci::SpdciResponseMapper;
+
+/// Header fields the SP DCI standard marks `required` on inbound
+/// requests (see `MsgHeader_V1.0.0.yaml`).
+const REQUIRED_HEADER_FIELDS: &[&str] = &[
+    "message_id",
+    "message_ts",
+    "action",
+    "sender_id",
+    "total_count",
+];
 
 pub fn router<S>() -> Router<S>
 where
@@ -56,6 +67,7 @@ async fn sync_search_for_registry(
     config: Option<Extension<Arc<Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
+    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
     principal: Option<Extension<Principal>>,
     Json(body): Json<Value>,
 ) -> Response {
@@ -65,6 +77,7 @@ async fn sync_search_for_registry(
         config,
         registry,
         query,
+        response_mapper,
         principal,
         body,
     )
@@ -80,21 +93,28 @@ async fn disabled_status(
     principal: Option<Extension<Principal>>,
     Json(body): Json<Value>,
 ) -> Response {
-    let Ok(route) = RouteState::resolve(config, registry, query, &registry_name) else {
-        return Error::from(SchemaError::UnknownResource).into_response();
+    let route = match RouteState::resolve(config, registry, query, &registry_name) {
+        Ok(route) => route,
+        Err(error) => return error.into_response(),
     };
-    if let Err(error) = require_scope_for(principal, &route.entity.access.verify_scope) {
-        return error.into_response();
-    }
+    let result = run_disabled_status(&route, headers, principal, body).await;
+    let (response, row_count) = match result {
+        Ok(value) => value,
+        Err(error) => (error.into_response(), 0),
+    };
+    with_audit_context(response, &route, row_count)
+}
 
-    let request = match SpdciRequest::from_body(body, &route.config) {
-        Ok(request) => request,
-        Err(error) => return error.into_response(),
-    };
-    let rows = match read_rows(&route, &request, Some(projected_status_fields(&route))).await {
-        Ok(rows) => rows,
-        Err(error) => return error.into_response(),
-    };
+async fn run_disabled_status(
+    route: &RouteState,
+    headers: HeaderMap,
+    principal: Option<Extension<Principal>>,
+    body: Value,
+) -> Result<(Response, u64), Error> {
+    require_scope_for(principal, &route.entity.access.verify_scope)?;
+    let request = SpdciRequest::from_body(body, &route.config)?;
+    let rows = read_rows(route, &request, Some(projected_status_fields(route))).await?;
+    let row_count = rows.len() as u64;
     let disabled = rows.first().is_some_and(|row| {
         row.get(&route.config.disabled_status_field)
             .is_some_and(|value| positive_status(value, &route.config.disabled_positive_values))
@@ -110,7 +130,14 @@ async fn disabled_status(
             "disabled_status": if disabled { "yes" } else { "no" },
         }],
     });
-    with_audit_context(spdci_envelope("on-search", message, &headers), &route, 1)
+    // disabled_status is a single yes/no answer per the SP DCI spec, so
+    // the wire envelope always reports total_count = 1 even when 0 rows
+    // matched the query. The audit row_count is the real cardinality.
+    const DISABLED_STATUS_TOTAL_COUNT: u64 = 1;
+    Ok((
+        spdci_envelope_with_count("on-search", message, &headers, DISABLED_STATUS_TOTAL_COUNT),
+        row_count,
+    ))
 }
 
 async fn sync_search_response(
@@ -119,29 +146,40 @@ async fn sync_search_response(
     config: Option<Extension<Arc<Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
+    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Response {
-    let Ok(route) = SearchRouteState::resolve(config, registry, query, registry_name.as_deref())
-    else {
-        return Error::from(SchemaError::UnknownResource).into_response();
+    let route =
+        match SearchRouteState::resolve(config, registry, query, registry_name.as_deref()) {
+            Ok(route) => route,
+            Err(error) => return error.into_response(),
+        };
+    let result =
+        run_sync_search_response(&route, headers, response_mapper.as_ref(), principal, body).await;
+    let (response, total_count) = match result {
+        Ok((response, total_count)) => (response, total_count),
+        Err(error) => (error.into_response(), 0),
     };
-    if let Err(error) = require_scope_for(principal, &route.entity.access.read_scope) {
-        return error.into_response();
-    }
+    with_search_audit_context(response, &route, total_count)
+}
 
-    let request = match SearchRequest::from_body(body, &route.config) {
-        Ok(request) => request,
-        Err(error) => return error.into_response(),
-    };
+async fn run_sync_search_response(
+    route: &SearchRouteState,
+    headers: HeaderMap,
+    response_mapper: Option<&Extension<Arc<SpdciResponseMapper>>>,
+    principal: Option<Extension<Principal>>,
+    body: Value,
+) -> Result<(Response, u64), Error> {
+    require_scope_for(principal, &route.entity.access.read_scope)?;
+    let request = SearchRequest::from_body(body, &route.config)?;
     let mut search_response = Vec::with_capacity(request.items.len());
     let mut total_count = 0_u64;
     for item in request.items {
-        let rows = match read_search_rows(&route, &item).await {
-            Ok(rows) => rows,
-            Err(error) => return error.into_response(),
-        };
+        let rows = read_search_rows(route, &item).await?;
         total_count += rows.len() as u64;
+        let reg_records =
+            project_search_records(&route.registry_name, &route.config, response_mapper, rows)?;
         search_response.push(json!({
             "reference_id": item.reference_id,
             "timestamp": now_rfc3339(),
@@ -150,21 +188,19 @@ async fn sync_search_response(
                 "version": "1.0.0",
                 "reg_type": route.config.registry_type,
                 "reg_record_type": route.config.record_type,
-                "reg_records": generic_reg_records(rows),
+                "reg_records": reg_records,
             },
         }));
     }
-
     let message = json!({
         "transaction_id": request.transaction_id,
         "correlation_id": request.correlation_id,
         "search_response": search_response,
     });
-    with_search_audit_context(
+    Ok((
         spdci_envelope_with_count("on-search", message, &headers, total_count),
-        &route,
         total_count,
-    )
+    ))
 }
 
 async fn disability_details(
@@ -173,6 +209,7 @@ async fn disability_details(
     config: Option<Extension<Arc<Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
+    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
     principal: Option<Extension<Principal>>,
     Json(body): Json<Value>,
 ) -> Response {
@@ -182,6 +219,7 @@ async fn disability_details(
         config,
         registry,
         query,
+        response_mapper,
         principal,
         body,
     )
@@ -194,6 +232,7 @@ async fn disability_support(
     config: Option<Extension<Arc<Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
+    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
     principal: Option<Extension<Principal>>,
     Json(body): Json<Value>,
 ) -> Response {
@@ -203,6 +242,7 @@ async fn disability_support(
         config,
         registry,
         query,
+        response_mapper,
         principal,
         body,
     )
@@ -215,25 +255,58 @@ async fn search_response(
     config: Option<Extension<Arc<Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
+    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Response {
-    let Ok(route) = RouteState::resolve(config, registry, query, &registry_name) else {
-        return Error::from(SchemaError::UnknownResource).into_response();
+    // Prefer the registered named-registry config when one exists so
+    // its `response_fields` / mapping path drive projection through
+    // the same code path as `sync_search`. Fall back to a synthesized
+    // shape for the legacy single-binding setup.
+    let named_search_config = config.as_ref().and_then(|Extension(cfg)| {
+        cfg.standards
+            .spdci
+            .as_ref()
+            .and_then(|spdci| spdci.registries.get(&registry_name).cloned())
+    });
+    let route = match RouteState::resolve(config, registry, query, &registry_name) {
+        Ok(route) => route,
+        Err(error) => return error.into_response(),
     };
-    if let Err(error) = require_scope_for(principal, &route.entity.access.read_scope) {
-        return error.into_response();
-    }
+    let search_registry_config =
+        named_search_config.unwrap_or_else(|| search_config_from_disability(&route.config));
+    let result = run_search_response(
+        &route,
+        &registry_name,
+        &search_registry_config,
+        headers,
+        response_mapper.as_ref(),
+        principal,
+        body,
+    )
+    .await;
+    let (response, row_count) = match result {
+        Ok((response, count)) => (response, count),
+        Err(error) => (error.into_response(), 0),
+    };
+    with_audit_context(response, &route, row_count)
+}
 
-    let request = match SpdciRequest::from_body(body, &route.config) {
-        Ok(request) => request,
-        Err(error) => return error.into_response(),
-    };
-    let rows = match read_rows(&route, &request, None).await {
-        Ok(rows) => rows,
-        Err(error) => return error.into_response(),
-    };
+async fn run_search_response(
+    route: &RouteState,
+    registry_name: &str,
+    search_registry_config: &SpdciRegistryConfig,
+    headers: HeaderMap,
+    response_mapper: Option<&Extension<Arc<SpdciResponseMapper>>>,
+    principal: Option<Extension<Principal>>,
+    body: Value,
+) -> Result<(Response, u64), Error> {
+    require_scope_for(principal, &route.entity.access.read_scope)?;
+    let request = SpdciRequest::from_body(body, &route.config)?;
+    let rows = read_rows(route, &request, None).await?;
     let row_count = rows.len() as u64;
+    let reg_records =
+        project_search_records(registry_name, search_registry_config, response_mapper, rows)?;
     let message = json!({
         "transaction_id": request.transaction_id,
         "correlation_id": request.correlation_id,
@@ -243,15 +316,14 @@ async fn search_response(
             "status": "succ",
             "data": {
                 "version": "1.0.0",
-                "reg_records": rows,
+                "reg_records": reg_records,
             },
         }],
     });
-    with_audit_context(
-        spdci_envelope("on-search", message, &headers),
-        &route,
+    Ok((
+        spdci_envelope_with_count("on-search", message, &headers, row_count),
         row_count,
-    )
+    ))
 }
 
 struct RouteState {
@@ -261,6 +333,7 @@ struct RouteState {
 }
 
 struct SearchRouteState {
+    registry_name: String,
     config: SpdciRegistryConfig,
     entity: EntityModel,
     query: Arc<EntityQueryEngine>,
@@ -309,7 +382,12 @@ fn resolve_disability_config(
         }
         return Err(SchemaError::UnknownResource.into());
     }
-    if registry_name == "dr" {
+    // Legacy back-compat: when no `spdci.registries` bindings are
+    // declared and the caller hits the canonical `dr` slug, fall back
+    // to the disability_registry block. Aligns with the matching arm
+    // in `resolve_search_config` so the four DR endpoints accept the
+    // same paths.
+    if spdci.registries.is_empty() && registry_name == "dr" {
         return Ok(disability);
     }
     Err(SchemaError::UnknownResource.into())
@@ -323,7 +401,7 @@ impl SearchRouteState {
         registry_name: Option<&str>,
     ) -> Result<Self, Error> {
         let Extension(config) = config.ok_or(SchemaError::UnknownResource)?;
-        let search = resolve_search_config(&config, registry_name)?;
+        let (resolved_name, search) = resolve_search_config(&config, registry_name)?;
         let Extension(registry) = registry.ok_or(SchemaError::UnknownResource)?;
         let entity = registry
             .dataset(search.dataset.as_str())
@@ -332,6 +410,7 @@ impl SearchRouteState {
             .ok_or(SchemaError::UnknownResource)?;
         let Extension(query) = query.ok_or(SchemaError::UnknownResource)?;
         Ok(Self {
+            registry_name: resolved_name,
             config: search,
             entity,
             query,
@@ -342,7 +421,7 @@ impl SearchRouteState {
 fn resolve_search_config(
     config: &Config,
     registry_name: Option<&str>,
-) -> Result<SpdciRegistryConfig, Error> {
+) -> Result<(String, SpdciRegistryConfig), Error> {
     let spdci = config
         .standards
         .spdci
@@ -353,19 +432,20 @@ fn resolve_search_config(
             .registries
             .get(name)
             .cloned()
+            .map(|registry| (name.to_string(), registry))
             .ok_or_else(|| SchemaError::UnknownResource.into());
     }
     if spdci.registries.len() == 1 {
         return spdci
             .registries
-            .values()
+            .iter()
             .next()
-            .cloned()
+            .map(|(name, registry)| (name.clone(), registry.clone()))
             .ok_or_else(|| SchemaError::UnknownResource.into());
     }
     if spdci.registries.is_empty() {
         if let Some(disability) = &spdci.disability_registry {
-            return Ok(search_config_from_disability(disability));
+            return Ok(("dr".to_string(), search_config_from_disability(disability)));
         }
     }
     Err(SchemaError::UnknownResource.into())
@@ -389,6 +469,9 @@ fn search_config_from_disability(
         record_type: "spdci-extensions-dci:DisabledPerson".to_string(),
         identifiers,
         expression_fields,
+        response_fields: BTreeMap::new(),
+        response_mapping_path: None,
+        response_schema_path: None,
         default_limit: 100,
     }
 }
@@ -414,16 +497,10 @@ struct SearchRequestItem {
 
 impl SpdciRequest {
     fn from_body(body: Value, config: &SpdciDisabilityRegistryConfig) -> Result<Self, Error> {
-        let message = body.get("message").unwrap_or(&body);
-        let transaction_id = string_field(message, "transaction_id")
-            .or_else(|| string_field(body.get("header").unwrap_or(&Value::Null), "message_id"))
-            .unwrap_or_else(|| Ulid::new().to_string());
-        let correlation_id = string_field(message, "correlation_id")
-            .or_else(|| string_field(body.get("header").unwrap_or(&Value::Null), "message_id"))
-            .unwrap_or_else(|| transaction_id.clone());
-        let reference_id = string_field(message, "reference_id")
-            .or_else(|| string_field(message, "transaction_id"))
-            .unwrap_or_else(|| transaction_id.clone());
+        let message = validated_message(&body)?;
+        let transaction_id = required_transaction_id(message)?;
+        let correlation_id = optional_correlator(message, "correlation_id", &transaction_id);
+        let reference_id = optional_correlator(message, "reference_id", &transaction_id);
         let query = message
             .pointer("/disabled_criteria/query")
             .ok_or(FilterError::InvalidValue)?;
@@ -439,13 +516,9 @@ impl SpdciRequest {
 
 impl SearchRequest {
     fn from_body(body: Value, config: &SpdciRegistryConfig) -> Result<Self, Error> {
-        let message = body.get("message").unwrap_or(&body);
-        let transaction_id = string_field(message, "transaction_id")
-            .or_else(|| string_field(body.get("header").unwrap_or(&Value::Null), "message_id"))
-            .unwrap_or_else(|| Ulid::new().to_string());
-        let correlation_id = string_field(message, "correlation_id")
-            .or_else(|| string_field(body.get("header").unwrap_or(&Value::Null), "message_id"))
-            .unwrap_or_else(|| transaction_id.clone());
+        let message = validated_message(&body)?;
+        let transaction_id = required_transaction_id(message)?;
+        let correlation_id = optional_correlator(message, "correlation_id", &transaction_id);
         let Some(items) = message.get("search_request").and_then(Value::as_array) else {
             return Err(FilterError::InvalidValue.into());
         };
@@ -463,9 +536,16 @@ impl SearchRequest {
                 .and_then(Value::as_u64)
                 .and_then(|value| usize::try_from(value).ok())
                 .unwrap_or(config.default_limit as usize);
+            let reference_id = string_field(item, "reference_id").unwrap_or_else(|| {
+                let synthesized = Ulid::new().to_string();
+                tracing::debug!(
+                    code = "spdci.request.reference_id_substituted",
+                    "search_request item missing reference_id; substituted a fresh ULID"
+                );
+                synthesized
+            });
             parsed.push(SearchRequestItem {
-                reference_id: string_field(item, "reference_id")
-                    .unwrap_or_else(|| Ulid::new().to_string()),
+                reference_id,
                 filters,
                 limit,
             });
@@ -476,6 +556,47 @@ impl SearchRequest {
             items: parsed,
         })
     }
+}
+
+/// Validate the SP DCI request envelope and return the inner message.
+///
+/// Rejects bodies whose `header` is missing or not an object, whose
+/// header omits any of [`REQUIRED_HEADER_FIELDS`], or whose `message`
+/// is missing or not an object. See `MsgHeader_V1.0.0.yaml`.
+fn validated_message(body: &Value) -> Result<&Value, Error> {
+    let header = body
+        .get("header")
+        .and_then(Value::as_object)
+        .ok_or(SpdciError::InvalidHeader)?;
+    for field in REQUIRED_HEADER_FIELDS {
+        if header.get(*field).map_or(true, Value::is_null) {
+            return Err(SpdciError::InvalidHeader.into());
+        }
+    }
+    body.get("message")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| SpdciError::InvalidMessage.into())
+}
+
+fn required_transaction_id(message: &Value) -> Result<String, Error> {
+    string_field(message, "transaction_id").ok_or_else(|| SpdciError::MissingTransactionId.into())
+}
+
+/// Read a correlation-style field that the SP DCI standard does not
+/// require on inbound request bodies (`correlation_id` is response-
+/// only, `reference_id` is required only on inner search-request
+/// items). Substitute the request's `transaction_id` when absent and
+/// emit a debug log so the substitution is audit-visible.
+fn optional_correlator(message: &Value, field: &str, transaction_id: &str) -> String {
+    if let Some(value) = string_field(message, field) {
+        return value;
+    }
+    tracing::debug!(
+        code = "spdci.request.correlator_substituted",
+        field,
+        "request message missing optional correlator; defaulting to transaction_id"
+    );
+    transaction_id.to_string()
 }
 
 async fn read_rows(
@@ -677,6 +798,13 @@ fn filter_from_operator_object(field: &str, value: &Value) -> Result<EntityFilte
             value: le.clone(),
         });
     }
+    if value.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .any(|key| key.starts_with('$') || matches!(key.as_str(), "ne" | "gt" | "lt"))
+    }) {
+        return Err(FilterError::UnsupportedOp.into());
+    }
     Ok(EntityFilter {
         field: field.to_string(),
         op: EntityFilterOp::Eq,
@@ -705,12 +833,49 @@ fn string_field(value: &Value, field: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn generic_reg_records(rows: Vec<Value>) -> Value {
-    match rows.len() {
-        0 => json!({}),
-        1 => rows.into_iter().next().unwrap_or_else(|| json!({})),
-        _ => json!({ "items": rows }),
-    }
+fn project_search_records(
+    registry_name: &str,
+    registry_config: &SpdciRegistryConfig,
+    response_mapper: Option<&Extension<Arc<SpdciResponseMapper>>>,
+    rows: Vec<Value>,
+) -> Result<Value, Error> {
+    let mapper = match response_mapper {
+        Some(Extension(mapper)) => Arc::clone(mapper),
+        None if registry_has_mapping(registry_config) => {
+            tracing::error!(
+                code = "spdci.mapper.unavailable",
+                registry = %registry_name,
+                dataset_id = %registry_config.dataset,
+                entity = %registry_config.entity,
+                "SP DCI response mapper extension absent for a registry that requires it"
+            );
+            return Err(SpdciError::MapperUnavailable.into());
+        }
+        None => Arc::new(SpdciResponseMapper::default()),
+    };
+    let mapped = rows
+        .into_iter()
+        .map(|row| mapper.project_record(registry_name, registry_config, row))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            tracing::error!(
+                registry = %registry_name,
+                dataset_id = %registry_config.dataset,
+                entity = %registry_config.entity,
+                error = %err,
+                "SP DCI response projection failed"
+            );
+            Error::from(InternalError::Unhandled)
+        })?;
+    // Per the SP DCI spec, `reg_records` is always a JSON array
+    // (`@container: "@set"`). Empty results emit `[]`.
+    Ok(Value::Array(mapped))
+}
+
+fn registry_has_mapping(config: &SpdciRegistryConfig) -> bool {
+    !config.response_fields.is_empty()
+        || config.response_mapping_path.is_some()
+        || config.response_schema_path.is_some()
 }
 
 fn positive_status(value: &Value, positive_values: &[String]) -> bool {
@@ -730,10 +895,6 @@ fn require_scope_for(principal: Option<Extension<Principal>>, required: &str) ->
         return Err(AuthError::MissingCredential.into());
     };
     require_scope(&principal, required)
-}
-
-fn spdci_envelope(action: &str, message: Value, headers: &HeaderMap) -> Response {
-    spdci_envelope_with_count(action, message, headers, 1)
 }
 
 fn spdci_envelope_with_count(

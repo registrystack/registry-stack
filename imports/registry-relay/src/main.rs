@@ -47,6 +47,8 @@ use registry_relay::provenance::{
     ResolvedProvenanceConfig,
 };
 use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
+#[cfg(feature = "spdci-api-standards")]
+use registry_relay::spdci::build_spdci_response_mapper;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -125,6 +127,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         build_resolved_provenance_config(config.provenance.as_ref())?
             .map(|resolved: ResolvedProvenanceConfig| Arc::new(ProvenanceState::new(resolved)));
     let publicschema_registry = build_publicschema_registry(&config)?.map(Arc::new);
+    #[cfg(feature = "spdci-api-standards")]
+    let spdci_response_mapper = build_spdci_response_mapper(&config)?.map(Arc::new);
     let provenance_state_for_log = provenance_state.as_ref().map(|state| {
         let cfg = state.config();
         (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
@@ -143,6 +147,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     if let Some(publicschema_registry) = publicschema_registry {
         app = app.layer(axum::Extension(publicschema_registry));
+    }
+    #[cfg(feature = "spdci-api-standards")]
+    if let Some(spdci_response_mapper) = spdci_response_mapper {
+        app = app.layer(axum::Extension(spdci_response_mapper));
     }
 
     let listener = TcpListener::bind(bind).await.map_err(|err| {

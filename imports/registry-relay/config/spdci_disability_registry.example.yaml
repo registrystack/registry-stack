@@ -51,6 +51,17 @@ standards:
         expression_fields:
           disability_status: disability_status
           disability_details.impairment_type: impairment_type
+        response_fields:
+          personal_details.identifier: id
+          disability_status: disability_status
+          disability_level: disability_level
+          disability_details.0.impairment_type: impairment_type
+          disability_details.0.impairment_level: impairment_level
+          disability_support.0.human_assistance.type: human_assistance_type
+          disability_support.0.human_assistance.frequency: support_frequency
+          disability_support.0.human_assistance.support_status: support_status
+          registration_date: registration_date
+          last_updated: last_updated
 
 datasets:
   - id: disability_registry

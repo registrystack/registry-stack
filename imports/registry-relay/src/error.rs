@@ -73,6 +73,9 @@ pub enum Error {
     /// Provenance runtime errors.
     #[error("{0}")]
     Provenance(#[from] ProvenanceError),
+    /// SP DCI request and runtime errors.
+    #[error("{0}")]
+    Spdci(#[from] SpdciError),
 }
 
 /// `entity.*` codes.
@@ -226,6 +229,10 @@ pub enum ConfigError {
     /// built without the optional adapter feature.
     #[error("spdci api standards feature disabled")]
     SpdciFeatureDisabled,
+    /// SP DCI response CEL mapping was configured but the binary was
+    /// built without the optional mapper dependency.
+    #[error("spdci cel mapping feature disabled")]
+    SpdciMappingFeatureDisabled,
 }
 
 /// `provenance.*` runtime codes.
@@ -247,6 +254,29 @@ pub enum ProvenanceError {
     /// `/.well-known/did.json` is not served in delegated mode.
     #[error("provenance did document unavailable")]
     DidDocumentUnavailable,
+}
+
+/// `spdci.*` runtime codes. Cover request envelope validation against
+/// the SP DCI standard (header + message) and wiring invariants for
+/// the response mapper extension.
+#[derive(Debug, Error)]
+pub enum SpdciError {
+    /// `header` is missing or not an object, or one of the required
+    /// header fields (`message_id`, `message_ts`, `action`, `sender_id`,
+    /// `total_count`) is absent.
+    #[error("invalid spdci header")]
+    InvalidHeader,
+    /// `message` is missing or not an object.
+    #[error("invalid spdci message")]
+    InvalidMessage,
+    /// `message.transaction_id` is absent or empty.
+    #[error("missing transaction_id")]
+    MissingTransactionId,
+    /// The registry has SP DCI response mapping configured but the
+    /// `SpdciResponseMapper` extension was not installed on the router.
+    /// Surfaced as 500 because it is a binary wiring bug.
+    #[error("spdci response mapper unavailable")]
+    MapperUnavailable,
 }
 
 /// `internal.*` codes.
@@ -278,6 +308,7 @@ impl Error {
             Error::Config(e) => e.code(),
             Error::Internal(e) => e.code(),
             Error::Provenance(e) => e.code(),
+            Error::Spdci(e) => e.code(),
         }
     }
 
@@ -300,6 +331,7 @@ impl Error {
             Error::Config(e) => e.http_status(),
             Error::Internal(e) => e.http_status(),
             Error::Provenance(e) => e.http_status(),
+            Error::Spdci(e) => e.http_status(),
         }
     }
 
@@ -318,6 +350,7 @@ impl Error {
             Error::Config(e) => e.title(),
             Error::Internal(e) => e.title(),
             Error::Provenance(e) => e.title(),
+            Error::Spdci(e) => e.title(),
         }
     }
 
@@ -338,6 +371,7 @@ impl Error {
             Error::Config(e) => e.detail().to_string(),
             Error::Internal(e) => e.detail().to_string(),
             Error::Provenance(e) => e.detail().to_string(),
+            Error::Spdci(e) => e.detail().to_string(),
         }
     }
 
@@ -683,6 +717,7 @@ impl ConfigError {
             }
             ConfigError::PublicSchemaFeatureDisabled => "publicschema.config.feature_disabled",
             ConfigError::SpdciFeatureDisabled => "spdci.config.feature_disabled",
+            ConfigError::SpdciMappingFeatureDisabled => "spdci.config.mapping_feature_disabled",
         }
     }
 
@@ -712,6 +747,7 @@ impl ConfigError {
             }
             ConfigError::PublicSchemaFeatureDisabled => "PublicSchema CEL feature disabled",
             ConfigError::SpdciFeatureDisabled => "SP DCI API standards feature disabled",
+            ConfigError::SpdciMappingFeatureDisabled => "SP DCI CEL mapping feature disabled",
         }
     }
 
@@ -753,6 +789,9 @@ impl ConfigError {
             }
             ConfigError::SpdciFeatureDisabled => {
                 "SP DCI standards adapters require a binary built with the spdci-api-standards feature"
+            }
+            ConfigError::SpdciMappingFeatureDisabled => {
+                "SP DCI response mappings require a binary built with the standards-cel-mapping feature"
             }
         }
     }
@@ -843,6 +882,50 @@ impl InternalError {
                 "request URI (path plus query string) exceeds the configured length cap"
             }
             InternalError::Unhandled => "the request could not be served",
+        }
+    }
+}
+
+impl SpdciError {
+    fn code(&self) -> &'static str {
+        match self {
+            SpdciError::InvalidHeader => "spdci.request.invalid_header",
+            SpdciError::InvalidMessage => "spdci.request.invalid_message",
+            SpdciError::MissingTransactionId => "spdci.request.missing_transaction_id",
+            SpdciError::MapperUnavailable => "spdci.mapper.unavailable",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            SpdciError::InvalidHeader
+            | SpdciError::InvalidMessage
+            | SpdciError::MissingTransactionId => StatusCode::BAD_REQUEST,
+            SpdciError::MapperUnavailable => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            SpdciError::InvalidHeader => "Invalid SP DCI header",
+            SpdciError::InvalidMessage => "Invalid SP DCI message",
+            SpdciError::MissingTransactionId => "Missing transaction_id",
+            SpdciError::MapperUnavailable => "SP DCI response mapper unavailable",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            SpdciError::InvalidHeader => {
+                "request header is missing or omits a required SP DCI field"
+            }
+            SpdciError::InvalidMessage => "request message is missing or not an object",
+            SpdciError::MissingTransactionId => {
+                "message.transaction_id is required and must be non-empty"
+            }
+            SpdciError::MapperUnavailable => {
+                "response mapping is configured but the mapper extension is not installed"
+            }
         }
     }
 }

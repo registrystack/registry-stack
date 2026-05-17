@@ -1,0 +1,17 @@
+version: "0.1"
+name: registry_relay_spdci_dr_disabled_person
+source_system: registry-relay.disabled_person
+target_model: spdci.dr.DisabledPerson
+
+records:
+  record:
+    emit: "present(source.member_identifier)"
+    fields:
+      "@type": '"spdci:DisabledPerson"'
+      personal_details: '{"member_identifier": {"identifier_type": "DISABILITY_ID", "identifier_value": source.member_identifier}, "identifier": source.member_identifier, "name": {"given_name": source.given_name, "surname": source.surname}, "date_of_birth": source.birth_date, "gender": source.sex == "male" ? "Male" : source.sex == "female" ? "Female" : "Other"}'
+      disability_status: "source.disability_status"
+      disability_level: "source.disability_level"
+      disability_details: '[{"impairment_type": source.impairment_type, "impairment_level": source.impairment_level, "impairment_cause": source.disability_details}]'
+      disability_support: '[{"human_assistance": {"type": source.human_assistance_type, "frequency": source.support_frequency, "support_status": source.support_status}}]'
+      registration_date: "source.registration_date"
+      last_updated: "source.last_updated"

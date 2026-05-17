@@ -943,11 +943,15 @@ def build_education(
 
 
 def build_disability_registry(rng: random.Random, count: int) -> dict[str, list[list[Any]]]:
-    """Return sheet data for the optional SP DCI Disability Registry demo."""
+    """Return sheet data for the optional SP DCI registry demos."""
 
     header = [
         "person_id",
         "member_identifier",
+        "given_name",
+        "surname",
+        "sex",
+        "birth_date",
         "disability_status",
         "disability_level",
         "impairment_type",
@@ -970,11 +974,18 @@ def build_disability_registry(rng: random.Random, count: int) -> dict[str, list[
     support_frequencies = ["daily", "weekly", "monthly", "as_needed"]
     support_statuses = ["active", "pending", "paused", "completed"]
     age_bands = ["0-17", "18-29", "30-44", "45-64", "65+"]
+    sexes = ["female", "male", "other"]
+    fake_first = ["Ada", "Bo", "Cy", "Dee", "El", "Fae", "Gus", "Hal", "Ivy", "Jo"]
+    fake_last = ["Apple", "Birch", "Cedar", "Dale", "Elm", "Fern", "Gray", "Holt", "Iron", "Jade"]
 
     rows: list[list[Any]] = [header]
     for i in range(1, count + 1):
         person_id = f"drp-{7000 + i}"
         member_identifier = f"DR-MEMBER-{i:03d}"
+        given_name = pick(rng, fake_first)
+        surname = pick(rng, fake_last)
+        sex = pick(rng, sexes, weights=[49, 49, 2])
+        birth_date = daterange(rng, dt.date(1945, 1, 1), dt.date(2018, 12, 31))
         status = statuses[(i - 1) % len(statuses)]
         impairment_type = pick(rng, impairment_types)
         disability_level = pick(rng, disability_levels)
@@ -996,6 +1007,10 @@ def build_disability_registry(rng: random.Random, count: int) -> dict[str, list[
             [
                 person_id,
                 member_identifier,
+                given_name,
+                surname,
+                sex,
+                birth_date,
                 status,
                 disability_level,
                 impairment_type,
@@ -1012,7 +1027,141 @@ def build_disability_registry(rng: random.Random, count: int) -> dict[str, list[
             ]
         )
 
-    return {"DisabledPeople": rows}
+    civil_header = [
+        "civil_person_id",
+        "national_id",
+        "given_name",
+        "surname",
+        "sex",
+        "birth_date",
+        "birth_place",
+        "address_line",
+        "district",
+        "phone",
+        "email",
+        "registration_date",
+        "last_updated",
+    ]
+    civil_rows: list[list[Any]] = [civil_header]
+    for i in range(1, count + 1):
+        district = pick(rng, DISTRICTS, weights=[20, 18, 25, 12, 10, 15])
+        birth_date = daterange(rng, dt.date(1940, 1, 1), dt.date(2022, 12, 31))
+        registration_date = birth_date + dt.timedelta(days=rng.randint(30, 365))
+        last_updated = daterange(rng, dt.date(2025, 1, 1), dt.date(2026, 4, 30))
+        civil_rows.append(
+            [
+                f"crp-{8000 + i}",
+                f"FAKE-{810000 + i}",
+                pick(rng, fake_first),
+                pick(rng, fake_last),
+                pick(rng, sexes, weights=[49, 49, 2]),
+                birth_date,
+                f"{district} civil office",
+                f"{100 + i} Fake St",
+                district,
+                f"555-1{i:03d}",
+                f"civil.{i:03d}@example.invalid",
+                registration_date,
+                last_updated,
+            ]
+        )
+
+    social_header = [
+        "group_id",
+        "group_type",
+        "district",
+        "address_line",
+        "poverty_score",
+        "poverty_score_type",
+        "group_size",
+        "head_member_id",
+        "head_national_id",
+        "head_given_name",
+        "head_surname",
+        "head_sex",
+        "head_birth_date",
+        "head_disability_status",
+        "registration_date",
+        "last_updated",
+    ]
+    social_rows: list[list[Any]] = [social_header]
+    for i in range(1, count + 1):
+        district = pick(rng, DISTRICTS, weights=[20, 18, 25, 12, 10, 15])
+        registered = daterange(rng, dt.date(2023, 1, 1), dt.date(2026, 3, 31))
+        social_rows.append(
+            [
+                f"SR-GROUP-{i:03d}",
+                pick(rng, ["family", "household"], weights=[35, 65]),
+                district,
+                f"{200 + i} Fake St, {district}",
+                round(rng.uniform(12.0, 88.0), 2),
+                "income-based",
+                rng.randint(1, 8),
+                f"SR-MEMBER-{i:03d}",
+                f"FAKE-{820000 + i}",
+                pick(rng, fake_first),
+                pick(rng, fake_last),
+                pick(rng, sexes, weights=[49, 49, 2]),
+                daterange(rng, dt.date(1945, 1, 1), dt.date(2006, 12, 31)),
+                pick(rng, ["none", "physical", "sensory", "cognitive"], weights=[80, 8, 7, 5]),
+                registered,
+                registered + dt.timedelta(days=rng.randint(0, 240)),
+            ]
+        )
+
+    farmer_header = [
+        "farmer_id",
+        "family_id",
+        "national_id",
+        "given_name",
+        "surname",
+        "sex",
+        "birth_date",
+        "district",
+        "farm_place_name",
+        "farm_type",
+        "crop_type",
+        "livestock_type",
+        "livestock_count",
+        "irrigation",
+        "registration_date",
+        "last_updated",
+    ]
+    farm_types = ["Small subsistence-oriented farms", "Market-oriented family farm", "Cooperative farm"]
+    crop_types = ["Fruit and nuts", "Cereals", "Vegetables and melons", "Leguminous crops"]
+    livestock_types = ["Sheep and goats", "Poultry", "Cattle", "None"]
+    farmer_rows: list[list[Any]] = [farmer_header]
+    for i in range(1, count + 1):
+        district = pick(rng, DISTRICTS, weights=[20, 18, 25, 12, 10, 15])
+        registered = daterange(rng, dt.date(2023, 1, 1), dt.date(2026, 3, 31))
+        livestock_type = pick(rng, livestock_types, weights=[30, 30, 20, 20])
+        farmer_rows.append(
+            [
+                f"FR-MEMBER-{i:03d}",
+                f"FR-FAMILY-{i:03d}",
+                f"FAKE-{830000 + i}",
+                pick(rng, fake_first),
+                pick(rng, fake_last),
+                pick(rng, sexes, weights=[49, 49, 2]),
+                daterange(rng, dt.date(1945, 1, 1), dt.date(2004, 12, 31)),
+                district,
+                f"{district} farm plot {i:03d}",
+                pick(rng, farm_types, weights=[55, 30, 15]),
+                pick(rng, crop_types),
+                livestock_type,
+                0 if livestock_type == "None" else rng.randint(2, 60),
+                pick(rng, [True, False], weights=[45, 55]),
+                registered,
+                registered + dt.timedelta(days=rng.randint(0, 240)),
+            ]
+        )
+
+    return {
+        "DisabledPeople": rows,
+        "CivilPersons": civil_rows,
+        "SocialGroups": social_rows,
+        "Farmers": farmer_rows,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -96,6 +96,16 @@ pub struct SpdciRegistryConfig {
     /// DCI expression or predicate attribute to entity field mappings.
     #[serde(default)]
     pub expression_fields: BTreeMap<String, String>,
+    /// SP DCI output path to entity field mappings for direct response
+    /// projection. A CEL mapping takes precedence when both are set.
+    #[serde(default)]
+    pub response_fields: BTreeMap<String, String>,
+    /// Optional local CEL mapping document used to shape response records.
+    #[serde(default)]
+    pub response_mapping_path: Option<PathBuf>,
+    /// Optional local JSON Schema used to validate shaped response records.
+    #[serde(default)]
+    pub response_schema_path: Option<PathBuf>,
     #[serde(default = "default_spdci_search_limit")]
     pub default_limit: u32,
 }

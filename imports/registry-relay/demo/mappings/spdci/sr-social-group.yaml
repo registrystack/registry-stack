@@ -1,0 +1,20 @@
+version: "0.1"
+name: registry_relay_spdci_sr_social_group
+source_system: registry-relay.social_group
+target_model: spdci.social.Group
+
+records:
+  record:
+    emit: "present(source.group_id)"
+    fields:
+      "@id": "source.group_id"
+      "@type": '"spdci:Group"'
+      group_identifier: '[{"identifier_type": "GROUP_ID", "identifier_value": source.group_id}]'
+      group_type: "source.group_type"
+      place: '{"@type": "Place", "name": source.district, "address": source.address_line}'
+      poverty_score: "source.poverty_score"
+      poverty_score_type: "source.poverty_score_type"
+      group_head_info: '{"@id": source.head_member_id, "member_identifier": [{"identifier_type": "MEMBER_ID", "identifier_value": source.head_member_id}], "demographic_info": {"identifier": [{"identifier_type": "UIN", "identifier_value": source.head_national_id}], "name": {"given_name": source.head_given_name, "surname": source.head_surname}, "sex": source.head_sex, "birth_date": source.head_birth_date}, "is_disabled": source.head_disability_status != "none"}'
+      group_size: "source.group_size"
+      registration_date: "source.registration_date"
+      last_updated: "source.last_updated"

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-relay.local/demo/schemas/spdci/dr-disabled-person.schema.json",
+  "title": "Demo SP DCI Disability Registry DisabledPerson",
+  "$comment": "Shaped from third_party/spdci-api-standards/src/registry/dr/RegistryRecord.yaml and src/extensions/dr/DisabledPerson.yaml.",
+  "type": "object",
+  "required": ["personal_details", "disability_status"],
+  "properties": {
+    "@type": { "type": "string" },
+    "personal_details": {
+      "type": "object",
+      "required": ["member_identifier", "name"],
+      "properties": {
+        "member_identifier": {
+          "type": "object",
+          "required": ["identifier_type", "identifier_value"],
+          "properties": {
+            "identifier_type": { "type": "string" },
+            "identifier_value": { "type": "string" }
+          }
+        },
+        "identifier": { "type": "string" },
+        "name": {
+          "type": "object",
+          "required": ["given_name", "surname"],
+          "properties": {
+            "given_name": { "type": "string" },
+            "surname": { "type": "string" }
+          }
+        },
+        "date_of_birth": { "type": "string" },
+        "gender": { "type": "string" }
+      }
+    },
+    "disability_status": { "type": "string" },
+    "disability_level": { "type": "string" },
+    "disability_details": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "disability_support": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "registration_date": { "type": "string" },
+    "last_updated": { "type": "string" }
+  }
+}
