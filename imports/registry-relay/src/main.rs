@@ -117,11 +117,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let dataset_count = config.datasets.len();
     // Operational startup log: a per-mode size hint. For `api_key` this
-    // is the configured key count; future OIDC mode reports issuer/jwks
-    // freshness instead. Read off the config rather than the provider so
-    // the wiring layer doesn't need a `len()` method on the trait.
+    // is the configured key count; for `oidc` it is 0 (the real signal
+    // is the issuer URL, logged separately when the provider is wired).
+    // Read off the config rather than the provider so the wiring layer
+    // doesn't need a `len()` method on the trait.
     let auth_size_hint = match config.auth.mode {
         config::AuthMode::ApiKey => config.auth.api_keys.len(),
+        config::AuthMode::Oidc => 0,
     };
     // Build provenance state from the parsed config.
     // `build_resolved_provenance_config` returns:
@@ -297,6 +299,15 @@ fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
                 entries.push(entry);
             }
             Ok(Arc::new(ApiKeyAuth::new(entries)))
+        }
+        config::AuthMode::Oidc => {
+            // OIDC validation accepts the config block; the actual
+            // provider wiring lands with the JWKS cache implementation.
+            tracing::error!(
+                code = "config.validation_error",
+                "auth.mode = oidc is configured but this binary does not yet include the OIDC provider"
+            );
+            Err(Error::from(ConfigError::ValidationError))
         }
     }
 }

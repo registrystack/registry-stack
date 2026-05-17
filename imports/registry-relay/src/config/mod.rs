@@ -230,22 +230,29 @@ pub struct CatalogConfig {
     pub participant_id: Option<String>,
 }
 
-/// Authentication configuration. V1 supports api_key only.
+/// Authentication configuration. Exactly one of `api_keys` and `oidc`
+/// is consumed at startup, gated by `mode`; cross-field validation in
+/// [`validate`] enforces that only the active block is populated.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub mode: AuthMode,
     #[serde(default)]
     pub api_keys: Vec<ApiKeyConfig>,
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
 }
 
 /// Authentication mode tag. Drives the provider built at startup in
-/// `crate::auth`.
+/// `crate::auth`. A given deployment runs in exactly one mode at a time;
+/// mixed-mode operation is not supported.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMode {
     /// Hashed shared secret in an environment variable.
     ApiKey,
+    /// Bearer JWT validated against an external OIDC / OAuth2 provider.
+    Oidc,
 }
 
 /// One configured API key, identified by an id and a `hash_env` env
@@ -258,6 +265,106 @@ pub struct ApiKeyConfig {
     pub hash_env: String,
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+/// OIDC / OAuth2 resource-server configuration. The relay validates
+/// incoming bearer JWTs against a configured external IdP. No tokens
+/// are minted here.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    /// Issuer URL. Compared verbatim against the JWT `iss` claim.
+    pub issuer: String,
+    /// One or more accepted `aud` values. Tokens with no `aud`, or
+    /// whose `aud` does not intersect this list, are rejected.
+    pub audience: Vec<String>,
+    /// JWKS endpoint. Either this or `discovery_url` must be set.
+    /// `discovery_url` takes precedence: when both are configured the
+    /// validator rejects the document.
+    #[serde(default)]
+    pub jwks_url: Option<String>,
+    /// OIDC discovery document URL
+    /// (`.well-known/openid-configuration`). The JWKS URL is resolved
+    /// from `jwks_uri` in the discovered document.
+    #[serde(default)]
+    pub discovery_url: Option<String>,
+    /// Signature algorithms accepted by the verifier. Defaults to
+    /// RS256, ES256, EdDSA. HS\* and `none` are intentionally absent
+    /// from [`OidcAlgorithm`].
+    #[serde(default = "default_oidc_algorithms")]
+    pub algorithms: Vec<OidcAlgorithm>,
+    /// JWKS cache TTL. Default 10 minutes. The provider also refreshes
+    /// on unknown `kid` (rate-limited) so this controls the steady-state
+    /// rotation pickup latency, not the upper bound.
+    #[serde(default = "default_oidc_jwks_cache_ttl", with = "humantime_serde")]
+    pub jwks_cache_ttl: Duration,
+    /// Clock skew tolerance applied to `exp` and (when present) `nbf`.
+    /// Default 60 seconds. Bounded at 5 minutes by validation.
+    #[serde(default = "default_oidc_leeway", with = "humantime_serde")]
+    pub leeway: Duration,
+    /// JWT claim whose value carries scopes. Defaults to `scope`, the
+    /// RFC 8693 / RFC 9068 space-separated form. Some IdPs use `scp`
+    /// or `permissions`; the value may be either a string or an array
+    /// of strings.
+    #[serde(default = "default_oidc_scope_claim")]
+    pub scope_claim: String,
+    /// Optional rename map: `external_scope -> internal_scope`. Applied
+    /// after parsing the scope claim, before scope-based access checks
+    /// run. Useful for adapting IdP role names (`role:foo`) to the
+    /// relay's `<dataset_id>:<level>` shape.
+    #[serde(default)]
+    pub scope_map: BTreeMap<String, String>,
+    /// Optional allowlist of client identifiers, matched against the
+    /// token's `azp` (preferred) or `client_id` claim. Empty list
+    /// means any client is accepted.
+    #[serde(default)]
+    pub allowed_clients: Vec<String>,
+    /// Accepted `typ` JOSE header values. Defaults to `JWT` and
+    /// `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are not access tokens
+    /// and are rejected by default.
+    #[serde(default = "default_oidc_token_types")]
+    pub token_types: Vec<String>,
+}
+
+/// JWS signature algorithms accepted by the OIDC verifier. Symmetric
+/// algorithms (`HS*`) and `none` are intentionally absent: shared-secret
+/// JWTs are unsafe between a resource server and an IdP, and `none`
+/// disables verification entirely.
+///
+/// YAML values are the canonical JWA `alg` strings (`RS256`, `ES256`,
+/// `EdDSA`), case-sensitive.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+pub enum OidcAlgorithm {
+    #[serde(rename = "RS256")]
+    Rs256,
+    #[serde(rename = "ES256")]
+    Es256,
+    #[serde(rename = "EdDSA")]
+    EdDsa,
+}
+
+fn default_oidc_algorithms() -> Vec<OidcAlgorithm> {
+    vec![
+        OidcAlgorithm::Rs256,
+        OidcAlgorithm::Es256,
+        OidcAlgorithm::EdDsa,
+    ]
+}
+
+fn default_oidc_jwks_cache_ttl() -> Duration {
+    Duration::from_secs(600)
+}
+
+fn default_oidc_leeway() -> Duration {
+    Duration::from_secs(60)
+}
+
+fn default_oidc_scope_claim() -> String {
+    "scope".to_string()
+}
+
+fn default_oidc_token_types() -> Vec<String> {
+    vec!["JWT".to_string(), "at+jwt".to_string()]
 }
 
 /// Audit configuration. Sink choice gates further fields via the

@@ -10,14 +10,15 @@
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::net::IpAddr;
+use std::time::Duration;
 
 use crate::error::{ConfigError, Error};
 
 use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
-    EntityRelationshipConfig, FieldConfig, RefreshConfig, RelationshipKind, ResourceConfig,
-    SourceConfig,
+    EntityRelationshipConfig, FieldConfig, OidcConfig, RefreshConfig, RelationshipKind,
+    ResourceConfig, SourceConfig,
 };
 
 /// Prefix for the special `admin` scope.
@@ -34,6 +35,7 @@ const ADMIN_SCOPE: &str = "admin";
 pub fn run(config: &Config) -> Result<(), Error> {
     super::vocabularies::validate_registry(&config.vocabularies).map_err(Error::from)?;
     validate_server(config).map_err(Error::from)?;
+    validate_auth_mode(config).map_err(Error::from)?;
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
@@ -846,6 +848,183 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
         }
     }
     Ok(())
+}
+
+/// Enforce the mode invariant: exactly one of `api_keys` and `oidc` is
+/// populated, matching the `mode` discriminator. Mixed-mode operation
+/// is not supported.
+fn validate_auth_mode(config: &Config) -> Result<(), ConfigError> {
+    match config.auth.mode {
+        AuthMode::ApiKey => {
+            if config.auth.oidc.is_some() {
+                tracing::error!(
+                    code = "config.validation_error",
+                    "auth.oidc must not be set when auth.mode = api_key"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        AuthMode::Oidc => {
+            if !config.auth.api_keys.is_empty() {
+                tracing::error!(
+                    code = "config.validation_error",
+                    "auth.api_keys must be empty when auth.mode = oidc"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    "auth.oidc is required when auth.mode = oidc"
+                );
+                ConfigError::ValidationError
+            })?;
+            validate_oidc(oidc)?;
+        }
+    }
+    Ok(())
+}
+
+/// Bounds for the OIDC JWKS cache TTL. The lower bound prevents tight
+/// re-fetch loops; the upper bound keeps rotation pickup latency
+/// sensible without exposing operators to the runtime cost of a
+/// freshness deadline that they thought was disabling the cache.
+const OIDC_MIN_JWKS_CACHE_TTL: Duration = Duration::from_secs(30);
+const OIDC_MAX_JWKS_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const OIDC_MAX_LEEWAY: Duration = Duration::from_secs(5 * 60);
+
+fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
+    if !is_https_or_localhost(&oidc.issuer) {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.issuer",
+            "issuer must be an absolute https:// URL (or http:// localhost / 127.0.0.1 for dev)"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if oidc.audience.is_empty() || oidc.audience.iter().any(|aud| aud.trim().is_empty()) {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.audience",
+            "audience must list one or more non-empty values"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
+        (Some(_), Some(_)) => {
+            tracing::error!(
+                code = "config.validation_error",
+                "auth.oidc.jwks_url and auth.oidc.discovery_url are mutually exclusive"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        (None, None) => {
+            tracing::error!(
+                code = "config.validation_error",
+                "auth.oidc requires exactly one of jwks_url or discovery_url"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        (Some(url), None) | (None, Some(url)) => {
+            if !is_https_or_localhost(url) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    field = "auth.oidc.jwks_url|discovery_url",
+                    "JWKS or discovery URL must be https:// (or http:// localhost for dev)"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+    }
+
+    if oidc.algorithms.is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.algorithms",
+            "algorithms must list at least one entry"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if oidc.jwks_cache_ttl < OIDC_MIN_JWKS_CACHE_TTL
+        || oidc.jwks_cache_ttl > OIDC_MAX_JWKS_CACHE_TTL
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.jwks_cache_ttl",
+            min_secs = OIDC_MIN_JWKS_CACHE_TTL.as_secs(),
+            max_secs = OIDC_MAX_JWKS_CACHE_TTL.as_secs(),
+            "jwks_cache_ttl out of range"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if oidc.leeway > OIDC_MAX_LEEWAY {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.leeway",
+            max_secs = OIDC_MAX_LEEWAY.as_secs(),
+            "leeway must not exceed 5 minutes"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if oidc.scope_claim.trim().is_empty() || oidc.scope_claim.chars().any(char::is_whitespace) {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.scope_claim",
+            "scope_claim must be a non-empty JSON key with no whitespace"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    for (from, to) in &oidc.scope_map {
+        if from.trim().is_empty() || to.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "auth.oidc.scope_map",
+                "scope_map keys and values must be non-empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+
+    if oidc
+        .allowed_clients
+        .iter()
+        .any(|client| client.trim().is_empty())
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.allowed_clients",
+            "allowed_clients entries must be non-empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if oidc.token_types.is_empty() || oidc.token_types.iter().any(|t| t.trim().is_empty()) {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.token_types",
+            "token_types must list one or more non-empty JOSE `typ` values"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    Ok(())
+}
+
+fn is_https_or_localhost(url: &str) -> bool {
+    if let Some(rest) = url.strip_prefix("https://") {
+        return !rest.is_empty();
+    }
+    if let Some(rest) = url.strip_prefix("http://") {
+        let host = rest.split(['/', ':']).next().unwrap_or("");
+        return host == "localhost" || host == "127.0.0.1" || host == "[::1]";
+    }
+    false
 }
 
 fn validate_scopes(config: &Config) -> Result<(), ConfigError> {

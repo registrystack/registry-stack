@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use registry_relay::config::vocabularies;
 use registry_relay::config::{
     self, AccessRights, AggregateFunction, AuditFormat, AuditSinkConfig, AuthMode, FieldType,
-    FilterOp, MaterializationMode, RefreshConfig, Sensitivity, SourceConfig, Suppression,
-    UpdateFrequency,
+    FilterOp, MaterializationMode, OidcAlgorithm, RefreshConfig, Sensitivity, SourceConfig,
+    Suppression, UpdateFrequency,
 };
 use registry_relay::error::{ConfigError, Error};
 use sha2::{Digest, Sha256};
@@ -1011,4 +1011,372 @@ audit:
         config.datasets[0].update_frequency,
         UpdateFrequency::AsNeeded
     ));
+}
+
+// ---------------------------------------------------------------------
+// OIDC config surface (Stage 2). The provider implementation lands in
+// a later stage; here we only assert YAML parsing and cross-field
+// validation behaviour.
+// ---------------------------------------------------------------------
+
+fn oidc_config_body(extra_oidc: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.test/realms/relay
+    audience:
+      - registry-relay
+    jwks_url: https://idp.example.test/realms/relay/protocol/openid-connect/certs
+{extra_oidc}
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#
+    )
+}
+
+#[test]
+fn oidc_config_loads_with_defaults() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp, &oidc_config_body(""));
+    let config = config::load(&path).expect("oidc config must load");
+
+    assert_eq!(config.auth.mode, AuthMode::Oidc);
+    assert!(config.auth.api_keys.is_empty());
+    let oidc = config.auth.oidc.as_ref().expect("oidc config present");
+    assert_eq!(oidc.issuer, "https://idp.example.test/realms/relay");
+    assert_eq!(oidc.audience, vec!["registry-relay".to_string()]);
+    assert_eq!(
+        oidc.jwks_url.as_deref(),
+        Some("https://idp.example.test/realms/relay/protocol/openid-connect/certs")
+    );
+    assert!(oidc.discovery_url.is_none());
+    assert_eq!(
+        oidc.algorithms,
+        vec![
+            OidcAlgorithm::Rs256,
+            OidcAlgorithm::Es256,
+            OidcAlgorithm::EdDsa,
+        ]
+    );
+    assert_eq!(oidc.jwks_cache_ttl.as_secs(), 600);
+    assert_eq!(oidc.leeway.as_secs(), 60);
+    assert_eq!(oidc.scope_claim, "scope");
+    assert!(oidc.scope_map.is_empty());
+    assert!(oidc.allowed_clients.is_empty());
+    assert_eq!(
+        oidc.token_types,
+        vec!["JWT".to_string(), "at+jwt".to_string()]
+    );
+}
+
+#[test]
+fn oidc_config_accepts_overrides() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = r#"    algorithms:
+      - RS256
+      - EdDSA
+    jwks_cache_ttl: 5m
+    leeway: 90s
+    scope_claim: scp
+    scope_map:
+      role/registry-reader: clinic_capacity:rows
+    allowed_clients:
+      - openspp-client
+    token_types:
+      - at+jwt
+"#;
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    let config = config::load(&path).expect("oidc override config must load");
+
+    let oidc = config.auth.oidc.as_ref().expect("oidc present");
+    assert_eq!(
+        oidc.algorithms,
+        vec![OidcAlgorithm::Rs256, OidcAlgorithm::EdDsa]
+    );
+    assert_eq!(oidc.jwks_cache_ttl.as_secs(), 300);
+    assert_eq!(oidc.leeway.as_secs(), 90);
+    assert_eq!(oidc.scope_claim, "scp");
+    assert_eq!(
+        oidc.scope_map.get("role/registry-reader").map(String::as_str),
+        Some("clinic_capacity:rows")
+    );
+    assert_eq!(oidc.allowed_clients, vec!["openspp-client".to_string()]);
+    assert_eq!(oidc.token_types, vec!["at+jwt".to_string()]);
+}
+
+#[test]
+fn oidc_config_with_discovery_url_loads() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.test
+    audience:
+      - registry-relay
+    discovery_url: https://idp.example.test/.well-known/openid-configuration
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    let config = config::load(&path).expect("discovery config must load");
+    let oidc = config.auth.oidc.as_ref().expect("oidc present");
+    assert!(oidc.jwks_url.is_none());
+    assert_eq!(
+        oidc.discovery_url.as_deref(),
+        Some("https://idp.example.test/.well-known/openid-configuration")
+    );
+}
+
+#[test]
+fn oidc_config_rejects_unknown_algorithm() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    algorithms:\n      - HS256\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    // Unknown enum variant fails at deserialize time, not validation.
+    assert_config_code(config::load(&path), "config.parse_error");
+}
+
+#[test]
+fn oidc_mode_rejects_api_keys_present() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  api_keys:
+    - id: leftover
+      hash_env: SHOULD_NOT_BE_READ
+      scopes: []
+  oidc:
+    issuer: https://idp.example.test
+    audience: [registry-relay]
+    jwks_url: https://idp.example.test/jwks
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_mode_requires_oidc_block() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn api_key_mode_rejects_oidc_block() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+  oidc:
+    issuer: https://idp.example.test
+    audience: [registry-relay]
+    jwks_url: https://idp.example.test/jwks
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_both_jwks_and_discovery_urls() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.test
+    audience: [registry-relay]
+    jwks_url: https://idp.example.test/jwks
+    discovery_url: https://idp.example.test/.well-known/openid-configuration
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_missing_jwks_and_discovery_urls() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.test
+    audience: [registry-relay]
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_http_issuer() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: http://idp.example.test
+    audience: [registry-relay]
+    jwks_url: https://idp.example.test/jwks
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_allows_localhost_http_issuer_for_dev() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: http://localhost:8080/realms/relay
+    audience: [registry-relay]
+    jwks_url: http://localhost:8080/realms/relay/protocol/openid-connect/certs
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#;
+    let path = write_config(&tmp, body);
+    let config = config::load(&path).expect("localhost dev config must load");
+    let oidc = config.auth.oidc.as_ref().expect("oidc present");
+    assert!(oidc.issuer.starts_with("http://localhost"));
+}
+
+#[test]
+fn oidc_config_rejects_empty_audience() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    # override audience\n";
+    let body = oidc_config_body(extra).replace(
+        "audience:\n      - registry-relay",
+        "audience: []",
+    );
+    let path = write_config(&tmp, &body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_leeway_above_5_minutes() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    leeway: 6m\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_jwks_cache_ttl_out_of_range() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp, &oidc_config_body("    jwks_cache_ttl: 5s\n"));
+    assert_config_code(config::load(&path), "config.validation_error");
+
+    let tmp2 = TempDir::new().expect("tempdir");
+    let path2 = write_config(&tmp2, &oidc_config_body("    jwks_cache_ttl: 48h\n"));
+    assert_config_code(config::load(&path2), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_rejects_scope_claim_with_whitespace() {
+    let tmp = TempDir::new().expect("tempdir");
+    let extra = "    scope_claim: \"my scope\"\n";
+    let path = write_config(&tmp, &oidc_config_body(extra));
+    assert_config_code(config::load(&path), "config.validation_error");
 }
