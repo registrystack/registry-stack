@@ -35,6 +35,7 @@ const OGC_BASE: &str = "/ogc/v1";
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const MAX_FILTERS_PER_REQUEST: usize = 20;
 const CURSOR_MAC_LEN: usize = 16;
+const OPENAPI_ENABLED: bool = true;
 
 const CONFORMANCE_CORE: &str = "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core";
 const CONFORMANCE_GEOJSON: &str = "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson";
@@ -98,27 +99,7 @@ async fn landing(
 
     let page = LandingPage::new("Registry Relay OGC API")
         .description("Spatial collections exposed from registry datasets.")
-        .links(vec![
-            link(OGC_BASE, "self", JSON, "Landing page"),
-            link(
-                &format!("{OGC_BASE}/conformance"),
-                "conformance",
-                JSON,
-                "Conformance",
-            ),
-            link(
-                &format!("{OGC_BASE}/collections"),
-                "data",
-                JSON,
-                "Collections",
-            ),
-            link(
-                "/openapi.json",
-                "service-desc",
-                "application/vnd.oai.openapi+json;version=3.0",
-                "OpenAPI definition",
-            ),
-        ]);
+        .links(landing_links());
     Json(page).into_response()
 }
 
@@ -132,12 +113,7 @@ async fn conformance(
     if let Err(error) = require_any_metadata_scope(&config, principal) {
         return error.into_response();
     }
-    Json(Conformance::new(&[
-        CONFORMANCE_CORE,
-        CONFORMANCE_GEOJSON,
-        CONFORMANCE_OAS30,
-    ]))
-    .into_response()
+    Json(Conformance::new(&conformance_uris())).into_response()
 }
 
 async fn collections(
@@ -359,17 +335,17 @@ async fn collection_items(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn feature_item(
     Path(path): Path<FeaturePath>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
+    config: Option<Extension<Arc<crate::config::Config>>>,
     registry: Option<Extension<Arc<EntityRegistry>>>,
     principal: Option<Extension<Principal>>,
     query: Option<Extension<Arc<EntityQueryEngine>>>,
 ) -> Response {
-    let Some(Extension(registry)) = registry else {
-        return query_unavailable("OGC feature route matched, but registry is not installed");
+    let Some((_, registry)) = ogc_state(config, registry) else {
+        return query_unavailable("OGC feature route matched, but state is not installed");
     };
     let Some(Extension(query)) = query else {
         return query_unavailable("OGC feature route matched, but query engine is not installed");
@@ -1423,6 +1399,48 @@ fn link_json(href: &str, rel: &str, media_type: &str, title: Option<&str>) -> Va
         value["title"] = json!(title);
     }
     value
+}
+
+fn landing_links() -> Vec<Link> {
+    let mut links = vec![
+        link(OGC_BASE, "self", JSON, "Landing page"),
+        link(
+            &format!("{OGC_BASE}/conformance"),
+            "conformance",
+            JSON,
+            "Conformance",
+        ),
+        link(
+            &format!("{OGC_BASE}/collections"),
+            "data",
+            JSON,
+            "Collections",
+        ),
+    ];
+    if openapi_enabled() {
+        links.push(link(
+            "/openapi.json",
+            "service-desc",
+            "application/vnd.oai.openapi+json;version=3.0",
+            "OpenAPI definition",
+        ));
+    }
+    links
+}
+
+fn conformance_uris() -> Vec<&'static str> {
+    let mut conforms_to = vec![CONFORMANCE_CORE, CONFORMANCE_GEOJSON];
+    if openapi_enabled() {
+        conforms_to.push(CONFORMANCE_OAS30);
+    }
+    conforms_to
+}
+
+fn openapi_enabled() -> bool {
+    // OpenAPI is always mounted today. Keep this as the single OGC gate
+    // point so an eventual optional OpenAPI surface can drop both the
+    // service-desc link and the oas30 conformance URI together.
+    OPENAPI_ENABLED
 }
 
 struct OgcAuditContext {
