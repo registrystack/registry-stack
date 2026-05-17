@@ -204,12 +204,16 @@ impl OidcAuth {
             }
         };
 
-        // Validation uses the first configured algorithm as the
-        // initial value, then replaces the algorithms vec with the
-        // full allowlist. jsonwebtoken enforces the alg in the token
-        // header is one of these.
-        let mut validation = Validation::new(self.algorithms[0]);
-        validation.algorithms = self.algorithms.clone();
+        // jsonwebtoken 9.x requires every entry in `validation.algorithms`
+        // to belong to the same family as the decoding key (verify_signature
+        // in jsonwebtoken/src/decoding.rs iterates the vec and errors out
+        // on any family mismatch). Mixing RSA/EC/EdDSA in one Validation
+        // therefore always fails. We've already enforced the allowlist
+        // against `header.alg` above, so narrowing the validation to just
+        // that one algorithm is safe and is the only shape jsonwebtoken
+        // accepts when the configured allowlist spans multiple families.
+        let mut validation = Validation::new(header.alg);
+        validation.algorithms = vec![header.alg];
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&self.audience);
         validation.leeway = self.leeway.as_secs();

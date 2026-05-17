@@ -21,16 +21,18 @@
 //!
 //! Required env vars (matching the bootstrap output):
 //!
-//! * `OIDC_ISSUER`         issuer URL, e.g. `http://localhost:8080`
-//! * `OIDC_CLIENT_ID`      Zitadel OIDC app `clientId`
-//! * `OIDC_CLIENT_SECRET`  Zitadel OIDC app `clientSecret`
+//! * `OIDC_ISSUER`: issuer URL, e.g. `http://localhost:8080`
+//! * `OIDC_SA_CLIENT_ID`: Zitadel machine user `clientId` (= username of
+//!   the `publicschema-api` service account)
+//! * `OIDC_SA_CLIENT_SECRET`: the SA's generated client secret
 //!
-//! The test prerequisites the OIDC application to have the
-//! `client_credentials` grant enabled. The default bootstrap creates
-//! the app with `AUTHORIZATION_CODE + REFRESH_TOKEN` only, so this
-//! grant must be enabled either by editing the bootstrap script or by
-//! toggling it in the Zitadel console (`Applications` → the app →
-//! `Grant types`).
+//! The test authenticates as the `publicschema-api` machine user rather
+//! than the workbench-dev OIDC app: Zitadel WEB-typed OIDC apps silently
+//! drop the `client_credentials` grant at write time, so the relay's
+//! machine-to-machine path is exercised through the SA. The bootstrap
+//! sets the SA's `accessTokenType` to JWT so the resulting bearer is
+//! verifiable against the project's JWKS. See
+//! `apps/publicschema.com/compose/seed/zitadel-init.sh` section 7b.
 //!
 //! ## What is asserted
 //!
@@ -70,12 +72,14 @@ use tower::ServiceExt;
 /// `eprintln!` and `return` to keep the test as a no-op skip.
 fn zitadel_env() -> Result<ZitadelEnv, String> {
     let issuer = env::var("OIDC_ISSUER").map_err(|_| "OIDC_ISSUER not set".to_string())?;
-    let client_id = env::var("OIDC_CLIENT_ID").map_err(|_| "OIDC_CLIENT_ID not set".to_string())?;
-    let client_secret =
-        env::var("OIDC_CLIENT_SECRET").map_err(|_| "OIDC_CLIENT_SECRET not set".to_string())?;
+    let client_id =
+        env::var("OIDC_SA_CLIENT_ID").map_err(|_| "OIDC_SA_CLIENT_ID not set".to_string())?;
+    let client_secret = env::var("OIDC_SA_CLIENT_SECRET")
+        .map_err(|_| "OIDC_SA_CLIENT_SECRET not set".to_string())?;
     if issuer.is_empty() || client_id.is_empty() || client_secret.is_empty() {
         return Err(
-            "one or more of OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET is empty".to_string(),
+            "one or more of OIDC_ISSUER / OIDC_SA_CLIENT_ID / OIDC_SA_CLIENT_SECRET is empty"
+                .to_string(),
         );
     }
     Ok(ZitadelEnv {
@@ -109,9 +113,14 @@ async fn mint_zitadel_token(env: &ZitadelEnv) -> String {
     let resp = client
         .post(&token_url)
         .basic_auth(&env.client_id, Some(&env.client_secret))
+        // Zitadel requires at least one scope for the machine-user
+        // client_credentials flow; `openid` is the minimal placeholder.
+        // The relay does not consume `openid` and the SA does not get an
+        // ID token (client_credentials never does); the scope just
+        // satisfies Zitadel's request validation.
         .form(&[
             ("grant_type", "client_credentials"),
-            ("scope", "openid profile"),
+            ("scope", "openid"),
         ])
         .send()
         .await
@@ -124,8 +133,9 @@ async fn mint_zitadel_token(env: &ZitadelEnv) -> String {
     assert!(
         status.is_success(),
         "zitadel token endpoint returned {status}: {body}.\n\
-         The OIDC application probably does not have the `client_credentials` grant enabled. \
-         Enable it via the Zitadel console (Applications → grant types) and re-run."
+         The machine user's client secret may be stale or its accessTokenType may not be JWT. \
+         Re-run `docker compose -f compose/dev.compose.yaml up zitadel-init` against the \
+         publicschema.com stack to regenerate the SA credentials and refresh the env file."
     );
     let payload: Value = serde_json::from_str(&body).expect("zitadel response is JSON");
     payload
@@ -256,8 +266,16 @@ async fn send_request(router: Router, auth_header: Option<&str>) -> (StatusCode,
 }
 
 #[tokio::test]
-#[ignore = "requires a running Zitadel + OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET"]
+#[ignore = "requires a running Zitadel + OIDC_ISSUER / OIDC_SA_CLIENT_ID / OIDC_SA_CLIENT_SECRET"]
 async fn oidc_zitadel_happy_and_failure_paths() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_test_writer()
+        .try_init();
+
     let env = match zitadel_env() {
         Ok(env) => env,
         Err(reason) => {
@@ -333,9 +351,16 @@ async fn oidc_zitadel_happy_and_failure_paths() {
     // 5) Issuer mismatch: verifier configured with a bogus issuer but
     //    still pointed at the real JWKS so signature verification
     //    passes and the failure mode is purely the iss claim check.
+    //    The fetcher is built against the real issuer (discovery
+    //    enforces an issuer match per RFC 8414), then the provider is
+    //    constructed manually with the bogus-issuer config so only the
+    //    verify-time `iss` check fires.
+    let real_fetcher = ReqwestJwksFetcher::from_discovery_url(env.discovery_url(), &env.issuer)
+        .await
+        .expect("discovery resolves against real issuer");
     let mut bogus_iss_cfg = oidc_config(&env, aud);
     bogus_iss_cfg.issuer = "https://wrong-issuer.example.test".to_string();
-    let bogus_iss_provider = build_provider(&bogus_iss_cfg).await;
+    let bogus_iss_provider = Arc::new(OidcAuth::new(&bogus_iss_cfg, Arc::new(real_fetcher)));
     let router = router_with_provider(Arc::clone(&bogus_iss_provider));
     let (status, _, parsed) = send_request(router, Some(&format!("Bearer {token}"))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "issuer: status");
