@@ -369,9 +369,19 @@ fn map_jwt_error(kind: &JwtErrorKind) -> AuthError {
     }
 }
 
-/// Read scopes off the configured claim. RFC 8693 / RFC 9068 specify a
-/// space-separated string; some IdPs (Auth0, Keycloak under certain
-/// mappers) emit a JSON array of strings. Both are accepted.
+/// Read scopes off the configured claim. Three shapes are accepted so the
+/// same `scope_claim` field can target different IdP conventions:
+///
+/// * `String`: RFC 8693 / RFC 9068 space-separated scope string.
+/// * `Array of strings`: Auth0, Keycloak (under certain mappers), and
+///   IdPs that emit roles as a flat list.
+/// * `Object`: Zitadel emits roles under
+///   `urn:zitadel:iam:org:project:roles` as an object whose **keys** are
+///   the role names (the values carry per-org metadata that the relay
+///   does not consume). The keys are returned as scopes; `scope_map`
+///   then renames them into the relay's `<dataset_id>:<level>` shape.
+///
+/// Any other JSON shape yields no scopes.
 fn extract_scopes(extra: &Map<String, Value>, claim_name: &str) -> Vec<String> {
     let Some(value) = extra.get(claim_name) else {
         return Vec::new();
@@ -382,6 +392,7 @@ fn extract_scopes(extra: &Map<String, Value>, claim_name: &str) -> Vec<String> {
             .iter()
             .filter_map(|item| item.as_str().map(String::from))
             .collect(),
+        Value::Object(map) => map.keys().cloned().collect(),
         _ => Vec::new(),
     }
 }
@@ -555,6 +566,40 @@ mod tests {
         assert_eq!(principal.auth_mode, AuthMode::Oidc);
         assert!(principal.scopes.contains("social_registry:rows"));
         assert!(principal.scopes.contains("social_registry:metadata"));
+    }
+
+    #[tokio::test]
+    async fn scope_object_form_treats_keys_as_scopes() {
+        // Zitadel's `urn:zitadel:iam:org:project:roles` shape: an object
+        // keyed by role name with per-org metadata as the value.
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                extra: Map::from_iter([(
+                    "urn:zitadel:iam:org:project:roles".to_string(),
+                    json!({
+                        "social-registry-reader":    { "orgId-123": "zitadel.localhost" },
+                        "social-registry-aggregate": { "orgId-123": "zitadel.localhost" },
+                    }),
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "urn:zitadel:iam:org:project:roles".to_string();
+        config.scope_map.insert(
+            "social-registry-reader".to_string(),
+            "social_registry:rows".to_string(),
+        );
+        config.scope_map.insert(
+            "social-registry-aggregate".to_string(),
+            "social_registry:aggregate".to_string(),
+        );
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(principal.scopes.contains("social_registry:rows"));
+        assert!(principal.scopes.contains("social_registry:aggregate"));
     }
 
     #[tokio::test]

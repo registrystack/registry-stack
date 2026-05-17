@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
-# OIDC / OAuth2 resource-server example. Mirror of `config/example.yaml`
-# with `auth.mode: api_key` swapped for `auth.mode: oidc` against a
-# local Zitadel instance. The relay is a resource server: it verifies
-# bearer JWTs against the configured IdP's JWKS and never mints or
-# refreshes tokens.
+# OIDC / OAuth2 resource-server example. Derived from `config/example.yaml`
+# with the `auth:` block swapped from `api_key` to `oidc` against a
+# local Zitadel instance, and trimmed of illustrative material that is
+# orthogonal to the auth path (extra aggregates, the provenance walk-
+# through comment block). Refer to `config/example.yaml` for the full
+# entity / aggregate / provenance surface.
+#
+# The relay is a resource server: it verifies bearer JWTs against the
+# configured IdP's JWKS and never mints or refreshes tokens.
 #
 # Pair this config with the publicschema.com dev compose stack, which
 # provisions a Zitadel organisation, project, OIDC application, test
-# user, and machine service account on first boot. See
-# `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for what
-# gets created and how credentials land in `compose/seed/zitadel.env`.
+# user, machine service account, and the relay-facing project roles on
+# first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md`
+# for what gets created and how credentials land in
+# `compose/seed/zitadel.env`.
 
 server:
   bind: 0.0.0.0:8080
@@ -53,13 +58,17 @@ auth:
     leeway: 60s
     # JWT claim to read scopes from. `scope` (RFC 8693 / RFC 9068
     # space-separated string) is the default; some IdPs emit an array
-    # under `scp` or `permissions`. Both shapes are accepted.
-    scope_claim: scope
+    # under `scp` or `permissions`, or an object keyed by role name
+    # (Zitadel's `urn:zitadel:iam:org:project:roles`). All three shapes
+    # are accepted; for object shape the keys are used as scopes.
+    scope_claim: "urn:zitadel:iam:org:project:roles"
     # Optional rename map applied before scope-based access checks.
     # Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.
+    # Keys here are the role names as they appear in the claim (for
+    # Zitadel object shape, the bare role keys).
     scope_map:
-      "role:social-registry-reader":    "social_registry:rows"
-      "role:social-registry-aggregate": "social_registry:aggregate"
+      "social-registry-reader":    "social_registry:rows"
+      "social-registry-aggregate": "social_registry:aggregate"
     # Optional allowlist matched against the token's `azp` (preferred)
     # or `client_id`. Empty list means any client is accepted.
     allowed_clients: []

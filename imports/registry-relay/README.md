@@ -101,6 +101,10 @@ auth:
     discovery_url: https://idp.example.gov/.well-known/openid-configuration
     algorithms:
       - RS256
+    # scope_map renames IdP roles/claims to the relay's
+    # `<dataset_id>:<level>` scopes; required when IdP role names
+    # differ from relay scope names. See config/example.oidc.yaml
+    # and docs/configuration.md for the full set.
     scope_map:
       "role:social-registry-reader": "social_registry:rows"
 ```

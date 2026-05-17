@@ -11,11 +11,16 @@
 #   ./scripts/mint-zitadel-token.sh                       # default env file
 #   ./scripts/mint-zitadel-token.sh path/to/zitadel.env   # explicit
 #
+# Optional: set OIDC_SCOPE to request specific scopes (e.g. a resource
+# scope mapped to a relay role). Left unset, the IdP grants the
+# application's default scopes; `openid`/`profile` are intentionally
+# omitted because client_credentials does not issue ID tokens.
+#
 # Requires: curl, jq.
 # Requires the OIDC application to have the `client_credentials` grant
-# enabled. The publicschema.com bootstrap creates it with
-# AUTHORIZATION_CODE + REFRESH_TOKEN only, so enable the extra grant in
-# the Zitadel console or via the management API before running.
+# type enabled on the IdP side. The publicschema.com bootstrap configures
+# this for the registry-relay path; older snapshots may need the grant
+# toggled on via the Zitadel console.
 
 set -euo pipefail
 
@@ -40,13 +45,19 @@ source "${env_file}"
 
 token_url="${OIDC_ISSUER%/}/oauth/v2/token"
 
-response="$(
-  curl --silent --show-error --fail-with-body \
-    --user "${OIDC_CLIENT_ID}:${OIDC_CLIENT_SECRET}" \
-    --data-urlencode 'grant_type=client_credentials' \
-    --data-urlencode 'scope=openid profile' \
-    "${token_url}"
-)"
+scope="${OIDC_SCOPE:-}"
+
+curl_args=(
+  --silent --show-error --fail-with-body
+  --user "${OIDC_CLIENT_ID}:${OIDC_CLIENT_SECRET}"
+  --data-urlencode 'grant_type=client_credentials'
+)
+if [[ -n "${scope}" ]]; then
+  curl_args+=(--data-urlencode "scope=${scope}")
+fi
+curl_args+=("${token_url}")
+
+response="$(curl "${curl_args[@]}")"
 
 token="$(printf '%s' "${response}" | jq -r '.access_token // empty')"
 

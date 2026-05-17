@@ -1171,16 +1171,16 @@ fn example_oidc_config_loads_and_validates() {
     assert_eq!(oidc.algorithms, vec![OidcAlgorithm::Rs256]);
     assert_eq!(oidc.jwks_cache_ttl.as_secs(), 600);
     assert_eq!(oidc.leeway.as_secs(), 60);
-    assert_eq!(oidc.scope_claim, "scope");
+    assert_eq!(oidc.scope_claim, "urn:zitadel:iam:org:project:roles");
     assert_eq!(
         oidc.scope_map
-            .get("role:social-registry-reader")
+            .get("social-registry-reader")
             .map(String::as_str),
         Some("social_registry:rows"),
     );
     assert_eq!(
         oidc.scope_map
-            .get("role:social-registry-aggregate")
+            .get("social-registry-aggregate")
             .map(String::as_str),
         Some("social_registry:aggregate"),
     );

@@ -169,12 +169,12 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `issuer`          | Compared verbatim against the JWT `iss` claim. Must match the IdP's published issuer URL.                                                                     |
 | `audience`        | One or more accepted `aud` values. Tokens whose `aud` does not intersect this list are rejected.                                                              |
-| `jwks_url`        | Explicit JWKS endpoint. Exactly one of `jwks_url` and `discovery_url` is required; the validator rejects both.                                                |
+| `jwks_url`        | Explicit JWKS endpoint. Exactly one of `jwks_url` and `discovery_url` must be set; the validator rejects configs that supply both or neither.                 |
 | `discovery_url`   | OIDC discovery document (`.well-known/openid-configuration`). The JWKS URL is resolved from `jwks_uri` at startup.                                            |
 | `algorithms`      | Signature algorithms accepted by the verifier. RS256, ES256, EdDSA. HS\* and `none` are intentionally absent.                                                 |
 | `jwks_cache_ttl`  | Steady-state JWKS cache TTL. The cache also refreshes on unknown `kid` (rate-limited), so this is the rotation pickup latency, not the upper bound.           |
 | `leeway`          | Clock skew tolerance on `exp` and `nbf`. Bounded at 5 minutes by validation.                                                                                  |
-| `scope_claim`     | JWT claim to read scopes from. Defaults to `scope` (RFC 8693 / RFC 9068 space-separated string). May be a string or an array of strings.                      |
+| `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names (Zitadel's `urn:zitadel:iam:org:project:roles`); all three shapes are accepted at verify time. |
 | `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.                               |
 | `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
 | `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default.                     |
@@ -203,21 +203,23 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 | `auth.kid_unknown`              | 401  | Header `kid` is absent from the JWKS even after one refresh   |
 | `auth.algorithm_not_allowed`    | 401  | Header `alg` is not in the configured allowlist               |
 | `auth.client_not_allowed`       | 403  | `azp` / `client_id` is not in the configured `allowed_clients`|
+| `auth.invalid_credential`       | 401  | JWT decode failure not covered by a more specific variant      |
 | `auth.jwks_unavailable`         | 503  | JWKS fetch failed; the relay cannot verify any token          |
 
 ### Running against a local IdP
 
-The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, and machine service account on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created and the env-file shape.
+The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, machine service account, and the relay-facing project roles on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created, the env-file shape, and the claim that carries roles in minted access tokens.
 
-To exercise the relay end-to-end against that Zitadel:
+**Prerequisites.** The bootstrap must have completed against a fresh Zitadel volume so the OIDC application has the `client_credentials` grant enabled and the project roles (`social-registry-reader`, `social-registry-aggregate`) are granted to the machine user. If you are pointing at an older snapshot of the stack, enable the grant via the Zitadel console and grant the roles manually before running the steps below; otherwise the token mint will fail with `invalid_grant` and every protected request will return 403.
+
+To exercise the relay end-to-end:
 
 ```sh
 # 1. Bring up Zitadel from the sibling stack.
 cd ../publicschema.com
 docker compose -f compose/dev.compose.yaml up -d zitadel zitadel-init
 
-# 2. Mint a test access token (requires the `client_credentials`
-#    grant on the OIDC application; toggle it via the Zitadel console).
+# 2. Mint a test access token.
 cd ../registry_relay
 TOKEN="$(./scripts/mint-zitadel-token.sh)"
 
@@ -233,6 +235,8 @@ The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts
 ```sh
 cargo test --test oidc_zitadel -- --ignored --nocapture
 ```
+
+The integration test verifies the auth wiring (signature, issuer, audience, principal extraction, granular `auth.*` codes) using a token minted by the bootstrap. Asserting RBAC against specific resource scopes requires either roles in the token that match `oidc.scope_map`'s keys, or aligning `oidc.scope_claim` with the IdP's role-bearing claim; the example `config/example.oidc.yaml` ships with the values the bootstrap emits.
 
 ## Audit
 
