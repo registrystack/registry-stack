@@ -7,9 +7,11 @@
 //! envelope onto one configured entity.
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::sync::Arc;
 
-use axum::extract::{Json, Path};
+use axum::extract::{FromRequestParts, Json, Path};
+use axum::http::request::Parts;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json as JsonResponse, Response};
 use axum::routing::post;
@@ -38,6 +40,43 @@ const REQUIRED_HEADER_FIELDS: &[&str] = &[
     "total_count",
 ];
 
+struct RouteDeps {
+    config: Option<Extension<Arc<Config>>>,
+    registry: Option<Extension<Arc<EntityRegistry>>>,
+    query: Option<Extension<Arc<EntityQueryEngine>>>,
+    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
+    principal: Option<Extension<Principal>>,
+}
+
+impl<S> FromRequestParts<S> for RouteDeps
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            config: Option::<Extension<Arc<Config>>>::from_request_parts(parts, state)
+                .await
+                .unwrap_or(None),
+            registry: Option::<Extension<Arc<EntityRegistry>>>::from_request_parts(parts, state)
+                .await
+                .unwrap_or(None),
+            query: Option::<Extension<Arc<EntityQueryEngine>>>::from_request_parts(parts, state)
+                .await
+                .unwrap_or(None),
+            response_mapper: Option::<Extension<Arc<SpdciResponseMapper>>>::from_request_parts(
+                parts, state,
+            )
+            .await
+            .unwrap_or(None),
+            principal: Option::<Extension<Principal>>::from_request_parts(parts, state)
+                .await
+                .unwrap_or(None),
+        })
+    }
+}
+
 pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -64,35 +103,25 @@ where
 async fn sync_search_for_registry(
     Path(registry_name): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
-    principal: Option<Extension<Principal>>,
+    deps: RouteDeps,
     Json(body): Json<Value>,
 ) -> Response {
-    sync_search_response(
-        headers,
-        Some(registry_name),
-        config,
-        registry,
-        query,
-        response_mapper,
-        principal,
-        body,
-    )
-    .await
+    sync_search_response(headers, Some(registry_name), deps, body).await
 }
 
 async fn disabled_status(
     Path(registry_name): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    principal: Option<Extension<Principal>>,
+    deps: RouteDeps,
     Json(body): Json<Value>,
 ) -> Response {
+    let RouteDeps {
+        config,
+        registry,
+        query,
+        principal,
+        ..
+    } = deps;
     let route = match RouteState::resolve(config, registry, query, &registry_name) {
         Ok(route) => route,
         Err(error) => return error.into_response(),
@@ -143,18 +172,20 @@ async fn run_disabled_status(
 async fn sync_search_response(
     headers: HeaderMap,
     registry_name: Option<String>,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
-    principal: Option<Extension<Principal>>,
+    deps: RouteDeps,
     body: Value,
 ) -> Response {
-    let route =
-        match SearchRouteState::resolve(config, registry, query, registry_name.as_deref()) {
-            Ok(route) => route,
-            Err(error) => return error.into_response(),
-        };
+    let RouteDeps {
+        config,
+        registry,
+        query,
+        response_mapper,
+        principal,
+    } = deps;
+    let route = match SearchRouteState::resolve(config, registry, query, registry_name.as_deref()) {
+        Ok(route) => route,
+        Err(error) => return error.into_response(),
+    };
     let result =
         run_sync_search_response(&route, headers, response_mapper.as_ref(), principal, body).await;
     let (response, total_count) = match result {
@@ -206,59 +237,34 @@ async fn run_sync_search_response(
 async fn disability_details(
     Path(registry_name): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
-    principal: Option<Extension<Principal>>,
+    deps: RouteDeps,
     Json(body): Json<Value>,
 ) -> Response {
-    search_response(
-        headers,
-        registry_name,
-        config,
-        registry,
-        query,
-        response_mapper,
-        principal,
-        body,
-    )
-    .await
+    search_response(headers, registry_name, deps, body).await
 }
 
 async fn disability_support(
     Path(registry_name): Path<String>,
     headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
-    principal: Option<Extension<Principal>>,
+    deps: RouteDeps,
     Json(body): Json<Value>,
 ) -> Response {
-    search_response(
-        headers,
-        registry_name,
-        config,
-        registry,
-        query,
-        response_mapper,
-        principal,
-        body,
-    )
-    .await
+    search_response(headers, registry_name, deps, body).await
 }
 
 async fn search_response(
     headers: HeaderMap,
     registry_name: String,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    response_mapper: Option<Extension<Arc<SpdciResponseMapper>>>,
-    principal: Option<Extension<Principal>>,
+    deps: RouteDeps,
     body: Value,
 ) -> Response {
+    let RouteDeps {
+        config,
+        registry,
+        query,
+        response_mapper,
+        principal,
+    } = deps;
     // Prefer the registered named-registry config when one exists so
     // its `response_fields` / mapping path drive projection through
     // the same code path as `sync_search`. Fall back to a synthesized
@@ -569,7 +575,7 @@ fn validated_message(body: &Value) -> Result<&Value, Error> {
         .and_then(Value::as_object)
         .ok_or(SpdciError::InvalidHeader)?;
     for field in REQUIRED_HEADER_FIELDS {
-        if header.get(*field).map_or(true, Value::is_null) {
+        if header.get(*field).is_none_or(Value::is_null) {
             return Err(SpdciError::InvalidHeader.into());
         }
     }

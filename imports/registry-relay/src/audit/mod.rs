@@ -99,7 +99,7 @@ pub struct ProvenanceIssuanceExt {
     pub exp: i64,
 }
 
-/// Endpoint family for an audit record. Mirrors Spec.md Section 13.1.
+/// Endpoint family for an audit record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EndpointKind {

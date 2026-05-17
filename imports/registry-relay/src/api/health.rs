@@ -3,13 +3,12 @@
 //!
 //! Both endpoints are unauthenticated; load balancers, container
 //! orchestrators, and uptime probes hit them without credentials. The
-//! paths match Spec.md Section 7.
+//! paths match the public API shape documented in the README.
 //!
 //! ## Semantics
 //!
 //! * `/health` reports process liveness only. It does not consult any
-//!   dependency state and always returns 200. This matches Spec.md
-//!   Section 7: "`/health` checks process liveness only".
+//!   dependency state and always returns 200.
 //! * `/ready` reports ingest readiness when a readiness watch receiver
 //!   is installed. Without that extension, it returns a trivial 200 for
 //!   tests that only exercise the HTTP shell.

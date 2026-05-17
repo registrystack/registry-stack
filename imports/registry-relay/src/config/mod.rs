@@ -264,7 +264,7 @@ pub struct ApiKeyConfig {
 /// Audit configuration. Sink choice gates further fields via the
 /// tagged `AuditSinkConfig` enum. The enum is flattened onto the
 /// containing struct so that the YAML `sink:` key acts as the
-/// discriminator, matching the example in Spec.md Section 4.
+/// discriminator, matching the public example configuration.
 ///
 /// `deny_unknown_fields` is deliberately omitted here: `serde` does
 /// not support combining it with `#[serde(flatten)]` on an internally
@@ -456,7 +456,7 @@ pub enum RefreshConfig {
 }
 
 fn default_mtime_interval() -> Duration {
-    // Spec.md Section 6.1: "default 60s".
+    // Default to a short refresh interval for modified local files.
     Duration::from_secs(60)
 }
 
@@ -731,7 +731,7 @@ pub struct SchemaConfig {
 }
 
 /// One column in a resource schema. Physical type and optional
-/// semantic annotations per Spec.md Section 11.bis.
+/// semantic annotations used by catalog and schema metadata.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FieldConfig {
@@ -806,7 +806,7 @@ pub struct AllowedFilter {
     pub ops: Vec<FilterOp>,
 }
 
-/// Filter operator opted into per field. Per Spec.md Section 9.
+/// Filter operator opted into per field.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOp {
@@ -846,7 +846,7 @@ pub struct AggregateMeasure {
     pub column: String,
 }
 
-/// Aggregate function. Spec.md Section 10 supported set plus the
+/// Aggregate function. V1 supports the basic set plus the
 /// optional functions (`median`, `count_distinct`, `stddev`).
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -861,8 +861,8 @@ pub enum AggregateFunction {
     Stddev,
 }
 
-/// Disclosure control settings per aggregate. Per Spec.md Section
-/// 10.1: defaults to `min_group_size: 5`, `suppression: omit`.
+/// Disclosure control settings per aggregate. Defaults to
+/// `min_group_size: 5`, `suppression: omit`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureControlConfig {
@@ -887,8 +887,8 @@ pub enum Suppression {
     Mask,
 }
 
-/// Sensitivity classification. Operator-defined per Spec.md Section
-/// 4; common values cover personal / public datasets in V1.
+/// Sensitivity classification. Operator-defined values cover common
+/// personal and public dataset classifications in V1.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

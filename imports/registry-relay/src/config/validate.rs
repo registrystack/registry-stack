@@ -20,7 +20,7 @@ use super::{
     SourceConfig,
 };
 
-/// Prefix for the special `admin` scope. Spec.md Section 8.
+/// Prefix for the special `admin` scope.
 const ADMIN_SCOPE: &str = "admin";
 
 /// Run every cross-field check on a freshly deserialised [`Config`].

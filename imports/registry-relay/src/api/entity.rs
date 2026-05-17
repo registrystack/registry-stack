@@ -106,7 +106,7 @@ impl std::fmt::Debug for CursorSigner {
     }
 }
 
-/// Sub-router for entity-shaped dataset routes from Spec.md Section 7.
+/// Sub-router for the entity-shaped dataset routes documented in `docs/api.md`.
 ///
 /// The router is generic over Axum state so `server::build_app` can
 /// mount it later without this module choosing the server state type.
