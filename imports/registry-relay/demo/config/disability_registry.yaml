@@ -74,6 +74,9 @@ standards:
           MEMBER_ID: member_identifier
           UIN: member_identifier
           NIN: member_identifier
+          DRN: member_identifier
+          NATIONAL_ID: member_identifier
+          NID: member_identifier
         expression_fields:
           personal_details.member_identifier: member_identifier
           disability_status: disability_status
