@@ -27,7 +27,7 @@ use registry_relay::claim_verification::{
 };
 use registry_relay::provenance::jwt_receipt::{self, ClaimVerificationReceiptInputs};
 use registry_relay::provenance::signers::software::SoftwareSigner;
-use registry_relay::provenance::{SigningAlgorithm, Signer};
+use registry_relay::provenance::{Signer, SigningAlgorithm};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
@@ -36,8 +36,7 @@ use time::OffsetDateTime;
 // Shared fixtures
 // ---------------------------------------------------------------------------
 
-const BENCH_KEY_HEX: &str =
-    "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const BENCH_KEY_HEX: &str = "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const BENCH_KEY_ID: &str = "bench-binding-key";
 
 fn make_hasher() -> ClaimVerificationHasher {
@@ -137,12 +136,7 @@ fn benchmark_normalize_small(c: &mut Criterion) {
 fn benchmark_normalize_typical(c: &mut Criterion) {
     // Bench normalization of a mixed-type object (8 fields).
     let claims = typical_claims();
-    let value = Value::Object(
-        claims
-            .into_iter()
-            .map(|(k, v)| (k, v))
-            .collect::<serde_json::Map<_, _>>(),
-    );
+    let value = Value::Object(claims.into_iter().collect::<serde_json::Map<_, _>>());
     c.bench_function("claim_verification/normalize_typical", |b| {
         b.iter(|| normalize_claim_value_for_hash(black_box(&value)));
     });

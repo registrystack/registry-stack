@@ -273,7 +273,7 @@ audit:
   format: jsonl
 ```
 
-`chain: true` wraps audit records with hash-chain fields for tamper evidence. Audit records are separate from operational logs, which go to stderr as structured JSON.
+`chain: true` wraps audit records with hash-chain fields for tamper evidence. Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
 
 ## Datasets
 

@@ -134,7 +134,7 @@ Never log the JWK, the env var value, or any full environment dump. The provenan
 
 ## Audit Sink And Rotation
 
-Audit records are JSON Lines and are separate from operational logs. Operational logs go to stderr as structured JSON.
+Audit records are JSON Lines and are separate from operational logs. Operational logs go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
 
 Current runtime behavior:
 
@@ -142,6 +142,7 @@ Current runtime behavior:
 - `audit.sink: file` writes audit JSONL to the configured path and rotates in-process by `rotate.max_size_mb` and `rotate.max_files`.
 - `audit.sink: syslog` ships audit JSONL to the local syslog Unix datagram socket.
 - `audit.chain: true` wraps sink output with `prev_hash` and `record_hash` fields for tamper-evidence.
+- `REGISTRY_RELAY_LOG_FORMAT=json` switches stderr operational logs from text to JSONL.
 
 File sink example:
 

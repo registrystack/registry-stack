@@ -2,7 +2,7 @@
 //! registry-relay binary entry point.
 //!
 //! Wires the V1 gateway into a runnable HTTP server:
-//! 1. Initialise structured JSON tracing on stderr.
+//! 1. Initialise operational tracing on stderr.
 //! 2. Load and validate the YAML config from `--config <path>`, the
 //!    `REGISTRY_RELAY_CONFIG` env var, or `./config/example.yaml` (in that
 //!    order of precedence).
@@ -62,6 +62,27 @@ const CONFIG_FLAG: &str = "--config";
 
 /// Last-resort default config path.
 const DEFAULT_CONFIG_PATH: &str = "./config/example.yaml";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationalLogFormat {
+    Text,
+    Json,
+}
+
+impl OperationalLogFormat {
+    fn from_env() -> Self {
+        env::var("REGISTRY_RELAY_LOG_FORMAT")
+            .map(|value| Self::parse(&value))
+            .unwrap_or(Self::Text)
+    }
+
+    fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "json" | "jsonl" => Self::Json,
+            _ => Self::Text,
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -432,15 +453,31 @@ fn audit_sink_kind(config: &Config) -> &'static str {
     }
 }
 
-/// Initialise structured JSON tracing on stderr. `RUST_LOG` controls
-/// the filter; defaults to `info`.
+/// Initialise operational tracing on stderr. `RUST_LOG` controls the
+/// filter and defaults to `info`. `REGISTRY_RELAY_LOG_FORMAT=json`
+/// switches the default human-readable terminal output back to JSONL
+/// for machine collection or redirected files.
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let fmt_layer = fmt::layer().json().with_writer(std::io::stderr);
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt_layer)
-        .init();
+    match OperationalLogFormat::from_env() {
+        OperationalLogFormat::Text => {
+            let fmt_layer = fmt::layer()
+                .compact()
+                .with_target(false)
+                .with_writer(std::io::stderr);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .init();
+        }
+        OperationalLogFormat::Json => {
+            let fmt_layer = fmt::layer().json().with_writer(std::io::stderr);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer)
+                .init();
+        }
+    }
 }
 
 /// Wait for `Ctrl-C` so axum can drain in-flight requests cleanly.
@@ -450,5 +487,39 @@ async fn shutdown_signal() {
         Err(err) => {
             error!(error = %err, "failed to install ctrl-c handler");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OperationalLogFormat;
+
+    #[test]
+    fn operational_log_format_defaults_to_text_for_empty_or_unknown_values() {
+        assert_eq!(OperationalLogFormat::parse(""), OperationalLogFormat::Text);
+        assert_eq!(
+            OperationalLogFormat::parse("text"),
+            OperationalLogFormat::Text
+        );
+        assert_eq!(
+            OperationalLogFormat::parse("compact"),
+            OperationalLogFormat::Text
+        );
+        assert_eq!(
+            OperationalLogFormat::parse("xml"),
+            OperationalLogFormat::Text
+        );
+    }
+
+    #[test]
+    fn operational_log_format_accepts_json_aliases() {
+        assert_eq!(
+            OperationalLogFormat::parse("json"),
+            OperationalLogFormat::Json
+        );
+        assert_eq!(
+            OperationalLogFormat::parse(" JSONL "),
+            OperationalLogFormat::Json
+        );
     }
 }

@@ -118,10 +118,7 @@ async fn mint_zitadel_token(env: &ZitadelEnv) -> String {
         // The relay does not consume `openid` and the SA does not get an
         // ID token (client_credentials never does); the scope just
         // satisfies Zitadel's request validation.
-        .form(&[
-            ("grant_type", "client_credentials"),
-            ("scope", "openid"),
-        ])
+        .form(&[("grant_type", "client_credentials"), ("scope", "openid")])
         .send()
         .await
         .expect("zitadel token endpoint reachable");

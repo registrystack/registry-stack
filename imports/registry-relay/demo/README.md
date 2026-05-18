@@ -264,6 +264,10 @@ configs keep audit on stdout so the running terminal shows the trail. The
 file sink path is created at startup if missing; the `demo/var/` directory
 is gitignored.
 
+Operational logs stay on stderr as readable text during local demo runs. Set
+`REGISTRY_RELAY_LOG_FORMAT=json` when you want those logs as JSONL for
+collection or a redirected file.
+
 ## Bruno collection
 
 Open `bruno/registry-relay-demo/` in Bruno, then pick the **local** environment.
