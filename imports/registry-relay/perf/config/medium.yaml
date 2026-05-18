@@ -31,7 +31,6 @@ auth:
     - id: perf_no_scope
       hash_env: PERF_NO_SCOPE_KEY_HASH
       scopes:
-        - clinic_capacity:bulk_export
 
     - id: perf_claim_verification
       hash_env: PERF_CLAIM_VERIFICATION_KEY_HASH

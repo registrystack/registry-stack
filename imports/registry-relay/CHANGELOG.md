@@ -6,7 +6,7 @@ Initial V1 release of `registry-relay`, a controlled, read-only registry relay f
 
 ### Included
 
-- Config-driven datasets, private storage tables, public domain entities, field projection, relationships, required filters, and scope-separated metadata, row, aggregate, verify, and admin capabilities, with bulk-export scopes reserved for the V1.x contract.
+- Config-driven datasets, private storage tables, public domain entities, field projection, relationships, required filters, and scope-separated metadata, row, aggregate, verify, claim-verification, and admin capabilities.
 - API-key authentication with SHA-256 fingerprints supplied through environment variables. Raw keys never appear in config.
 - Entity collection, record, relationship, schema, verify, and configured aggregate endpoints with per-entity authorization and purpose-header enforcement.
 - Catalog, DCAT-AP JSON-LD, embedded SHACL shape metadata, best-effort OpenAPI 3.1 generation, and the local `/docs` Scalar API reference shell.
@@ -16,6 +16,4 @@ Initial V1 release of `registry-relay`, a controlled, read-only registry relay f
 
 ### Deferred
 
-- Registry-wide `POST /admin/reload` remains reserved and returns `501 admin.reload_unavailable`.
-- Bulk export endpoints are contract-locked for V1.x and are not implemented in 0.1.0.
 - Remaining hardening work is tracked through normal issues and release planning, not shipped review notes.

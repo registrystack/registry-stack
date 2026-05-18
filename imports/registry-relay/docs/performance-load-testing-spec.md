@@ -29,7 +29,7 @@ This spec covers local developer runs, CI smoke checks, and longer manual or sch
 - This is not a production capacity guarantee for every deployment shape.
 - This is not a substitute for security testing.
 - This does not require testing against real personal data.
-- This does not require implementing bulk export endpoints. Bulk export is still unavailable unless a separate product spec enables it.
+- This does not require implementing export endpoints.
 - This does not require public API backward compatibility for performance-only fixture config or scripts.
 
 ## Test Layers

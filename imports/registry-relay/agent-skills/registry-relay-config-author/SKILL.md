@@ -43,7 +43,7 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Dataset title, owner, publisher/base URL, and update cadence if unknown.
    - Which columns are identifiers, foreign keys, sensitive fields, and fields safe to expose.
    - Which domain entities the file represents. Infer obvious candidates, but do not pretend a sheet name is automatically the public entity model.
-   - Which consumers need metadata, aggregate, row, verify, bulk export, or admin scopes.
+   - Which consumers need metadata, aggregate, row, verify, claim-verification, or admin scopes.
    - Which filters, expansions, and aggregates are safe and useful.
 
 4. Declare catalog and dataset metadata.
@@ -73,7 +73,7 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
 
 8. Assign scopes independently.
    - Declare `metadata_scope`, `aggregate_scope`, `read_scope`, and `verify_scope` on each entity.
-   - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, `<dataset>:verify`, and `<dataset>:bulk_export`.
+   - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, `<dataset>:verify`, and `<dataset>:claim_verification`.
    - Do not assume aggregate or verify access implies row access.
    - Use an `admin` scope only for `/admin/reload`.
    - `auth.api_keys[].hash_env` names an environment variable containing an Argon2id PHC hash. Never put raw keys or hashes directly in comments, examples, logs, or final answers.
@@ -115,7 +115,7 @@ After drafting a config:
 
 1. Check the YAML against the skeleton and field tables in `references/v1-config-contract.md`.
 2. Confirm every storage table, entity, relationship, scope, filter, and aggregate reference resolves.
-3. Confirm verify-only, aggregate-only, row, metadata, bulk-export, and admin scopes remain independent.
+3. Confirm verify-only, claim-verification-only, aggregate-only, row, metadata, and admin scopes remain independent.
 4. Confirm hidden storage columns are not used as public filters, aggregate columns, verify parameters, or documentation fields.
 5. If the user supplies loader errors or validation logs from a `registry-relay` deployment, map them back to the bundled contract and revise the YAML. Do not require repository access to complete the config draft.
 6. If env-backed API keys appear in examples, use placeholder environment variable names only. Do not print real secrets.
@@ -124,7 +124,7 @@ After drafting a config:
 
 - `tables` are private storage. Public URLs are built from `entities[].name`.
 - If `fields` is present, every filter, aggregate group, aggregate measure, and verify primary-key parameter must use exposed entity field names.
-- Verify-only keys must not be able to call catalog, schema, rows, aggregate, or bulk-export endpoints.
+- Verify-only keys must not be able to call catalog, schema, rows, aggregate, or claim-verification endpoints.
 - Collection and expansion responses must not include total counts.
 - `?expand=` requires read scope, and required purpose headers, for both the host entity and every expanded target.
 - `resources` is an older alias still accepted by the code. Prefer `tables` for V1 configs.

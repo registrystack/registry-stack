@@ -54,7 +54,6 @@ OPENAPI_WORDS = {
         "Get claim-verification ruleset",
         "Create claim verification",
     ],
-    "bulk_export": ["Bulk export (reserved; unavailable in the V1 demo)"],
     "admin": ["Admin operation"],
 }
 
@@ -180,7 +179,6 @@ def levels_for(key: DemoKey) -> list[str]:
         "verify",
         "claim_verification",
         "admin",
-        "bulk_export",
         "other",
     ]
     return sorted(seen, key=lambda level: order.index(level) if level in order else len(order))

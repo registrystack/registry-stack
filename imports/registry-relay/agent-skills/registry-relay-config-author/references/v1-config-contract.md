@@ -379,7 +379,7 @@ Scope forms:
 - `<dataset>:aggregate`
 - `<dataset>:rows`
 - `<dataset>:verify`
-- `<dataset>:bulk_export`
+- `<dataset>:claim_verification`
 
 Deployments may use finer strings such as `<dataset>:<entity>:read` if every configured scope and key grant matches, but dataset-grained strings are the V1 default.
 
@@ -389,10 +389,10 @@ Scope meanings:
 - `aggregate`: configured aggregate endpoints only.
 - `rows`: collection, single-record, nested relationship, and expansion row reads.
 - `verify`: one-bit existence check only.
-- `bulk_export`: reserved contract for V1.x bulk export.
+- `claim_verification`: submitted-claim comparison only.
 - `admin`: reload and future admin operations.
 
-Scopes are independent. Aggregate access does not imply row access. Verify access does not imply metadata, aggregate, row, bulk-export, or admin access.
+Scopes are independent. Aggregate access does not imply row access. Verify access does not imply metadata, aggregate, row, claim-verification, or admin access.
 
 ## Dataset
 
@@ -724,11 +724,6 @@ Public entity-oriented routes:
 - `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}`
 - `POST /admin/reload`
 - `GET /openapi.json`
-
-Bulk export route contract is reserved for V1.x:
-
-- `POST /datasets/{dataset_id}/{entity}/exports`
-- `GET /admin/jobs/{job_id}`
 
 Do not add public table-ID routes.
 

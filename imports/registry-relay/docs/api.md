@@ -91,7 +91,6 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 | `verify` | Existence checks through `/verify` only |
 | `claim_verification` | Submitted-claims matching through `/claim-verifications` only |
 | `aggregate` | Aggregate discovery and configured aggregate execution |
-| `bulk_export` | Reserved for the V1.x contract, not implemented in 1.0 |
 | `admin` | Admin listener operations |
 
 ## Entity Reads

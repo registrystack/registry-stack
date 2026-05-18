@@ -54,7 +54,7 @@ Use that bundled reference as the source of truth for V1 syntax, constraints, ro
    - Each entity must have `metadata_scope`, `aggregate_scope`, `read_scope`, and `verify_scope`.
    - API keys should have the minimum scopes needed by their consumer.
    - Aggregate-only keys must not read rows.
-   - Verify-only keys must not access catalog, schema, rows, aggregates, or bulk export.
+   - Verify-only keys must not access catalog, schema, rows, aggregates, or claim verification.
    - `admin` should be separate from data scopes and used only for reload.
    - If personal data is exposed, prefer `require_purpose_header: true` for entities with row or verify access.
 

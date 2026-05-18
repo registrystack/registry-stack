@@ -1062,7 +1062,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|claim_verification|bulk_export>'"
+            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|claim_verification>'"
         );
         ConfigError::ValidationError
     })?;
@@ -1072,7 +1072,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "unknown scope level (allowed: metadata, aggregate, rows, verify, claim_verification, bulk_export)"
+            "unknown scope level (allowed: metadata, aggregate, rows, verify, claim_verification)"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -1093,7 +1093,7 @@ fn validate_scope(
 fn is_valid_scope_level(level: &str) -> bool {
     matches!(
         level,
-        "metadata" | "aggregate" | "rows" | "verify" | "claim_verification" | "bulk_export"
+        "metadata" | "aggregate" | "rows" | "verify" | "claim_verification"
     ) || level
         .strip_prefix("claim_verification:")
         .is_some_and(|ruleset| !ruleset.trim().is_empty())

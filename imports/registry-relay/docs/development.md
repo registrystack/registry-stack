@@ -101,7 +101,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 - Keep the public URL space entity-shaped. Do not expose table ids in data-plane paths.
 - Add config fields through `src/config/mod.rs` and validation in `src/config/validate.rs`.
-- Keep auth scopes independent. Metadata, rows, verify, aggregate, bulk export, and admin must not imply one another.
+- Keep auth scopes independent. Metadata, rows, verify, claim verification, aggregate, and admin must not imply one another.
 - Treat audit as a product surface. New routes should populate endpoint kind, dataset/entity/table ids, purpose, row count, suppression count, and stable error code when applicable.
 - Prefer structured parsers and DataFusion expressions over string-built query logic.
 - Do not log raw keys, fingerprints, private JWKs, row values, or full environment dumps.

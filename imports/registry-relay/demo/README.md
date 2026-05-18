@@ -11,8 +11,7 @@ the `spdci-api-standards` feature.
 
 This pack is intended for local review. Nothing in `demo/data/` is real, all
 identifiers are synthetic (`fake.*@example.invalid`, `FAKE-NNNNNN` national
-ids, `555-0xxx` phones, `*** Fake St` addresses), and no key in any V1 config
-holds the contract-reserved `bulk_export` scope.
+ids, `555-0xxx` phones, `*** Fake St` addresses).
 
 ## The core demos
 
@@ -361,9 +360,6 @@ The `Cross-Demo Workflows` folder also contains:
 
 ## What's intentionally unavailable in V1
 
-- **Bulk export.** No key in any V1 demo config is granted the reserved
-  bulk-export scope. The Bruno collection contains no bulk-export request.
-  The surface is contract-reserved for a future version.
 - **Admin reload Bruno workflow.** The `operations_admin` persona carries
   `admin` plus per-dataset `metadata` scopes for dataset discovery, but
   the demo pack does not include a Bruno request for operational reload.
