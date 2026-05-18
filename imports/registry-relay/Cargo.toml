@@ -162,3 +162,7 @@ harness = false
 [[bench]]
 name = "audit_bench"
 harness = false
+
+[[bench]]
+name = "claim_verification_bench"
+harness = false

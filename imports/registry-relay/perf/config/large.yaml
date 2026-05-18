@@ -34,6 +34,38 @@ auth:
       scopes:
         - clinic_capacity:bulk_export
 
+    - id: perf_claim_verification
+      hash_env: PERF_CLAIM_VERIFICATION_KEY_HASH
+      scopes:
+        - clinic_capacity:claim_verification
+
+claim_verification:
+  binding_key_id: perf-clinic-capacity-v1
+  # Env value format: hex:<64 lowercase hex chars>
+  # generate_perf_keys.py emits CLAIM_VERIFICATION_BINDING_KEY.
+  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
+
+# Provenance signer for the claim-verification JWT receipt path.
+# See perf/config/medium.yaml for the full comment.
+provenance:
+  enabled: true
+  accepted_media_types:
+    - application/vnd.registry-relay.claim-verification+jwt
+  schema_base_url: http://127.0.0.1:18080/schemas
+  context_base_url: http://127.0.0.1:18080/contexts
+  claim_validity:
+    verify_result: 5m
+    aggregate_result: 1h
+    entity_record: 24h
+  issuer:
+    mode: gateway
+    did: did:web:127.0.0.1%3A18080
+    verification_method_id: did:web:127.0.0.1%3A18080#perf-claim-verification-v1
+    signer:
+      kind: software
+      jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
+      signing_algorithm: EdDSA
+
 datasets:
   - id: clinic_capacity
     title: Clinic Capacity
@@ -101,11 +133,12 @@ datasets:
           - name: category
             from: category
         access:
-          metadata_scope:    clinic_capacity:metadata
-          aggregate_scope:   clinic_capacity:aggregate
-          read_scope:        clinic_capacity:rows
-          verify_scope:      clinic_capacity:verify
-          bulk_export_scope: clinic_capacity:bulk_export
+          metadata_scope:           clinic_capacity:metadata
+          aggregate_scope:          clinic_capacity:aggregate
+          read_scope:               clinic_capacity:rows
+          verify_scope:             clinic_capacity:verify
+          claim_verification_scope: clinic_capacity:claim_verification
+          bulk_export_scope:        clinic_capacity:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -129,6 +162,40 @@ datasets:
                 column: capacity
             disclosure_control:
               min_group_size: 1
+        claim_verification:
+          rulesets:
+            # Drives the match and mismatch decision paths.
+            # candidate_lookup on id (unique primary key) returns at most one candidate.
+            # Match: submit id + correct category.
+            # Mismatch: submit id + wrong category (candidate found, match_fields fail).
+            facility-identity-v1:
+              mode: normalized_exact
+              required_claims: [id, category]
+              candidate_lookup: [id]
+              match_fields:
+                id: id
+                category: category
+              allow_subject_id_targeting: false
+              diagnostics: false
+              expose_ambiguous: false
+              scope: clinic_capacity:claim_verification
+
+            # Drives the ambiguous decision path.
+            # candidate_lookup on region_code (20 distinct values, ~50000 rows each in 1M)
+            # returns many candidates. Matching on category still leaves many matches,
+            # so the decision is ambiguous. expose_ambiguous: true is required here so
+            # the endpoint reports "ambiguous" rather than collapsing to "mismatch".
+            facility-region-v1:
+              mode: normalized_exact
+              required_claims: [region_code, category]
+              candidate_lookup: [region_code]
+              match_fields:
+                region_code: region_code
+                category: category
+              allow_subject_id_targeting: false
+              diagnostics: false
+              expose_ambiguous: true
+              scope: clinic_capacity:claim_verification
 
 audit:
   sink: file

@@ -1,17 +1,30 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["cryptography>=42"]
 # ///
 """
 Synthetic API-key generator for Registry Relay performance testing.
 
 Hashing scheme: Registry Relay expects env vars holding sha256:<64 lowercase hex chars>
-where the hex is SHA-256(raw_token_bytes). This is stdlib hashlib; no external
-deps needed.
+where the hex is SHA-256(raw_token_bytes). This is stdlib hashlib.
+
+The `cryptography` dep is used solely to derive the Ed25519 public half from
+the freshly generated private seed when assembling the provenance JWK.
 
 Generates 5 tokens, writes an env file, and prints only the variable names and
 the output path. Raw tokens and hashes are never printed to stdout.
+
+Also emits:
+
+- CLAIM_VERIFICATION_BINDING_KEY: hex: prefixed 32-byte secret for the
+  claim_verification HMAC key.
+- REGISTRY_RELAY_PROVENANCE_JWK: JSON-encoded Ed25519 private JWK used by
+  the provenance signer to issue signed claim-verification receipts.
+
+If the env file already exists and is being reused (--force not set), this
+script exits without writing. When --force is set a new file is written with
+fresh values for all variables (tokens, binding key, signing JWK).
 
 Usage:
     uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env
@@ -19,20 +32,26 @@ Usage:
 """
 
 import argparse
+import base64
 import hashlib
+import json
 import os
 import secrets
 import sys
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 
 # Key definitions: (id, hash_env_var, scopes list or None)
 # Scopes are informational for the comment; the env file carries the hash only.
 KEY_DEFS = [
-    ("perf_rows",      "PERF_ROWS_KEY_HASH",      ["clinic_capacity:rows"]),
-    ("perf_metadata",  "PERF_METADATA_KEY_HASH",   ["clinic_capacity:metadata"]),
-    ("perf_aggregate", "PERF_AGGREGATE_KEY_HASH",  ["clinic_capacity:aggregate"]),
-    ("perf_no_scope",  "PERF_NO_SCOPE_KEY_HASH",   ["other:metadata"]),
+    ("perf_rows",               "PERF_ROWS_KEY_HASH",               ["clinic_capacity:rows"]),
+    ("perf_metadata",           "PERF_METADATA_KEY_HASH",           ["clinic_capacity:metadata"]),
+    ("perf_aggregate",          "PERF_AGGREGATE_KEY_HASH",          ["clinic_capacity:aggregate"]),
+    ("perf_no_scope",           "PERF_NO_SCOPE_KEY_HASH",           ["other:metadata"]),
+    ("perf_claim_verification", "PERF_CLAIM_VERIFICATION_KEY_HASH", ["clinic_capacity:claim_verification"]),
 ]
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"
@@ -49,7 +68,52 @@ def generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def build_env_lines(tokens: dict[str, str]) -> list[str]:
+def generate_binding_key() -> str:
+    """Return a hex: prefixed 32-byte random secret for claim_verification HMAC."""
+    return f"hex:{secrets.token_hex(32)}"
+
+
+def _b64url(raw: bytes) -> str:
+    """Unpadded base64url encoding per RFC 7515."""
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+# kid for the perf provenance signer. Must match the fragment in
+# provenance.issuer.verification_method_id in perf/config/*.yaml.
+PROVENANCE_KID = "perf-claim-verification-v1"
+
+
+def generate_provenance_jwk() -> str:
+    """Return a JSON-encoded Ed25519 private JWK with kid + alg fields.
+
+    The value is consumed by the software signer via
+    `provenance.issuer.signer.jwk_env`. Format matches docs/provenance.md.
+    """
+    private = Ed25519PrivateKey.generate()
+    seed = private.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    jwk = {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "alg": "EdDSA",
+        "kid": PROVENANCE_KID,
+        "d": _b64url(seed),
+        "x": _b64url(public),
+    }
+    # Compact, no whitespace. The env var is a single JSON string.
+    return json.dumps(jwk, separators=(",", ":"))
+
+
+def build_env_lines(
+    tokens: dict[str, str], binding_key: str, provenance_jwk: str
+) -> list[str]:
     """Build the env file lines from the token map. Never includes raw tokens."""
     lines = [
         "# Registry Relay perf test environment",
@@ -60,6 +124,7 @@ def build_env_lines(tokens: dict[str, str]) -> list[str]:
         f"REGISTRY_RELAY_TOKEN_METADATA={tokens['perf_metadata']}",
         f"REGISTRY_RELAY_TOKEN_AGGREGATE={tokens['perf_aggregate']}",
         f"REGISTRY_RELAY_TOKEN_NO_SCOPE={tokens['perf_no_scope']}",
+        f"REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION={tokens['perf_claim_verification']}",
         f"REGISTRY_RELAY_TOKEN_INVALID={INVALID_TOKEN_VALUE}",
         "#",
         "# Routing defaults",
@@ -73,6 +138,16 @@ def build_env_lines(tokens: dict[str, str]) -> list[str]:
     for key_id, hash_env, _ in KEY_DEFS:
         fingerprint = sha256_fingerprint(tokens[key_id])
         lines.append(f"{hash_env}={fingerprint}")
+    lines += [
+        "#",
+        "# Claim verification HMAC binding key (hex:<64 lowercase hex chars>).",
+        "# Must remain stable across server restarts so claim_hash values stay interpretable.",
+        f"CLAIM_VERIFICATION_BINDING_KEY={binding_key}",
+        "#",
+        "# Provenance signing key: JSON-encoded Ed25519 private JWK.",
+        "# Read by the software signer at startup. NEVER commit this file.",
+        f"REGISTRY_RELAY_PROVENANCE_JWK={provenance_jwk}",
+    ]
     return lines
 
 
@@ -103,10 +178,13 @@ def main() -> None:
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Generate one random token per keyed entry.
+    # Generate one random token per keyed entry, the HMAC binding key, and
+    # the Ed25519 private JWK for the provenance signer.
     tokens: dict[str, str] = {key_id: generate_token() for key_id, _, _ in KEY_DEFS}
+    binding_key = generate_binding_key()
+    provenance_jwk = generate_provenance_jwk()
 
-    env_lines = build_env_lines(tokens)
+    env_lines = build_env_lines(tokens, binding_key, provenance_jwk)
     env_content = "\n".join(env_lines) + "\n"
 
     env_path.write_text(env_content, encoding="utf-8")
@@ -121,11 +199,15 @@ def main() -> None:
         "REGISTRY_RELAY_TOKEN_METADATA",
         "REGISTRY_RELAY_TOKEN_AGGREGATE",
         "REGISTRY_RELAY_TOKEN_NO_SCOPE",
+        "REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION",
         "REGISTRY_RELAY_TOKEN_INVALID",
         "REGISTRY_RELAY_BASE_URL",
         "REGISTRY_RELAY_DATASET_ID",
         "REGISTRY_RELAY_ENTITY",
-    ] + [hash_env for _, hash_env, _ in KEY_DEFS]
+    ] + [hash_env for _, hash_env, _ in KEY_DEFS] + [
+        "CLAIM_VERIFICATION_BINDING_KEY",
+        "REGISTRY_RELAY_PROVENANCE_JWK",
+    ]
     for name in var_names:
         print(f"  {name}")
 
