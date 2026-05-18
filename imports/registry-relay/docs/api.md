@@ -47,7 +47,7 @@ POST /admin/reload
 
 `GET /metrics` returns Prometheus-style `text/plain` metrics for operators. It is intentionally admin-listener only and is not mounted on `server.bind`.
 
-`POST /admin/reload` is reserved for registry-wide reload and currently returns `501 admin.reload_unavailable`.
+`POST /admin/reload` reloads every configured resource and returns a compact per-resource report. Use the table-specific route when you need to reload only one source.
 
 ## Authentication
 

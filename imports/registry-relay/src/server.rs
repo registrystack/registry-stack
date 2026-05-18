@@ -38,9 +38,8 @@
 //! [`build_admin_app`] mirrors [`build_app`] for the optional admin
 //! listener (`config.server.admin_bind`). Admin routes are intentionally
 //! kept off the public data-plane listener. The admin listener carries
-//! `/health`, admin-listener-only `/metrics`, table reload, and the
-//! registry-wide reload placeholder; `POST /admin/reload` remains a
-//! reserved V1.x surface that returns `501 admin.reload_unavailable`.
+//! `/health`, admin-listener-only `/metrics`, table reload, and
+//! registry-wide reload.
 //!
 //! ## What lives elsewhere
 //!

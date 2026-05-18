@@ -178,7 +178,14 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
   http://127.0.0.1:8081/admin/datasets/social_registry/tables/individuals_table/reload
 ```
 
-`POST /admin/reload` is specified as reload-all, but the current handler reports `501 admin.reload_unavailable` until registry-wide reload is implemented.
+Manual registry reload:
+
+```sh
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  http://127.0.0.1:8081/admin/reload
+```
+
+The reload-all response includes `status`, `counts`, and one result per resource. A failing resource is reported with `status: "failed"` and `error_code`; the handler continues attempting the remaining resources.
 
 ## Readiness And Probes
 
@@ -266,11 +273,11 @@ Caller expected a signed VC but received plain JSON:
 - Confirm the env var named by `provenance.issuer.signer.jwk_env` is set and holds a valid JWK; a missing or malformed JWK fails the signer at startup, not at request time.
 - For `mode: delegated`, confirm the ministry's DID Document publishes the gateway's `verification_method_id`.
 
-Admin reload unavailable:
+Admin reload fails:
 
 - Confirm `server.admin_bind` is configured and reachable only from the private admin network.
 - Confirm the key has the independent `admin` scope.
-- Use the single-table reload path for V1. If `POST /admin/reload` returns `501 admin.reload_unavailable`, use the table-specific endpoint, refresh mode, or restart as the operational workaround.
+- Check the per-resource `error_code` in the reload-all response. Use the table-specific endpoint to retry one failed source after correcting the underlying data or connectivity issue.
 
 Metrics missing:
 

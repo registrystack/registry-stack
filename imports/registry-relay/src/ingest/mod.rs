@@ -518,6 +518,22 @@ pub struct IngestRegistry {
     plans: BTreeMap<(DatasetId, ResourceId), Arc<IngestPlan>>,
 }
 
+#[derive(Debug)]
+pub struct RegistryReloadReport {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub resources: Vec<ResourceReloadResult>,
+}
+
+#[derive(Debug)]
+pub struct ResourceReloadResult {
+    pub dataset_id: DatasetId,
+    pub resource_id: ResourceId,
+    pub status: &'static str,
+    pub error_code: Option<&'static str>,
+}
+
 impl IngestRegistry {
     pub fn from_config(
         config: &Config,
@@ -738,6 +754,45 @@ impl IngestRegistry {
         let key = (dataset.clone(), resource.clone());
         let plan = self.plans.get(&key).ok_or(IngestError::SourceNotFound)?;
         plan.refresh().await
+    }
+
+    /// Trigger a reload of every configured resource through the admin endpoint.
+    pub async fn reload_all(&self) -> RegistryReloadReport {
+        let mut resources = Vec::with_capacity(self.plans.len());
+        let mut succeeded = 0;
+        let mut failed = 0;
+
+        for ((dataset_id, resource_id), plan) in &self.plans {
+            let result = plan.refresh().await;
+            let resource = match result {
+                Ok(()) => {
+                    succeeded += 1;
+                    ResourceReloadResult {
+                        dataset_id: dataset_id.clone(),
+                        resource_id: resource_id.clone(),
+                        status: "ok",
+                        error_code: None,
+                    }
+                }
+                Err(error) => {
+                    failed += 1;
+                    ResourceReloadResult {
+                        dataset_id: dataset_id.clone(),
+                        resource_id: resource_id.clone(),
+                        status: "failed",
+                        error_code: Some(ingest_error_code(&error)),
+                    }
+                }
+            };
+            resources.push(resource);
+        }
+
+        RegistryReloadReport {
+            total: resources.len(),
+            succeeded,
+            failed,
+            resources,
+        }
     }
 
     /// Aggregate readiness snapshot across all plans.

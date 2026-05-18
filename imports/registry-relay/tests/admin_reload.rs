@@ -118,6 +118,39 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+      - id: beneficiaries_copy_csv
+        primary_key: beneficiary_id
+        schema:
+          strict: true
+          fields:
+            - name: beneficiary_id
+              type: integer
+              nullable: false
+            - name: household_size
+              type: integer
+              nullable: false
+            - name: municipality_code
+              type: string
+              nullable: false
+            - name: program
+              type: string
+              nullable: false
+            - name: amount_eur
+              type: number
+              nullable: false
+            - name: joined_date
+              type: date
+              nullable: false
+            - name: last_updated
+              type: date
+              nullable: true
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          row_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
 
 audit:
   sink: stdout
@@ -261,7 +294,7 @@ async fn reload_all_with_non_admin_key_is_rejected() {
 }
 
 #[tokio::test]
-async fn reload_all_with_admin_key_returns_not_implemented() {
+async fn reload_all_with_admin_key_reloads_every_configured_resource() {
     let fixture = build_fixture();
 
     let resp = fixture
@@ -270,12 +303,25 @@ async fn reload_all_with_admin_key_returns_not_implemented() {
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await;
 
-    // The endpoint is authenticated but not yet implemented; it returns
-    // 501 once the scope check passes.
-    assert_problem(
-        resp,
-        StatusCode::NOT_IMPLEMENTED,
-        "admin.reload_unavailable",
-    )
-    .await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["counts"]["total"], 2);
+    assert_eq!(body["counts"]["succeeded"], 2);
+    assert_eq!(body["counts"]["failed"], 0);
+
+    let resources = body["resources"].as_array().expect("resources array");
+    assert_eq!(resources.len(), 2);
+    assert!(resources.iter().any(|resource| {
+        resource["dataset_id"] == "social_registry"
+            && resource["resource_id"] == "beneficiaries_csv"
+            && resource["status"] == "ok"
+            && resource.get("error_code").is_none()
+    }));
+    assert!(resources.iter().any(|resource| {
+        resource["dataset_id"] == "social_registry"
+            && resource["resource_id"] == "beneficiaries_copy_csv"
+            && resource["status"] == "ok"
+            && resource.get("error_code").is_none()
+    }));
 }

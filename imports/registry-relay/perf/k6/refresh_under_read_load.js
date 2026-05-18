@@ -3,7 +3,7 @@
 //
 // Admin reload endpoint (from src/api/admin.rs):
 //   POST /admin/datasets/{dataset_id}/tables/{table_id}/reload
-//   POST /admin/reload  (reload-all; currently returns 501 -- not yet implemented)
+//   POST /admin/reload
 //
 // Auth requirement (require_admin_scope in admin.rs):
 //   scope: "admin"

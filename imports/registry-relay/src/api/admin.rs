@@ -12,7 +12,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::post;
 use axum::{Extension, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::audit::ErrorCodeExt;
@@ -23,6 +23,7 @@ use crate::error::{AdminError, AuthError, Error, IngestError};
 use crate::ingest::IngestRegistry;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
+const RELOAD_FAILED_CODE: &str = "admin.reload_failed";
 const RELOAD_UNAVAILABLE_CODE: &str = "admin.reload_unavailable";
 
 /// Sub-router for admin reload routes.
@@ -72,11 +73,54 @@ async fn reload_table(
     }
 }
 
-async fn reload_all(principal: Option<Extension<Principal>>) -> Response {
+async fn reload_all(
+    registry: Option<Extension<Arc<IngestRegistry>>>,
+    principal: Option<Extension<Principal>>,
+) -> Response {
     if let Err(error) = require_admin_scope(principal) {
         return error.into_response();
     }
-    reload_unavailable("admin reload-all route matched, but registry-wide reload is not available")
+    let Some(Extension(registry)) = registry else {
+        return reload_unavailable(
+            "admin reload-all route matched, but ingest registry is not installed",
+        );
+    };
+
+    let report = registry.reload_all().await;
+    let status = if report.failed == 0 { "ok" } else { "failed" };
+    let http_status = if report.failed == 0 {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    let mut response = (
+        http_status,
+        Json(ReloadAllResponse {
+            status,
+            counts: ReloadAllCounts {
+                total: report.total,
+                succeeded: report.succeeded,
+                failed: report.failed,
+            },
+            resources: report
+                .resources
+                .into_iter()
+                .map(|resource| ReloadAllResource {
+                    dataset_id: resource.dataset_id.as_str().to_string(),
+                    resource_id: resource.resource_id.as_str().to_string(),
+                    status: resource.status,
+                    error_code: resource.error_code,
+                })
+                .collect(),
+        }),
+    )
+        .into_response();
+    if http_status.is_server_error() {
+        response
+            .extensions_mut()
+            .insert(ErrorCodeExt(RELOAD_FAILED_CODE.to_string()));
+    }
+    response
 }
 
 fn require_admin_scope(principal: Option<Extension<Principal>>) -> Result<(), Error> {
@@ -84,6 +128,29 @@ fn require_admin_scope(principal: Option<Extension<Principal>>) -> Result<(), Er
         return Err(AuthError::MissingCredential.into());
     };
     require_scope(&principal, "admin")
+}
+
+#[derive(Debug, Serialize)]
+struct ReloadAllResponse {
+    status: &'static str,
+    counts: ReloadAllCounts,
+    resources: Vec<ReloadAllResource>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReloadAllCounts {
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct ReloadAllResource {
+    dataset_id: String,
+    resource_id: String,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<&'static str>,
 }
 
 fn reload_unavailable(detail: &'static str) -> Response {
