@@ -142,6 +142,7 @@ Current runtime behavior:
 - `audit.sink: file` writes audit JSONL to the configured path and rotates in-process by `rotate.max_size_mb` and `rotate.max_files`.
 - `audit.sink: syslog` ships audit JSONL to the local syslog Unix datagram socket.
 - `audit.chain: true` wraps sink output with `prev_hash` and `record_hash` fields for tamper-evidence.
+- HTTP request completion is logged at `info` with method, matched route template, request id, status, and latency. It does not log raw query strings, request bodies, auth headers, or row values.
 - `REGISTRY_RELAY_LOG_FORMAT=json` switches stderr operational logs from text to JSONL.
 
 File sink example:

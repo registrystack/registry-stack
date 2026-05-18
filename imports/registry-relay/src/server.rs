@@ -53,6 +53,7 @@ use std::env;
 use std::sync::Arc;
 
 use axum::body::Body;
+use axum::extract::MatchedPath;
 use axum::http::{HeaderName, HeaderValue, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
@@ -64,7 +65,8 @@ use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use ulid::Ulid;
 
 use crate::api::{self, CursorSigner};
@@ -381,7 +383,18 @@ fn apply_cross_cutting_layers_with_metrics(
         .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
         .layer(cors)
-        .layer(TraceLayer::new_for_http());
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<Body>| {
+                    tracing::info_span!(
+                        "http.request",
+                        method = %request.method(),
+                        route = operational_route(request),
+                        request_id = operational_request_id(request),
+                    )
+                })
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        );
     let with_operational_layers = crate::observability::install(with_operational_layers, metrics);
 
     let with_audit = audit::middleware::install_with_settings(
@@ -396,6 +409,22 @@ fn apply_cross_cutting_layers_with_metrics(
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
         .layer(from_fn(strip_untrusted_request_id))
+}
+
+fn operational_route(request: &Request<Body>) -> &str {
+    request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("<unmatched>")
+}
+
+fn operational_request_id(request: &Request<Body>) -> &str {
+    request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
 }
 
 async fn strip_untrusted_request_id(mut request: Request<Body>, next: Next) -> Response {
