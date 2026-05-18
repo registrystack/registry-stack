@@ -135,7 +135,7 @@ Entity collection and record responses include validators where supported. Clien
 Entities can require a purpose string for row and verify reads:
 
 ```http
-Data-Purpose: eligibility-check
+Data-Purpose: service-intake-check
 ```
 
 When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_required`. Use stable, reviewable purpose names. Do not put secrets, bearer tokens, or personal data in this header because it is recorded in audit logs.
@@ -158,14 +158,14 @@ Verify routes answer existence checks without returning row content:
 GET /datasets/social_registry/individual/verify?id=ind-123
 ```
 
-Claim verification is a separate POST resource for comparing submitted facts against a configured ruleset. V1 supports `normalized_exact` matching with configured `candidate_lookup` fields only. JSON is the default response, and signed server-to-server receipts use `application/vnd.registry-relay.claim-verification+jwt`, not `application/vc+jwt`:
+Claim verification is a separate POST resource for comparing submitted claims against registry facts under a configured ruleset. It can return a verification receipt or attestation of that comparison, but it does not issue official source credentials or make policy or eligibility decisions. V1 supports `normalized_exact` matching with configured `candidate_lookup` fields only. JSON is the default response, and signed server-to-server receipts use `application/vnd.registry-relay.claim-verification+jwt`, not `application/vc+jwt`:
 
 ```http
 POST /datasets/social_registry/individual/claim-verifications HTTP/1.1
 Authorization: Bearer <api-key>
 Content-Type: application/json
 Accept: application/json
-Data-Purpose: eligibility-check
+Data-Purpose: identity-verification
 
 {
   "ruleset": "identity-match-v1",
@@ -177,7 +177,7 @@ Data-Purpose: eligibility-check
 }
 ```
 
-Responses include `Cache-Control: no-store` and `Vary: Authorization, Accept`. They return `decision`, `verification_id`, `claim_hash`, and metadata, but they do not echo raw submitted claims. Unknown claim keys are rejected. `Data-Purpose` header names are case-insensitive; examples use this casing for readability.
+Responses include `Cache-Control: no-store` and `Vary: Authorization, Accept`. They return `decision`, `verification_id`, `claim_hash`, and metadata for the comparison, but they do not echo raw submitted claims, issue source documents, or decide downstream eligibility. Unknown claim keys are rejected. `Data-Purpose` header names are case-insensitive; examples use this casing for readability.
 
 Ruleset discovery is available through `GET /claim-verification-rulesets`. It is authorization-filtered and returns broad scalar JSON Schemas for the caller-visible rulesets. Discovery responses also include `Cache-Control: no-store` and `Vary: Authorization, Accept`. Unknown, hidden, or unauthorized discovery targets return `403 claim_verification.ruleset_not_allowed` so callers cannot distinguish unavailable rulesets or entities by probing. See [claim-verification.md](claim-verification.md) for full request, response, privacy, and signed-receipt examples.
 
