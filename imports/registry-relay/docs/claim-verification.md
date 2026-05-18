@@ -303,7 +303,6 @@ access:
   verify_scope: civil_registry:verify
   claim_verification_scope: civil_registry:claim_verification
   aggregate_scope: civil_registry:aggregate
-  bulk_export_scope: civil_registry:bulk_export
 ```
 
 Runtime checks happen in this order:

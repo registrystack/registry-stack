@@ -51,7 +51,7 @@ Use that bundled reference as the source of truth for V1 syntax, constraints, ro
    - Cross-dataset and multi-hop relationships are out of scope for V1.
 
 6. Check access isolation.
-   - Each entity must have `metadata_scope`, `aggregate_scope`, `read_scope`, `verify_scope`, and `bulk_export_scope`.
+   - Each entity must have `metadata_scope`, `aggregate_scope`, `read_scope`, and `verify_scope`.
    - API keys should have the minimum scopes needed by their consumer.
    - Aggregate-only keys must not read rows.
    - Verify-only keys must not access catalog, schema, rows, aggregates, or bulk export.

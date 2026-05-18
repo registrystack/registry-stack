@@ -109,7 +109,6 @@ fn civic_dataset(dataset_id: &str, entity_name: &str, spatial: &str) -> String {
           aggregate_scope: {dataset_id}:aggregate
           read_scope: {dataset_id}:rows
           verify_scope: {dataset_id}:verify
-          bulk_export_scope: {dataset_id}:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -216,7 +215,6 @@ fn duplicate_collection_id_within_dataset_is_rejected() {
           aggregate_scope: civic_registry:aggregate
           read_scope: civic_registry:rows
           verify_scope: civic_registry:verify
-          bulk_export_scope: civic_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

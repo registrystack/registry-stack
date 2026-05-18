@@ -361,15 +361,12 @@ The `Cross-Demo Workflows` folder also contains:
 
 ## What's intentionally unavailable in V1
 
-- **Bulk export.** Every entity declares a `bulk_export_scope` string (it's
-  a required field in the platform schema), but no key in any V1 demo
-  config is granted that scope. The Bruno collection contains no
-  bulk-export request. The surface is contract-reserved for a future
-  version.
-- **Registry-wide admin reload.** The `operations_admin` persona carries
+- **Bulk export.** No key in any V1 demo config is granted the reserved
+  bulk-export scope. The Bruno collection contains no bulk-export request.
+  The surface is contract-reserved for a future version.
+- **Admin reload Bruno workflow.** The `operations_admin` persona carries
   `admin` plus per-dataset `metadata` scopes for dataset discovery, but
-  there is no Bruno request that exercises a reload endpoint. Operational
-  reload is out of scope for the demo pack.
+  the demo pack does not include a Bruno request for operational reload.
 - **Cross-dataset relationships at config level.** V1 relationships are
   scoped to entities inside one dataset. Cross-dataset reuse is
   demonstrated through client-side Bruno workflows, not through declared

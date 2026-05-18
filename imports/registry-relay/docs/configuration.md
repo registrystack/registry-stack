@@ -499,7 +499,6 @@ entities:
       read_scope: social_registry:rows
       verify_scope: social_registry:verify
       claim_verification_scope: social_registry:claim_verification
-      bulk_export_scope: social_registry:bulk_export
     api:
       default_limit: 100
       max_limit: 1000

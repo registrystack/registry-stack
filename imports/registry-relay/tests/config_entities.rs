@@ -95,7 +95,6 @@ fn valid_dataset() -> String {
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -120,7 +119,6 @@ fn valid_dataset() -> String {
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -194,7 +192,6 @@ fn dataset_with_required_filters(required_filters: &str) -> String {
           aggregate_scope: my_dataset:aggregate
           read_scope: my_dataset:rows
           verify_scope: my_dataset:verify
-          bulk_export_scope: my_dataset:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

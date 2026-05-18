@@ -930,7 +930,6 @@ pub struct EntityAccessConfig {
     pub verify_scope: String,
     #[serde(default)]
     pub claim_verification_scope: Option<String>,
-    pub bulk_export_scope: String,
 }
 
 impl EntityAccessConfig {

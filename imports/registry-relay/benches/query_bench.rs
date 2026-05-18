@@ -76,7 +76,6 @@ datasets:
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
           verify_scope: clinic_capacity:verify
-          bulk_export_scope: clinic_capacity:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

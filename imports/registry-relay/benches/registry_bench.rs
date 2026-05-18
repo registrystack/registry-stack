@@ -76,7 +76,6 @@ const ENTITY_TEMPLATE: &str = "      - name: {ENT}
           aggregate_scope: {DS}:aggregate
           read_scope: {DS}:rows
           verify_scope: {DS}:verify
-          bulk_export_scope: {DS}:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

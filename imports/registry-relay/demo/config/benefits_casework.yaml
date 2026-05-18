@@ -248,7 +248,6 @@ datasets:
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
           verify_scope:      benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -310,7 +309,6 @@ datasets:
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
           verify_scope:      benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -379,7 +377,6 @@ datasets:
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
           verify_scope:      benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -442,7 +439,6 @@ datasets:
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
           verify_scope:      benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

@@ -72,7 +72,7 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Only list relationships in `api.allowed_expansions` when clients may use `?expand=`.
 
 8. Assign scopes independently.
-   - Declare `metadata_scope`, `aggregate_scope`, `read_scope`, `verify_scope`, and `bulk_export_scope` on each entity.
+   - Declare `metadata_scope`, `aggregate_scope`, `read_scope`, and `verify_scope` on each entity.
    - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, `<dataset>:verify`, and `<dataset>:bulk_export`.
    - Do not assume aggregate or verify access implies row access.
    - Use an `admin` scope only for `/admin/reload`.

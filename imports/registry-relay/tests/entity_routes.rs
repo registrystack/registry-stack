@@ -279,7 +279,6 @@ datasets:
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
           claim_verification_scope: social_registry:claim_verification
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -307,7 +306,6 @@ datasets:
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
           claim_verification_scope: social_registry:claim_verification
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -998,7 +996,6 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1609,7 +1606,6 @@ datasets:
           aggregate_scope: test_dataset:aggregate
           read_scope: test_dataset:rows
           verify_scope: test_dataset:verify
-          bulk_export_scope: test_dataset:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1629,7 +1625,6 @@ datasets:
           aggregate_scope: test_dataset:aggregate
           read_scope: test_dataset:rows
           verify_scope: test_dataset:verify
-          bulk_export_scope: test_dataset:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

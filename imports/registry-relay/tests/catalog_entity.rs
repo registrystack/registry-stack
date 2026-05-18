@@ -105,7 +105,6 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -143,7 +142,6 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
-          bulk_export_scope: social_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -184,7 +182,6 @@ datasets:
           aggregate_scope: payments:aggregate
           read_scope: payments:rows
           verify_scope: payments:verify
-          bulk_export_scope: payments:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

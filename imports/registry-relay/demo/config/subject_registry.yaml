@@ -143,7 +143,6 @@ datasets:
           aggregate_scope:   subject_registry:aggregate
           read_scope:        subject_registry:rows
           verify_scope:      subject_registry:verify
-          bulk_export_scope: subject_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

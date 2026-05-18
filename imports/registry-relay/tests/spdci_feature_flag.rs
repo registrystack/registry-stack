@@ -80,7 +80,6 @@ datasets:
           aggregate_scope: disability_registry:aggregate
           read_scope: disability_registry:rows
           verify_scope: disability_registry:verify
-          bulk_export_scope: disability_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

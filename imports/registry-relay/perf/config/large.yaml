@@ -138,7 +138,6 @@ datasets:
           read_scope:               clinic_capacity:rows
           verify_scope:             clinic_capacity:verify
           claim_verification_scope: clinic_capacity:claim_verification
-          bulk_export_scope:        clinic_capacity:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

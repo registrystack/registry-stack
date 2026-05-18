@@ -1518,7 +1518,6 @@ mod tests {
                 read_scope: "rows".to_string(),
                 verify_scope: "verify".to_string(),
                 claim_verification_scope: None,
-                bulk_export_scope: "bulk_export".to_string(),
             },
             api: EntityApiConfig {
                 default_limit: 100,

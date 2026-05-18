@@ -255,7 +255,6 @@ datasets:
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
           verify_scope:      public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -323,7 +322,6 @@ datasets:
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
           verify_scope:      public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -388,7 +386,6 @@ datasets:
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
           verify_scope:      public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -452,7 +449,6 @@ datasets:
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
           verify_scope:      public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

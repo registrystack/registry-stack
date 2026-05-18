@@ -100,7 +100,6 @@ datasets:
           aggregate_scope: civic_registry:aggregate
           read_scope: civic_registry:rows
           verify_scope: civic_registry:verify
-          bulk_export_scope: civic_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000

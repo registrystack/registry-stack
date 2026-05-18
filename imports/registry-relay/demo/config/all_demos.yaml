@@ -285,7 +285,6 @@ datasets:
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
           verify_scope: benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -346,7 +345,6 @@ datasets:
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
           verify_scope: benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -414,7 +412,6 @@ datasets:
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
           verify_scope: benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -476,7 +473,6 @@ datasets:
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
           verify_scope: benefits_casework:verify
-          bulk_export_scope: benefits_casework:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -671,7 +667,6 @@ datasets:
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
           verify_scope: clinic_capacity:verify
-          bulk_export_scope: clinic_capacity:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -740,7 +735,6 @@ datasets:
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
           verify_scope: clinic_capacity:verify
-          bulk_export_scope: clinic_capacity:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -800,7 +794,6 @@ datasets:
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
           verify_scope: clinic_capacity:verify
-          bulk_export_scope: clinic_capacity:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1031,7 +1024,6 @@ datasets:
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
           verify_scope: public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1098,7 +1090,6 @@ datasets:
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
           verify_scope: public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1162,7 +1153,6 @@ datasets:
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
           verify_scope: public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1225,7 +1215,6 @@ datasets:
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
           verify_scope: public_works_projects:verify
-          bulk_export_scope: public_works_projects:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1535,7 +1524,6 @@ datasets:
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
           verify_scope: education_registry:verify
-          bulk_export_scope: education_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1609,7 +1597,6 @@ datasets:
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
           verify_scope: education_registry:verify
-          bulk_export_scope: education_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1657,7 +1644,6 @@ datasets:
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
           verify_scope: education_registry:verify
-          bulk_export_scope: education_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1722,7 +1708,6 @@ datasets:
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
           verify_scope: education_registry:verify
-          bulk_export_scope: education_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1770,7 +1755,6 @@ datasets:
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
           verify_scope: education_registry:verify
-          bulk_export_scope: education_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1832,7 +1816,6 @@ datasets:
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
           verify_scope: education_registry:verify
-          bulk_export_scope: education_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
@@ -1950,7 +1933,6 @@ datasets:
           aggregate_scope: subject_registry:aggregate
           read_scope: subject_registry:rows
           verify_scope: subject_registry:verify
-          bulk_export_scope: subject_registry:bulk_export
         api:
           default_limit: 100
           max_limit: 1000
