@@ -116,11 +116,14 @@ pub fn entity_schema_document(
 }
 
 fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
-    let distributions = dataset
-        .entities
-        .iter()
-        .flat_map(entity_distributions)
-        .collect::<Vec<_>>();
+    let mut distributions = dataset_standard_distributions(dataset);
+    distributions.extend(
+        dataset
+            .entities
+            .iter()
+            .flat_map(entity_distributions)
+            .collect::<Vec<_>>(),
+    );
 
     json!({
         "@id": dataset.links.self_url,
@@ -135,6 +138,82 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
         "dcterms:conformsTo": dataset.conforms_to,
         "odrl:hasPolicy": dataset_offer(dataset),
         "dcat:distribution": distributions,
+    })
+}
+
+fn dataset_standard_distributions(dataset: &DatasetMetadata) -> Vec<Value> {
+    let mut distributions = Vec::new();
+    if let Some(ogc) = &dataset.standards.ogc_api_features {
+        distributions.push(dataset_ogc_distribution(dataset, ogc));
+    }
+    if let Some(spdci) = &dataset.standards.spdci {
+        distributions.extend(
+            spdci
+                .registries
+                .iter()
+                .map(|registry| dataset_spdci_distribution(dataset, registry)),
+        );
+    }
+    distributions
+}
+
+fn dataset_ogc_distribution(
+    dataset: &DatasetMetadata,
+    ogc: &super::catalog::OgcApiFeaturesMetadata,
+) -> Value {
+    let access_service = format!("{}#ogc-api-features-service", ogc.collections);
+    json!({
+        "@id": ogc.collections,
+        "@type": "dcat:Distribution",
+        "dcterms:title": format!("{} OGC API Features service", dataset.title),
+        "dct:format": {
+            "@id": "registry_relay:OGCAPI-Features",
+        },
+        "dcat:accessURL": ogc.collections,
+        "dcat:accessService": {
+            "@id": access_service,
+            "@type": "dcat:DataService",
+            "dcterms:title": format!("{} OGC API Features service", dataset.title),
+            "dspace:dataServiceType": "registry_relay:ogc-api-features",
+            "dcat:endpointURL": ogc.collections,
+            "dcat:servesDataset": dataset.links.self_url,
+            "dcterms:conformsTo": [
+                "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+                "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+            ],
+        },
+        "dcterms:conformsTo": [
+            "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+            "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+        ],
+    })
+}
+
+fn dataset_spdci_distribution(
+    dataset: &DatasetMetadata,
+    registry: &super::catalog::SpdciRegistryMetadata,
+) -> Value {
+    let access_service = format!("{}#spdci-sync-service", registry.sync_search);
+    json!({
+        "@id": registry.sync_search,
+        "@type": "dcat:Distribution",
+        "dcterms:title": format!("{} SP DCI {} sync service", dataset.title, registry.registry),
+        "dct:format": {
+            "@id": "registry_relay:SPDCI-Sync",
+        },
+        "dcat:accessURL": registry.sync_search,
+        "dcat:accessService": {
+            "@id": access_service,
+            "@type": "dcat:DataService",
+            "dcterms:title": format!("{} SP DCI {} sync service", dataset.title, registry.registry),
+            "dspace:dataServiceType": "registry_relay:spdci-sync",
+            "dcat:endpointURL": registry.sync_search,
+            "dcat:servesDataset": dataset.links.self_url,
+            "dcterms:conformsTo": "https://spdci.org/",
+            "registry_relay:registryName": registry.registry,
+            "registry_relay:recordType": registry.record_type,
+        },
+        "dcterms:conformsTo": "https://spdci.org/",
     })
 }
 
@@ -396,6 +475,7 @@ fn context() -> Value {
         "dcat:distribution": { "@type": "@id" },
         "dcat:downloadURL": { "@type": "@id" },
         "dcat:endpointURL": { "@type": "@id" },
+        "dcat:servesDataset": { "@type": "@id" },
         "dct:format": { "@type": "@id" },
         "dcterms:accessRights": { "@type": "@id" },
         "dcterms:accrualPeriodicity": { "@type": "@id" },

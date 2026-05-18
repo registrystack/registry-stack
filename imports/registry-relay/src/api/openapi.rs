@@ -2275,7 +2275,9 @@ mod tests {
                 conforms_to: Vec::new(),
                 links: DatasetLinks {
                     self_url: "https://data.example.test/datasets/social_registry".to_string(),
+                    ogc_collections: None,
                 },
+                standards: Default::default(),
                 entities: vec![EntityMetadata {
                     name: "individual".to_string(),
                     title: Some("Individual".to_string()),

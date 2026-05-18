@@ -236,6 +236,19 @@ fn spatial_catalog_server() -> TestServer {
     server_from_config(path, &["social_registry:metadata"])
 }
 
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_catalog_server() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "auth:\n  mode: api_key\n  api_keys: []\n",
+        "auth:\n  mode: api_key\n  api_keys: []\n\nstandards:\n  spdci:\n    registries:\n      sr:\n        dataset: social_registry\n        entity: household\n        registry_type: ns:org:RegistryType:SR\n        record_type: spdci-extensions-social:Group\n        identifiers:\n          REGION: region\n        expression_fields:\n          region: region\n",
+    );
+    std::fs::write(&path, body).expect("write SP DCI config");
+    server_from_config(path, &["social_registry:metadata"])
+}
+
 fn principal(scopes: &[&str]) -> Principal {
     Principal {
         principal_id: "test".to_string(),
@@ -393,6 +406,14 @@ async fn catalog_and_dcat_advertise_ogc_links_for_spatial_entities() {
 
     catalog_resp.assert_status(StatusCode::OK);
     let catalog: Value = catalog_resp.json();
+    assert_eq!(
+        catalog["datasets"][0]["links"]["ogc_collections"],
+        "https://data.example.test/ogc/v1/datasets/social_registry/collections"
+    );
+    assert_eq!(
+        catalog["datasets"][0]["standards"]["ogc_api_features"]["collections"],
+        "https://data.example.test/ogc/v1/datasets/social_registry/collections"
+    );
     let household = entity(&catalog, "household");
     assert_eq!(
         household["links"]["ogc_collection"],
@@ -409,20 +430,78 @@ async fn catalog_and_dcat_advertise_ogc_links_for_spatial_entities() {
     let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
         .as_array()
         .expect("distributions");
-    let ogc = distributions
+    let dataset_ogc = distributions
         .iter()
         .find(|distribution| {
             distribution["dcat:accessService"]["dspace:dataServiceType"]
                 == "registry_relay:ogc-api-features"
+                && distribution["dcat:accessURL"]
+                    == "https://data.example.test/ogc/v1/datasets/social_registry/collections"
         })
-        .expect("OGC distribution");
+        .expect("dataset OGC distribution");
     assert_eq!(
-        ogc["dcat:accessURL"],
+        dataset_ogc["dcat:accessService"]["dcat:servesDataset"],
+        "https://data.example.test/datasets/social_registry"
+    );
+    let entity_ogc = distributions
+        .iter()
+        .find(|distribution| {
+            distribution["dcat:accessService"]["dspace:dataServiceType"]
+                == "registry_relay:ogc-api-features"
+                && distribution["dcat:accessURL"]
+                    == "https://data.example.test/ogc/v1/datasets/social_registry/collections/households"
+        })
+        .expect("entity OGC distribution");
+    assert_eq!(
+        entity_ogc["dcat:accessURL"],
         "https://data.example.test/ogc/v1/datasets/social_registry/collections/households"
     );
     assert_eq!(
-        ogc["dcat:downloadURL"],
+        entity_ogc["dcat:downloadURL"],
         "https://data.example.test/ogc/v1/datasets/social_registry/collections/households/items"
+    );
+}
+
+#[cfg(feature = "spdci-api-standards")]
+#[tokio::test]
+async fn catalog_and_dcat_advertise_spdci_services_for_bound_datasets() {
+    let server = spdci_catalog_server();
+    let catalog_resp = server.get("/catalog").await;
+
+    catalog_resp.assert_status(StatusCode::OK);
+    let catalog: Value = catalog_resp.json();
+    let registry = &catalog["datasets"][0]["standards"]["spdci"]["registries"][0];
+    assert_eq!(registry["registry"], "sr");
+    assert_eq!(registry["entity"], "household");
+    assert_eq!(
+        registry["sync_search"],
+        "https://data.example.test/dci/sr/registry/sync/search"
+    );
+
+    let dcat_resp = server.get("/catalog/dcat-ap.jsonld").await;
+    dcat_resp.assert_status(StatusCode::OK);
+    let dcat: Value = dcat_resp.json();
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("distributions");
+    let spdci = distributions
+        .iter()
+        .find(|distribution| {
+            distribution["dcat:accessService"]["dspace:dataServiceType"]
+                == "registry_relay:spdci-sync"
+        })
+        .expect("SP DCI distribution");
+    assert_eq!(
+        spdci["dcat:accessService"]["dcat:endpointURL"],
+        "https://data.example.test/dci/sr/registry/sync/search"
+    );
+    assert_eq!(
+        spdci["dcat:accessService"]["dcat:servesDataset"],
+        "https://data.example.test/datasets/social_registry"
+    );
+    assert_eq!(
+        spdci["dcat:accessService"]["registry_relay:registryName"],
+        "sr"
     );
 }
 

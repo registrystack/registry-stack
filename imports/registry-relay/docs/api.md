@@ -144,6 +144,10 @@ When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_r
 
 `GET /catalog` and `GET /catalog/dcat-ap.jsonld` return only datasets visible to the authenticated principal's metadata scopes.
 
+Dataset summaries and catalog entries advertise optional standards adapters when the caller can see the bound entity metadata. OGC API Features datasets include links to the canonical `/ogc/v1` landing and dataset collection endpoints. SP DCI-bound datasets include the configured registry slug and sync endpoints under `/dci/{registry}/registry/sync/...`.
+
+The DCAT-AP JSON-LD export registers those standards endpoints as `dcat:DataService` entries that `dcat:servesDataset` the corresponding dataset. The standards routes remain canonical at their protocol roots; `/datasets/{dataset_id}` acts as the discovery surface that connects them back to the native dataset model.
+
 `GET /openapi.json` is also auth-gated and metadata-filtered. The generated document includes only the operations and dataset/entity tags visible to the caller. `GET /docs` serves the local Scalar viewer and asks for a bearer token before fetching `GET /openapi.json`.
 
 ## Verify And Aggregates

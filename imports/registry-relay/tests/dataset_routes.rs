@@ -55,12 +55,28 @@ datasets:
             - name: household_id
               type: string
               nullable: false
+            - name: lon
+              type: number
+              nullable: true
+            - name: lat
+              type: number
+              nullable: true
     entities:
       - name: household
         table: households_table
         fields:
           - name: id
             from: household_id
+          - name: lon
+          - name: lat
+        spatial:
+          collection_id: households
+          title: Household locations
+          geometry:
+            kind: point
+            longitude_field: lon
+            latitude_field: lat
+            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
         access:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
@@ -70,6 +86,9 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq]
       - name: individual
         table: households_table
         fields:
@@ -142,6 +161,25 @@ fn server(scopes: &[&str]) -> TestServer {
     )
 }
 
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_server(scopes: &[&str]) -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "auth:\n  mode: api_key\n  api_keys: []\n",
+        "auth:\n  mode: api_key\n  api_keys: []\n\nstandards:\n  spdci:\n    registries:\n      sr:\n        dataset: social_registry\n        entity: household\n        registry_type: ns:org:RegistryType:SR\n        record_type: spdci-extensions-social:Group\n        identifiers:\n          HOUSEHOLD_ID: id\n        expression_fields:\n          household_id: id\n",
+    );
+    std::fs::write(&path, body).expect("write SP DCI config");
+    let config = Arc::new(config::load(&path).expect("config loads"));
+
+    TestServer::new(
+        datasets_router::<()>()
+            .layer(Extension(config))
+            .layer(Extension(principal(scopes))),
+    )
+}
+
 fn principal(scopes: &[&str]) -> Principal {
     Principal {
         principal_id: "test".to_string(),
@@ -169,6 +207,7 @@ async fn datasets_lists_only_datasets_with_entity_metadata_scope() {
         data[0]["conforms_to"][0],
         "https://example.test/profile/social"
     );
+    assert_eq!(data[0]["links"]["self"], "/datasets/social_registry");
     assert_eq!(data[0]["entities"], serde_json::json!(["household"]));
 }
 
@@ -217,7 +256,56 @@ async fn dataset_returns_single_summary_when_scope_matches_entity_in_dataset() {
     assert_eq!(body["sensitivity"], "confidential");
     assert_eq!(body["access_rights"], "non_public");
     assert_eq!(body["update_frequency"], "weekly");
+    assert_eq!(body["links"]["self"], "/datasets/payments");
     assert_eq!(body["entities"], serde_json::json!(["payment"]));
+}
+
+#[cfg(feature = "ogcapi-features")]
+#[tokio::test]
+async fn dataset_summary_advertises_visible_ogc_standard_service() {
+    let resp = server(&["social_registry:metadata"])
+        .get("/datasets/social_registry")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["links"]["ogc_collections"],
+        "/ogc/v1/datasets/social_registry/collections"
+    );
+    assert_eq!(body["standards"]["ogc_api_features"]["landing"], "/ogc/v1");
+    assert_eq!(
+        body["standards"]["ogc_api_features"]["collections"],
+        "/ogc/v1/datasets/social_registry/collections"
+    );
+}
+
+#[cfg(not(feature = "ogcapi-features"))]
+#[tokio::test]
+async fn dataset_summary_hides_ogc_standard_service_when_feature_is_disabled() {
+    let resp = server(&["social_registry:metadata"])
+        .get("/datasets/social_registry")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert!(body["links"].get("ogc_collections").is_none());
+    assert!(body.get("standards").is_none());
+}
+
+#[cfg(feature = "spdci-api-standards")]
+#[tokio::test]
+async fn dataset_summary_advertises_visible_spdci_standard_service() {
+    let resp = spdci_server(&["social_registry:metadata"])
+        .get("/datasets/social_registry")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let registry = &body["standards"]["spdci"]["registries"][0];
+    assert_eq!(registry["registry"], "sr");
+    assert_eq!(registry["entity"], "household");
+    assert_eq!(registry["sync_search"], "/dci/sr/registry/sync/search");
 }
 
 #[tokio::test]

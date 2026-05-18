@@ -41,6 +41,8 @@ pub struct DatasetMetadata {
     pub update_frequency: &'static str,
     pub conforms_to: Vec<String>,
     pub links: DatasetLinks,
+    #[serde(skip_serializing_if = "DatasetStandardsMetadata::is_empty")]
+    pub standards: DatasetStandardsMetadata,
     pub entities: Vec<EntityMetadata>,
 }
 
@@ -48,6 +50,48 @@ pub struct DatasetMetadata {
 pub struct DatasetLinks {
     #[serde(rename = "self")]
     pub self_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ogc_collections: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct DatasetStandardsMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ogc_api_features: Option<OgcApiFeaturesMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spdci: Option<SpdciStandardsMetadata>,
+}
+
+impl DatasetStandardsMetadata {
+    fn is_empty(&self) -> bool {
+        self.ogc_api_features.is_none() && self.spdci.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct OgcApiFeaturesMetadata {
+    pub landing: String,
+    pub conformance: String,
+    pub collections: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SpdciStandardsMetadata {
+    pub registries: Vec<SpdciRegistryMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SpdciRegistryMetadata {
+    pub registry: String,
+    pub entity: String,
+    pub record_type: String,
+    pub sync_search: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disability_details: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disability_support: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -210,6 +254,9 @@ fn dataset_metadata_with_entity_filter(
         return None;
     }
 
+    let links = dataset_links(base_url, dataset_id, &entities);
+    let standards = dataset_standards(config, base_url, dataset_id, &entities);
+
     Some(DatasetMetadata {
         dataset_id: dataset_id.to_string(),
         title: dataset.title.clone(),
@@ -224,11 +271,160 @@ fn dataset_metadata_with_entity_filter(
             .iter()
             .filter_map(|uri| expand_uri(config, uri))
             .collect(),
-        links: DatasetLinks {
-            self_url: format!("{base_url}/datasets/{dataset_id}"),
-        },
+        links,
+        standards,
         entities,
     })
+}
+
+fn dataset_links(base_url: &str, dataset_id: &str, entities: &[EntityMetadata]) -> DatasetLinks {
+    DatasetLinks {
+        self_url: format!("{base_url}/datasets/{dataset_id}"),
+        ogc_collections: ogc_collections_url(base_url, dataset_id, entities),
+    }
+}
+
+fn dataset_standards(
+    config: &Config,
+    base_url: &str,
+    dataset_id: &str,
+    entities: &[EntityMetadata],
+) -> DatasetStandardsMetadata {
+    DatasetStandardsMetadata {
+        ogc_api_features: ogc_api_features_metadata(base_url, dataset_id, entities),
+        spdci: spdci_metadata(config, base_url, dataset_id, entities),
+    }
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_collections_url(
+    base_url: &str,
+    dataset_id: &str,
+    entities: &[EntityMetadata],
+) -> Option<String> {
+    entities
+        .iter()
+        .any(|entity| entity.links.ogc_collection.is_some())
+        .then(|| format!("{base_url}/ogc/v1/datasets/{dataset_id}/collections"))
+}
+
+#[cfg(not(feature = "ogcapi-features"))]
+fn ogc_collections_url(
+    _base_url: &str,
+    _dataset_id: &str,
+    _entities: &[EntityMetadata],
+) -> Option<String> {
+    None
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_api_features_metadata(
+    base_url: &str,
+    dataset_id: &str,
+    entities: &[EntityMetadata],
+) -> Option<OgcApiFeaturesMetadata> {
+    entities
+        .iter()
+        .any(|entity| entity.links.ogc_collection.is_some())
+        .then(|| OgcApiFeaturesMetadata {
+            landing: format!("{base_url}/ogc/v1"),
+            conformance: format!("{base_url}/ogc/v1/conformance"),
+            collections: format!("{base_url}/ogc/v1/datasets/{dataset_id}/collections"),
+        })
+}
+
+#[cfg(not(feature = "ogcapi-features"))]
+fn ogc_api_features_metadata(
+    _base_url: &str,
+    _dataset_id: &str,
+    _entities: &[EntityMetadata],
+) -> Option<OgcApiFeaturesMetadata> {
+    None
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_metadata(
+    config: &Config,
+    base_url: &str,
+    dataset_id: &str,
+    entities: &[EntityMetadata],
+) -> Option<SpdciStandardsMetadata> {
+    let spdci = config.standards.spdci.as_ref()?;
+    let visible_entities = entities
+        .iter()
+        .map(|entity| entity.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let disability = spdci.disability_registry.as_ref();
+    let mut registries = Vec::new();
+
+    if spdci.registries.is_empty() {
+        if let Some(disability) = disability {
+            if disability.dataset.as_str() == dataset_id
+                && visible_entities.contains(disability.entity.as_str())
+            {
+                registries.push(spdci_registry_metadata(
+                    base_url,
+                    "dr",
+                    &disability.entity,
+                    "spdci-extensions-dci:DisabledPerson",
+                    true,
+                ));
+            }
+        }
+    } else {
+        for (name, registry) in &spdci.registries {
+            if registry.dataset.as_str() != dataset_id
+                || !visible_entities.contains(registry.entity.as_str())
+            {
+                continue;
+            }
+            let supports_disability = disability.is_some_and(|disability| {
+                disability.dataset.as_str() == registry.dataset.as_str()
+                    && disability.entity.as_str() == registry.entity.as_str()
+            });
+            registries.push(spdci_registry_metadata(
+                base_url,
+                name,
+                &registry.entity,
+                &registry.record_type,
+                supports_disability,
+            ));
+        }
+    }
+
+    (!registries.is_empty()).then_some(SpdciStandardsMetadata { registries })
+}
+
+#[cfg(not(feature = "spdci-api-standards"))]
+fn spdci_metadata(
+    _config: &Config,
+    _base_url: &str,
+    _dataset_id: &str,
+    _entities: &[EntityMetadata],
+) -> Option<SpdciStandardsMetadata> {
+    None
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_registry_metadata(
+    base_url: &str,
+    registry: &str,
+    entity: &str,
+    record_type: &str,
+    supports_disability: bool,
+) -> SpdciRegistryMetadata {
+    let sync_base = format!("{base_url}/dci/{registry}/registry/sync");
+    SpdciRegistryMetadata {
+        registry: registry.to_string(),
+        entity: entity.to_string(),
+        record_type: record_type.to_string(),
+        sync_search: format!("{sync_base}/search"),
+        disabled: supports_disability.then(|| format!("{sync_base}/disabled")),
+        disability_details: supports_disability
+            .then(|| format!("{sync_base}/get-disability-details")),
+        disability_support: supports_disability
+            .then(|| format!("{sync_base}/get-disability-support")),
+    }
 }
 
 #[must_use]
