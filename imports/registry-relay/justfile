@@ -11,6 +11,12 @@ setup:
 build:
     cargo build --release
 
+# Build the binary shape used by the core demo configs.
+# Usage: just demo-build
+#        just demo-build ogcapi-features
+demo-build features="":
+    if [ -n "{{features}}" ]; then cargo build --features "{{features}}"; else cargo build; fi
+
 # Run all tests with all features enabled.
 test:
     cargo test --all-features
@@ -59,6 +65,25 @@ ci: fmt-check lint-default lint test-default test deny
 #        just run config=path/to/other.yaml
 run config="config/example.yaml":
     cargo run -- --config {{config}}
+
+# Generate or rotate local demo API keys for the server and Bruno.
+demo-keys env="demo/.env.local":
+    uv run demo/scripts/generate_demo_keys.py --env-file {{env}}
+
+# List demo personas and the key variable to use for each OpenAPI-style task.
+# Usage: just demo-keys-list
+#        just demo-keys-list demo/config/disability_registry.yaml
+#        just demo-keys-list demo/config/all_demos.yaml path/to/demo.env
+demo-keys-list config="demo/config/all_demos.yaml" env="demo/.env.local":
+    uv run demo/scripts/list_demo_keys.py --config {{config}} --env-file {{env}}
+
+# Run a demo config, generating demo keys first when demo/.env.local is absent.
+# Usage: just demo-run
+#        just demo-run demo/config/benefits_casework.yaml
+#        just demo-run demo/config/disability_registry.yaml spdci-api-standards,standards-cel-mapping
+demo-run config="demo/config/all_demos.yaml" features="":
+    @if [ ! -f demo/.env.local ]; then uv run demo/scripts/generate_demo_keys.py --env-file; fi
+    set -a; . demo/.env.local; set +a; if [ -n "{{features}}" ]; then cargo run --features "{{features}}" -- --config {{config}}; else cargo run -- --config {{config}}; fi
 
 # Generate synthetic perf fixtures under perf/fixtures/generated/.
 # Usage: just perf-gen                       (default: all profiles)

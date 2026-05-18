@@ -115,7 +115,7 @@ A separate script produces fresh SHA-256 key fingerprints for the configs and th
 matching raw keys for Bruno:
 
 ```bash
-uv run demo/scripts/generate_demo_keys.py --env-file
+just demo-keys
 ```
 
 This writes two files in one go (both gitignored):
@@ -142,6 +142,17 @@ uv run demo/scripts/generate_demo_keys.py --bruno
 The script verifies every (raw, hash) pair before emitting anything, so
 broken output never reaches a config or environment file.
 
+To choose the right key for an API call, list the demo personas with the same
+operation words used by the OpenAPI document:
+
+```bash
+just demo-keys-list
+```
+
+The compact listing shows the key id, Bruno variable, raw bearer key, and the
+OpenAPI-style operations it unlocks, such as `List datasets`, `Get record`,
+`Run aggregate`, `Verify record exists`, and `Create claim verification`.
+
 After rotation, Bruno needs to re-read its collection `.env`. The simplest
 way is to close and reopen the collection in the Bruno UI (right-click the
 collection → close, then File → Open Collection → pick
@@ -152,22 +163,29 @@ collection → close, then File → Open Collection → pick
 Pick a config and source the env file before starting the server:
 
 ```bash
-set -a; source demo/.env.local; set +a
-cargo run -- --config demo/config/benefits_casework.yaml
+just demo-run demo/config/benefits_casework.yaml
 ```
 
 For the cross-demo workflows, use the combined config which loads all five
 datasets together:
 
 ```bash
-cargo run -- --config demo/config/all_demos.yaml
+just demo-run
+```
+
+`just demo-run` creates `demo/.env.local` first when it is missing, then
+starts the server with `demo/config/all_demos.yaml`. Build the demo binary
+shape without starting the server with:
+
+```bash
+just demo-build
 ```
 
 To exercise the OGC API Features demo surface over the clinic facilities
 collection, enable the feature flag:
 
 ```bash
-cargo run --features ogcapi-features -- --config demo/config/all_demos.yaml
+just demo-run demo/config/all_demos.yaml ogcapi-features
 ```
 
 The same works with `demo/config/clinic_capacity.yaml` if you only want the
@@ -177,7 +195,7 @@ facilities; exact operational coordinates remain unprojected.
 For the optional SP DCI sync demos, use the feature-gated config:
 
 ```bash
-cargo run --features spdci-api-standards,standards-cel-mapping -- --config demo/config/disability_registry.yaml
+just demo-run demo/config/disability_registry.yaml spdci-api-standards,standards-cel-mapping
 ```
 
 Example sync status request:
