@@ -151,3 +151,101 @@ impl TableProvider for SwappableTableProvider {
         self.inner().statistics()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use datafusion::arrow::array::{ArrayRef, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::MemTable;
+
+    fn ingest_ulid(value: &str) -> Ulid {
+        Ulid::from_string(value).expect("valid ulid")
+    }
+
+    fn mem_table(values: &[&str]) -> Arc<dyn TableProvider> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(values.to_vec())) as ArrayRef],
+        )
+        .expect("record batch");
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).expect("mem table"))
+    }
+
+    async fn query_values(ctx: &SessionContext, table_name: &str) -> Vec<String> {
+        let batches = ctx
+            .sql(&format!("select value from {table_name} order by value"))
+            .await
+            .expect("sql plans")
+            .collect()
+            .await
+            .expect("sql executes");
+        assert_eq!(batches.len(), 1);
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("value array")
+            .iter()
+            .map(|value| value.expect("non-null value").to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn register_or_replace_versioned_table_queries_replacement_provider() {
+        let ctx = SessionContext::new();
+        let table = "replacement_query";
+
+        register_or_replace_versioned_table(
+            &ctx,
+            table,
+            Some(ingest_ulid("01J5K8M0000000000000000000")),
+            mem_table(&["old-a", "old-b"]),
+        )
+        .await
+        .expect("register old table");
+        assert_eq!(query_values(&ctx, table).await, vec!["old-a", "old-b"]);
+
+        register_or_replace_versioned_table(
+            &ctx,
+            table,
+            Some(ingest_ulid("01J5K8M0000000000000000001")),
+            mem_table(&["new-a"]),
+        )
+        .await
+        .expect("replace table");
+
+        assert_eq!(query_values(&ctx, table).await, vec!["new-a"]);
+    }
+
+    #[tokio::test]
+    async fn table_snapshot_reports_current_ingest_ulid_after_replacement() {
+        let ctx = SessionContext::new();
+        let table = "snapshot_version";
+        let previous = ingest_ulid("01J5K8M0000000000000000000");
+        let current = ingest_ulid("01J5K8M0000000000000000001");
+
+        register_or_replace_versioned_table(&ctx, table, Some(previous), mem_table(&["previous"]))
+            .await
+            .expect("register previous table");
+        let previous_snapshot = table_snapshot(&ctx, table)
+            .await
+            .expect("previous snapshot");
+        assert_eq!(previous_snapshot.ingest_ulid, Some(previous));
+
+        register_or_replace_versioned_table(&ctx, table, Some(current), mem_table(&["current"]))
+            .await
+            .expect("replace table");
+        let current_snapshot = table_snapshot(&ctx, table).await.expect("current snapshot");
+
+        assert_eq!(current_snapshot.ingest_ulid, Some(current));
+        assert_eq!(query_values(&ctx, table).await, vec!["current"]);
+    }
+}

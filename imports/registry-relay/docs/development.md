@@ -52,6 +52,33 @@ cargo test --test api_docs
 cargo test provenance
 ```
 
+## Coverage Metrics
+
+Use `cargo-llvm-cov` when you need quantitative coverage metrics to complement the qualitative test review:
+
+```sh
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+cargo llvm-cov --all-features --json --summary-only --output-path target/llvm-cov-summary.json
+```
+
+The summary report is written under ignored `target/` artifacts. For a quick local refresh after an instrumented coverage build already exists, add `--no-clean` to reuse compiled coverage artifacts:
+
+```sh
+cargo llvm-cov --all-features --json --summary-only --output-path target/llvm-cov-summary.json --no-clean
+```
+
+If a Homebrew-managed Rust toolchain cannot find `llvm-cov` or `llvm-profdata`, install Homebrew LLVM and point `cargo-llvm-cov` at it explicitly:
+
+```sh
+brew install llvm
+LLVM_COV="$(brew --prefix llvm)/bin/llvm-cov" \
+LLVM_PROFDATA="$(brew --prefix llvm)/bin/llvm-profdata" \
+cargo llvm-cov --all-features --json --summary-only --output-path target/llvm-cov-summary.json
+```
+
+External-service tests remain ignored unless their required environment is configured, such as `DATA_GATE_POSTGRES_TEST_URL` for PostgreSQL and the Zitadel OIDC variables documented in [configuration.md](configuration.md#oidc-oauth2).
+
 ## Project Layout
 
 ```text

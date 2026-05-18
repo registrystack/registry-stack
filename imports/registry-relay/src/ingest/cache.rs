@@ -289,13 +289,100 @@ fn cache_err(op: &str, e: io::Error) -> IngestError {
 mod tests {
     use std::sync::Arc;
 
+    use datafusion::arrow::array::{Int64Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use futures::stream;
     use tempfile::TempDir;
 
-    use super::{gc_resource, CacheLayout};
+    use super::{gc_resource, write_atomic, CacheLayout};
     use crate::config::{DatasetId, ResourceId};
+    use crate::error::IngestError;
 
     fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
         serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
+    }
+
+    fn simple_batch() -> (SchemaRef, RecordBatch) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64, 2])),
+                Arc::new(StringArray::from(vec!["alice", "bob"])),
+            ],
+        )
+        .expect("record batch");
+
+        (schema, batch)
+    }
+
+    #[tokio::test]
+    async fn write_atomic_writes_readable_parquet_and_removes_tmp() {
+        let tmp = TempDir::new().expect("tempdir");
+        let layout = CacheLayout::new(Arc::from(tmp.path()));
+        let dataset: DatasetId = id("dataset");
+        let resource: ResourceId = id("resource");
+        let ulid = ulid::Ulid::from_string("01CRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let (schema, batch) = simple_batch();
+
+        let final_path = write_atomic(
+            &layout,
+            &dataset,
+            &resource,
+            ulid,
+            schema,
+            stream::iter(vec![Ok(batch)]),
+        )
+        .await
+        .expect("write succeeds");
+
+        assert_eq!(final_path, layout.final_path(&dataset, &resource, ulid));
+        assert!(final_path.exists());
+        assert!(!layout.tmp_path(&dataset, &resource, ulid).exists());
+
+        let raw = tokio::fs::read(&final_path).await.expect("read parquet");
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(raw))
+            .expect("parquet metadata")
+            .build()
+            .expect("parquet reader");
+        let batches = reader
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parquet batches");
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+
+        assert_eq!(total_rows, 2);
+        assert_eq!(batches[0].schema().field(0).name(), "id");
+        assert_eq!(batches[0].schema().field(1).name(), "name");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_removes_tmp_when_batch_stream_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let layout = CacheLayout::new(Arc::from(tmp.path()));
+        let dataset: DatasetId = id("dataset");
+        let resource: ResourceId = id("resource");
+        let ulid = ulid::Ulid::from_string("01CRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let (schema, batch) = simple_batch();
+
+        let err = write_atomic(
+            &layout,
+            &dataset,
+            &resource,
+            ulid,
+            schema,
+            stream::iter(vec![Ok(batch), Err(IngestError::SourceUnreadable)]),
+        )
+        .await
+        .expect_err("stream failure propagates");
+
+        assert!(matches!(err, IngestError::SourceUnreadable));
+        assert!(!layout.final_path(&dataset, &resource, ulid).exists());
+        assert!(!layout.tmp_path(&dataset, &resource, ulid).exists());
     }
 
     #[tokio::test]

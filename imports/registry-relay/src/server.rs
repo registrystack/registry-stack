@@ -678,4 +678,43 @@ mod tests {
         assert_eq!(record["error_code"], "internal.payload_too_large");
         assert_eq!(record["status_code"], 413);
     }
+
+    #[tokio::test]
+    async fn uri_length_layer_returns_problem_details_and_audit_code() {
+        let config = Arc::new(load_example_config());
+        let inmem = InMemorySink::new();
+        let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+        let router = Router::new().route("/", get(|| async { StatusCode::OK }));
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        );
+        let uri = format!("/{}", "x".repeat(MAX_URI_BYTES));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::URI_TOO_LONG);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("problem JSON");
+        assert_eq!(body["code"], "internal.uri_too_long");
+        assert_eq!(body["status"], 414);
+
+        let records = inmem.snapshot();
+        assert_eq!(records.len(), 1);
+        let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
+        assert_eq!(record["error_code"], "internal.uri_too_long");
+        assert_eq!(record["status_code"], 414);
+    }
 }

@@ -27,6 +27,9 @@ The closest local CI equivalent is:
 just ci
 ```
 
+Coverage metrics are documented in
+[docs/development.md#coverage-metrics](docs/development.md#coverage-metrics).
+
 PostgreSQL integration tests require `DATA_GATE_POSTGRES_TEST_URL`; without it,
 the relevant tests are ignored locally.
 

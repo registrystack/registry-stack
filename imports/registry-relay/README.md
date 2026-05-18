@@ -53,6 +53,7 @@ just build
 ```
 
 The release binary is written to `target/release/registry-relay`.
+Coverage metrics use `cargo-llvm-cov`; see [docs/development.md#coverage-metrics](docs/development.md#coverage-metrics) for the install and report commands.
 
 ## Configure
 
