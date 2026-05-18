@@ -8,7 +8,7 @@
 //   Auth: Authorization: Bearer <token> by default. X-Api-Key is tested in auth_deny.js.
 
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.2/index.js';
-import { Counter, Rate, Trend } from 'k6/metrics';
+import { Counter, Rate } from 'k6/metrics';
 import { fail } from 'k6';
 
 // ---------------------------------------------------------------------------
@@ -162,6 +162,14 @@ const THRESHOLDS = {
   'mixed_read_large': {
     'http_req_duration{expected_status:false}': ['p(95)<100', 'p(99)<200'],
   },
+  // Claim verification: write+sign path (HMAC + DataFusion candidate scan +
+  // Ed25519 receipt sign per request). The aggregate threshold here is a
+  // backstop; per-decision-path budgets are set inline in
+  // claim_verification.js via tagged thresholds and are tighter for the
+  // unique-lookup paths (match / mismatch).
+  'claim_verification': {
+    'http_req_duration{expected_status:false}': ['p(95)<200', 'p(99)<500'],
+  },
 };
 
 // Global thresholds appended to every scenario.
@@ -182,23 +190,6 @@ export function thresholdsFor(key) {
 // ---------------------------------------------------------------------------
 // Scenario / options factory
 // ---------------------------------------------------------------------------
-
-// Profile -> VU count and RPS defaults.
-const PROFILE_VUS = {
-  'single': 1,
-  'light': 5,
-  'moderate': 20,
-  'heavy': 50,
-  'stress': 100,
-};
-
-const PROFILE_RPS = {
-  'single': 1,
-  'light': 10,
-  'moderate': 100,
-  'heavy': 250,
-  'stress': 500,
-};
 
 export function commonOptions(opts) {
   const {
