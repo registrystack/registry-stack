@@ -14,6 +14,11 @@
         sh:nodeKind sh:Literal ;
     ] ;
     sh:property [
+        sh:path dcterms:description ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
         sh:path dspace:participantId ;
         sh:minCount 1 ;
         sh:nodeKind sh:Literal ;
@@ -27,6 +32,11 @@
         sh:path dcat:dataset ;
         sh:minCount 1 ;
         sh:class dcat:Dataset ;
+    ] ;
+    sh:property [
+        sh:path dcat:landingPage ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
     ] .
 
 <https://registry-relay.dev/shapes/DcatDatasetSmokeShape>
@@ -61,6 +71,11 @@
         sh:path dcat:distribution ;
         sh:minCount 1 ;
         sh:class dcat:Distribution ;
+    ] ;
+    sh:property [
+        sh:path dcat:landingPage ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
     ] ;
     sh:property [
         sh:path odrl:hasPolicy ;
@@ -106,6 +121,11 @@
         sh:nodeKind sh:IRI ;
     ] ;
     sh:property [
+        sh:path dcat:endpointDescription ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
         sh:path dspace:dataServiceType ;
         sh:minCount 1 ;
         sh:nodeKind sh:Literal ;
@@ -131,6 +151,11 @@
         sh:path sh:property ;
         sh:minCount 1 ;
         sh:class sh:PropertyShape ;
+    ] ;
+    sh:property [
+        sh:path sh:nodeKind ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
     ] .
 
 <https://registry-relay.dev/shapes/EmbeddedPropertyShapeSmokeShape>
@@ -145,4 +170,25 @@
         sh:path sh:name ;
         sh:minCount 1 ;
         sh:nodeKind sh:Literal ;
-    ] .
+    ] ;
+    sh:property [
+        sh:path sh:nodeKind ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:or (
+        [
+            sh:property [
+                sh:path sh:datatype ;
+                sh:minCount 1 ;
+                sh:nodeKind sh:IRI ;
+            ]
+        ]
+        [
+            sh:property [
+                sh:path sh:class ;
+                sh:minCount 1 ;
+                sh:nodeKind sh:IRI ;
+            ]
+        ]
+    ) .

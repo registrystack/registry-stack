@@ -266,19 +266,27 @@ fn entity<'a>(body: &'a Value, name: &str) -> &'a Value {
 fn assert_structural_dcat_shacl(body: &Value) {
     assert_eq!(body["@type"], "dcat:Catalog");
     assert_eq!(body["@context"]["dcat"], "http://www.w3.org/ns/dcat#");
-    assert_eq!(body["@context"]["dct"], "http://purl.org/dc/terms/");
     assert_eq!(body["@context"]["dcterms"], "http://purl.org/dc/terms/");
+    assert!(
+        body["@context"]["dct"].is_null(),
+        "redundant dct alias must not be present: use dcterms exclusively"
+    );
     assert_eq!(
         body["@context"]["dspace"],
         "https://w3id.org/dspace/2025/1/"
     );
     assert_eq!(body["@context"]["odrl"], "http://www.w3.org/ns/odrl/2/");
     assert_eq!(body["@context"]["sh"], "http://www.w3.org/ns/shacl#");
+    assert_eq!(body["@context"]["xsd"], "http://www.w3.org/2001/XMLSchema#");
     assert_eq!(body["@context"]["dcat:accessService"]["@type"], "@id");
     assert_eq!(body["@context"]["dcat:endpointURL"]["@type"], "@id");
-    assert_eq!(body["@context"]["dct:format"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:endpointDescription"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:landingPage"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcterms:format"]["@type"], "@id");
     assert_eq!(body["@context"]["odrl:action"]["@type"], "@id");
     assert_eq!(body["@context"]["odrl:hasPolicy"]["@type"], "@id");
+    assert_eq!(body["@context"]["sh:datatype"]["@type"], "@id");
+    assert_eq!(body["@context"]["sh:nodeKind"]["@type"], "@id");
     assert_eq!(body["@context"]["sh:path"]["@type"], "@id");
     assert_eq!(body["@context"]["sh:targetClass"]["@type"], "@id");
     assert_eq!(body["@context"]["dcat:accessURL"]["@type"], "@id");
@@ -291,6 +299,8 @@ fn assert_structural_dcat_shacl(body: &Value) {
             dataset["@type"] == "dcat:Dataset"
                 && dataset["@id"].is_string()
                 && dataset["dcterms:title"].is_string()
+                && dataset["dcterms:description"].is_string()
+                && dataset["dcat:landingPage"].is_string()
                 && dataset["odrl:hasPolicy"]["@type"] == "odrl:Offer"
                 && dataset["dcat:distribution"].is_array()
         }));
@@ -302,11 +312,13 @@ fn assert_structural_dcat_shacl(body: &Value) {
             shape["@type"] == "sh:NodeShape"
                 && shape["@id"].is_string()
                 && shape["sh:targetClass"].is_string()
+                && shape["sh:nodeKind"] == "sh:IRI"
                 && shape["sh:property"].as_array().is_some_and(|properties| {
                     properties.iter().all(|property| {
                         property["@type"] == "sh:PropertyShape"
                             && property["sh:path"].is_string()
                             && property["sh:name"].is_string()
+                            && property["sh:nodeKind"].is_string()
                     })
                 })
         }));
@@ -502,6 +514,229 @@ async fn catalog_and_dcat_advertise_spdci_services_for_bound_datasets() {
     );
 }
 
+// --- BRegDCAT-AP 3.0.0 extension tests ---
+
+fn bregdcat_server() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    // Add spatial_coverage and status on the dataset, authority_type on catalog,
+    // and a second dataset with a codelist field to test dct:references.
+    // authority_type uses the EU corporate-body-classification scheme, which is
+    // the current SEMIC-recommended vocabulary for BRegDCAT-AP publisher type.
+    // The legacy ADMS publishertype scheme (http://purl.org/adms/publishertype/...)
+    // is also accepted by validators but is no longer the recommended default.
+    body = body.replace(
+        "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test",
+        "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test\n  authority_type: http://publications.europa.eu/resource/authority/corporate-body-classification/NAT_AUTH\n  default_spatial_coverage: http://publications.europa.eu/resource/authority/country/NLD",
+    );
+    body = body.replace(
+        "  - id: social_registry\n    title: Social Registry\n    description: Synthetic registry\n    owner: Social Ministry\n    sensitivity: personal\n    access_rights: restricted\n    update_frequency: monthly",
+        "  - id: social_registry\n    title: Social Registry\n    description: Synthetic registry\n    owner: Social Ministry\n    sensitivity: personal\n    access_rights: restricted\n    update_frequency: monthly\n    status: completed\n    spatial_coverage: http://publications.europa.eu/resource/authority/country/BEL",
+    );
+    std::fs::write(&path, body).expect("write bregdcat config");
+    server_from_config(path, &["social_registry:metadata"])
+}
+
+// Note: `dcterms:identifier` on dcat:Dataset is pre-existing DCAT-AP behavior
+// and is implicitly exercised by the BRegDCAT-AP tests below that read other
+// `dcterms:*` fields from the same dataset object. It is not BRegDCAT-AP-specific
+// and intentionally does not get its own bregdcat_* test.
+
+#[tokio::test]
+async fn bregdcat_dataset_has_dct_spatial_from_dataset_config() {
+    let resp = bregdcat_server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    // Dataset-level spatial_coverage overrides the catalog default.
+    assert_eq!(
+        body["dcat:dataset"][0]["dcterms:spatial"],
+        "http://publications.europa.eu/resource/authority/country/BEL"
+    );
+}
+
+#[tokio::test]
+async fn bregdcat_dataset_falls_back_to_default_spatial_coverage() {
+    // Use a config with no per-dataset spatial_coverage but with a catalog default.
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test",
+        "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test\n  default_spatial_coverage: http://publications.europa.eu/resource/authority/country/NLD",
+    );
+    std::fs::write(&path, body).expect("write config");
+    let resp = server_from_config(path, &["social_registry:metadata"])
+        .get("/catalog/dcat-ap.jsonld")
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["dcat:dataset"][0]["dcterms:spatial"],
+        "http://publications.europa.eu/resource/authority/country/NLD"
+    );
+}
+
+#[tokio::test]
+async fn bregdcat_dataset_omits_dct_spatial_when_not_configured() {
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert!(
+        body["dcat:dataset"][0]["dcterms:spatial"].is_null(),
+        "dcterms:spatial must be absent when not configured"
+    );
+}
+
+#[tokio::test]
+async fn bregdcat_dataset_adms_status_context_aliases_are_present() {
+    // Verifies the JSON-LD `@type: @id` alias for adms:status and the adms
+    // namespace binding. URI mapping for each enum variant is covered by
+    // `bregdcat_adms_status_emits_canonical_uri_for_each_variant`.
+    let resp = bregdcat_server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["@context"]["adms"], "http://www.w3.org/ns/adms#");
+    assert_eq!(body["@context"]["adms:status"]["@type"], "@id");
+}
+
+async fn dataset_adms_status_for_config_value(yaml_status: &str) -> String {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "  - id: social_registry\n    title: Social Registry\n    description: Synthetic registry\n    owner: Social Ministry\n    sensitivity: personal\n    access_rights: restricted\n    update_frequency: monthly",
+        &format!(
+            "  - id: social_registry\n    title: Social Registry\n    description: Synthetic registry\n    owner: Social Ministry\n    sensitivity: personal\n    access_rights: restricted\n    update_frequency: monthly\n    status: {yaml_status}"
+        ),
+    );
+    std::fs::write(&path, body).expect("write config");
+    let resp = server_from_config(path, &["social_registry:metadata"])
+        .get("/catalog/dcat-ap.jsonld")
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    body["dcat:dataset"][0]["adms:status"]
+        .as_str()
+        .expect("adms:status must be a string IRI")
+        .to_string()
+}
+
+#[tokio::test]
+async fn bregdcat_adms_status_emits_canonical_uri_for_each_variant() {
+    // Every AdmsStatus variant must map to its canonical ADMS Status SKOS IRI.
+    // Adding a new variant requires updating this table and the emitter match
+    // (which is exhaustive, so the compiler will already enforce coverage).
+    let cases = [
+        ("under_development", "UnderDevelopment"),
+        ("completed", "Completed"),
+        ("deprecated", "Deprecated"),
+        ("withdrawn", "Withdrawn"),
+    ];
+    for (yaml_value, iri_term) in cases {
+        let got = dataset_adms_status_for_config_value(yaml_value).await;
+        let expected = format!("http://purl.org/adms/status/{iri_term}");
+        assert_eq!(
+            got, expected,
+            "adms:status for config `status: {yaml_value}` must map to {expected}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn bregdcat_adms_status_defaults_to_under_development_when_unset() {
+    // When the operator does not declare status, BRegDCAT-AP requires a value;
+    // the emitter applies UnderDevelopment as the weakest lifecycle claim.
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["dcat:dataset"][0]["adms:status"],
+        "http://purl.org/adms/status/UnderDevelopment"
+    );
+}
+
+#[tokio::test]
+async fn bregdcat_publisher_has_dct_type_when_authority_type_configured() {
+    let resp = bregdcat_server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    // Catalog-level publisher.
+    assert_eq!(
+        body["dcterms:publisher"]["dcterms:type"],
+        "http://publications.europa.eu/resource/authority/corporate-body-classification/NAT_AUTH"
+    );
+    // Dataset-level publisher inherits the same publisher_agent.
+    assert_eq!(
+        body["dcat:dataset"][0]["dcterms:publisher"]["dcterms:type"],
+        "http://publications.europa.eu/resource/authority/corporate-body-classification/NAT_AUTH"
+    );
+    assert_eq!(body["@context"]["org"], "http://www.w3.org/ns/org#");
+}
+
+#[tokio::test]
+async fn bregdcat_publisher_has_no_dct_type_when_not_configured() {
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert!(
+        body["dcterms:publisher"]["dcterms:type"].is_null(),
+        "dcterms:type must be absent when authority_type is not configured"
+    );
+}
+
+#[tokio::test]
+async fn bregdcat_property_shape_keeps_codelist_annotation_only() {
+    // Codelists surface as typed skos:ConceptScheme nodes under
+    // dcterms:references on the dataset; the PropertyShape carries only the
+    // custom registry_relay:codelist annotation. skos:inScheme would be a
+    // SKOS-semantic mismatch on a sh:PropertyShape and must NOT be emitted.
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let shapes = body["sh:shapesGraph"].as_array().expect("shapes");
+    let household = shapes
+        .iter()
+        .find(|s| s["sh:name"] == "household")
+        .expect("household shape");
+    let region_prop = household["sh:property"]
+        .as_array()
+        .expect("properties")
+        .iter()
+        .find(|p| p["sh:name"] == "region")
+        .expect("region property");
+    assert_eq!(
+        region_prop["registry_relay:codelist"],
+        "https://example.test/vocab/codelists/Region"
+    );
+    assert!(
+        region_prop["skos:inScheme"].is_null(),
+        "skos:inScheme must not be emitted on a sh:PropertyShape"
+    );
+    assert_eq!(
+        body["@context"]["skos"],
+        "http://www.w3.org/2004/02/skos/core#"
+    );
+}
+
+#[tokio::test]
+async fn bregdcat_dataset_has_dcterms_references_typed_as_concept_schemes() {
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let references = body["dcat:dataset"][0]["dcterms:references"]
+        .as_array()
+        .expect("dcterms:references must be an array");
+    let region_ref = references
+        .iter()
+        .find(|r| r["@id"] == "https://example.test/vocab/codelists/Region")
+        .expect("dcterms:references must include the Region codelist IRI");
+    assert_eq!(
+        region_ref["@type"], "skos:ConceptScheme",
+        "each referenced codelist must be typed as skos:ConceptScheme"
+    );
+}
+
 #[tokio::test]
 async fn catalog_returns_etag_and_honors_if_none_match() {
     let server = server();
@@ -530,6 +765,10 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(body["@type"], "dcat:Catalog");
     assert_eq!(body["dspace:participantId"], "did:web:data.example.test");
     assert_structural_dcat_shacl(&body);
+    assert_eq!(
+        body["dcterms:description"],
+        "DCAT-AP catalog for Program Data Catalog"
+    );
     assert_eq!(body["@context"]["foaf"], "http://xmlns.com/foaf/0.1/");
     assert_eq!(body["dcterms:publisher"]["@type"], "foaf:Agent");
     assert_eq!(
@@ -564,7 +803,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     );
     let distribution = &body["dcat:dataset"][0]["dcat:distribution"][0];
     assert_eq!(
-        distribution["dct:format"]["@id"],
+        distribution["dcterms:format"]["@id"],
         "registry_relay:HttpData-PULL"
     );
     assert_eq!(
@@ -578,6 +817,10 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(
         distribution["dcat:accessService"]["dcat:endpointURL"],
         "https://data.example.test/datasets/social_registry/household"
+    );
+    assert_eq!(
+        distribution["dcat:accessService"]["dcat:endpointDescription"],
+        "https://data.example.test/openapi.json"
     );
 
     let shapes = body["sh:shapesGraph"].as_array().expect("shapes graph");
@@ -598,6 +841,9 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         .any(|property| {
             property["sh:path"] == "https://example.test/vocab/properties/region"
                 && property["sh:name"] == "region"
+                && property["sh:nodeKind"] == "sh:Literal"
+                && property["sh:datatype"] == "xsd:string"
+                && property["sh:maxCount"] == 1
         }));
     assert!(household["sh:property"]
         .as_array()
@@ -606,6 +852,10 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         .any(|property| {
             property["sh:path"] == "https://example.test/vocab/relationships/householdMember"
                 && property["registry_relay:targetEntity"] == "individual"
+                && property["sh:nodeKind"] == "sh:IRI"
+                && property["sh:class"]
+                    == "https://data.example.test/datasets/social_registry/individual/schema"
+                && property["sh:maxCount"].is_null()
         }));
 }
 
@@ -687,6 +937,27 @@ async fn generated_catalog_can_run_external_shacl_validation_when_enabled() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[tokio::test]
+async fn export_generated_dcat_ap_catalog_when_path_is_set() {
+    let Ok(path) = std::env::var("REGISTRY_RELAY_EXPORT_DCAT_AP_PATH") else {
+        return;
+    };
+
+    let resp = server().get("/catalog/dcat-ap.jsonld").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    let path = std::path::PathBuf::from(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create export directory");
+    }
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&body).expect("catalog serializes"),
+    )
+    .expect("write exported catalog");
 }
 
 #[tokio::test]
@@ -880,7 +1151,18 @@ async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready
     assert_eq!(scheme["type"], "http");
     assert_eq!(scheme["scheme"], "bearer");
 
-    assert_eq!(body["security"], serde_json::json!([{ "bearerAuth": [] }]));
+    assert_eq!(
+        body["security"],
+        serde_json::json!([{ "bearerAuth": [] }, { "apiKeyAuth": [] }])
+    );
+    assert_eq!(
+        body["components"]["securitySchemes"]["apiKeyAuth"]["in"],
+        "header"
+    );
+    assert_eq!(
+        body["components"]["securitySchemes"]["apiKeyAuth"]["name"],
+        "X-Api-Key"
+    );
 
     // `/health` and `/ready` are on the unauthenticated sub-router in
     // `server::build_app_with_provenance`. Their entries override the

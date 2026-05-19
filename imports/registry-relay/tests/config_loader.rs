@@ -398,6 +398,36 @@ fn unknown_vocabulary_prefix_rejected() {
 }
 
 #[test]
+fn invalid_authority_type_rejected() {
+    env::set_var(
+        "TEST_KEY_HASH_AUTH_TYPE",
+        make_fingerprint(b"auth-type-test"),
+    );
+    let result = config::load(&fixture_path("invalid_authority_type.yaml"));
+    assert_config_code(result, "config.validation_error");
+}
+
+#[test]
+fn invalid_default_spatial_coverage_rejected() {
+    env::set_var(
+        "TEST_KEY_HASH_DEF_SPATIAL",
+        make_fingerprint(b"def-spatial-test"),
+    );
+    let result = config::load(&fixture_path("invalid_default_spatial_coverage.yaml"));
+    assert_config_code(result, "config.validation_error");
+}
+
+#[test]
+fn invalid_dataset_spatial_coverage_rejected() {
+    env::set_var(
+        "TEST_KEY_HASH_DS_SPATIAL",
+        make_fingerprint(b"ds-spatial-test"),
+    );
+    let result = config::load(&fixture_path("invalid_dataset_spatial_coverage.yaml"));
+    assert_config_code(result, "config.validation_error");
+}
+
+#[test]
 fn allowed_filter_unknown_field_rejected() {
     env::set_var("TEST_KEY_HASH_FILTER", make_fingerprint(b"filter-test"));
     let result = config::load(&fixture_path("allowed_filter_unknown_field.yaml"));

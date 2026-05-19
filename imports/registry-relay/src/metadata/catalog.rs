@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use crate::config::vocabularies;
 use crate::config::{
-    AccessRights, Config, DatasetConfig, EntityConfig, FieldConfig, FieldType, RelationshipKind,
-    UpdateFrequency,
+    AccessRights, AdmsStatus, Config, DatasetConfig, EntityConfig, FieldConfig, FieldType,
+    RelationshipKind, UpdateFrequency,
 };
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 
@@ -18,6 +18,9 @@ pub struct CatalogDocument {
     pub publisher: String,
     pub base_url: String,
     pub participant_id: String,
+    /// BRegDCAT-AP publisher authority type IRI, forwarded from `CatalogConfig`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_type: Option<String>,
     pub links: CatalogLinks,
     pub datasets: Vec<DatasetMetadata>,
 }
@@ -40,6 +43,15 @@ pub struct DatasetMetadata {
     pub access_rights: &'static str,
     pub update_frequency: &'static str,
     pub conforms_to: Vec<String>,
+    /// BRegDCAT-AP `dct:spatial` IRI, if configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spatial_coverage: Option<String>,
+    /// BRegDCAT-AP `adms:status`. Defaulted at construction to
+    /// `UnderDevelopment` when the operator does not declare one (the
+    /// weakest lifecycle claim; forces explicit opt-in to anything
+    /// stronger). The emitter maps this to the canonical
+    /// `http://purl.org/adms/status/<Term>` IRI.
+    pub adms_status: AdmsStatus,
     pub links: DatasetLinks,
     #[serde(skip_serializing_if = "DatasetStandardsMetadata::is_empty")]
     pub standards: DatasetStandardsMetadata,
@@ -200,6 +212,11 @@ fn catalog_document_with_entity_filter(
             .participant_id
             .clone()
             .unwrap_or_else(|| base_url.clone()),
+        authority_type: config
+            .catalog
+            .authority_type
+            .as_deref()
+            .and_then(|uri| vocabularies::expand(uri, &config.vocabularies)),
         links: CatalogLinks {
             self_url: format!("{base_url}/catalog"),
             dcat_ap: format!("{base_url}/catalog/dcat-ap.jsonld"),
@@ -257,6 +274,12 @@ fn dataset_metadata_with_entity_filter(
     let links = dataset_links(base_url, dataset_id, &entities);
     let standards = dataset_standards(config, base_url, dataset_id, &entities);
 
+    let spatial_coverage = dataset
+        .spatial_coverage
+        .as_deref()
+        .or(config.catalog.default_spatial_coverage.as_deref())
+        .and_then(|uri| expand_uri(config, uri));
+
     Some(DatasetMetadata {
         dataset_id: dataset_id.to_string(),
         title: dataset.title.clone(),
@@ -271,6 +294,8 @@ fn dataset_metadata_with_entity_filter(
             .iter()
             .filter_map(|uri| expand_uri(config, uri))
             .collect(),
+        spatial_coverage,
+        adms_status: dataset.status.unwrap_or(AdmsStatus::UnderDevelopment),
         links,
         standards,
         entities,

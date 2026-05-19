@@ -1,0 +1,104 @@
+@prefix adms: <http://www.w3.org/ns/adms#> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# BRegDCAT-AP 3.0.0 smoke shapes layered on top of dcat-ap-catalog-smoke.ttl.
+# Source: https://semiceu.github.io/uri.semic.eu-generated/BRegDCAT-AP/releases/3.0.0/
+# These shapes are ADDITIVE: they do not replace dcat-ap-catalog-smoke.ttl.
+# Run both fixtures together (which is the default in validate_dcat_shacl.py).
+#
+# Note on scope: BRegDCAT-AP 3.0.0 is a thin annex that defers to DCAT-AP 3.0
+# for most cardinalities ("In any other case, the guidelines of DCAT-AP itself
+# are applicable"), and DCAT-AP 3.0 marks `dct:identifier` / `dct:spatial`
+# Recommended/Optional, not Mandatory. The shapes below assert what this
+# emitter ALWAYS or CONDITIONALLY produces, not what the BRegDCAT-AP
+# specification mandates. Full mandatoriness gap analysis against SEMIC's
+# active BRegDCAT-AP profile is delegated to the SEMIC ITB validator job in
+# .github/workflows/dcat-ap-external-validation.yml (continue-on-error, gap
+# report).
+#
+# ---------------------------------------------------------------------------
+# dcat:Dataset -- emitter-produced shape constraints
+#   dcterms:identifier  always emitted (dataset id, Literal, minCount 1)
+#   adms:status         always emitted (lifecycle IRI, defaults to
+#                       UnderDevelopment when not configured, minCount 1)
+#   dcterms:spatial     emitted when spatial_coverage is configured; checked
+#                       as "IRI when present" so the fixture stays green for
+#                       deployments that have not set spatial_coverage
+#   dcterms:references  emitted as typed skos:ConceptScheme nodes, one per
+#                       distinct codelist IRI referenced by the dataset's
+#                       entity fields (project convention; see top comment in
+#                       src/metadata/shacl.rs::dcat_dataset)
+# ---------------------------------------------------------------------------
+
+<https://registry-relay.dev/shapes/BRegDatasetMandatoryShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:Dataset ;
+    sh:property [
+        sh:path dcterms:identifier ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+        sh:name "identifier" ;
+    ] ;
+    sh:property [
+        sh:path dcterms:spatial ;
+        sh:nodeKind sh:IRI ;
+        sh:name "spatial" ;
+    ] ;
+    sh:property [
+        sh:path adms:status ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:name "status" ;
+    ] .
+
+# `dcterms:references` on Dataset is optional in BRegDCAT-AP; this emitter
+# uses it (project convention) to surface codelist IRIs as typed
+# `skos:ConceptScheme` related resources. When present it must be IRI-valued.
+<https://registry-relay.dev/shapes/BRegDatasetReferencesShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:Dataset ;
+    sh:property [
+        sh:path dcterms:references ;
+        sh:nodeKind sh:IRI ;
+        sh:name "references" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# foaf:Agent (publisher) -- BRegDCAT-AP recommended extension
+# Section: Agent (BRegDCAT-AP 3.0.0)
+#   dct:type  R 0..*  IRI  (type of agent from EU authority table or similar)
+#   Cardinality is recommended (0..*), not mandatory: no sh:minCount here.
+#   When present it must be an IRI.
+# ---------------------------------------------------------------------------
+
+<https://registry-relay.dev/shapes/BRegAgentTypeShape>
+    a sh:NodeShape ;
+    sh:targetClass foaf:Agent ;
+    sh:property [
+        sh:path dcterms:type ;
+        sh:nodeKind sh:IRI ;
+        sh:name "type" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# skos:ConceptScheme smoke check
+#
+# Each distinct codelist IRI is emitted as a typed inline node under the
+# dataset's dcterms:references array. This shape is a PRESENCE-AND-TYPING
+# smoke check only: it asserts that any skos:ConceptScheme instance reached
+# from the data graph is an IRI node. It is intentionally NOT a meaningful
+# ConceptScheme structural check (no dct:title, no skos hierarchy): we do
+# not emit skos:Concept instances or scheme metadata, only the typed
+# reference. Per-PropertyShape codelist annotation lives in the custom
+# registry_relay:codelist predicate.
+# ---------------------------------------------------------------------------
+
+<https://registry-relay.dev/shapes/BRegConceptSchemeSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass skos:ConceptScheme ;
+    sh:nodeKind sh:IRI .

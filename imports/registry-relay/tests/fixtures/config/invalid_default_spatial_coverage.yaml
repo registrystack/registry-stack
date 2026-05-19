@@ -1,0 +1,51 @@
+# Tests config.validation_error: catalog.default_spatial_coverage uses an
+# unregistered vocabulary prefix.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+  default_spatial_coverage: nope:country/BEL
+vocabularies:
+  psc: https://publicschema.org/
+auth:
+  mode: api_key
+  api_keys:
+    - id: k1
+      hash_env: TEST_KEY_HASH_DEF_SPATIAL
+      scopes:
+        - ds_one:metadata
+audit:
+  sink: stdout
+datasets:
+  - id: ds_one
+    title: T
+    description: D
+    owner: O
+    sensitivity: public
+    access_rights: public
+    update_frequency: monthly
+    conforms_to: []
+    source:
+      type: file
+      path: ./data/x.xlsx
+    refresh:
+      mode: manual
+    resources:
+      - id: r_one
+        schema:
+          strict: true
+          fields:
+            - name: f1
+              type: string
+              nullable: false
+        access:
+          metadata_scope: ds_one:metadata
+          aggregate_scope: ds_one:aggregate
+          row_scope: ds_one:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters: []
+        aggregates: []

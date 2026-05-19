@@ -23,7 +23,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
 pub mod loader;
@@ -244,6 +244,24 @@ pub struct CatalogConfig {
     pub publisher: String,
     #[serde(default)]
     pub participant_id: Option<String>,
+    /// BRegDCAT-AP: type IRI for the `foaf:Agent` publisher. When set,
+    /// emits `dcterms:type` on the publisher node.
+    ///
+    /// The preferred vocabulary per SEMIC is the EU corporate-body
+    /// classification scheme:
+    /// `http://publications.europa.eu/resource/authority/corporate-body-classification/<TERM>`.
+    /// The legacy ADMS publishertype scheme
+    /// (`http://purl.org/adms/publishertype/NationalAuthority`, etc.) is also
+    /// accepted by validators but is no longer the recommended default.
+    /// The relay does not enforce a vocabulary: any IRI passes through.
+    #[serde(default)]
+    pub authority_type: Option<String>,
+    /// BRegDCAT-AP: default `dcterms:spatial` IRI applied to datasets that
+    /// do not declare their own `spatial_coverage`. Typically an EU
+    /// authority country IRI under
+    /// `http://publications.europa.eu/resource/authority/country/`.
+    #[serde(default)]
+    pub default_spatial_coverage: Option<String>,
 }
 
 /// Authentication configuration. Exactly one of `api_keys` and `oidc`
@@ -451,6 +469,16 @@ impl Default for RotateConfig {
     }
 }
 
+/// BRegDCAT-AP `adms:status` vocabulary. Maps to the EU ADMS status codelists.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmsStatus {
+    UnderDevelopment,
+    Completed,
+    Deprecated,
+    Withdrawn,
+}
+
 /// A single dataset declaration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -464,6 +492,15 @@ pub struct DatasetConfig {
     pub update_frequency: UpdateFrequency,
     #[serde(default)]
     pub conforms_to: Vec<String>,
+    /// BRegDCAT-AP: `dct:spatial` IRI for this dataset. Overrides the
+    /// catalog-level `default_spatial_coverage` when set.
+    #[serde(default)]
+    pub spatial_coverage: Option<String>,
+    /// BRegDCAT-AP: `adms:status` for this dataset. Defaults to
+    /// `UnderDevelopment` when not set: it is the weakest ADMS lifecycle
+    /// claim and forces an explicit opt-in to anything stronger.
+    #[serde(default)]
+    pub status: Option<AdmsStatus>,
     #[serde(default)]
     pub defaults: DatasetDefaultsConfig,
     #[serde(default)]

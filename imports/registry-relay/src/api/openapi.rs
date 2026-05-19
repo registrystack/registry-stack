@@ -2236,6 +2236,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::config::AdmsStatus;
     use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
 
     fn load_example_config() -> Config {
@@ -2259,6 +2260,7 @@ mod tests {
             publisher: "Test Publisher".to_string(),
             base_url: "https://data.example.test".to_string(),
             participant_id: "did:web:data.example.test".to_string(),
+            authority_type: None,
             links: CatalogLinks {
                 self_url: "https://data.example.test/catalog".to_string(),
                 dcat_ap: "https://data.example.test/catalog/dcat-ap.jsonld".to_string(),
@@ -2272,6 +2274,8 @@ mod tests {
                 sensitivity: "personal",
                 access_rights: "restricted",
                 update_frequency: "monthly",
+                spatial_coverage: None,
+                adms_status: AdmsStatus::UnderDevelopment,
                 conforms_to: Vec::new(),
                 links: DatasetLinks {
                     self_url: "https://data.example.test/datasets/social_registry".to_string(),

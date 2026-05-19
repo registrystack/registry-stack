@@ -10,7 +10,11 @@ from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SHAPES = REPO_ROOT / "tests" / "fixtures" / "shacl" / "dcat-ap-catalog-smoke.ttl"
+SHACL_DIR = REPO_ROOT / "tests" / "fixtures" / "shacl"
+DEFAULT_SHAPES = [
+    str(SHACL_DIR / "dcat-ap-catalog-smoke.ttl"),
+    str(SHACL_DIR / "bregdcat-ap-catalog-smoke.ttl"),
+]
 
 
 def load_dependencies():
@@ -64,8 +68,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--shapes",
-        default=str(DEFAULT_SHAPES),
-        help="Path to a Turtle SHACL shapes file.",
+        action="append",
+        dest="shapes",
+        metavar="FILE",
+        help=(
+            "Path to a Turtle SHACL shapes file. May be given multiple times. "
+            "When omitted, defaults to both dcat-ap-catalog-smoke.ttl and "
+            "bregdcat-ap-catalog-smoke.ttl."
+        ),
     )
     parser.add_argument(
         "--catalog-format",
@@ -95,21 +105,28 @@ def run_validation() -> int:
     args = parse_args()
     Graph, validate, ReportableRuntimeError = load_dependencies()
 
+    shapes_files: list[str] = args.shapes if args.shapes else DEFAULT_SHAPES
+
     data_graph = Graph().parse(
         data=read_catalog(args.catalog, request_headers(args.header)),
         format=args.catalog_format,
     )
-    shapes_graph = Graph().parse(args.shapes, format=args.shapes_format)
 
-    conforms, _report_graph, report_text = validate(
-        data_graph,
-        shacl_graph=shapes_graph,
-        inference="rdfs",
-        abort_on_first=False,
-    )
-    if not conforms:
-        print(report_text, file=sys.stderr)
-        return 1
+    total_shape_triples = 0
+    for shapes_path in shapes_files:
+        shapes_graph = Graph().parse(shapes_path, format=args.shapes_format)
+        total_shape_triples += len(shapes_graph)
+
+        conforms, _report_graph, report_text = validate(
+            data_graph,
+            shacl_graph=shapes_graph,
+            inference="rdfs",
+            abort_on_first=False,
+        )
+        if not conforms:
+            print(f"SHACL validation failed for shapes: {shapes_path}", file=sys.stderr)
+            print(report_text, file=sys.stderr)
+            return 1
 
     if not args.skip_metashacl:
         try:
@@ -129,7 +146,8 @@ def run_validation() -> int:
 
     print(
         "DCAT-AP catalog SHACL validation passed "
-        f"({len(data_graph)} data triples, {len(shapes_graph)} shape triples)."
+        f"({len(data_graph)} data triples, {total_shape_triples} shape triples "
+        f"across {len(shapes_files)} fixture(s))."
     )
     return 0
 

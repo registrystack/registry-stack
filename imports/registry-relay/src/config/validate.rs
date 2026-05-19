@@ -41,6 +41,7 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
+    validate_catalog_uris(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     validate_claim_verification_runtime(config).map_err(Error::from)?;
     if let Some(provenance) = &config.provenance {
@@ -48,6 +49,36 @@ pub fn run(config: &Config) -> Result<(), Error> {
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    Ok(())
+}
+
+/// BRegDCAT-AP catalog-level IRI fields must resolve via the configured
+/// vocabulary registry. Without this check, a typo'd `authority_type` or
+/// `default_spatial_coverage` would be silently dropped at emit time.
+fn validate_catalog_uris(config: &Config) -> Result<(), ConfigError> {
+    let registry = &config.vocabularies;
+    if let Some(uri) = config.catalog.authority_type.as_deref() {
+        if super::vocabularies::expand(uri, registry).is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "catalog.authority_type",
+                uri = %uri,
+                "authority_type IRI is neither absolute nor a registered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    if let Some(uri) = config.catalog.default_spatial_coverage.as_deref() {
+        if super::vocabularies::expand(uri, registry).is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "catalog.default_spatial_coverage",
+                uri = %uri,
+                "default_spatial_coverage IRI is neither absolute nor a registered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     Ok(())
 }
 
@@ -1343,6 +1374,18 @@ fn validate_dataset_uris(
                 dataset_id = %dataset.id,
                 uri = %uri,
                 "conforms_to URI uses an unregistered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    if let Some(uri) = dataset.spatial_coverage.as_deref() {
+        if super::vocabularies::expand(uri, registry).is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                field = "spatial_coverage",
+                uri = %uri,
+                "spatial_coverage IRI is neither absolute nor a registered vocabulary prefix"
             );
             return Err(ConfigError::ValidationError);
         }

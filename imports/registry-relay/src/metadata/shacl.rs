@@ -5,13 +5,13 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
-use crate::config::Config;
+use crate::config::{AdmsStatus, Config};
 use crate::entity::EntityRegistry;
 
 use super::catalog::{
     catalog_document, catalog_document_for_dataset_ids, catalog_document_for_entity_ids,
-    entity_class_uri, field_property_uri, normalized_base_url, DatasetMetadata, EntityMetadata,
-    FieldMetadata,
+    entity_class_uri, field_property_uri, normalized_base_url, CatalogDocument, DatasetMetadata,
+    EntityMetadata, FieldMetadata,
 };
 
 #[must_use]
@@ -40,11 +40,12 @@ pub fn dcat_ap_document_for_entity_ids(
     dcat_ap_document_from_catalog(catalog)
 }
 
-fn dcat_ap_document_from_catalog(catalog: super::catalog::CatalogDocument) -> Value {
+fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
+    let authority_type = catalog.authority_type.as_deref();
     let datasets = catalog
         .datasets
         .iter()
-        .map(dcat_dataset)
+        .map(|dataset| dcat_dataset(dataset, authority_type))
         .collect::<Vec<_>>();
     let shapes = catalog
         .datasets
@@ -63,7 +64,9 @@ fn dcat_ap_document_from_catalog(catalog: super::catalog::CatalogDocument) -> Va
         "@type": "dcat:Catalog",
         "dspace:participantId": catalog.participant_id,
         "dcterms:title": catalog.title,
-        "dcterms:publisher": publisher_agent(&catalog.publisher),
+        "dcterms:description": format!("DCAT-AP catalog for {}", catalog.title),
+        "dcterms:publisher": publisher_agent(&catalog.publisher, authority_type),
+        "dcat:landingPage": catalog.links.self_url,
         "dcat:dataset": datasets,
         "sh:shapesGraph": shapes,
     })
@@ -115,7 +118,7 @@ pub fn entity_schema_document(
     Some(entity_schema_object(&base_url, dataset, entity))
 }
 
-fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
+fn dcat_dataset(dataset: &DatasetMetadata, authority_type: Option<&str>) -> Value {
     let mut distributions = dataset_standard_distributions(dataset);
     distributions.extend(
         dataset
@@ -125,20 +128,61 @@ fn dcat_dataset(dataset: &DatasetMetadata) -> Value {
             .collect::<Vec<_>>(),
     );
 
-    json!({
+    // Collect distinct codelist IRIs across all entity fields for dct:references.
+    let codelist_iris: Vec<&str> = {
+        let mut seen = BTreeSet::new();
+        let mut iris = Vec::new();
+        for entity in &dataset.entities {
+            for field in &entity.fields {
+                if let Some(cl) = field.codelist.as_deref() {
+                    if seen.insert(cl) {
+                        iris.push(cl);
+                    }
+                }
+            }
+        }
+        iris
+    };
+
+    let mut obj = json!({
         "@id": dataset.links.self_url,
         "@type": "dcat:Dataset",
         "dcterms:identifier": dataset.dataset_id,
         "dcterms:title": dataset.title,
         "dcterms:description": dataset.description,
-        "dcterms:publisher": publisher_agent(&dataset.publisher),
+        "dcterms:publisher": publisher_agent(&dataset.publisher, authority_type),
         "dcterms:rightsHolder": dataset.owner,
         "dcterms:accessRights": access_rights_uri(dataset.access_rights),
         "dcterms:accrualPeriodicity": frequency_uri(dataset.update_frequency),
         "dcterms:conformsTo": dataset.conforms_to,
+        "adms:status": adms_status_uri(dataset.adms_status),
+        "dcat:landingPage": dataset.links.self_url,
         "odrl:hasPolicy": dataset_offer(dataset),
         "dcat:distribution": distributions,
-    })
+    });
+
+    if let Some(spatial) = dataset.spatial_coverage.as_deref() {
+        obj["dcterms:spatial"] = json!(spatial);
+    }
+
+    // Project convention: surface distinct codelist IRIs used by this
+    // dataset's entity fields as typed `skos:ConceptScheme` nodes under
+    // `dcterms:references`, so external tooling can resolve the type
+    // without dereferencing the codelist URL. BRegDCAT-AP does not
+    // prescribe a property for codelist linkage; `dct:references` on
+    // Dataset has range `rdfs:Resource` ("related resource"), and a
+    // `skos:ConceptScheme` is an `rdfs:Resource`, so this usage is
+    // type-valid even though it is not spec-mandated.
+    if !codelist_iris.is_empty() {
+        obj["dcterms:references"] = Value::Array(
+            codelist_iris
+                .iter()
+                .map(|iri| json!({ "@id": iri, "@type": "skos:ConceptScheme" }))
+                .collect(),
+        );
+    }
+
+    obj
 }
 
 fn dataset_standard_distributions(dataset: &DatasetMetadata) -> Vec<Value> {
@@ -166,7 +210,7 @@ fn dataset_ogc_distribution(
         "@id": ogc.collections,
         "@type": "dcat:Distribution",
         "dcterms:title": format!("{} OGC API Features service", dataset.title),
-        "dct:format": {
+        "dcterms:format": {
             "@id": "registry_relay:OGCAPI-Features",
         },
         "dcat:accessURL": ogc.collections,
@@ -176,6 +220,7 @@ fn dataset_ogc_distribution(
             "dcterms:title": format!("{} OGC API Features service", dataset.title),
             "dspace:dataServiceType": "registry_relay:ogc-api-features",
             "dcat:endpointURL": ogc.collections,
+            "dcat:endpointDescription": openapi_url(&dataset.links.self_url),
             "dcat:servesDataset": dataset.links.self_url,
             "dcterms:conformsTo": [
                 "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
@@ -198,7 +243,7 @@ fn dataset_spdci_distribution(
         "@id": registry.sync_search,
         "@type": "dcat:Distribution",
         "dcterms:title": format!("{} SP DCI {} sync service", dataset.title, registry.registry),
-        "dct:format": {
+        "dcterms:format": {
             "@id": "registry_relay:SPDCI-Sync",
         },
         "dcat:accessURL": registry.sync_search,
@@ -208,6 +253,7 @@ fn dataset_spdci_distribution(
             "dcterms:title": format!("{} SP DCI {} sync service", dataset.title, registry.registry),
             "dspace:dataServiceType": "registry_relay:spdci-sync",
             "dcat:endpointURL": registry.sync_search,
+            "dcat:endpointDescription": openapi_url(&dataset.links.self_url),
             "dcat:servesDataset": dataset.links.self_url,
             "dcterms:conformsTo": "https://spdci.org/",
             "registry_relay:registryName": registry.registry,
@@ -238,7 +284,7 @@ fn entity_rest_distribution(entity: &EntityMetadata) -> Value {
         "@id": entity.links.collection,
         "@type": "dcat:Distribution",
         "dcterms:title": entity.title.as_deref().unwrap_or(entity.name.as_str()),
-        "dct:format": {
+        "dcterms:format": {
             "@id": "registry_relay:HttpData-PULL",
         },
         "dcat:accessURL": entity.links.collection,
@@ -251,6 +297,7 @@ fn entity_rest_distribution(entity: &EntityMetadata) -> Value {
             ),
             "dspace:dataServiceType": "registry_relay:entity-rest",
             "dcat:endpointURL": entity.links.collection,
+            "dcat:endpointDescription": openapi_url(&entity.links.collection),
             "dcterms:conformsTo": entity.links.schema,
         },
         "dcterms:conformsTo": entity.links.schema,
@@ -269,7 +316,7 @@ fn entity_ogc_distribution(entity: &EntityMetadata) -> Option<Value> {
             "{} OGC API Features collection",
             entity.title.as_deref().unwrap_or(entity.name.as_str())
         ),
-        "dct:format": {
+        "dcterms:format": {
             "@id": "registry_relay:OGCAPI-Features",
         },
         "dcat:accessURL": collection,
@@ -283,6 +330,7 @@ fn entity_ogc_distribution(entity: &EntityMetadata) -> Option<Value> {
             ),
             "dspace:dataServiceType": "registry_relay:ogc-api-features",
             "dcat:endpointURL": collection,
+            "dcat:endpointDescription": openapi_url(collection),
             "dcterms:conformsTo": "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
         },
         "dcterms:conformsTo": [
@@ -310,14 +358,21 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
             "@type": "sh:PropertyShape",
             "sh:path": field_property_uri(base_url, &dataset.dataset_id, &entity.name, field),
             "sh:name": field.name,
+            "sh:nodeKind": "sh:Literal",
+            "sh:datatype": shacl_datatype(field.r#type),
             "registry_relay:type": field.r#type,
             "sh:minCount": if field.nullable { 0 } else { 1 },
+            "sh:maxCount": 1,
         });
         insert_optional(
             &mut property,
             "registry_relay:codelist",
             field.codelist.as_deref(),
         );
+        // Codelist IRIs surface as typed `skos:ConceptScheme` nodes under
+        // `dcterms:references` on the parent dataset (see `dcat_dataset`).
+        // We intentionally do NOT put `skos:inScheme` here: `skos:inScheme`
+        // applies to `skos:Concept` instances, not to a `sh:PropertyShape`.
         insert_optional(&mut property, "registry_relay:unit", field.unit.as_deref());
         insert_optional(
             &mut property,
@@ -344,15 +399,20 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
                     dataset.dataset_id, relationship.target
                 )
             });
-        json!({
+        let mut property = json!({
             "@type": "sh:PropertyShape",
             "sh:path": path,
             "sh:name": relationship.name,
+            "sh:nodeKind": "sh:IRI",
             "registry_relay:relationshipKind": relationship.kind,
             "registry_relay:targetEntity": relationship.target,
             "registry_relay:foreignKey": relationship.foreign_key,
             "sh:class": target_class,
-        })
+        });
+        if let Some(max_count) = relationship_max_count(relationship.kind) {
+            property["sh:maxCount"] = json!(max_count);
+        }
+        property
     });
 
     json!({
@@ -362,6 +422,7 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
         "dcterms:isPartOf": dataset.links.self_url,
         "dcterms:identifier": format!("{}:{}", dataset.dataset_id, entity.name),
         "sh:name": entity.name,
+        "sh:nodeKind": "sh:IRI",
         "registry_relay:primaryKey": entity.primary_key,
         "sh:property": field_properties.chain(relationship_properties).collect::<Vec<_>>(),
     })
@@ -430,11 +491,55 @@ fn insert_optional(target: &mut Value, key: &'static str, value: Option<&str>) {
     }
 }
 
-fn publisher_agent(name: &str) -> Value {
-    json!({
+fn openapi_url(collection_url: &str) -> String {
+    let base_url = ["/ogc/v1/", "/datasets/"]
+        .iter()
+        .find_map(|marker| {
+            collection_url
+                .find(marker)
+                .map(|index| &collection_url[..index])
+        })
+        .unwrap_or(collection_url);
+    format!("{base_url}/openapi.json")
+}
+
+fn shacl_datatype(field_type: &str) -> &'static str {
+    match field_type {
+        "string" => "xsd:string",
+        "number" => "xsd:decimal",
+        "integer" => "xsd:integer",
+        "boolean" => "xsd:boolean",
+        "date" => "xsd:date",
+        "timestamp" => "xsd:dateTime",
+        _ => "xsd:string",
+    }
+}
+
+fn relationship_max_count(kind: &str) -> Option<u8> {
+    match kind {
+        "belongs_to" | "has_one" => Some(1),
+        _ => None,
+    }
+}
+
+fn publisher_agent(name: &str, authority_type: Option<&str>) -> Value {
+    let mut agent = json!({
         "@type": "foaf:Agent",
         "foaf:name": name,
-    })
+    });
+    if let Some(at) = authority_type {
+        agent["dcterms:type"] = json!(at);
+    }
+    agent
+}
+
+fn adms_status_uri(status: AdmsStatus) -> &'static str {
+    match status {
+        AdmsStatus::UnderDevelopment => "http://purl.org/adms/status/UnderDevelopment",
+        AdmsStatus::Completed => "http://purl.org/adms/status/Completed",
+        AdmsStatus::Deprecated => "http://purl.org/adms/status/Deprecated",
+        AdmsStatus::Withdrawn => "http://purl.org/adms/status/Withdrawn",
+    }
 }
 
 fn access_rights_uri(access_rights: &str) -> &'static str {
@@ -462,28 +567,38 @@ fn frequency_uri(frequency: &str) -> &'static str {
 
 fn context() -> Value {
     json!({
+        "adms": "http://www.w3.org/ns/adms#",
         "dcat": "http://www.w3.org/ns/dcat#",
-        "dct": "http://purl.org/dc/terms/",
         "dcterms": "http://purl.org/dc/terms/",
         "dspace": "https://w3id.org/dspace/2025/1/",
         "foaf": "http://xmlns.com/foaf/0.1/",
         "odrl": "http://www.w3.org/ns/odrl/2/",
+        "org": "http://www.w3.org/ns/org#",
         "sh": "http://www.w3.org/ns/shacl#",
+        "skos": "http://www.w3.org/2004/02/skos/core#",
         "registry_relay": "https://registry-relay.dev/ns#",
+        "xsd": "http://www.w3.org/2001/XMLSchema#",
+        "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },
         "dcat:accessService": { "@type": "@id" },
         "dcat:distribution": { "@type": "@id" },
         "dcat:downloadURL": { "@type": "@id" },
+        "dcat:endpointDescription": { "@type": "@id" },
         "dcat:endpointURL": { "@type": "@id" },
+        "dcat:landingPage": { "@type": "@id" },
         "dcat:servesDataset": { "@type": "@id" },
-        "dct:format": { "@type": "@id" },
+        "dcterms:format": { "@type": "@id" },
         "dcterms:accessRights": { "@type": "@id" },
         "dcterms:accrualPeriodicity": { "@type": "@id" },
         "dcterms:conformsTo": { "@type": "@id" },
         "dcterms:isPartOf": { "@type": "@id" },
+        "dcterms:spatial": { "@type": "@id" },
+        "dcterms:type": { "@type": "@id" },
         "odrl:action": { "@type": "@id" },
         "odrl:hasPolicy": { "@type": "@id" },
         "sh:class": { "@type": "@id" },
+        "sh:datatype": { "@type": "@id" },
+        "sh:nodeKind": { "@type": "@id" },
         "sh:path": { "@type": "@id" },
         "sh:targetClass": { "@type": "@id" },
     })
