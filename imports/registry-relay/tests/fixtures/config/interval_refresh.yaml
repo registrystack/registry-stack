@@ -24,10 +24,8 @@ datasets:
     access_rights: public
     update_frequency: monthly
     conforms_to: []
-    source:
-      type: file
-      path: ./data/x.xlsx
-    refresh:
-      mode: interval
-      interval: 1h
-    resources: []
+    defaults:
+      refresh:
+        mode: interval
+        interval: 1h
+    tables:

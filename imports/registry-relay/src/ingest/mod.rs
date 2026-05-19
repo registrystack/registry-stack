@@ -545,9 +545,7 @@ impl IngestRegistry {
 
         for dataset in &config.datasets {
             for resource in dataset.table_configs() {
-                let source_cfg = resource
-                    .effective_source(dataset)
-                    .ok_or(IngestError::SourceNotFound)?;
+                let source_cfg = &resource.source;
                 let materialization = resource.effective_materialization(dataset);
                 let capabilities = source_capabilities(source_cfg, materialization);
                 tracing::info!(
@@ -593,7 +591,7 @@ impl IngestRegistry {
                             IngestError::SourceUnreadable
                         })?;
 
-                        let hints = hints_from_config(Arc::clone(&declared), resource, source_cfg);
+                        let hints = hints_from_config(Arc::clone(&declared), resource);
                         Arc::new(FileConnector::new(
                             source,
                             format,
@@ -946,24 +944,12 @@ fn format_name_from_source(source_cfg: &SourceConfig) -> Option<&'static str> {
     }
 }
 
-/// Build `FormatHints` from resource and dataset source config.
-fn hints_from_config(
-    declared: Arc<DeclaredSchema>,
-    resource_cfg: &ResourceConfig,
-    dataset_source: &SourceConfig,
-) -> FormatHints {
-    let (dataset_header_row, dataset_data_range) = match dataset_source {
-        SourceConfig::File {
-            header_row,
-            data_range,
-            ..
-        } => (*header_row, data_range.clone()),
-        SourceConfig::Postgres { .. } => (None, None),
-    };
+/// Build `FormatHints` from the table source config.
+fn hints_from_config(declared: Arc<DeclaredSchema>, resource_cfg: &ResourceConfig) -> FormatHints {
     FormatHints {
         sheet: resource_cfg.xlsx_sheet(),
-        header_row: resource_cfg.xlsx_header_row().or(dataset_header_row),
-        data_range: resource_cfg.xlsx_data_range().or(dataset_data_range),
+        header_row: resource_cfg.header_row(),
+        data_range: resource_cfg.xlsx_data_range(),
         delimiter: resource_cfg.csv_delimiter(),
         quote: resource_cfg.csv_quote(),
         declared,

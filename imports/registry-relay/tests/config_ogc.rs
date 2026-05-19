@@ -48,13 +48,14 @@ fn civic_dataset(dataset_id: &str, entity_name: &str, spatial: &str) -> String {
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/civic_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: facilities_table
+        source:
+          type: file
+          path: fixtures/civic_registry.xlsx
         primary_key: facility_id
         schema:
           strict: true

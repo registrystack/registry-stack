@@ -221,13 +221,14 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/social_registry.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: households_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
         primary_key: household_id
         schema:
           strict: true
@@ -244,6 +245,9 @@ datasets:
               unit: ISO-3166-2
               language: en
       - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
         primary_key: individual_id
         schema:
           strict: true
@@ -971,13 +975,14 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/social_registry.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
         primary_key: individual_id
         schema:
           strict: true
@@ -1569,13 +1574,14 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/test.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: items_table
+        source:
+          type: file
+          path: fixtures/test.csv
         primary_key: item_id
         schema:
           strict: true
@@ -1587,6 +1593,9 @@ datasets:
               type: string
               nullable: true
       - id: unrestricted_table
+        source:
+          type: file
+          path: fixtures/test.csv
         primary_key: thing_id
         schema:
           strict: true

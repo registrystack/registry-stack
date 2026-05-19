@@ -46,13 +46,14 @@ fn valid_dataset() -> String {
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/social_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: households_table
+        source:
+          type: file
+          path: fixtures/social_registry.xlsx
         primary_key: household_id
         schema:
           strict: true
@@ -64,6 +65,9 @@ fn valid_dataset() -> String {
               type: string
               nullable: true
       - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.xlsx
         primary_key: individual_id
         schema:
           strict: true
@@ -163,13 +167,14 @@ fn dataset_with_required_filters(required_filters: &str) -> String {
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/my_dataset.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: records_table
+        source:
+          type: file
+          path: fixtures/my_dataset.xlsx
         primary_key: record_id
         schema:
           strict: true

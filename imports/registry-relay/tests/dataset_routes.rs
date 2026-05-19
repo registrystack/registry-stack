@@ -41,13 +41,14 @@ datasets:
     update_frequency: monthly
     conforms_to:
       - https://example.test/profile/social
-    source:
-      type: file
-      path: fixtures/social_registry.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: households_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
         primary_key: household_id
         schema:
           strict: true
@@ -109,13 +110,14 @@ datasets:
     sensitivity: confidential
     access_rights: non_public
     update_frequency: weekly
-    source:
-      type: file
-      path: fixtures/payments.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: payments_table
+        source:
+          type: file
+          path: fixtures/payments.csv
         primary_key: payment_id
         schema:
           strict: true

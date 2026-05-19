@@ -315,7 +315,7 @@ source:
       data_range: A1:E100000
 ```
 
-For XLSX files, `header_row` and `data_range` can be used when a worksheet has notes or title rows around the rectangular table. Existing configs with dataset-level `source` and table-level `format` are still accepted during the datasource refactor, but new configs should use `tables[].source.format`.
+For CSV files, set `format.csv.header_row: 1` when the first row contains column names. For XLSX files, `header_row` and `data_range` can be used when a worksheet has notes or title rows around the rectangular table. Source configuration is table-local: put file/database settings and format hints under each `tables[].source`.
 
 Postgres snapshot and live table sources are supported. Credentials are never stored in YAML:
 

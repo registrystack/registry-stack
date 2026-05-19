@@ -504,13 +504,7 @@ pub struct DatasetConfig {
     #[serde(default)]
     pub defaults: DatasetDefaultsConfig,
     #[serde(default)]
-    pub source: Option<SourceConfig>,
-    #[serde(default)]
-    pub refresh: Option<RefreshConfig>,
-    #[serde(default)]
     pub tables: Vec<ResourceConfig>,
-    #[serde(default)]
-    pub resources: Vec<ResourceConfig>,
     #[serde(default)]
     pub entities: Vec<EntityConfig>,
 }
@@ -526,10 +520,9 @@ pub struct DatasetDefaultsConfig {
 }
 
 impl DatasetConfig {
-    /// Storage-layer tables, accepting `resources` as a legacy alias
-    /// until all fixtures and deployments migrate.
+    /// Storage-layer tables owned by this dataset.
     pub fn table_configs(&self) -> impl Iterator<Item = &ResourceConfig> {
-        self.tables.iter().chain(self.resources.iter())
+        self.tables.iter()
     }
 }
 
@@ -543,10 +536,6 @@ pub enum SourceConfig {
         path: PathBuf,
         #[serde(default)]
         format: Option<ResourceFormatConfig>,
-        #[serde(default)]
-        header_row: Option<u32>,
-        #[serde(default)]
-        data_range: Option<String>,
     },
     Postgres {
         connection_env: String,
@@ -636,16 +625,11 @@ pub enum MaterializationMode {
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
     pub id: ResourceId,
-    #[serde(default)]
-    pub source: Option<SourceConfig>,
+    pub source: SourceConfig,
     #[serde(default)]
     pub refresh: Option<RefreshConfig>,
     #[serde(default)]
     pub materialization: Option<MaterializationMode>,
-    #[serde(default)]
-    pub format: Option<ResourceFormatConfig>,
-    #[serde(default)]
-    pub sheet: Option<String>,
     #[serde(default)]
     pub primary_key: Option<String>,
     pub schema: SchemaConfig,
@@ -674,6 +658,8 @@ pub struct ResourceFormatConfig {
 #[serde(deny_unknown_fields)]
 pub struct CsvFormatConfig {
     #[serde(default)]
+    pub header_row: Option<u32>,
+    #[serde(default)]
     pub delimiter: Option<u8>,
     #[serde(default)]
     pub quote: Option<u8>,
@@ -696,7 +682,7 @@ pub struct ParquetFormatConfig {}
 
 impl ResourceConfig {
     pub fn format_name(&self) -> Option<&'static str> {
-        let format = self.source_format().or(self.format.as_ref())?;
+        let format = self.source_format()?;
         if format.csv.is_some() {
             Some("csv")
         } else if format.xlsx.is_some() {
@@ -710,36 +696,40 @@ impl ResourceConfig {
 
     pub fn xlsx_sheet(&self) -> Option<String> {
         self.source_format()
-            .or(self.format.as_ref())
             .and_then(|format| format.xlsx.as_ref())
             .and_then(|xlsx| xlsx.sheet.clone())
-            .or_else(|| self.sheet.clone())
     }
 
     pub fn xlsx_header_row(&self) -> Option<u32> {
         self.source_format()
-            .or(self.format.as_ref())
             .and_then(|format| format.xlsx.as_ref())
             .and_then(|xlsx| xlsx.header_row)
     }
 
+    pub fn header_row(&self) -> Option<u32> {
+        self.source_format().and_then(|format| {
+            format
+                .xlsx
+                .as_ref()
+                .and_then(|xlsx| xlsx.header_row)
+                .or_else(|| format.csv.as_ref().and_then(|csv| csv.header_row))
+        })
+    }
+
     pub fn xlsx_data_range(&self) -> Option<String> {
         self.source_format()
-            .or(self.format.as_ref())
             .and_then(|format| format.xlsx.as_ref())
             .and_then(|xlsx| xlsx.data_range.clone())
     }
 
     pub fn csv_delimiter(&self) -> Option<u8> {
         self.source_format()
-            .or(self.format.as_ref())
             .and_then(|format| format.csv.as_ref())
             .and_then(|csv| csv.delimiter)
     }
 
     pub fn csv_quote(&self) -> Option<u8> {
         self.source_format()
-            .or(self.format.as_ref())
             .and_then(|format| format.csv.as_ref())
             .and_then(|csv| csv.quote)
     }
@@ -748,10 +738,7 @@ impl ResourceConfig {
         &'a self,
         dataset: &'a DatasetConfig,
     ) -> Option<&'a RefreshConfig> {
-        self.refresh
-            .as_ref()
-            .or(dataset.defaults.refresh.as_ref())
-            .or(dataset.refresh.as_ref())
+        self.refresh.as_ref().or(dataset.defaults.refresh.as_ref())
     }
 
     pub fn effective_materialization(&self, dataset: &DatasetConfig) -> MaterializationMode {
@@ -760,12 +747,8 @@ impl ResourceConfig {
             .unwrap_or(MaterializationMode::Snapshot)
     }
 
-    pub fn effective_source<'a>(&'a self, dataset: &'a DatasetConfig) -> Option<&'a SourceConfig> {
-        self.source.as_ref().or(dataset.source.as_ref())
-    }
-
     fn source_format(&self) -> Option<&ResourceFormatConfig> {
-        self.source.as_ref().and_then(SourceConfig::format)
+        self.source.format()
     }
 }
 

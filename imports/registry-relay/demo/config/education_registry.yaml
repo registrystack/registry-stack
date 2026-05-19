@@ -61,15 +61,18 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: termly
-    source:
-      type: file
-      path: demo/data/education_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
 
     tables:
       - id: students_table
-        sheet: Students
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Students
         primary_key: student_id
         schema:
           strict: true
@@ -134,7 +137,12 @@ datasets:
               sensitive: true
 
       - id: guardians_table
-        sheet: Guardians
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Guardians
         primary_key: guardian_id
         schema:
           strict: true
@@ -169,7 +177,12 @@ datasets:
               sensitive: true
 
       - id: schools_table
-        sheet: Schools
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Schools
         primary_key: school_id
         schema:
           strict: true
@@ -197,7 +210,12 @@ datasets:
               nullable: false
 
       - id: enrollments_table
-        sheet: Enrollments
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Enrollments
         primary_key: enrollment_id
         schema:
           strict: true
@@ -228,7 +246,12 @@ datasets:
               nullable: true
 
       - id: support_needs_table
-        sheet: SupportNeeds
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: SupportNeeds
         primary_key: support_need_id
         schema:
           strict: true
@@ -257,7 +280,12 @@ datasets:
               sensitive: true
 
       - id: attendance_summary_table
-        sheet: AttendanceSummary
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: AttendanceSummary
         primary_key: attendance_id
         schema:
           strict: true

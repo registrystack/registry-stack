@@ -87,14 +87,17 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: "{source_path}"
-      header_row: 1
-    refresh:
-      mode: manual
-    resources:
+    defaults:
+      refresh:
+        mode: manual
+    tables:
       - id: beneficiaries_csv
+        source:
+          type: file
+          path: "{source_path}"
+          format:
+            csv:
+              header_row: 1
         primary_key: beneficiary_id
         schema:
           strict: true

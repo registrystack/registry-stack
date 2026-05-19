@@ -45,9 +45,17 @@ fn write_config(
     max_source_file_bytes: Option<u64>,
 ) -> std::path::PathBuf {
     let cache_dir = tmp.path().join("cache");
-    let sheet_line = sheet
-        .map(|s| format!("        sheet: {s}\n"))
-        .unwrap_or_default();
+    let source_format = if let Some(sheet) = sheet {
+        format!(
+            "          format:\n            xlsx:\n              sheet: {sheet}\n              header_row: 1\n"
+        )
+    } else if source_path.ends_with(".parquet") {
+        "          format:\n            parquet: {}\n".to_string()
+    } else if source_path.ends_with(".xlsx") || source_path.ends_with(".xls") {
+        "          format:\n            xlsx:\n              header_row: 1\n".to_string()
+    } else {
+        "          format:\n            csv:\n              header_row: 1\n".to_string()
+    };
     let xlsx_max_line = xlsx_max_file_bytes
         .map(|bytes| format!("  xlsx_max_file_bytes: {bytes}\n"))
         .unwrap_or_default();
@@ -81,15 +89,15 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: "{source_path}"
-      header_row: 1
-    refresh:
-      mode: manual
-    resources:
+    defaults:
+      refresh:
+        mode: manual
+    tables:
       - id: {resource_id}
-{sheet_line}        primary_key: beneficiary_id
+        source:
+          type: file
+          path: "{source_path}"
+{source_format}        primary_key: beneficiary_id
         schema:
           strict: true
           fields:
@@ -129,6 +137,7 @@ audit:
         cache_dir = cache_dir.to_string_lossy(),
         xlsx_max_line = xlsx_max_line,
         max_source_line = max_source_line,
+        source_format = source_format,
     );
     let path = tmp.path().join(format!("{resource_id}.yaml"));
     std::fs::write(&path, yaml).expect("write config");

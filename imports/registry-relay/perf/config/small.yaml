@@ -73,17 +73,17 @@ datasets:
     access_rights: public
     update_frequency: as_needed
 
-    source:
-      type: file
-      path: perf/fixtures/generated/clinic_capacity_1k.parquet
-
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
 
     tables:
       - id: facility_table
-        format:
-          parquet: {}
+        source:
+          type: file
+          path: perf/fixtures/generated/clinic_capacity_1k.parquet
+          format:
+            parquet: {}
         primary_key: id
         schema:
           strict: true

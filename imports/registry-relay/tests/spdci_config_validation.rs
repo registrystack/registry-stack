@@ -56,13 +56,14 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/disability_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: disabled_people_table
+        source:
+          type: file
+          path: fixtures/disability_registry.xlsx
         primary_key: person_id
         schema:
           strict: true

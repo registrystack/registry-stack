@@ -160,15 +160,18 @@ datasets:
       - spdci:extensions/social/v1/Group
       - spdci:extensions/crvs/v1/Person
       - spdci:extensions/fr/v1/FRPerson
-    source:
-      type: file
-      path: demo/data/disability_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
 
     tables:
       - id: disabled_people_table
-        sheet: DisabledPeople
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: DisabledPeople
         primary_key: person_id
         schema:
           strict: true
@@ -232,7 +235,12 @@ datasets:
               nullable: true
 
       - id: civil_persons_table
-        sheet: CivilPersons
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: CivilPersons
         primary_key: civil_person_id
         schema:
           strict: true
@@ -278,7 +286,12 @@ datasets:
               nullable: false
 
       - id: social_groups_table
-        sheet: SocialGroups
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: SocialGroups
         primary_key: group_id
         schema:
           strict: true
@@ -333,7 +346,12 @@ datasets:
               nullable: false
 
       - id: farmers_table
-        sheet: Farmers
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: Farmers
         primary_key: farmer_id
         schema:
           strict: true

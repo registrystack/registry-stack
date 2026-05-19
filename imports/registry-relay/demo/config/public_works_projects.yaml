@@ -60,15 +60,18 @@ datasets:
     sensitivity: confidential
     access_rights: non_public
     update_frequency: monthly
-    source:
-      type: file
-      path: demo/data/public_works_projects.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
 
     tables:
       - id: projects_table
-        sheet: Projects
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Projects
         primary_key: project_id
         schema:
           strict: true
@@ -112,7 +115,12 @@ datasets:
               sensitive: true
 
       - id: contracts_table
-        sheet: Contracts
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Contracts
         primary_key: contract_id
         schema:
           strict: true
@@ -145,7 +153,12 @@ datasets:
               sensitive: true
 
       - id: milestones_table
-        sheet: Milestones
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Milestones
         primary_key: milestone_id
         schema:
           strict: true
@@ -177,7 +190,12 @@ datasets:
               sensitive: true
 
       - id: disbursements_table
-        sheet: Disbursements
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Disbursements
         primary_key: disbursement_id
         schema:
           strict: true

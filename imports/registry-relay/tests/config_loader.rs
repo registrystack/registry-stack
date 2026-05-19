@@ -144,13 +144,14 @@ fn claim_verification_dataset(access_scope_line: &str, claim_verification_body: 
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/people.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: people_table
+        source:
+          type: file
+          path: fixtures/people.csv
         primary_key: person_id
         schema:
           strict: true
@@ -253,10 +254,6 @@ fn example_config_loads_and_validates() {
     assert!(matches!(dataset.update_frequency, UpdateFrequency::Monthly));
     assert_eq!(dataset.conforms_to.len(), 3);
 
-    assert!(dataset.source.is_none());
-    assert!(dataset.refresh.is_none());
-
-    assert!(dataset.resources.is_empty());
     assert_eq!(dataset.tables.len(), 2);
     let first_table = &dataset.tables[0];
     assert_eq!(first_table.id.as_ref(), "households_table");
@@ -264,7 +261,7 @@ fn example_config_loads_and_validates() {
         first_table.materialization,
         Some(MaterializationMode::Snapshot)
     ));
-    match first_table.source.as_ref().expect("table source") {
+    match &first_table.source {
         SourceConfig::File { path, format, .. } => {
             assert_eq!(path.to_string_lossy(), "./data/social_registry.xlsx");
             let xlsx = format
@@ -815,9 +812,10 @@ fn humantime_parses_interval() {
     let config = config::load(&fixture_path("interval_refresh.yaml"))
         .expect("interval_refresh fixture must load");
     let refresh = config.datasets[0]
+        .defaults
         .refresh
         .as_ref()
-        .expect("legacy dataset refresh");
+        .expect("dataset default refresh");
     match refresh {
         RefreshConfig::Interval { interval } => {
             assert_eq!(interval.as_secs(), 3600);
@@ -880,7 +878,7 @@ fn table_level_file_source_and_defaults_load() {
 }
 
 #[test]
-fn dataset_level_source_format_must_choose_exactly_one_format() {
+fn table_source_format_must_choose_exactly_one_format() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(
         &tmp,
@@ -893,16 +891,17 @@ fn dataset_level_source_format_must_choose_exactly_one_format() {
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: ./data/records.xlsx
-      format:
-        csv: {}
-        xlsx: {}
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: records_table
+        source:
+          type: file
+          path: ./data/records.xlsx
+          format:
+            csv: {}
+            xlsx: {}
         primary_key: record_id
         schema:
           strict: true
@@ -959,10 +958,7 @@ fn postgres_table_source_descriptor_loads_without_reading_secret() {
     );
 
     let config = config::load(&config_path).expect("postgres descriptor loads");
-    let source = config.datasets[0].tables[0]
-        .source
-        .as_ref()
-        .expect("source");
+    let source = &config.datasets[0].tables[0].source;
     match source {
         SourceConfig::Postgres {
             connection_env,
@@ -1024,11 +1020,7 @@ fn postgres_query_source_descriptor_loads() {
     );
 
     let config = config::load(&config_path).expect("postgres query descriptor loads");
-    match config.datasets[0].tables[0]
-        .source
-        .as_ref()
-        .expect("source")
-    {
+    match &config.datasets[0].tables[0].source {
         SourceConfig::Postgres { table, query, .. } => {
             assert!(table.is_none());
             assert_eq!(
@@ -1432,11 +1424,9 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: termly
-    source:
-      type: file
-      path: fixtures/education.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables: []
     entities: []
 audit:
@@ -1485,11 +1475,9 @@ datasets:
     sensitivity: confidential
     access_rights: restricted
     update_frequency: as_needed
-    source:
-      type: file
-      path: fixtures/subject_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables: []
     entities: []
 audit:

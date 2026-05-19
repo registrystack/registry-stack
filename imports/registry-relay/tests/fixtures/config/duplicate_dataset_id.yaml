@@ -24,12 +24,10 @@ datasets:
     access_rights: public
     update_frequency: monthly
     conforms_to: []
-    source:
-      type: file
-      path: ./data/x.xlsx
-    refresh:
-      mode: manual
-    resources: []
+    defaults:
+      refresh:
+        mode: manual
+    tables:
   - id: ds_one
     title: T2
     description: D2
@@ -38,9 +36,7 @@ datasets:
     access_rights: public
     update_frequency: monthly
     conforms_to: []
-    source:
-      type: file
-      path: ./data/y.xlsx
-    refresh:
-      mode: manual
-    resources: []
+    defaults:
+      refresh:
+        mode: manual
+    tables:

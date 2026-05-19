@@ -211,13 +211,14 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/social_registry.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
         primary_key: individual_id
         schema:
           strict: true

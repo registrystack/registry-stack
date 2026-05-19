@@ -27,13 +27,14 @@ datasets:
     update_frequency: monthly
     conforms_to: []
     spatial_coverage: nope:country/BEL
-    source:
-      type: file
-      path: ./data/x.xlsx
-    refresh:
-      mode: manual
-    resources:
+    defaults:
+      refresh:
+        mode: manual
+    tables:
       - id: r_one
+        source:
+          type: file
+          path: ./data/x.xlsx
         schema:
           strict: true
           fields:

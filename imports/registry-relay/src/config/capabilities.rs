@@ -149,8 +149,6 @@ mod tests {
         let source = SourceConfig::File {
             path: PathBuf::from("records.csv"),
             format: None,
-            header_row: None,
-            data_range: None,
         };
         let capabilities = source_capabilities(&source, MaterializationMode::Live);
 

@@ -102,14 +102,17 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: demo/data/benefits_casework.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: households_table
-        sheet: Households
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Households
         primary_key: household_id
         schema:
           strict: true
@@ -146,7 +149,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: persons_table
-        sheet: Persons
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Persons
         primary_key: person_id
         schema:
           strict: true
@@ -185,7 +193,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: cases_table
-        sheet: Cases
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Cases
         primary_key: case_id
         schema:
           strict: true
@@ -216,7 +229,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: payments_table
-        sheet: Payments
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Payments
         primary_key: payment_id
         schema:
           strict: true
@@ -516,14 +534,17 @@ datasets:
     sensitivity: confidential
     access_rights: restricted
     update_frequency: weekly
-    source:
-      type: file
-      path: demo/data/clinic_capacity.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: facilities_table
-        sheet: Facilities
+        source:
+          type: file
+          path: demo/data/clinic_capacity.xlsx
+          format:
+            xlsx:
+              sheet: Facilities
         primary_key: facility_id
         schema:
           strict: true
@@ -569,7 +590,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: service_capacity_table
-        sheet: ServiceCapacity
+        source:
+          type: file
+          path: demo/data/clinic_capacity.xlsx
+          format:
+            xlsx:
+              sheet: ServiceCapacity
         primary_key: capacity_id
         schema:
           strict: true
@@ -600,7 +626,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: stock_events_table
-        sheet: StockEvents
+        source:
+          type: file
+          path: demo/data/clinic_capacity.xlsx
+          format:
+            xlsx:
+              sheet: StockEvents
         primary_key: stock_event_id
         schema:
           strict: true
@@ -834,14 +865,17 @@ datasets:
     sensitivity: confidential
     access_rights: non_public
     update_frequency: monthly
-    source:
-      type: file
-      path: demo/data/public_works_projects.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: projects_table
-        sheet: Projects
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Projects
         primary_key: project_id
         schema:
           strict: true
@@ -884,7 +918,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: contracts_table
-        sheet: Contracts
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Contracts
         primary_key: contract_id
         schema:
           strict: true
@@ -916,7 +955,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: milestones_table
-        sheet: Milestones
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Milestones
         primary_key: milestone_id
         schema:
           strict: true
@@ -947,7 +991,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: disbursements_table
-        sheet: Disbursements
+        source:
+          type: file
+          path: demo/data/public_works_projects.xlsx
+          format:
+            xlsx:
+              sheet: Disbursements
         primary_key: disbursement_id
         schema:
           strict: true
@@ -1257,14 +1306,17 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: termly
-    source:
-      type: file
-      path: demo/data/education_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: students_table
-        sheet: Students
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Students
         primary_key: student_id
         schema:
           strict: true
@@ -1328,7 +1380,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: guardians_table
-        sheet: Guardians
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Guardians
         primary_key: guardian_id
         schema:
           strict: true
@@ -1362,7 +1419,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: schools_table
-        sheet: Schools
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Schools
         primary_key: school_id
         schema:
           strict: true
@@ -1389,7 +1451,12 @@ datasets:
               type: boolean
               nullable: false
       - id: enrollments_table
-        sheet: Enrollments
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Enrollments
         primary_key: enrollment_id
         schema:
           strict: true
@@ -1419,7 +1486,12 @@ datasets:
               type: date
               nullable: true
       - id: support_needs_table
-        sheet: SupportNeeds
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: SupportNeeds
         primary_key: support_need_id
         schema:
           strict: true
@@ -1447,7 +1519,12 @@ datasets:
               nullable: true
               sensitive: true
       - id: attendance_summary_table
-        sheet: AttendanceSummary
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: AttendanceSummary
         primary_key: attendance_id
         schema:
           strict: true
@@ -1860,14 +1937,17 @@ datasets:
     sensitivity: confidential
     access_rights: restricted
     update_frequency: as_needed
-    source:
-      type: file
-      path: demo/data/subject_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: subjects_table
-        sheet: Subjects
+        source:
+          type: file
+          path: demo/data/subject_registry.xlsx
+          format:
+            xlsx:
+              sheet: Subjects
         primary_key: canonical_id
         schema:
           strict: true

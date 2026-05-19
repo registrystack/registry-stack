@@ -1268,45 +1268,14 @@ fn validate_resources(config: &Config) -> Result<(), ConfigError> {
 }
 
 fn validate_format_overrides(dataset: &DatasetConfig) -> Result<(), ConfigError> {
-    if let Some(SourceConfig::File {
-        format: Some(format),
-        ..
-    }) = &dataset.source
-    {
-        validate_dataset_format_config(dataset, format, "dataset.source.format")?;
-    }
-
     for resource in dataset.table_configs() {
-        if let Some(format) = &resource.format {
-            validate_format_config(dataset, resource, format, "resource.format")?;
-        }
-        if let Some(SourceConfig::File {
+        if let SourceConfig::File {
             format: Some(format),
             ..
-        }) = &resource.source
+        } = &resource.source
         {
             validate_format_config(dataset, resource, format, "resource.source.format")?;
         }
-    }
-    Ok(())
-}
-
-fn validate_dataset_format_config(
-    dataset: &DatasetConfig,
-    format: &super::ResourceFormatConfig,
-    field: &'static str,
-) -> Result<(), ConfigError> {
-    let count = usize::from(format.csv.is_some())
-        + usize::from(format.xlsx.is_some())
-        + usize::from(format.parquet.is_some());
-    if count != 1 {
-        tracing::error!(
-            code = "config.validation_error",
-            dataset_id = %dataset.id,
-            field,
-            "format config must declare exactly one of csv, xlsx, parquet"
-        );
-        return Err(ConfigError::ValidationError);
     }
     Ok(())
 }
@@ -1334,20 +1303,7 @@ fn validate_format_config(
 }
 
 fn validate_sources(dataset: &DatasetConfig) -> Result<(), ConfigError> {
-    if let Some(source) = &dataset.source {
-        validate_source_config(dataset, None, source)?;
-    }
-
     for resource in dataset.table_configs() {
-        let source = resource.effective_source(dataset).ok_or_else(|| {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                resource_id = %resource.id,
-                "table source is required when dataset.source is absent"
-            );
-            ConfigError::ValidationError
-        })?;
         let refresh = resource.effective_refresh(dataset).ok_or_else(|| {
             tracing::error!(
                 code = "config.validation_error",
@@ -1357,8 +1313,8 @@ fn validate_sources(dataset: &DatasetConfig) -> Result<(), ConfigError> {
             );
             ConfigError::ValidationError
         })?;
-        validate_source_config(dataset, Some(resource), source)?;
-        validate_materialization_refresh(dataset, resource, source, refresh)?;
+        validate_source_config(dataset, Some(resource), &resource.source)?;
+        validate_materialization_refresh(dataset, resource, &resource.source, refresh)?;
     }
     Ok(())
 }

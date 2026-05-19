@@ -66,15 +66,18 @@ datasets:
     sensitivity: confidential
     access_rights: restricted
     update_frequency: as_needed
-    source:
-      type: file
-      path: demo/data/subject_registry.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
 
     tables:
       - id: subjects_table
-        sheet: Subjects
+        source:
+          type: file
+          path: demo/data/subject_registry.xlsx
+          format:
+            xlsx:
+              sheet: Subjects
         primary_key: canonical_id
         schema:
           strict: true

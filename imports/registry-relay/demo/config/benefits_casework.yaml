@@ -60,15 +60,18 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: demo/data/benefits_casework.xlsx
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
 
     tables:
       - id: households_table
-        sheet: Households
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Households
         primary_key: household_id
         schema:
           strict: true
@@ -106,7 +109,12 @@ datasets:
               sensitive: true
 
       - id: persons_table
-        sheet: Persons
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Persons
         primary_key: person_id
         schema:
           strict: true
@@ -146,7 +154,12 @@ datasets:
               sensitive: true
 
       - id: cases_table
-        sheet: Cases
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Cases
         primary_key: case_id
         schema:
           strict: true
@@ -178,7 +191,12 @@ datasets:
               sensitive: true
 
       - id: payments_table
-        sheet: Payments
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Payments
         primary_key: payment_id
         schema:
           strict: true

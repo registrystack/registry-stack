@@ -59,13 +59,14 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/civic.csv
-    refresh:
-      mode: manual
+    defaults:
+      refresh:
+        mode: manual
     tables:
       - id: facilities_table
+        source:
+          type: file
+          path: fixtures/civic.csv
         primary_key: facility_id
         schema:
           strict: true
