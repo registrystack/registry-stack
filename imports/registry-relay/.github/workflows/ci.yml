@@ -44,6 +44,9 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2   # pinned to major v2
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -58,6 +61,17 @@ jobs:
 
       - name: Run all-features tests
         run: cargo test --all-features
+
+      - name: Export sample DCAT-AP catalog
+        env:
+          REGISTRY_RELAY_EXPORT_DCAT_AP_PATH: target/dcat-ap/catalog.dcat-ap.jsonld
+        run: cargo test --test catalog_entity export_generated_dcat_ap_catalog_when_path_is_set
+
+      - name: Validate sample DCAT-AP catalog with local SHACL smoke profile
+        run: |
+          uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
+            python scripts/validate_dcat_shacl.py \
+            --catalog target/dcat-ap/catalog.dcat-ap.jsonld
 
   # ── cargo-deny (license + advisory + bans) ───────────────────────────────
   deny:

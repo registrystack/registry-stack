@@ -195,9 +195,16 @@ fn build_fixture() -> AdminFixture {
         )
         .expect("ingest registry builds"),
     );
-    let (_readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ingest.snapshot());
+    let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ingest.snapshot());
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    let app = build_admin_app(config, build_auth(), sink, readiness_rx, ingest);
+    let app = build_admin_app(
+        config,
+        build_auth(),
+        sink,
+        readiness_rx,
+        readiness_tx,
+        ingest,
+    );
 
     AdminFixture {
         _tmp: tmp,
@@ -271,6 +278,36 @@ async fn table_reload_with_admin_key_reaches_registry_reload_path() {
 }
 
 #[tokio::test]
+async fn table_reload_publishes_updated_readiness_snapshot() {
+    let fixture = build_fixture();
+
+    let before = fixture.server.get("/ready").await;
+    let before_body = assert_problem(
+        before,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "schema.resource_unavailable",
+    )
+    .await;
+    assert_eq!(before_body["not_ready_count"], 2);
+
+    fixture
+        .server
+        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await
+        .assert_status(StatusCode::OK);
+
+    let after = fixture.server.get("/ready").await;
+    let after_body = assert_problem(
+        after,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "schema.resource_unavailable",
+    )
+    .await;
+    assert_eq!(after_body["not_ready_count"], 1);
+}
+
+#[tokio::test]
 async fn reload_all_without_credential_is_rejected() {
     let fixture = build_fixture();
 
@@ -324,4 +361,26 @@ async fn reload_all_with_admin_key_reloads_every_configured_resource() {
             && resource["status"] == "ok"
             && resource.get("error_code").is_none()
     }));
+}
+
+#[tokio::test]
+async fn reload_all_publishes_ready_snapshot() {
+    let fixture = build_fixture();
+
+    fixture
+        .server
+        .post("/admin/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await
+        .assert_status(StatusCode::OK);
+
+    let resp = fixture.server.get("/ready").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(
+        body["resources"].as_array().expect("resources array").len(),
+        2
+    );
 }

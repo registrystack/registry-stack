@@ -47,6 +47,20 @@ scripts/build-image.sh registry-relay:<version>
 
 Before promoting an image, inspect the effective config and verify that every referenced `hash_env` is supplied by the runtime environment. Do not bake API keys or API-key hashes into the image.
 
+For releases that claim DCAT-AP interoperability, run the
+`dcat-ap-external-validation` GitHub Actions workflow or validate an
+exported `/catalog/dcat-ap.jsonld` with the SEMIC validator:
+
+```sh
+just validate-catalog-semic catalog=target/catalog.dcat-ap.jsonld
+```
+
+The release workflow uploads both the generated catalog and the SEMIC
+JSON report as artifacts. Treat `dcatap.3_0_1_base` as the minimum
+external profile; use stricter SEMIC profiles such as
+`dcatap.3_0_1_full` when the deployment is intended to satisfy the full
+European profile.
+
 ## Configure
 
 Set the config path with `--config <path>` or `REGISTRY_RELAY_CONFIG`. The container image defaults to:

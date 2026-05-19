@@ -187,6 +187,21 @@ uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
 
 For CI jobs that should exercise the external engine from Rust tests, set `REGISTRY_RELAY_RUN_EXTERNAL_SHACL=1` before running `cargo test --test catalog_entity generated_catalog_can_run_external_shacl_validation_when_enabled`.
 
+For external DCAT-AP profile validation, export a catalog and submit it
+to the European Commission SEMIC SHACL validator:
+
+```sh
+curl -H "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY" \
+  http://127.0.0.1:8080/catalog/dcat-ap.jsonld \
+  > target/catalog.dcat-ap.jsonld
+
+just validate-catalog-semic catalog=target/catalog.dcat-ap.jsonld
+```
+
+The default SEMIC profile is `dcatap.3_0_1_base`. Use
+`validation_type=dcatap.3_0_1_full` or another SEMIC validation type when
+you need a stricter release check.
+
 ## Container Image
 
 Build the production image with Docker:

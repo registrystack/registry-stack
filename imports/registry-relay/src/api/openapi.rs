@@ -12,7 +12,7 @@ use serde_json::{json, Map, Value};
 
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
-use crate::config::{Config, EntityConfig, FilterOp};
+use crate::config::{AuthMode, ClaimVerificationRulesetConfig, Config, EntityConfig, FilterOp};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 use crate::metadata::catalog::{
@@ -25,8 +25,12 @@ const OPENAPI_UNAVAILABLE_CODE: &str = "openapi.generation_unavailable";
 
 const TAG_SERVICE: &str = "Service";
 const TAG_CATALOG: &str = "Catalog";
+const TAG_PROVENANCE: &str = "Provenance";
 #[cfg(feature = "ogcapi-features")]
 const TAG_OGC: &str = "OGC API Features";
+#[cfg(feature = "spdci-api-standards")]
+const TAG_SPD_CI: &str = "SP DCI";
+const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
 
 const INFO_SUMMARY: &str = "Read-only data gateway exposing entity records, \
     catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.";
@@ -162,6 +166,13 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
 
     #[cfg(feature = "ogcapi-features")]
     insert_ogc_paths(&mut paths);
+    if provenance_enabled(config) {
+        insert_provenance_paths(&mut paths);
+    }
+    #[cfg(feature = "spdci-api-standards")]
+    if spdci_configured(config) {
+        insert_spdci_paths(&mut paths);
+    }
 
     insert_json_path(
         &mut paths,
@@ -218,6 +229,8 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             };
             let component = entity_component_name(&dataset.dataset_id, &entity.name);
             let collection_component = entity_collection_component_name(&component);
+            let claim_verification_request_component =
+                claim_verification_request_schema_name(&component, entity_config);
             let entity_tag = entity_tag_name(&dataset.dataset_id, &entity.name);
             let entity_slug = op_id_slug(&entity.name);
             let stem = format!("{dataset_slug}_{entity_slug}");
@@ -308,6 +321,13 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             if entity_config.api.require_purpose_header {
                 add_purpose_header_parameter(&mut paths, &record_path, "get");
             }
+            add_signed_vc_variant(
+                &mut paths,
+                &record_path,
+                "get",
+                config,
+                "Signed entity-record Verifiable Credential.",
+            );
             tag(&mut paths, &record_path, "get", &entity_tag);
 
             // Field schema (JSON Schema view)
@@ -358,6 +378,13 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             if entity_config.api.require_purpose_header {
                 add_purpose_header_parameter(&mut paths, &verify_path, "get");
             }
+            add_signed_vc_variant(
+                &mut paths,
+                &verify_path,
+                "get",
+                config,
+                "Signed verify-result Verifiable Credential.",
+            );
             tag(&mut paths, &verify_path, "get", &entity_tag);
 
             // Claim verification
@@ -367,7 +394,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             );
             paths.insert(
                 claim_verifications_path.clone(),
-                claim_verification_path_item(),
+                claim_verification_path_item(&claim_verification_request_component),
             );
             set_op_id(
                 &mut paths,
@@ -511,6 +538,13 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 "get",
                 "Aggregate definition not found for this entity.",
             );
+            add_signed_vc_variant(
+                &mut paths,
+                &aggregate_run_path,
+                "get",
+                config,
+                "Signed aggregate-result Verifiable Credential.",
+            );
             tag(&mut paths, &aggregate_run_path, "get", &entity_tag);
 
             // Relationships
@@ -598,21 +632,27 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "url": server_url,
             "description": "Configured base URL for this gateway instance.",
         }],
-        "security": [{ "bearerAuth": [] }],
-        "tags": tag_definitions(catalog),
-        "x-tagGroups": tag_groups(catalog),
+        "security": security_requirements(config),
+        "tags": tag_definitions(catalog, config),
+        "x-tagGroups": tag_groups(catalog, config),
         "paths": paths,
         "components": {
-            "schemas": schemas(catalog),
-            "securitySchemes": {
-                "bearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "description": "V1 API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint against `config.auth.api_keys[*].hash_env`.",
-                },
-            },
+            "schemas": schemas(catalog, config),
+            "securitySchemes": security_schemes(config),
         },
     })
+}
+
+fn provenance_enabled(config: &Config) -> bool {
+    config
+        .provenance
+        .as_ref()
+        .is_some_and(|provenance| provenance.enabled)
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_configured(config: &Config) -> bool {
+    config.standards.spdci.is_some()
 }
 
 fn entity_tag_name(dataset_id: &str, entity_name: &str) -> String {
@@ -625,7 +665,7 @@ fn entity_tag_name(dataset_id: &str, entity_name: &str) -> String {
 /// document is already sorted). Entity tags carry `x-displayName` so
 /// Scalar can render a short label while the tag key (used by every
 /// per-operation `tags` reference) stays stable.
-fn tag_definitions(catalog: &CatalogDocument) -> Value {
+fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
     let mut tags = vec![
         json!({
             "name": TAG_SERVICE,
@@ -636,11 +676,24 @@ fn tag_definitions(catalog: &CatalogDocument) -> Value {
             "description": "Catalog discovery: dataset listing, dataset metadata, DCAT-AP export.",
         }),
     ];
+    if provenance_enabled(config) {
+        tags.push(json!({
+            "name": TAG_PROVENANCE,
+            "description": "Public verification artefacts and signed Verifiable Credential support.",
+        }));
+    }
     #[cfg(feature = "ogcapi-features")]
     tags.push(json!({
         "name": TAG_OGC,
         "description": "OGC API Features discovery and dataset-scoped feature collections.",
     }));
+    #[cfg(feature = "spdci-api-standards")]
+    if spdci_configured(config) {
+        tags.push(json!({
+            "name": TAG_SPD_CI,
+            "description": "Social Protection Digital Convergence Initiative sync adapter routes.",
+        }));
+    }
     for dataset in &catalog.datasets {
         for entity in &dataset.entities {
             let display = entity.title.as_deref().unwrap_or(&entity.name);
@@ -669,13 +722,20 @@ fn tag_definitions(catalog: &CatalogDocument) -> Value {
 /// Build the Scalar-specific `x-tagGroups` array. Groups every entity
 /// tag under its dataset, with `Service` and `Catalog` as their own
 /// groups. Scalar renders each group as a collapsible sidebar section.
-fn tag_groups(catalog: &CatalogDocument) -> Value {
+fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
     let mut groups = vec![
         json!({ "name": "Service", "tags": [TAG_SERVICE] }),
         json!({ "name": "Catalog", "tags": [TAG_CATALOG] }),
     ];
+    if provenance_enabled(config) {
+        groups.push(json!({ "name": "Provenance", "tags": [TAG_PROVENANCE] }));
+    }
     #[cfg(feature = "ogcapi-features")]
     groups.push(json!({ "name": "OGC", "tags": [TAG_OGC] }));
+    #[cfg(feature = "spdci-api-standards")]
+    if spdci_configured(config) {
+        groups.push(json!({ "name": "SP DCI", "tags": [TAG_SPD_CI] }));
+    }
     for dataset in &catalog.datasets {
         let entity_tags: Vec<String> = dataset
             .entities
@@ -691,6 +751,45 @@ fn tag_groups(catalog: &CatalogDocument) -> Value {
         }));
     }
     Value::Array(groups)
+}
+
+fn security_requirements(config: &Config) -> Value {
+    match config.auth.mode {
+        AuthMode::ApiKey => json!([{ "bearerAuth": [] }, { "apiKeyAuth": [] }]),
+        AuthMode::Oidc => json!([{ "bearerAuth": [] }]),
+    }
+}
+
+fn security_schemes(config: &Config) -> Value {
+    let mut schemes = Map::new();
+    let bearer_description = match config.auth.mode {
+        AuthMode::ApiKey => {
+            "API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint against `config.auth.api_keys[*].hash_env`."
+        }
+        AuthMode::Oidc => {
+            "OIDC/OAuth2 bearer JWT validated against the configured issuer, audience, JWKS, token type, and scope claim."
+        }
+    };
+    schemes.insert(
+        "bearerAuth".to_string(),
+        json!({
+            "type": "http",
+            "scheme": "bearer",
+            "description": bearer_description,
+        }),
+    );
+    if config.auth.mode == AuthMode::ApiKey {
+        schemes.insert(
+            "apiKeyAuth".to_string(),
+            json!({
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-Api-Key",
+                "description": "Compatibility API-key header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present.",
+            }),
+        );
+    }
+    Value::Object(schemes)
 }
 
 // --- post-construction mutators ------------------------------------
@@ -755,6 +854,81 @@ fn add_purpose_header_parameter(paths: &mut Map<String, Value>, path: &str, meth
     if !already_declared {
         parameters.push(purpose_header_parameter());
     }
+}
+
+fn add_signed_vc_variant(
+    paths: &mut Map<String, Value>,
+    path: &str,
+    method: &str,
+    config: &Config,
+    description: &str,
+) {
+    let Some(provenance) = config
+        .provenance
+        .as_ref()
+        .filter(|provenance| provenance.enabled)
+    else {
+        return;
+    };
+    let Some(op) = op_at(paths, path, method) else {
+        return;
+    };
+    add_accept_parameter(op, &provenance.accepted_media_types);
+    let Some(content) = op
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut("200"))
+        .and_then(Value::as_object_mut)
+        .and_then(|ok| ok.get_mut("content"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    content.insert(
+        VC_JWT_MEDIA_TYPE.to_string(),
+        json!({
+            "schema": {
+                "type": "string",
+                "description": description,
+                "examples": ["eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..."],
+            }
+        }),
+    );
+}
+
+fn add_accept_parameter(op: &mut Map<String, Value>, accepted_media_types: &[String]) {
+    let parameters = op
+        .entry("parameters".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut();
+    let Some(parameters) = parameters else {
+        return;
+    };
+    let already_declared = parameters.iter().any(|p| {
+        p.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|n| n.eq_ignore_ascii_case("Accept"))
+            && p.get("in").and_then(Value::as_str) == Some("header")
+    });
+    if already_declared {
+        return;
+    }
+    let mut values = vec!["application/json".to_string()];
+    for media_type in accepted_media_types {
+        if !values
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(media_type))
+        {
+            values.push(media_type.clone());
+        }
+    }
+    parameters.push(json!({
+        "name": "Accept",
+        "in": "header",
+        "required": false,
+        "description": "Use `application/json` or omit for the default JSON response. Use an enabled provenance media type to request a signed Verifiable Credential response.",
+        "schema": { "type": "string", "enum": values },
+    }));
 }
 
 fn add_response_404(paths: &mut Map<String, Value>, path: &str, method: &str, description: &str) {
@@ -832,7 +1006,7 @@ fn code_samples_for_record(dataset_id: &str, entity_name: &str) -> Vec<Value> {
 
 // --- schemas --------------------------------------------------------
 
-fn schemas(catalog: &CatalogDocument) -> Value {
+fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     let mut schemas = Map::new();
     schemas.insert("HealthResponse".to_string(), health_schema());
     schemas.insert("ReadinessResponse".to_string(), readiness_schema());
@@ -842,6 +1016,20 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     schemas.insert("Pagination".to_string(), pagination_schema());
     schemas.insert("ProblemDetails".to_string(), problem_details_schema());
     schemas.insert("VerifyResponse".to_string(), verify_response_schema());
+    if provenance_enabled(config) {
+        schemas.insert(
+            "DidDocument".to_string(),
+            generic_object_schema("DID Document."),
+        );
+        schemas.insert(
+            "JsonSchemaDocument".to_string(),
+            generic_object_schema("Published JSON Schema document."),
+        );
+        schemas.insert(
+            "JsonLdContext".to_string(),
+            generic_object_schema("Published JSON-LD context document."),
+        );
+    }
     schemas.insert(
         "ClaimVerificationRequest".to_string(),
         claim_verification_request_schema(),
@@ -860,6 +1048,17 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     );
     schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
+    #[cfg(feature = "spdci-api-standards")]
+    if spdci_configured(config) {
+        schemas.insert(
+            "SpdciSyncRequest".to_string(),
+            generic_object_schema("SP DCI sync request envelope."),
+        );
+        schemas.insert(
+            "SpdciSyncResponse".to_string(),
+            generic_object_schema("SP DCI sync response envelope."),
+        );
+    }
     #[cfg(feature = "ogcapi-features")]
     insert_ogc_schemas(&mut schemas);
 
@@ -874,6 +1073,18 @@ fn schemas(catalog: &CatalogDocument) -> Value {
                 entity_collection_component_name(&component),
                 entity_collection_schema(&component, catalog, dataset, entity),
             );
+            if let Some(entity_config) = entity_config(config, &dataset.dataset_id, &entity.name) {
+                if entity_config
+                    .claim_verification
+                    .as_ref()
+                    .is_some_and(|claim_verification| !claim_verification.rulesets.is_empty())
+                {
+                    schemas.insert(
+                        claim_verification_request_component_name(&component),
+                        entity_claim_verification_request_schema(entity_config),
+                    );
+                }
+            }
             schemas.insert(
                 format!("{component}Schema"),
                 entity_metadata_schema(dataset, entity),
@@ -882,6 +1093,14 @@ fn schemas(catalog: &CatalogDocument) -> Value {
     }
 
     Value::Object(schemas)
+}
+
+fn generic_object_schema(description: &str) -> Value {
+    json!({
+        "type": "object",
+        "description": description,
+        "additionalProperties": true,
+    })
 }
 
 fn health_schema() -> Value {
@@ -1145,6 +1364,142 @@ fn claim_verification_request_schema() -> Value {
             },
         }],
     })
+}
+
+fn entity_claim_verification_request_schema(entity: &EntityConfig) -> Value {
+    let Some(claim_verification) = entity.claim_verification.as_ref() else {
+        return claim_verification_request_schema();
+    };
+    let variants = claim_verification
+        .rulesets
+        .iter()
+        .map(|(ruleset_id, ruleset)| claim_verification_ruleset_request_schema(ruleset_id, ruleset))
+        .collect::<Vec<_>>();
+    if variants.is_empty() {
+        return claim_verification_request_schema();
+    }
+
+    json!({
+        "oneOf": variants,
+        "discriminator": {
+            "propertyName": "ruleset",
+        },
+        "description": "Claim-verification request constrained to this entity's configured rulesets. Runtime authorization can still hide rulesets from callers that lack the required scope.",
+    })
+}
+
+fn claim_verification_ruleset_request_schema(
+    ruleset_id: &str,
+    ruleset: &ClaimVerificationRulesetConfig,
+) -> Value {
+    let claims_schema = claim_verification_claims_schema(ruleset);
+    let mut properties = Map::new();
+    properties.insert(
+        "ruleset".to_string(),
+        json!({
+            "type": "string",
+            "const": ruleset_id,
+            "description": "Configured entity-scoped claim verification ruleset to apply.",
+        }),
+    );
+    if ruleset.allow_subject_id_targeting {
+        properties.insert(
+            "subject".to_string(),
+            json!({
+                "type": "object",
+                "description": "Optional targeted registry subject. This ruleset permits subject-id targeting when the caller also has the required scope.",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Known entity primary key to verify against.",
+                    },
+                },
+                "additionalProperties": false,
+            }),
+        );
+    }
+    properties.insert("claims".to_string(), claims_schema);
+    properties.insert(
+        "evidence".to_string(),
+        json!({
+            "type": "array",
+            "description": "Optional metadata about external documents or artifacts the caller already holds. Raw evidence is not echoed by default.",
+            "items": {
+                "type": "object",
+                "additionalProperties": true,
+            },
+        }),
+    );
+
+    json!({
+        "type": "object",
+        "required": ["ruleset", "claims"],
+        "properties": properties,
+        "additionalProperties": false,
+        "examples": [claim_verification_request_example(ruleset_id, ruleset)],
+    })
+}
+
+fn claim_verification_claims_schema(ruleset: &ClaimVerificationRulesetConfig) -> Value {
+    let properties = ruleset
+        .match_fields
+        .keys()
+        .map(|claim| {
+            (
+                claim.clone(),
+                json!({
+                    "type": ["string", "number", "boolean", "null"],
+                }),
+            )
+        })
+        .collect::<Map<_, _>>();
+
+    json!({
+        "type": "object",
+        "description": "Caller-submitted facts accepted by this ruleset.",
+        "required": ruleset.required_claims,
+        "properties": properties,
+        "additionalProperties": false,
+    })
+}
+
+fn claim_verification_request_example(
+    ruleset_id: &str,
+    ruleset: &ClaimVerificationRulesetConfig,
+) -> Value {
+    let mut claims = Map::new();
+    for claim in &ruleset.required_claims {
+        claims.insert(claim.clone(), claim_example_value(claim));
+    }
+    if claims.is_empty() {
+        for claim in ruleset.match_fields.keys().take(1) {
+            claims.insert(claim.clone(), claim_example_value(claim));
+        }
+    }
+
+    let mut example = Map::new();
+    example.insert("ruleset".to_string(), json!(ruleset_id));
+    example.insert("claims".to_string(), Value::Object(claims));
+    Value::Object(example)
+}
+
+fn claim_example_value(claim: &str) -> Value {
+    if claim.ends_with("_id") || claim == "id" {
+        return json!("01HZX9...");
+    }
+    if claim.contains("date") {
+        return json!("1992-04-18");
+    }
+    if claim.contains("status") {
+        return json!("active");
+    }
+    if claim.contains("amount") || claim.contains("count") {
+        return json!(42);
+    }
+    if claim.starts_with("is_") || claim.starts_with("has_") {
+        return json!(true);
+    }
+    json!("Alex Example")
 }
 
 fn claim_verification_response_schema() -> Value {
@@ -1589,6 +1944,100 @@ fn entity_config<'a>(
 
 // --- path-item builders --------------------------------------------
 
+fn insert_provenance_paths(paths: &mut Map<String, Value>) {
+    paths.insert(
+        "/schemas/{claim_type}/{version}".to_string(),
+        public_resource_path_item(
+            "get_provenance_schema",
+            "Get provenance JSON Schema",
+            "Returns a published JSON Schema for a supported provenance claim type. Schema bytes are stable for a given version and cacheable.",
+            "application/schema+json",
+            "JsonSchemaDocument",
+            vec![
+                path_parameter("claim_type", "Provenance claim type, for example `verify-result`."),
+                path_parameter("version", "Schema version filename, for example `v1.json`."),
+            ],
+        ),
+    );
+    mark_public(paths, "/schemas/{claim_type}/{version}", "get");
+    tag(
+        paths,
+        "/schemas/{claim_type}/{version}",
+        "get",
+        TAG_PROVENANCE,
+    );
+
+    paths.insert(
+        "/contexts/{vocab}/{version}".to_string(),
+        public_resource_path_item(
+            "get_provenance_context",
+            "Get provenance JSON-LD context",
+            "Returns a published JSON-LD context used by signed Verifiable Credential responses.",
+            "application/ld+json",
+            "JsonLdContext",
+            vec![
+                path_parameter("vocab", "Context vocabulary, for example `provenance`."),
+                path_parameter(
+                    "version",
+                    "Context version filename, for example `v1.jsonld`.",
+                ),
+            ],
+        ),
+    );
+    mark_public(paths, "/contexts/{vocab}/{version}", "get");
+    tag(paths, "/contexts/{vocab}/{version}", "get", TAG_PROVENANCE);
+
+    paths.insert(
+        "/.well-known/did.json".to_string(),
+        public_resource_path_item(
+            "get_gateway_did_document",
+            "Get gateway DID Document",
+            "Returns the gateway-hosted DID Document in gateway issuer mode. Delegated issuer deployments mount the route but return `provenance.did_document_unavailable`.",
+            "application/did+json",
+            "DidDocument",
+            Vec::new(),
+        ),
+    );
+    mark_public(paths, "/.well-known/did.json", "get");
+    tag(paths, "/.well-known/did.json", "get", TAG_PROVENANCE);
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn insert_spdci_paths(paths: &mut Map<String, Value>) {
+    for (path, op_id, summary, description) in [
+        (
+            "/dci/{registry}/registry/sync/search",
+            "spdci_sync_search",
+            "SP DCI sync search",
+            "Runs the configured SP DCI registry sync search adapter for a named registry.",
+        ),
+        (
+            "/dci/{registry}/registry/sync/disabled",
+            "spdci_disabled_status",
+            "SP DCI disabled status",
+            "Returns disability status using the configured SP DCI disability registry binding.",
+        ),
+        (
+            "/dci/{registry}/registry/sync/get-disability-details",
+            "spdci_get_disability_details",
+            "SP DCI disability details",
+            "Returns disability details using the configured SP DCI registry binding.",
+        ),
+        (
+            "/dci/{registry}/registry/sync/get-disability-support",
+            "spdci_get_disability_support",
+            "SP DCI disability support",
+            "Returns disability support using the configured SP DCI registry binding.",
+        ),
+    ] {
+        paths.insert(
+            path.to_string(),
+            spdci_path_item(op_id, summary, description),
+        );
+        tag(paths, path, "post", TAG_SPD_CI);
+    }
+}
+
 #[cfg(feature = "ogcapi-features")]
 fn insert_ogc_paths(paths: &mut Map<String, Value>) {
     paths.insert(
@@ -1759,6 +2208,73 @@ fn ogc_path_item_with_params(
                     "Authenticated principal lacks the scope required for this operation."
                 ),
                 "404": problem_response("OGC collection or feature not found."),
+                "default": problem_response("Problem Details error response."),
+            }
+        }
+    })
+}
+
+fn public_resource_path_item(
+    op_id: &str,
+    summary: &str,
+    description: &str,
+    media_type: &str,
+    schema: &str,
+    parameters: Vec<Value>,
+) -> Value {
+    json!({
+        "get": {
+            "operationId": op_id,
+            "summary": summary,
+            "description": description,
+            "parameters": parameters,
+            "responses": {
+                "200": {
+                    "description": "Successful response",
+                    "content": {
+                        media_type: {
+                            "schema": { "$ref": format!("#/components/schemas/{schema}") }
+                        }
+                    }
+                },
+                "404": problem_response("Requested provenance artefact is not available."),
+                "default": problem_response("Problem Details error response."),
+            }
+        }
+    })
+}
+
+#[cfg(feature = "spdci-api-standards")]
+fn spdci_path_item(op_id: &str, summary: &str, description: &str) -> Value {
+    json!({
+        "post": {
+            "operationId": op_id,
+            "summary": summary,
+            "description": description,
+            "parameters": [
+                path_parameter("registry", "Configured SP DCI registry adapter name.")
+            ],
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/SpdciSyncRequest" }
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Successful SP DCI response envelope.",
+                    "content": {
+                        "application/json": {
+                            "schema": { "$ref": "#/components/schemas/SpdciSyncResponse" }
+                        }
+                    }
+                },
+                "400": problem_response("Invalid SP DCI request header or message envelope."),
+                "401": problem_response("Missing or invalid bearer credential."),
+                "403": problem_response("Authenticated principal lacks the scope required for this adapter."),
+                "404": problem_response("Configured SP DCI registry adapter was not found."),
                 "default": problem_response("Problem Details error response."),
             }
         }
@@ -1956,7 +2472,7 @@ fn entity_verify_path_item(entity: &EntityMetadata) -> Value {
     )
 }
 
-fn claim_verification_path_item() -> Value {
+fn claim_verification_path_item(request_schema: &str) -> Value {
     json!({
         "post": {
             "summary": "Create claim verification",
@@ -1979,7 +2495,7 @@ fn claim_verification_path_item() -> Value {
                 "required": true,
                 "content": {
                     "application/json": {
-                        "schema": { "$ref": "#/components/schemas/ClaimVerificationRequest" }
+                        "schema": { "$ref": format!("#/components/schemas/{request_schema}") }
                     }
                 }
             },
@@ -2196,6 +2712,22 @@ fn entity_collection_component_name(entity_component: &str) -> String {
     format!("{entity_component}Collection")
 }
 
+fn claim_verification_request_component_name(entity_component: &str) -> String {
+    format!("{entity_component}ClaimVerificationRequest")
+}
+
+fn claim_verification_request_schema_name(entity_component: &str, entity: &EntityConfig) -> String {
+    if entity
+        .claim_verification
+        .as_ref()
+        .is_some_and(|claim_verification| !claim_verification.rulesets.is_empty())
+    {
+        claim_verification_request_component_name(entity_component)
+    } else {
+        "ClaimVerificationRequest".to_string()
+    }
+}
+
 fn sanitize_component_part(value: &str) -> String {
     value
         .chars()
@@ -2230,13 +2762,19 @@ fn openapi_unavailable(detail: &'static str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "spdci-api-standards")]
+    use std::collections::BTreeMap;
     use std::env;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use serde_json::Value;
 
     use super::*;
-    use crate::config::AdmsStatus;
+    use crate::config::{
+        AdmsStatus, AuthMode, ClaimValidity, GatewayIssuerConfig, IssuerConfig,
+        ProvenanceAlgorithm, ProvenanceConfig, SignerConfig, SoftwareSignerConfig,
+    };
     use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
 
     fn load_example_config() -> Config {
@@ -2252,6 +2790,32 @@ mod tests {
         }
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
         crate::config::load(&path).expect("example config loads")
+    }
+
+    fn enable_provenance(config: &mut Config) {
+        config.provenance = Some(ProvenanceConfig {
+            enabled: true,
+            accepted_media_types: vec![
+                "application/vc+jwt".to_string(),
+                "application/jwt".to_string(),
+            ],
+            schema_base_url: "https://data.example.test/schemas".to_string(),
+            context_base_url: "https://data.example.test/contexts".to_string(),
+            claim_validity: ClaimValidity {
+                verify_result: Duration::from_secs(300),
+                aggregate_result: Duration::from_secs(3600),
+                entity_record: Duration::from_secs(86_400),
+            },
+            issuer: IssuerConfig::Gateway(GatewayIssuerConfig {
+                did: "did:web:data.example.test".to_string(),
+                verification_method_id: "did:web:data.example.test#issuance".to_string(),
+                signer: SignerConfig::Software(SoftwareSignerConfig {
+                    jwk_env: "REGISTRY_RELAY_PROVENANCE_JWK".to_string(),
+                    signing_algorithm: ProvenanceAlgorithm::EdDSA,
+                }),
+                retired_keys: Vec::new(),
+            }),
+        });
     }
 
     fn catalog_with_individual() -> CatalogDocument {
@@ -2274,9 +2838,9 @@ mod tests {
                 sensitivity: "personal",
                 access_rights: "restricted",
                 update_frequency: "monthly",
-                spatial_coverage: None,
-                adms_status: AdmsStatus::UnderDevelopment,
                 conforms_to: Vec::new(),
+                spatial_coverage: None,
+                adms_status: AdmsStatus::Completed,
                 links: DatasetLinks {
                     self_url: "https://data.example.test/datasets/social_registry".to_string(),
                     ogc_collections: None,
@@ -2324,7 +2888,7 @@ mod tests {
         );
         assert_eq!(
             op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
-            "#/components/schemas/ClaimVerificationRequest"
+            "#/components/schemas/Entity_social_registry_individualClaimVerificationRequest"
         );
         assert_eq!(
             op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
@@ -2392,7 +2956,23 @@ mod tests {
             .expect("schemas object");
 
         assert!(schemas.contains_key("ClaimVerificationRequest"));
+        assert!(schemas.contains_key("Entity_social_registry_individualClaimVerificationRequest"));
         assert!(schemas.contains_key("ClaimVerificationResponse"));
+        let request =
+            &schemas["Entity_social_registry_individualClaimVerificationRequest"]["oneOf"][0];
+        assert_eq!(
+            request["properties"]["ruleset"]["const"],
+            "identity-match-v1"
+        );
+        assert_eq!(request["properties"]["claims"]["required"], json!(["id"]));
+        assert_eq!(
+            request["properties"]["claims"]["additionalProperties"],
+            Value::Bool(false)
+        );
+        assert_eq!(
+            request["properties"]["claims"]["properties"]["id"]["type"],
+            json!(["string", "number", "boolean", "null"])
+        );
         assert!(
             schemas["ClaimVerificationResponse"]["properties"]["decision"]
                 .get("enum")
@@ -2403,5 +2983,125 @@ mod tests {
             schemas["ClaimVerificationResponse"]["properties"]["decision"]["examples"],
             json!(["match"])
         );
+    }
+
+    #[test]
+    fn provenance_openapi_documents_public_artifacts_and_signed_vc_variants_when_enabled() {
+        let mut config = load_example_config();
+        enable_provenance(&mut config);
+        let doc = openapi_document(&catalog_with_individual(), &config);
+
+        for (path, media_type, schema) in [
+            (
+                "/schemas/{claim_type}/{version}",
+                "application/schema+json",
+                "#/components/schemas/JsonSchemaDocument",
+            ),
+            (
+                "/contexts/{vocab}/{version}",
+                "application/ld+json",
+                "#/components/schemas/JsonLdContext",
+            ),
+            (
+                "/.well-known/did.json",
+                "application/did+json",
+                "#/components/schemas/DidDocument",
+            ),
+        ] {
+            let op = &doc["paths"][path]["get"];
+            assert_eq!(op["security"], json!([]), "{path} should be public");
+            assert_eq!(op["tags"], json!([TAG_PROVENANCE]));
+            assert_eq!(
+                op["responses"]["200"]["content"][media_type]["schema"]["$ref"], schema,
+                "{path} should document its media type"
+            );
+        }
+
+        for path in [
+            "/datasets/social_registry/individual/{id}",
+            "/datasets/social_registry/individual/verify",
+            "/datasets/social_registry/individual/aggregates/{aggregate_id}",
+        ] {
+            let op = &doc["paths"][path]["get"];
+            assert_eq!(
+                op["responses"]["200"]["content"][VC_JWT_MEDIA_TYPE]["schema"]["type"], "string",
+                "{path} should document signed VC-JWT responses"
+            );
+            let accept = op["parameters"]
+                .as_array()
+                .expect("parameters")
+                .iter()
+                .find(|parameter| parameter["name"] == "Accept")
+                .expect("Accept parameter");
+            assert_eq!(accept["schema"]["enum"][1], VC_JWT_MEDIA_TYPE);
+            assert_eq!(accept["schema"]["enum"][2], "application/jwt");
+        }
+
+        assert!(doc["components"]["schemas"]["DidDocument"].is_object());
+        assert!(doc["components"]["schemas"]["JsonSchemaDocument"].is_object());
+        assert!(doc["components"]["schemas"]["JsonLdContext"].is_object());
+    }
+
+    #[test]
+    fn security_scheme_description_tracks_auth_mode() {
+        let mut config = load_example_config();
+
+        let api_key_doc = openapi_document(&catalog_with_individual(), &config);
+        assert_eq!(
+            api_key_doc["security"],
+            json!([{ "bearerAuth": [] }, { "apiKeyAuth": [] }])
+        );
+        assert!(
+            api_key_doc["components"]["securitySchemes"]["bearerAuth"]["description"]
+                .as_str()
+                .expect("bearer description")
+                .contains("API key")
+        );
+        assert_eq!(
+            api_key_doc["components"]["securitySchemes"]["apiKeyAuth"]["name"],
+            "X-Api-Key"
+        );
+
+        config.auth.mode = AuthMode::Oidc;
+        let oidc_doc = openapi_document(&catalog_with_individual(), &config);
+        assert_eq!(oidc_doc["security"], json!([{ "bearerAuth": [] }]));
+        assert!(oidc_doc["components"]["securitySchemes"]["apiKeyAuth"].is_null());
+        assert!(
+            oidc_doc["components"]["securitySchemes"]["bearerAuth"]["description"]
+                .as_str()
+                .expect("bearer description")
+                .contains("OIDC/OAuth2 bearer JWT")
+        );
+    }
+
+    #[cfg(feature = "spdci-api-standards")]
+    #[test]
+    fn spdci_openapi_documents_configured_sync_surface() {
+        let mut config = load_example_config();
+        config.standards.spdci = Some(crate::config::SpdciStandardsConfig {
+            disability_registry: None,
+            registries: BTreeMap::new(),
+        });
+        let doc = openapi_document(&catalog_with_individual(), &config);
+
+        for path in [
+            "/dci/{registry}/registry/sync/search",
+            "/dci/{registry}/registry/sync/disabled",
+            "/dci/{registry}/registry/sync/get-disability-details",
+            "/dci/{registry}/registry/sync/get-disability-support",
+        ] {
+            let op = &doc["paths"][path]["post"];
+            assert_eq!(op["tags"], json!([TAG_SPD_CI]));
+            assert_eq!(
+                op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/SpdciSyncRequest"
+            );
+            assert_eq!(
+                op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/SpdciSyncResponse"
+            );
+        }
+        assert!(doc["components"]["schemas"]["SpdciSyncRequest"].is_object());
+        assert!(doc["components"]["schemas"]["SpdciSyncResponse"].is_object());
     }
 }

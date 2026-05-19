@@ -52,7 +52,7 @@ export function setup() {
   const token = rowsToken();
   logScenarioStart({
     scenario: 'refresh_under_read_load',
-    expectedResponse: '200 reads stable; reloads trigger 200 or 501',
+    expectedResponse: '200 reads stable; reloads trigger 200',
     vus: options.vus,
     duration: options.duration,
   });
@@ -111,12 +111,10 @@ export default function (ctx) {
       }
     );
     check(reloadRes, {
-      'reload: 200 or 501': (r) => r.status === 200 || r.status === 501,
-      'reload: not 5xx (except 501)': (r) => r.status < 500 || r.status === 501,
+      'reload: 200': (r) => r.status === 200,
+      'reload: not 5xx': (r) => r.status < 500,
     });
-    // 501 is the current "not yet wired" response from admin.rs; do not count
-    // it as a server error. Any other 5xx is unexpected.
-    if (reloadRes.status >= 500 && reloadRes.status !== 501) {
+    if (reloadRes.status >= 500) {
       trackResponse(reloadRes);
     }
     console.log(`reload triggered: status=${reloadRes.status}`);

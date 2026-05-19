@@ -14,13 +14,14 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::watch;
 
 use crate::audit::ErrorCodeExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::{DatasetId, ResourceId};
 use crate::error::{AdminError, AuthError, Error, IngestError};
-use crate::ingest::IngestRegistry;
+use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const RELOAD_FAILED_CODE: &str = "admin.reload_failed";
@@ -48,6 +49,7 @@ struct ReloadTablePath {
 async fn reload_table(
     Path(path): Path<ReloadTablePath>,
     registry: Option<Extension<Arc<IngestRegistry>>>,
+    readiness_tx: Option<Extension<watch::Sender<ReadinessSnapshot>>>,
     principal: Option<Extension<Principal>>,
 ) -> Response {
     let Some(Extension(registry)) = registry else {
@@ -59,7 +61,10 @@ async fn reload_table(
         return error.into_response();
     }
 
-    match registry.reload(&path.dataset_id, &path.table_id).await {
+    let result = registry.reload(&path.dataset_id, &path.table_id).await;
+    publish_readiness(readiness_tx, &registry);
+
+    match result {
         Ok(()) => Json(json!({
             "status": "ok",
             "dataset_id": path.dataset_id.as_str(),
@@ -75,6 +80,7 @@ async fn reload_table(
 
 async fn reload_all(
     registry: Option<Extension<Arc<IngestRegistry>>>,
+    readiness_tx: Option<Extension<watch::Sender<ReadinessSnapshot>>>,
     principal: Option<Extension<Principal>>,
 ) -> Response {
     if let Err(error) = require_admin_scope(principal) {
@@ -87,6 +93,7 @@ async fn reload_all(
     };
 
     let report = registry.reload_all().await;
+    publish_readiness(readiness_tx, &registry);
     let status = if report.failed == 0 { "ok" } else { "failed" };
     let http_status = if report.failed == 0 {
         StatusCode::OK
@@ -121,6 +128,15 @@ async fn reload_all(
             .insert(ErrorCodeExt(RELOAD_FAILED_CODE.to_string()));
     }
     response
+}
+
+fn publish_readiness(
+    readiness_tx: Option<Extension<watch::Sender<ReadinessSnapshot>>>,
+    registry: &IngestRegistry,
+) {
+    if let Some(Extension(readiness_tx)) = readiness_tx {
+        let _ = readiness_tx.send(registry.snapshot());
+    }
 }
 
 fn require_admin_scope(principal: Option<Extension<Principal>>) -> Result<(), Error> {

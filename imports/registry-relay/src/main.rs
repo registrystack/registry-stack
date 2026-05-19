@@ -135,7 +135,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     ingest.run_initial_ingest(readiness_tx.clone()).await;
     let (mut refresh_tasks, refresh_shutdown) =
-        Arc::clone(&ingest).spawn_refresh_tasks_with_config(&config, readiness_tx);
+        Arc::clone(&ingest).spawn_refresh_tasks_with_config(&config, readiness_tx.clone());
 
     let dataset_count = config.datasets.len();
     // Operational startup log: a per-mode size hint. For `api_key` this
@@ -240,6 +240,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Arc::clone(&auth),
                 Arc::clone(&audit_sink),
                 readiness_rx.clone(),
+                readiness_tx.clone(),
                 Arc::clone(&ingest),
                 Arc::clone(&metrics),
             );

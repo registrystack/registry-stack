@@ -52,6 +52,12 @@ deny:
 validate-catalog-shacl catalog:
     uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' python scripts/validate_dcat_shacl.py --catalog {{catalog}}
 
+# Validate a generated DCAT-AP JSON-LD catalog with the external SEMIC validator.
+# Usage: just validate-catalog-semic catalog=target/catalog.dcat-ap.jsonld
+#        just validate-catalog-semic catalog=http://127.0.0.1:8080/catalog/dcat-ap.jsonld validation_type=dcatap.3_0_1_full
+validate-catalog-semic catalog validation_type="dcatap.3_0_1_base":
+    python scripts/validate_semic_dcat_ap.py --catalog {{catalog}} --validation-type {{validation_type}}
+
 # Check advisories only (alias for a quick security scan).
 audit:
     if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check advisories; else cargo deny check advisories; fi
@@ -73,17 +79,19 @@ demo-keys env="demo/.env.local":
 # List demo personas and the key variable to use for each OpenAPI-style task.
 # Usage: just demo-keys-list
 #        just demo-keys-list demo/config/disability_registry.yaml
+#        just demo-keys-list demo/config/all_standards.yaml
 #        just demo-keys-list demo/config/all_demos.yaml path/to/demo.env
-demo-keys-list config="demo/config/all_demos.yaml" env="demo/.env.local":
+demo-keys-list config="demo/config/all_standards.yaml" env="demo/.env.local":
     uv run demo/scripts/list_demo_keys.py --config {{config}} --env-file {{env}}
 
 # Run a demo config, generating demo keys first when demo/.env.local is absent.
 # Usage: just demo-run
 #        just demo-run demo/config/benefits_casework.yaml
+#        just demo-run demo/config/all_demos.yaml ogcapi-features
 #        just demo-run demo/config/disability_registry.yaml spdci-api-standards,standards-cel-mapping
-demo-run config="demo/config/all_demos.yaml" features="":
+demo-run config="demo/config/all_standards.yaml" features="":
     @if [ ! -f demo/.env.local ]; then uv run demo/scripts/generate_demo_keys.py --env-file; fi
-    set -a; . demo/.env.local; set +a; if [ -n "{{features}}" ]; then cargo run --features "{{features}}" -- --config {{config}}; else cargo run -- --config {{config}}; fi
+    set -a; . demo/.env.local; set +a; demo_features="{{features}}"; if [ -z "$demo_features" ] && [ "{{config}}" = "demo/config/all_standards.yaml" ]; then demo_features="ogcapi-features,spdci-api-standards,standards-cel-mapping"; fi; if [ -n "$demo_features" ]; then cargo run --features "$demo_features" -- --config {{config}}; else cargo run -- --config {{config}}; fi
 
 # Generate synthetic perf fixtures under perf/fixtures/generated/.
 # Usage: just perf-gen                       (default: all profiles)

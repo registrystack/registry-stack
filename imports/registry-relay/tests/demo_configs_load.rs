@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Focused config-loading verification for the five core demo-pack YAMLs and the
-//! combined `all_demos.yaml`. This keeps the public demo pack covered by
-//! a focused config-loading check.
+//! Focused config-loading verification for the five core demo-pack YAMLs, the
+//! combined `all_demos.yaml`, and the full standards demo config. This keeps
+//! the public demo pack covered by a focused config-loading check.
 //!
 //! The core configs declare the same six persona `hash_env:` names
 //! (`CATALOG_VIEWER_HASH` etc.), so this binary keeps a single test function
@@ -188,6 +188,23 @@ fn spdci_demo_configs_load_and_validate() {
             path.display()
         );
     }
+
+    let all_standards_path = demo_config("all_standards.yaml");
+    let all_standards =
+        config::load(&all_standards_path).expect("all_standards.yaml failed to load");
+    assert_eq!(
+        all_standards.datasets.len(),
+        6,
+        "all_standards.yaml should aggregate the five core datasets plus disability_registry"
+    );
+    assert_clinic_facility_spatial_demo(&all_standards);
+    assert!(
+        all_standards
+            .datasets
+            .iter()
+            .any(|dataset| dataset.id.as_ref() == "disability_registry"),
+        "all_standards.yaml missing disability_registry"
+    );
 }
 
 #[cfg(all(
@@ -199,9 +216,15 @@ fn mapped_spdci_demo_configs_require_mapping_feature() {
     for name in PERSONA_HASH_ENVS {
         env::set_var(name, make_fingerprint(name.as_bytes()));
     }
+    env::set_var(
+        "CLAIM_VERIFICATION_BINDING_KEY",
+        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    );
 
-    let path = demo_config("disability_registry.yaml");
-    let err =
-        config::load(&path).expect_err("mapped SP DCI demo should require standards-cel-mapping");
-    assert_eq!(err.code(), "spdci.config.mapping_feature_disabled");
+    for name in ["disability_registry.yaml", "all_standards.yaml"] {
+        let path = demo_config(name);
+        let err = config::load(&path)
+            .expect_err("mapped SP DCI demo should require standards-cel-mapping");
+        assert_eq!(err.code(), "spdci.config.mapping_feature_disabled");
+    }
 }

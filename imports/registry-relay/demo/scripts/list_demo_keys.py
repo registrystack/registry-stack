@@ -297,9 +297,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config",
-        default="demo/config/all_demos.yaml",
+        default="demo/config/all_standards.yaml",
         type=Path,
-        help="demo config to inspect (default: demo/config/all_demos.yaml)",
+        help="demo config to inspect (default: demo/config/all_standards.yaml)",
     )
     parser.add_argument(
         "--env-file",

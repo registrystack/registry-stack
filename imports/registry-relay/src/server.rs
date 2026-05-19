@@ -325,6 +325,7 @@ pub fn build_admin_app(
     auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    readiness_tx: tokio::sync::watch::Sender<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
 ) -> Router {
     build_admin_app_with_metrics(
@@ -332,6 +333,7 @@ pub fn build_admin_app(
         auth,
         audit_sink,
         readiness,
+        readiness_tx,
         ingest,
         RequestMetrics::shared(),
     )
@@ -344,6 +346,7 @@ pub fn build_admin_app_with_metrics(
     auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    readiness_tx: tokio::sync::watch::Sender<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
     metrics: Arc<RequestMetrics>,
 ) -> Router {
@@ -355,6 +358,7 @@ pub fn build_admin_app_with_metrics(
     let merged: Router<()> = Router::new().merge(public).merge(protected);
     apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
         .layer(Extension(readiness))
+        .layer(Extension(readiness_tx))
         .layer(Extension(config))
 }
 

@@ -172,7 +172,7 @@ fn build_fixture() -> MetricsFixture {
         )
         .expect("ingest registry builds"),
     );
-    let (_readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ready_snapshot());
+    let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ready_snapshot());
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
     let public = TestServer::new(build_app_with_readiness(
         Arc::clone(&config),
@@ -185,6 +185,7 @@ fn build_fixture() -> MetricsFixture {
         build_auth(),
         sink,
         readiness_rx,
+        readiness_tx,
         ingest,
     ));
 
@@ -316,7 +317,7 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
         .add_header("Data-Purpose", SENSITIVE_PURPOSE)
         .add_header("x-request-id", SENSITIVE_REQUEST_ID)
         .await
-        .assert_status(StatusCode::NOT_IMPLEMENTED);
+        .assert_status(StatusCode::OK);
     fixture
         .public
         .get(&format!(

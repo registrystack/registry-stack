@@ -52,6 +52,24 @@ cargo test --test api_docs
 cargo test provenance
 ```
 
+DCAT-AP catalog validation runs at two levels:
+
+```sh
+REGISTRY_RELAY_RUN_EXTERNAL_SHACL=1 \
+  cargo test --test catalog_entity generated_catalog_can_run_external_shacl_validation_when_enabled
+```
+
+The CI workflow also exports a sample catalog and validates it with the
+local SHACL smoke profile. For a manual external check against the
+European Commission SEMIC validator, run:
+
+```sh
+just validate-catalog-semic catalog=target/dcat-ap/catalog.dcat-ap.jsonld
+```
+
+or trigger the `dcat-ap-external-validation` GitHub Actions workflow.
+The default external profile is `dcatap.3_0_1_base`.
+
 ## Coverage Metrics
 
 Use `cargo-llvm-cov` when you need quantitative coverage metrics to complement the qualitative test review:

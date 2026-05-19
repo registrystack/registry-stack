@@ -410,13 +410,14 @@ async fn admin_bind_serves_health_on_second_listener() {
         )
         .expect("empty ingest registry builds"),
     );
-    let (_readiness_tx, readiness_rx) = watch::channel(ingest.snapshot());
+    let (readiness_tx, readiness_rx) = watch::channel(ingest.snapshot());
     let main_app = build_app(Arc::clone(&config), Arc::clone(&auth), Arc::clone(&sink));
     let admin_app = build_admin_app(
         Arc::clone(&config),
         Arc::clone(&auth),
         Arc::clone(&sink),
         readiness_rx,
+        readiness_tx,
         ingest,
     );
 
