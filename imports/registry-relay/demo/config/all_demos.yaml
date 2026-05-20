@@ -12,6 +12,9 @@
 
 server:
   bind: 0.0.0.0:4242
+metadata:
+  manifest_path: all_demos.metadata.yaml
+
 catalog:
   title: Government Demo Registry Relay (All Demos)
   base_url: http://127.0.0.1:4242

@@ -1,0 +1,21 @@
+meta {
+  name: SHACL graph
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/metadata/shacl
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the collection-level SHACL JSON-LD graph generated from the portable manifest.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json body containing node shapes for visible entities.
+}

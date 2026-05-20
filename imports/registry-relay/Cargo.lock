@@ -4450,6 +4450,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "registry-metadata-cli"
+version = "0.1.0"
+dependencies = [
+ "registry-metadata-core",
+ "serde",
+ "serde_json",
+ "serde_yml",
+]
+
+[[package]]
+name = "registry-metadata-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "registry-relay"
 version = "0.1.0"
 dependencies = [
@@ -4481,6 +4501,7 @@ dependencies = [
  "postgres-native-tls",
  "proptest",
  "rand_core 0.6.4",
+ "registry-metadata-core",
  "reqwest",
  "ryu",
  "serde",

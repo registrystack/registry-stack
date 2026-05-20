@@ -102,7 +102,7 @@ impl CursorSigner {
         tag
     }
 
-    #[cfg(feature = "ogcapi-features")]
+    #[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
     pub(crate) fn sign_payload(&self, message: &[u8]) -> [u8; CURSOR_MAC_LEN] {
         self.tag(message)
     }
@@ -116,7 +116,7 @@ impl CursorSigner {
         expected.ct_eq(tag).into()
     }
 
-    #[cfg(feature = "ogcapi-features")]
+    #[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
     pub(crate) fn verify_payload(&self, message: &[u8], tag: &[u8]) -> bool {
         self.verify(message, tag)
     }

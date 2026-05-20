@@ -1,0 +1,21 @@
+meta {
+  name: Dataset records
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/records/collections/datasets/items?q=benefits&limit=10
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Searches visible dataset catalog records through the runtime OGC API Records surface.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 application/geo+json with a FeatureCollection containing benefits_casework.
+}

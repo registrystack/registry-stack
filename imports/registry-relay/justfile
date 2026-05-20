@@ -58,6 +58,30 @@ validate-catalog-shacl catalog:
 validate-catalog-semic catalog validation_type="dcatap.3_0_1_base":
     python scripts/validate_semic_dcat_ap.py --catalog {{catalog}} --validation-type {{validation_type}}
 
+# Validate one portable metadata manifest.
+# Usage: just metadata-validate
+#        just metadata-validate profiles/example-benefits-sync/fixtures/metadata.yaml
+metadata-validate manifest="profiles/example-civil-registration/fixtures/metadata.yaml":
+    cargo run --quiet -p registry-metadata-cli -- validate {{manifest}}
+
+# Validate all ecosystem profile descriptors and fixture manifests.
+metadata-validate-profiles:
+    cargo run --quiet -p registry-metadata-cli -- validate-profiles profiles
+
+# Render one static metadata artifact from a manifest.
+# Usage: just metadata-render
+#        just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
+#        just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
+metadata-render manifest="profiles/example-civil-registration/fixtures/metadata.yaml" format="catalog" out="target/metadata/catalog.json" extra="":
+    mkdir -p $(dirname {{out}})
+    cargo run --quiet -p registry-metadata-cli -- render {{manifest}} --format {{format}} {{extra}} > {{out}}
+
+# Publish a static metadata bundle with index, catalog, DCAT, SHACL, and schemas.
+# Usage: just metadata-publish
+#        just metadata-publish profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
+metadata-publish manifest="profiles/example-civil-registration/fixtures/metadata.yaml" out="target/metadata/public":
+    cargo run --quiet -p registry-metadata-cli -- publish {{manifest}} --out {{out}}
+
 # Check advisories only (alias for a quick security scan).
 audit:
     if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check advisories; else cargo deny check advisories; fi
@@ -91,7 +115,7 @@ demo-keys-list config="demo/config/all_standards.yaml" env="demo/.env.local":
 #        just demo-run demo/config/disability_registry.yaml spdci-api-standards,standards-cel-mapping
 demo-run config="demo/config/all_standards.yaml" features="":
     @if [ ! -f demo/.env.local ]; then uv run demo/scripts/generate_demo_keys.py --env-file; fi
-    set -a; . demo/.env.local; set +a; demo_features="{{features}}"; if [ -z "$demo_features" ] && [ "{{config}}" = "demo/config/all_standards.yaml" ]; then demo_features="ogcapi-features,spdci-api-standards,standards-cel-mapping"; fi; if [ -n "$demo_features" ]; then cargo run --features "$demo_features" -- --config {{config}}; else cargo run -- --config {{config}}; fi
+    set -a; . demo/.env.local; set +a; demo_features="{{features}}"; if [ -z "$demo_features" ] && [ "{{config}}" = "demo/config/all_standards.yaml" ]; then demo_features="ogcapi-records,ogcapi-features,spdci-api-standards,standards-cel-mapping"; fi; if [ -n "$demo_features" ]; then cargo run --features "$demo_features" -- --config {{config}}; else cargo run -- --config {{config}}; fi
 
 # Generate synthetic perf fixtures under perf/fixtures/generated/.
 # Usage: just perf-gen                       (default: all profiles)

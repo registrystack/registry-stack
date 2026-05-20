@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Optional Social Protection Digital Convergence Initiative (SP DCI)
-# Disability Registry demo plus small SR, CRVS, and FR sync-search bindings.
+# Registry gateway demo with separate Disability, Social, Civil, and Farmer datasets.
 # Run with:
 #   cargo run --features spdci-api-standards,standards-cel-mapping -- --config demo/config/disability_registry.yaml
 
 server:
   bind: 0.0.0.0:4242
 
+metadata:
+  manifest_path: disability_registry.metadata.yaml
+
 catalog:
-  title: SP DCI Disability Registry Gateway (Demo)
+  title: SP DCI Registry Gateway Demo
   base_url: http://127.0.0.1:4242
   publisher: Ministry of Social Affairs (Demo)
 
@@ -22,11 +25,17 @@ auth:
       hash_env: CATALOG_VIEWER_HASH
       scopes:
         - disability_registry:metadata
+        - civil_registry:metadata
+        - social_registry:metadata
+        - farmer_registry:metadata
 
     - id: planning_analyst
       hash_env: PLANNING_ANALYST_HASH
       scopes:
         - disability_registry:metadata
+        - civil_registry:metadata
+        - social_registry:metadata
+        - farmer_registry:metadata
 
     - id: casework_system
       hash_env: CASEWORK_SYSTEM_HASH
@@ -35,18 +44,33 @@ auth:
         - disability_registry:rows
         - disability_registry:verify
         - disability_registry:claim_verification
+        - civil_registry:metadata
+        - civil_registry:rows
+        - civil_registry:verify
+        - social_registry:metadata
+        - social_registry:rows
+        - social_registry:verify
+        - farmer_registry:metadata
+        - farmer_registry:rows
+        - farmer_registry:verify
 
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
         - disability_registry:verify
         - disability_registry:claim_verification
+        - civil_registry:verify
+        - social_registry:verify
+        - farmer_registry:verify
 
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_HASH
       scopes:
         - admin
         - disability_registry:metadata
+        - civil_registry:metadata
+        - social_registry:metadata
+        - farmer_registry:metadata
 
 claim_verification:
   binding_key_id: demo-disability-v1
@@ -85,7 +109,7 @@ standards:
         response_mapping_path: demo/mappings/spdci/dr-disabled-person.yaml
         response_schema_path: demo/schemas/spdci/dr-disabled-person.schema.json
       sr:
-        dataset: disability_registry
+        dataset: social_registry
         entity: social_group
         registry_type: ns:org:RegistryType:Social
         record_type: SRPerson
@@ -102,7 +126,7 @@ standards:
         response_mapping_path: demo/mappings/spdci/sr-social-group.yaml
         response_schema_path: demo/schemas/spdci/sr-social-group.schema.json
       crvs:
-        dataset: disability_registry
+        dataset: civil_registry
         entity: civil_person
         registry_type: ns:org:RegistryType:Civil
         record_type: spdci-extensions-dci:Person
@@ -122,7 +146,7 @@ standards:
         response_mapping_path: demo/mappings/spdci/crvs-person.yaml
         response_schema_path: demo/schemas/spdci/crvs-person.schema.json
       fr:
-        dataset: disability_registry
+        dataset: farmer_registry
         entity: farmer
         registry_type: ns:org:RegistryType:FR
         record_type: spdci-extensions-dci:Farmer
@@ -148,18 +172,15 @@ datasets:
   - id: disability_registry
     title: SP DCI Disability Registry
     description: >-
-      Synthetic disability registry backed by a spreadsheet. It demonstrates
-      the optional SP DCI Disability Registry sync adapter for disabled-status,
-      disability-details, and disability-support lookups.
+      Synthetic disability registry backed by the SP DCI demo workbook. It
+      demonstrates disabled-status, disability-details, and disability-support
+      lookups.
     owner: Ministry of Social Affairs
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
     conforms_to:
       - spdci:extensions/dr/v1/DisabledPerson
-      - spdci:extensions/social/v1/Group
-      - spdci:extensions/crvs/v1/Person
-      - spdci:extensions/fr/v1/FRPerson
     defaults:
       refresh:
         mode: manual
@@ -234,176 +255,6 @@ datasets:
               type: date
               nullable: true
 
-      - id: civil_persons_table
-        source:
-          type: file
-          path: demo/data/disability_registry.xlsx
-          format:
-            xlsx:
-              sheet: CivilPersons
-        primary_key: civil_person_id
-        schema:
-          strict: true
-          fields:
-            - name: civil_person_id
-              type: string
-              nullable: false
-            - name: national_id
-              type: string
-              nullable: false
-            - name: given_name
-              type: string
-              nullable: false
-            - name: surname
-              type: string
-              nullable: false
-            - name: sex
-              type: string
-              nullable: false
-            - name: birth_date
-              type: date
-              nullable: false
-            - name: birth_place
-              type: string
-              nullable: false
-            - name: address_line
-              type: string
-              nullable: false
-            - name: district
-              type: string
-              nullable: false
-            - name: phone
-              type: string
-              nullable: false
-            - name: email
-              type: string
-              nullable: false
-            - name: registration_date
-              type: date
-              nullable: false
-            - name: last_updated
-              type: date
-              nullable: false
-
-      - id: social_groups_table
-        source:
-          type: file
-          path: demo/data/disability_registry.xlsx
-          format:
-            xlsx:
-              sheet: SocialGroups
-        primary_key: group_id
-        schema:
-          strict: true
-          fields:
-            - name: group_id
-              type: string
-              nullable: false
-            - name: group_type
-              type: string
-              nullable: false
-            - name: district
-              type: string
-              nullable: false
-            - name: address_line
-              type: string
-              nullable: false
-            - name: poverty_score
-              type: number
-              nullable: false
-            - name: poverty_score_type
-              type: string
-              nullable: false
-            - name: group_size
-              type: integer
-              nullable: false
-            - name: head_member_id
-              type: string
-              nullable: false
-            - name: head_national_id
-              type: string
-              nullable: false
-            - name: head_given_name
-              type: string
-              nullable: false
-            - name: head_surname
-              type: string
-              nullable: false
-            - name: head_sex
-              type: string
-              nullable: false
-            - name: head_birth_date
-              type: date
-              nullable: false
-            - name: head_disability_status
-              type: string
-              nullable: false
-            - name: registration_date
-              type: date
-              nullable: false
-            - name: last_updated
-              type: date
-              nullable: false
-
-      - id: farmers_table
-        source:
-          type: file
-          path: demo/data/disability_registry.xlsx
-          format:
-            xlsx:
-              sheet: Farmers
-        primary_key: farmer_id
-        schema:
-          strict: true
-          fields:
-            - name: farmer_id
-              type: string
-              nullable: false
-            - name: family_id
-              type: string
-              nullable: false
-            - name: national_id
-              type: string
-              nullable: false
-            - name: given_name
-              type: string
-              nullable: false
-            - name: surname
-              type: string
-              nullable: false
-            - name: sex
-              type: string
-              nullable: false
-            - name: birth_date
-              type: date
-              nullable: false
-            - name: district
-              type: string
-              nullable: false
-            - name: farm_place_name
-              type: string
-              nullable: false
-            - name: farm_type
-              type: string
-              nullable: false
-            - name: crop_type
-              type: string
-              nullable: false
-            - name: livestock_type
-              type: string
-              nullable: false
-            - name: livestock_count
-              type: integer
-              nullable: false
-            - name: irrigation
-              type: boolean
-              nullable: false
-            - name: registration_date
-              type: date
-              nullable: false
-            - name: last_updated
-              type: date
-              nullable: false
 
     entities:
       - name: disabled_person
@@ -481,6 +332,77 @@ datasets:
                 disability_status: disability_status
               expose_ambiguous: false
 
+
+  - id: civil_registry
+    title: SP DCI Civil Registry
+    description: >-
+      Synthetic civil registry backed by the SP DCI demo workbook. It
+      demonstrates the CRVS sync-search adapter without making the disability
+      registry the system owner.
+    owner: Civil Registration Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/crvs/v1/Person
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: civil_persons_table
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: CivilPersons
+        primary_key: civil_person_id
+        schema:
+          strict: true
+          fields:
+            - name: civil_person_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+            - name: given_name
+              type: string
+              nullable: false
+            - name: surname
+              type: string
+              nullable: false
+            - name: sex
+              type: string
+              nullable: false
+            - name: birth_date
+              type: date
+              nullable: false
+            - name: birth_place
+              type: string
+              nullable: false
+            - name: address_line
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: phone
+              type: string
+              nullable: false
+            - name: email
+              type: string
+              nullable: false
+            - name: registration_date
+              type: date
+              nullable: false
+            - name: last_updated
+              type: date
+              nullable: false
+
+
+    entities:
       - name: civil_person
         title: Civil Person
         description: Synthetic civil-registration person exposed through the SP DCI CRVS sync-search adapter.
@@ -514,10 +436,10 @@ datasets:
           - name: last_updated
             from: last_updated
         access:
-          metadata_scope:    disability_registry:metadata
-          aggregate_scope:   disability_registry:aggregate
-          read_scope:        disability_registry:rows
-          verify_scope:      disability_registry:verify
+          metadata_scope:    civil_registry:metadata
+          aggregate_scope:   civil_registry:aggregate
+          read_scope:        civil_registry:rows
+          verify_scope:      civil_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -535,6 +457,86 @@ datasets:
             - field: district
               ops: [eq, in]
 
+
+  - id: social_registry
+    title: SP DCI Social Registry
+    description: >-
+      Synthetic social registry backed by the SP DCI demo workbook. It
+      demonstrates the Social Registry sync-search adapter as its own system
+      boundary.
+    owner: Ministry of Social Protection
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/social/v1/Group
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: social_groups_table
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: SocialGroups
+        primary_key: group_id
+        schema:
+          strict: true
+          fields:
+            - name: group_id
+              type: string
+              nullable: false
+            - name: group_type
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: address_line
+              type: string
+              nullable: false
+            - name: poverty_score
+              type: number
+              nullable: false
+            - name: poverty_score_type
+              type: string
+              nullable: false
+            - name: group_size
+              type: integer
+              nullable: false
+            - name: head_member_id
+              type: string
+              nullable: false
+            - name: head_national_id
+              type: string
+              nullable: false
+            - name: head_given_name
+              type: string
+              nullable: false
+            - name: head_surname
+              type: string
+              nullable: false
+            - name: head_sex
+              type: string
+              nullable: false
+            - name: head_birth_date
+              type: date
+              nullable: false
+            - name: head_disability_status
+              type: string
+              nullable: false
+            - name: registration_date
+              type: date
+              nullable: false
+            - name: last_updated
+              type: date
+              nullable: false
+
+
+    entities:
       - name: social_group
         title: Social Registry Group
         description: Synthetic social-registry group exposed through the SP DCI Social Registry sync-search adapter.
@@ -574,10 +576,10 @@ datasets:
           - name: last_updated
             from: last_updated
         access:
-          metadata_scope:    disability_registry:metadata
-          aggregate_scope:   disability_registry:aggregate
-          read_scope:        disability_registry:rows
-          verify_scope:      disability_registry:verify
+          metadata_scope:    social_registry:metadata
+          aggregate_scope:   social_registry:aggregate
+          read_scope:        social_registry:rows
+          verify_scope:      social_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -593,6 +595,86 @@ datasets:
             - field: poverty_score
               ops: [eq, gte, lte]
 
+
+  - id: farmer_registry
+    title: SP DCI Farmer Registry
+    description: >-
+      Synthetic farmer registry backed by the SP DCI demo workbook. It
+      demonstrates the Farmer Registry sync-search adapter as its own system
+      boundary.
+    owner: Ministry of Agriculture
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/fr/v1/FRPerson
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: farmers_table
+        source:
+          type: file
+          path: demo/data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: Farmers
+        primary_key: farmer_id
+        schema:
+          strict: true
+          fields:
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: family_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+            - name: given_name
+              type: string
+              nullable: false
+            - name: surname
+              type: string
+              nullable: false
+            - name: sex
+              type: string
+              nullable: false
+            - name: birth_date
+              type: date
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: farm_place_name
+              type: string
+              nullable: false
+            - name: farm_type
+              type: string
+              nullable: false
+            - name: crop_type
+              type: string
+              nullable: false
+            - name: livestock_type
+              type: string
+              nullable: false
+            - name: livestock_count
+              type: integer
+              nullable: false
+            - name: irrigation
+              type: boolean
+              nullable: false
+            - name: registration_date
+              type: date
+              nullable: false
+            - name: last_updated
+              type: date
+              nullable: false
+
+
+    entities:
       - name: farmer
         title: Farmer
         description: Synthetic farmer record exposed through the SP DCI Farmer Registry sync-search adapter.
@@ -632,10 +714,10 @@ datasets:
           - name: last_updated
             from: last_updated
         access:
-          metadata_scope:    disability_registry:metadata
-          aggregate_scope:   disability_registry:aggregate
-          read_scope:        disability_registry:rows
-          verify_scope:      disability_registry:verify
+          metadata_scope:    farmer_registry:metadata
+          aggregate_scope:   farmer_registry:aggregate
+          read_scope:        farmer_registry:rows
+          verify_scope:      farmer_registry:verify
         api:
           default_limit: 100
           max_limit: 1000

@@ -12,6 +12,7 @@ The canonical sample is [config/example.yaml](../config/example.yaml). Keep exam
 
 ```yaml
 server: {}
+metadata: {}   # optional split portable metadata manifest
 catalog: {}
 vocabularies: {}
 auth: {}
@@ -62,6 +63,26 @@ vocabularies:
 `base_url` is used in generated catalog links, OpenAPI servers, and provenance subject URIs. `participant_id` is optional and defaults from the catalog base URL when omitted.
 
 Vocabulary prefixes let entity fields and dataset metadata use compact semantic references such as `psc:concepts/Person`.
+
+## Split Metadata Manifest
+
+```yaml
+metadata:
+  manifest_path: ./metadata.yaml
+```
+
+`manifest_path` points at a portable metadata manifest. Relative paths are
+resolved from the runtime config file. At startup, Registry Relay compiles the
+manifest and validates that runtime datasets, entities, fields, filters, and
+relationships are present in the metadata model.
+
+Keep operational details in this runtime config: sources, tables, physical
+columns, scopes, filters, aggregates, standards adapters, ingest, and refresh.
+Keep standard-facing meaning in the manifest: catalog, datasets, entities,
+fields, constraints, vocabularies, codelists, profiles, and conformance claims.
+
+See [metadata.md](metadata.md) for the manifest schema, static publication, and
+the `metadata.manifest.*` / `runtime.binding.*` startup error codes.
 
 ## Optional Social Protection Digital Convergence Initiative (SP DCI) Sync Adapter
 
@@ -556,7 +577,7 @@ claim_verification:
 
 V1 supports `normalized_exact` only. `binding_key_env` must point at a stable high-entropy secret encoded as `hex:<64-or-more-lowercase-hex-chars>`, where the decoded key is at least 32 bytes. For example, generate it with `printf 'hex:%s\n' "$(openssl rand -hex 32)"`. The same decoded key must remain available after process restarts so `claim_hash` and `evidence_hash` remain interpretable. The endpoint defaults to JSON and uses `application/vnd.registry-relay.claim-verification+jwt` for signed JWT receipts. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent. See [claim-verification.md](claim-verification.md) for request and response examples.
 
-`publicschema` is optional and requires a binary built with
+`example-person-schema` is optional and requires a binary built with
 `--features publicschema-cel`. When present, entity-record VC issuance
 uses the mapping file to transform the public entity JSON into a
 PublicSchema.org subject. The plain JSON route is unchanged. Defaults

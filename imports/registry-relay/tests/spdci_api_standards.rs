@@ -294,7 +294,25 @@ fn disability_registry_demo_config_loads_with_spdci_feature() {
 
     let config_path = demo_config("disability_registry.yaml");
     let config = config::load(&config_path).expect("disability_registry.yaml failed to load");
-    assert_eq!(config.datasets.len(), 1);
+    assert_eq!(
+        config.datasets.len(),
+        4,
+        "SP DCI gateway demo should keep each registry type as a separate dataset"
+    );
+    let dataset_ids = config
+        .datasets
+        .iter()
+        .map(|dataset| dataset.id.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dataset_ids,
+        [
+            "disability_registry",
+            "civil_registry",
+            "social_registry",
+            "farmer_registry"
+        ]
+    );
     assert!(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("demo/data/disability_registry.xlsx")

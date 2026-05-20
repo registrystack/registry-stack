@@ -13,7 +13,7 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 Registry Relay is an experiment toward a redesigned [GovStack](https://govstack.global/) Digital Registries Building Block. The current BB spec defines a single uniform CRUD platform; this project explores the BB instead as a protected consultation gateway with optional capability families (verify, aggregates, standards adapters) over a shared entity model. Provisioning and Write are intentionally out of scope for V1; conformance is by capability, not by a single mandatory interface.
 
-Standards integrations such as DCAT-AP, OGC API Features, PublicSchema, provenance VCs, and the optional [Social Protection Digital Convergence Initiative (SP DCI)](https://spdci.org/) sync adapter are layered on top of the core gateway. Use them when a deployment needs those interoperability contracts; the default product model remains protected read-only registry consultation.
+Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, PublicSchema, provenance VCs, and the optional [Social Protection Digital Convergence Initiative (SP DCI)](https://spdci.org/) sync adapter are layered on top of the core gateway. Use them when a deployment needs those interoperability contracts; the default product model remains protected read-only registry consultation.
 
 ## Current Status
 
@@ -24,10 +24,14 @@ Standards integrations such as DCAT-AP, OGC API Features, PublicSchema, provenan
 - [config/example.yaml](config/example.yaml): canonical example config.
 - [docs/configuration.md](docs/configuration.md): operator-facing configuration reference.
 - [docs/api.md](docs/api.md): authentication, endpoint, filtering, pagination, and error contract.
+- [docs/metadata.md](docs/metadata.md): portable metadata manifests, static publication, and `/metadata/*` routes.
 - [docs/claim-verification.md](docs/claim-verification.md): submitted-claims verification guide, examples, privacy model, and signed receipts.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
+- [crates/registry-metadata-core](crates/registry-metadata-core): portable metadata manifest model, validation, and renderers.
+- [crates/registry-metadata-cli](crates/registry-metadata-cli): local metadata validation, rendering, and static publish CLI.
+- [profiles/](profiles/): non-normative example profile descriptors and fixture metadata manifests.
 - [docs/performance-load-testing-spec.md](docs/performance-load-testing-spec.md): performance and load testing plan.
 - [perf/](perf/): k6 scenarios, synthetic fixture configs, and performance run helpers.
 - [benches/](benches/): Criterion microbenchmarks for auth, ETags, query planning, JSON, registry lookup, and audit.
@@ -49,6 +53,26 @@ just build
 
 The release binary is written to `target/release/registry-relay`.
 Coverage metrics use `cargo-llvm-cov`; see [docs/development.md#coverage-metrics](docs/development.md#coverage-metrics) for the install and report commands.
+
+## Metadata Manifests
+
+Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or backend URLs.
+
+Use this split when you want standards-facing metadata that can outlive Registry Relay itself. A civil registration application, a social benefits application, or another registry system can validate and publish the same manifest through static files without adopting Relay's runtime API. The checked-in app profiles are hypothetical examples; real OpenCRVS, OpenSPP, PublicSchema, or SP DCI profiles should be added only after review with the relevant project artifacts or maintainers.
+
+Use the metadata CLI through `just`:
+
+```sh
+just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
+just metadata-validate-profiles
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
+just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
+```
+
+`metadata-publish` writes a static bundle with `index.json`, the original manifest, catalog JSON, base DCAT, BRegDCAT-AP, SHACL, and entity JSON Schemas. The bundle can be served as static files without starting Registry Relay.
+
+When Relay serves a split config, it validates runtime bindings against the compiled manifest at startup and exposes caller-scoped metadata under `/metadata/*`. See [docs/metadata.md](docs/metadata.md) for the manifest shape, publication layout, endpoint list, and error codes.
 
 ## Configure
 
@@ -144,6 +168,17 @@ GET /docs
 GET /openapi.json
 GET /catalog
 GET /catalog/dcat-ap.jsonld
+GET /metadata
+GET /metadata/catalog
+GET /metadata/dcat
+GET /metadata/dcat/{profile}
+GET /metadata/shacl
+GET /metadata/datasets
+GET /metadata/datasets/{dataset_id}
+GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
+GET /ogc/v1/records                         (feature: ogcapi-records)
+GET /ogc/v1/records/collections             (feature: ogcapi-records)
+GET /ogc/v1/records/collections/datasets/items  (feature: ogcapi-records)
 GET /datasets
 GET /datasets/{dataset_id}
 GET /datasets/{dataset_id}/{entity}/schema

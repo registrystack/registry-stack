@@ -1,0 +1,21 @@
+meta {
+  name: Household JSON Schema
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/metadata/schema/benefits_casework/household/schema.json
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the Draft 2020-12 JSON Schema for the household entity from the portable metadata surface.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/schema+json, $schema, $id, properties, and required fields.
+}

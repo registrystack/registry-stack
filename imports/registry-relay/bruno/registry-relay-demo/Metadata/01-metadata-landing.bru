@@ -1,0 +1,21 @@
+meta {
+  name: Metadata landing
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/metadata
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the standards-facing metadata landing resource backed by the split manifest.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with links to portable catalog, DCAT, BRegDCAT-AP, and SHACL outputs.
+}

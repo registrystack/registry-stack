@@ -11,7 +11,8 @@ use axum::response::IntoResponse;
 use registry_relay::audit::ErrorCodeExt;
 use registry_relay::error::{
     AdminError, AggregateError, AuthError, ConfigError, Error, FilterError, IngestError,
-    InternalError, OgcError, QueryError, SchemaError, SpatialError,
+    InternalError, MetadataError, OgcError, QueryError, RuntimeBindingError, SchemaError,
+    SpatialError,
 };
 use serde_json::Value;
 
@@ -73,9 +74,22 @@ fn all_variants() -> Vec<Error> {
         Error::Config(ConfigError::ValidationError),
         Error::Config(ConfigError::MissingSecret),
         Error::Config(ConfigError::DuplicateId),
+        // metadata.manifest.*
+        Error::Metadata(MetadataError::ManifestFileNotFound),
+        Error::Metadata(MetadataError::ManifestParseFailed),
+        Error::Metadata(MetadataError::ManifestVersionUnsupported),
+        Error::Metadata(MetadataError::ManifestValidationFailed),
+        // runtime.binding.*
+        Error::RuntimeBinding(RuntimeBindingError::DatasetMissing),
+        Error::RuntimeBinding(RuntimeBindingError::EntityMissing),
+        Error::RuntimeBinding(RuntimeBindingError::TableMissing),
+        Error::RuntimeBinding(RuntimeBindingError::FieldMissing),
+        Error::RuntimeBinding(RuntimeBindingError::FilterMissing),
+        Error::RuntimeBinding(RuntimeBindingError::RelationshipMissing),
         // ogc.*
         Error::Ogc(OgcError::CollectionNotFound),
         Error::Ogc(OgcError::FeatureNotFound),
+        Error::Ogc(OgcError::RecordNotFound),
         // spatial.*
         Error::Spatial(SpatialError::GeometryInvalid),
         Error::Spatial(SpatialError::GeometryTooLarge),
@@ -167,8 +181,49 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("config.validation_error", StatusCode::INTERNAL_SERVER_ERROR),
         ("config.missing_secret", StatusCode::INTERNAL_SERVER_ERROR),
         ("config.duplicate_id", StatusCode::INTERNAL_SERVER_ERROR),
+        (
+            "metadata.manifest.file_not_found",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "metadata.manifest.parse_failed",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "metadata.manifest.version_unsupported",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "metadata.manifest.validation_failed",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.dataset_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.entity_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.table_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.field_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.filter_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.relationship_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
         ("ogc.collection_not_found", StatusCode::NOT_FOUND),
         ("ogc.feature_not_found", StatusCode::NOT_FOUND),
+        ("ogc.record_not_found", StatusCode::NOT_FOUND),
         (
             "spatial.geometry_invalid",
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -312,6 +367,14 @@ async fn snapshot_one_variant_per_namespace() {
         ),
         ("admin", Error::Admin(AdminError::ReloadFailed)),
         ("config", Error::Config(ConfigError::MissingSecret)),
+        (
+            "metadata",
+            Error::Metadata(MetadataError::ManifestValidationFailed),
+        ),
+        (
+            "runtime_binding",
+            Error::RuntimeBinding(RuntimeBindingError::FieldMissing),
+        ),
         ("ogc", Error::Ogc(OgcError::CollectionNotFound)),
         (
             "spatial",
@@ -364,6 +427,14 @@ async fn error_into_response_attaches_error_code_extension() {
         (
             "config.missing_secret",
             Error::Config(ConfigError::MissingSecret),
+        ),
+        (
+            "metadata.manifest.validation_failed",
+            Error::Metadata(MetadataError::ManifestValidationFailed),
+        ),
+        (
+            "runtime.binding.field_missing",
+            Error::RuntimeBinding(RuntimeBindingError::FieldMissing),
         ),
         (
             "ogc.collection_not_found",

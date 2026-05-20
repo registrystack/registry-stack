@@ -104,7 +104,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config_path = resolve_config_path();
     info!(path = %config_path.display(), "loading registry-relay config");
 
-    let config = Arc::new(config::load(&config_path)?);
+    let loaded = config::load_with_metadata(&config_path)?;
+    let compiled_metadata = loaded.metadata.map(Arc::new);
+    let config = Arc::new(loaded.runtime);
 
     let auth = build_auth(&config).await?;
     let audit_sink = build_audit_sink(&config);
@@ -165,17 +167,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
     });
     let metrics = RequestMetrics::shared();
-    let mut app = registry_relay::server::build_app_with_entity_query_and_provenance_and_metrics(
-        Arc::clone(&config),
-        Arc::clone(&auth),
-        Arc::clone(&audit_sink),
-        readiness_rx.clone(),
-        entity_registry,
-        query,
-        aggregate_query,
-        provenance_state.clone(),
-        Arc::clone(&metrics),
-    );
+    let mut app =
+        registry_relay::server::build_app_with_entity_query_metadata_provenance_and_metrics(
+            Arc::clone(&config),
+            Arc::clone(&auth),
+            Arc::clone(&audit_sink),
+            readiness_rx.clone(),
+            entity_registry,
+            query,
+            aggregate_query,
+            compiled_metadata,
+            provenance_state.clone(),
+            Arc::clone(&metrics),
+        );
     if let Some(publicschema_registry) = publicschema_registry {
         app = app.layer(axum::Extension(publicschema_registry));
     }

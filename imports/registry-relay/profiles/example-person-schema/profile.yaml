@@ -1,0 +1,61 @@
+schema_version: registry-relay-profile/v1
+profile:
+  id: example-person-schema
+  version: "1"
+  name: Hypothetical Person Schema Profile
+  upstream_system: Hypothetical person schema app
+  upstream_url: https://person-schema.example.gov/vocab/
+  description: Non-normative example metadata expectations for person concept and JSON Schema publication.
+supported_input_artifacts:
+  - kind: metadata_manifest
+    media_type: application/yaml
+    description: Registry Relay portable metadata manifest with fictional person-schema concept references.
+  - kind: json_schema
+    media_type: application/schema+json
+    description: Draft 2020-12 JSON Schema generated from the manifest.
+required_concepts:
+  - name: person identifier
+    iri: person:Person.identifier
+  - name: given name
+    iri: person:Person.givenName
+  - name: family name
+    iri: person:Person.familyName
+optional_concepts:
+  - name: birth date
+    iri: person:Person.birthDate
+  - name: administrative area
+    iri: person:PostalAddress.addressRegion
+required_identifiers:
+  - entity: person
+    name: person_id
+    kind: local
+cardinality_expectations:
+  - entity: person
+    field: person_id
+    min: 1
+    max: 1
+  - entity: person
+    field: given_name
+    min: 0
+    max: 1
+  - entity: person
+    field: family_name
+    min: 0
+    max: 1
+codelist_expectations: []
+unsupported_mappings:
+  - source: credential issuance rules
+    reason: Credential issuance is runtime provenance behavior and is outside portable metadata conformance.
+conformance_checks:
+  - id: example-person-schema.required_concepts
+    severity: error
+    description: Manifest must include required fictional person-schema concept references.
+  - id: example-person-schema.identifiers
+    severity: error
+    description: Person metadata must expose a stable local identifier.
+fixtures:
+  - path: fixtures/metadata.yaml
+    manifest: true
+    expect: valid
+    description: Minimal hypothetical person-schema fixture.
+generator_command: null

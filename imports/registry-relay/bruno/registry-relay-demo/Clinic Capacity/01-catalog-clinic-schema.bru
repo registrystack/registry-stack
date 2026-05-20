@@ -1,11 +1,11 @@
 meta {
-  name: Clinic capacity DCAT metadata
+  name: Facility SHACL metadata
   type: http
   seq: 1
 }
 
 get {
-  url: {{baseUrl}}/catalog/datasets/clinic_capacity/facility/schema.jsonld
+  url: {{baseUrl}}/metadata/datasets/clinic_capacity/entities/facility/shacl
   body: none
   auth: bearer
 }
@@ -15,8 +15,8 @@ auth:bearer {
 }
 
 docs {
-  Reads the DCAT-AP JSON-LD schema document for the clinic_capacity facility entity.
+  Reads the portable SHACL JSON-LD shape for the clinic_capacity facility entity.
   Uses catalog_viewer persona (metadataKey).
-  Expected: 200 with application/ld+json body describing the facility entity's fields
-  and relationships in machine-readable catalog format.
+  Expected: 200 with application/ld+json body describing the facility entity's fields,
+  constraints, concepts, and relationships from the split metadata manifest.
 }

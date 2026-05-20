@@ -10,7 +10,7 @@
 //! that use disjoint env names.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use registry_relay::config::{self, AuditSinkConfig};
 use sha2::{Digest, Sha256};
@@ -74,6 +74,7 @@ fn core_demo_configs_load_and_validate() {
         if name == "clinic_capacity.yaml" {
             assert_clinic_facility_spatial_demo(&config);
         }
+        assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
     }
 
     let combined_path = demo_config("all_demos.yaml");
@@ -108,6 +109,33 @@ fn core_demo_configs_load_and_validate() {
         other => panic!("all_demos.yaml expected file audit sink, got {other:?}"),
     }
     assert_clinic_facility_spatial_demo(&combined);
+    assert_split_metadata_matches_runtime(
+        "all_demos.yaml",
+        &combined_path,
+        combined.datasets.len(),
+    );
+}
+
+fn assert_split_metadata_matches_runtime(name: &str, path: &Path, dataset_count: usize) {
+    let loaded = config::load_with_metadata(path)
+        .unwrap_or_else(|err| panic!("{name} split metadata failed to load: {err}"));
+    let metadata = loaded.metadata.expect("demo metadata manifest");
+    assert_eq!(
+        metadata.datasets().count(),
+        dataset_count,
+        "{name}: metadata manifest should describe each runtime dataset"
+    );
+    for dataset in &loaded.runtime.datasets {
+        let metadata_dataset = metadata
+            .dataset(dataset.id.as_ref())
+            .unwrap_or_else(|| panic!("{name}: missing metadata dataset {}", dataset.id));
+        assert_eq!(
+            metadata_dataset.entities.len(),
+            dataset.entities.len(),
+            "{name}: metadata entity count should match runtime for {}",
+            dataset.id
+        );
+    }
 }
 
 fn assert_clinic_facility_spatial_demo(config: &config::Config) {
@@ -158,6 +186,13 @@ fn spdci_demo_configs_load_and_validate() {
         if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
             continue;
         }
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".metadata.yaml"))
+        {
+            continue;
+        }
         let contents = std::fs::read_to_string(&path).expect("demo config should be readable");
         if contents.contains("  spdci:") {
             spdci_configs.push(path);
@@ -177,6 +212,11 @@ fn spdci_demo_configs_load_and_validate() {
         let config = config::load(&path).unwrap_or_else(|err| {
             panic!("{} failed to load: {err}", path.display());
         });
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("demo");
+        assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
         let spdci = config
             .standards
             .spdci
@@ -194,16 +234,33 @@ fn spdci_demo_configs_load_and_validate() {
         config::load(&all_standards_path).expect("all_standards.yaml failed to load");
     assert_eq!(
         all_standards.datasets.len(),
-        6,
-        "all_standards.yaml should aggregate the five core datasets plus disability_registry"
+        9,
+        "all_standards.yaml should aggregate the five core datasets plus four SP DCI registry datasets"
     );
     assert_clinic_facility_spatial_demo(&all_standards);
     assert!(
         all_standards
             .datasets
             .iter()
-            .any(|dataset| dataset.id.as_ref() == "disability_registry"),
-        "all_standards.yaml missing disability_registry"
+            .map(|dataset| dataset.id.as_ref())
+            .collect::<Vec<_>>()
+            .as_slice()
+            .windows(4)
+            .any(|window| {
+                window
+                    == [
+                        "disability_registry",
+                        "civil_registry",
+                        "social_registry",
+                        "farmer_registry",
+                    ]
+            }),
+        "all_standards.yaml should keep the SP DCI registry gateway datasets split by domain"
+    );
+    assert_split_metadata_matches_runtime(
+        "all_standards.yaml",
+        &all_standards_path,
+        all_standards.datasets.len(),
     );
 }
 

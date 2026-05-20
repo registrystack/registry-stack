@@ -6,12 +6,20 @@ license = "Apache-2.0"
 description = "Registry Relay: config-driven, read-only APIs over sensitive registry and tabular files."
 publish = false
 
+[workspace]
+members = [
+    ".",
+    "crates/registry-metadata-core",
+    "crates/registry-metadata-cli",
+]
+
 [features]
 default = []
 standards-cel-mapping = ["dep:cel-mapper-core"]
 publicschema-cel = ["standards-cel-mapping", "dep:jsonschema"]
 spdci-api-standards = ["dep:jsonschema"]
 ogcapi-features = ["dep:ogcapi-types", "dep:geojson"]
+ogcapi-records = []
 
 # ─── runtime ─────────────────────────────────────────────────────────────────
 [dependencies]
@@ -69,6 +77,7 @@ jsonschema = { version = "0.18", optional = true }
 # deliberately before changing it.
 serde_yml = { version = "0.0.12" }
 humantime-serde = { version = "1" }
+registry-metadata-core = { version = "0.1.0", path = "crates/registry-metadata-core" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 getrandom = { version = "0.4" }

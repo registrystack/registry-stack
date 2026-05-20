@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from benefits_casework.yaml.
+
+schema_version: registry-metadata/v1
+catalog:
+  id: benefits-casework
+  base_url: http://127.0.0.1:4242
+  title: Benefits Casework Gateway (Demo)
+  publisher:
+    name: Ministry of Social Affairs (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+datasets:
+- id: benefits_casework
+  title: Benefits Casework
+  description: Household, person, benefit case, and payment data for social protection
+    programme administration. Used for eligibility checks, grievance follow-up, reconciliation,
+    and planning aggregates.
+  owner: Ministry of Social Affairs
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  entities:
+  - name: household
+    title: Household
+    description: A household enrolled in the benefits programme
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: municipality
+      type: string
+      required: true
+    - name: household_size
+      type: number
+      required: true
+    - name: poverty_band
+      type: string
+      required: true
+    - name: enrollment_status
+      type: string
+      required: true
+    - name: enrolled_on
+      type: date
+      required: true
+    relationships:
+    - name: members
+      target_entity: person
+      cardinality: many
+    - name: cases
+      target_entity: case
+      cardinality: many
+    - name: payments
+      target_entity: payment
+      cardinality: many
+  - name: person
+    title: Person
+    description: An individual member of a benefit household
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: age_band
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: disability_status
+      type: string
+      required: true
+    - name: benefit_role
+      type: string
+      required: true
+    - name: eligibility_status
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+  - name: case
+    title: Benefit Case
+    description: An appeal, recertification, or grievance case for a household
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: case_type
+      type: string
+      required: true
+    - name: case_status
+      type: string
+      required: true
+    - name: opened_on
+      type: date
+      required: true
+    - name: closed_on
+      type: date
+    - name: priority
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+  - name: payment
+    title: Benefit Payment
+    description: A payment disbursed to a household in a given cycle
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: cycle
+      type: string
+      required: true
+    - name: payment_status
+      type: string
+      required: true
+    - name: amount
+      type: number
+      required: true
+      unit: USD
+    - name: paid_on
+      type: date
+    - name: payment_channel
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one

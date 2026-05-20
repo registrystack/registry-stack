@@ -1,0 +1,236 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from education_registry.yaml.
+
+schema_version: registry-metadata/v1
+catalog:
+  id: education-registry
+  base_url: http://127.0.0.1:4242
+  title: Education Student Registry Gateway (Demo)
+  publisher:
+    name: Ministry of Education (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+datasets:
+- id: education_registry
+  title: Education Student Registry
+  description: Student registry for the national education system. Covers students,
+    guardians, schools, enrolments, support needs, and attendance summaries. Governed
+    personal data; scholarship, transport, meals, and planning systems access via
+    controlled scopes.
+  owner: Ministry of Education
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: termly
+  entities:
+  - name: student
+    title: Student
+    description: A student enrolled in the national education system
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: school_id
+      type: string
+      required: true
+    - name: current_enrollment_id
+      type: string
+    - name: age_band
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: grade_level
+      type: string
+      required: true
+    - name: enrollment_status
+      type: string
+      required: true
+    - name: home_district
+      type: string
+      required: true
+    - name: language_group
+      type: string
+      required: true
+    - name: disability_status
+      type: string
+      required: true
+    - name: scholarship_eligible
+      type: boolean
+      required: true
+    relationships:
+    - name: school
+      target_entity: school
+      cardinality: zero_or_one
+    - name: guardians
+      target_entity: guardian
+      cardinality: many
+    - name: enrollments
+      target_entity: enrollment
+      cardinality: many
+    - name: support_needs
+      target_entity: support_need
+      cardinality: many
+    - name: attendance_summaries
+      target_entity: attendance_summary
+      cardinality: many
+  - name: guardian
+    title: Guardian
+    description: A guardian or caregiver linked to a student
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: relationship
+      type: string
+      required: true
+    - name: contact_verified
+      type: boolean
+      required: true
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+  - name: school
+    title: School
+    description: A school in the national education system
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: school_name
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: school_type
+      type: string
+      required: true
+    - name: education_level
+      type: string
+      required: true
+    - name: has_meal_program
+      type: boolean
+      required: true
+    - name: has_accessibility_support
+      type: boolean
+      required: true
+    relationships:
+    - name: students
+      target_entity: student
+      cardinality: many
+    - name: enrollments
+      target_entity: enrollment
+      cardinality: many
+  - name: enrollment
+    title: Enrollment
+    description: A student enrollment record for a school year
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: school_id
+      type: string
+      required: true
+    - name: school_year
+      type: string
+      required: true
+    - name: grade_level
+      type: string
+      required: true
+    - name: status
+      type: string
+      required: true
+    - name: enrolled_on
+      type: date
+      required: true
+    - name: exited_on
+      type: date
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+    - name: school
+      target_entity: school
+      cardinality: zero_or_one
+  - name: support_need
+    title: Support Need
+    description: A support need assessment for a student
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: support_type
+      type: string
+      required: true
+    - name: eligibility_status
+      type: string
+      required: true
+    - name: assessment_date
+      type: date
+    - name: active
+      type: boolean
+      required: true
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+  - name: attendance_summary
+    title: Attendance Summary
+    description: Term-level attendance summary for a student
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: school_year
+      type: string
+      required: true
+    - name: term
+      type: string
+      required: true
+    - name: attendance_rate
+      type: number
+      required: true
+    - name: chronic_absence_flag
+      type: boolean
+      required: true
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one

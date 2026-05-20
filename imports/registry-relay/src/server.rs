@@ -58,6 +58,7 @@ use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
+use registry_metadata_core::CompiledMetadata;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{
@@ -148,6 +149,19 @@ pub fn build_app_with_provenance_and_metrics(
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
 ) -> Router {
+    build_app_with_provenance_metadata_and_metrics(
+        config, auth, audit_sink, provenance, None, metrics,
+    )
+}
+
+fn build_app_with_provenance_metadata_and_metrics(
+    config: Arc<Config>,
+    auth: AuthProviderRef,
+    audit_sink: Arc<dyn AuditSink>,
+    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
+    metadata: Option<Arc<CompiledMetadata>>,
+    metrics: Arc<RequestMetrics>,
+) -> Router {
     // Health/ready routes: unauthenticated sub-router. Merged onto the
     // top-level router *outside* the auth layer. The Scalar viewer
     // (`/docs` + `/docs/scalar.js`) is a static HTML+JS shell with no
@@ -181,9 +195,12 @@ pub fn build_app_with_provenance_and_metrics(
         .merge(api::entity_router())
         .merge(api::aggregates_router())
         .merge(api::catalog_router())
+        .merge(api::metadata_router())
         .merge(api::openapi_router());
     #[cfg(feature = "ogcapi-features")]
     let protected = protected.merge(api::ogc_router());
+    #[cfg(feature = "ogcapi-records")]
+    let protected = protected.merge(api::records_router());
     let protected = merge_spdci_routes(protected);
     let protected = auth_layer(protected, auth);
 
@@ -206,6 +223,9 @@ pub fn build_app_with_provenance_and_metrics(
     }
     if let Some(state) = provenance {
         router = router.layer(Extension(state));
+    }
+    if let Some(metadata) = metadata {
+        router = router.layer(Extension(metadata));
     }
     router
 }
@@ -312,6 +332,29 @@ pub fn build_app_with_entity_query_and_provenance_and_metrics(
         .layer(Extension(aggregate_query))
         .layer(Extension(query))
         .layer(Extension(entity_registry))
+}
+
+/// Production assembly with split metadata compiled from `metadata.yaml`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
+    config: Arc<Config>,
+    auth: AuthProviderRef,
+    audit_sink: Arc<dyn AuditSink>,
+    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
+    entity_registry: Arc<EntityRegistry>,
+    query: Arc<EntityQueryEngine>,
+    aggregate_query: Arc<AggregateQueryEngine>,
+    metadata: Option<Arc<CompiledMetadata>>,
+    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
+    metrics: Arc<RequestMetrics>,
+) -> Router {
+    build_app_with_provenance_metadata_and_metrics(
+        config, auth, audit_sink, provenance, metadata, metrics,
+    )
+    .layer(Extension(readiness))
+    .layer(Extension(aggregate_query))
+    .layer(Extension(query))
+    .layer(Extension(entity_registry))
 }
 
 /// Assemble the admin HTTP application for `config.server.admin_bind`.

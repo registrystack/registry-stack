@@ -6,7 +6,7 @@ Five core synthetic government datasets show `registry-relay` as a controlled
 data reuse gateway: per-persona scopes, purpose-tagged reads,
 disclosure-controlled aggregates, and cross-dataset composition that stays
 client-side and audited. The pack also includes an optional Social Protection
-Digital Convergence Initiative (SP DCI) Disability Registry demo, enabled with
+Digital Convergence Initiative (SP DCI) registry gateway demo, enabled with
 the `spdci-api-standards` feature.
 
 This pack is intended for local review. Nothing in `demo/data/` is real, all
@@ -27,12 +27,17 @@ ids, `555-0xxx` phones, `*** Fake St` addresses).
 
 | Dataset | Sensitivity | What it covers | Persona that owns row access |
 | --- | --- | --- | --- |
-| `disability_registry` | personal | Disabled-person status, details, support fields, plus small synthetic SR, CRVS, and FR sync-search records exposed through the SP DCI adapter. | `casework_system` |
+| `disability_registry` | personal | Disabled-person status, details, and support fields exposed through the SP DCI Disability Registry adapter. | `casework_system` |
+| `civil_registry` | personal | Synthetic civil-person records exposed through the SP DCI CRVS sync-search adapter. | `casework_system` |
+| `social_registry` | personal | Synthetic social-registry groups exposed through the SP DCI Social Registry sync-search adapter. | `casework_system` |
+| `farmer_registry` | personal | Synthetic farmer records exposed through the SP DCI Farmer Registry sync-search adapter. | `casework_system` |
 
 This demo is kept as its own focused config and is also included in
 `all_standards.yaml`, because it requires the optional `spdci-api-standards`
 feature and, for response shaping, the optional CEL mapping feature. The
-sample workbook includes `DR-MEMBER-001` through
+single config runs as one gateway, but its metadata is split into four domain
+datasets so discovery tools do not confuse farmer, civil, or social-registry
+capabilities with the disability registry. The sample workbook includes `DR-MEMBER-001` through
 `DR-MEMBER-080`, `SR-GROUP-001` through `SR-GROUP-080`, `FAKE-810001` through
 `FAKE-810080` for CRVS, and `FR-MEMBER-001` through `FR-MEMBER-080`;
 `DR-MEMBER-001` has an approved disability status and is useful for quick sync
@@ -43,6 +48,16 @@ two datasets are knowingly tied together. Reading its rows is scoped to a
 single persona (`linkage_service`), requires `Data-Purpose`, and audits per
 call. The registry has no relationships into personal datasets; cross-dataset
 composition happens client-side, with separate audited calls per dataset.
+
+Each runtime config in `demo/config/*.yaml` points at a sibling portable
+metadata manifest via `metadata.manifest_path`. The runtime YAML keeps source
+paths, table bindings, scopes, filters, aggregates, standards adapters, and
+ingest settings. The `*.metadata.yaml` file carries only the standard-facing
+catalog, dataset, entity, field, relationship, vocabulary, and profile
+metadata. Startup validates those runtime bindings against the compiled
+manifest before serving `/metadata/*`. See
+[../docs/metadata.md](../docs/metadata.md) for the portable manifest model and
+static publication workflow.
 
 ## Personas
 
@@ -174,9 +189,9 @@ just demo-run demo/config/all_demos.yaml
 ```
 
 Bare `just demo-run` creates `demo/.env.local` first when it is missing, then
-starts `demo/config/all_standards.yaml` with `ogcapi-features`,
+starts `demo/config/all_standards.yaml` with `ogcapi-records`, `ogcapi-features`,
 `spdci-api-standards`, and `standards-cel-mapping` enabled. This exposes the
-core entity APIs, the clinic OGC API Features surface, and the SP DCI sync
+core entity APIs, the dataset OGC API Records catalog, the clinic OGC API Features surface, and the SP DCI sync
 routes from one local server. Build the core demo binary shape without
 starting the server with:
 
@@ -266,7 +281,7 @@ that `just demo-run` supplies automatically:
 
 ```bash
 export REGISTRY_RELAY_CONFIG=demo/config/all_standards.yaml
-cargo run --features ogcapi-features,spdci-api-standards,standards-cel-mapping
+cargo run --features ogcapi-records,ogcapi-features,spdci-api-standards,standards-cel-mapping
 ```
 
 `all_demos.yaml` and `all_standards.yaml` route the audit log to a file sink at
@@ -299,11 +314,18 @@ The environment file pre-fills the cross-demo defaults the requests reference:
 
 The collection is grouped by capability and dataset:
 
+- `Metadata` exercises the split-manifest `/metadata/*` surface, including
+  portable catalog JSON, base DCAT, BRegDCAT-AP, SHACL, JSON Schema, and
+  link-free OGC record bodies;
+- `Catalog` keeps the older operational `/catalog` discovery endpoints that
+  remain available for Relay-native consumers;
 - per-dataset folders (`Benefits Casework`, `Clinic Capacity`,
   `Public Works Projects`, `Education Registry`, `Subject Registry`) contain
   positive flows plus the spec-listed dataset-local negative checks;
 - `Auth Boundaries` is the canonical cross-cutting suite of denial cases
   (401, 403, 400 `auth.purpose_required`, 400 `entity.filter_required`);
+- `OGC API Records` exercises the feature-gated `/ogc/v1/records` catalog
+  surface over visible dataset metadata.
 - `OGC API Features` exercises the feature-gated `/ogc/v1` surface over
   `clinic_capacity.facilities`;
 - `Cross-Demo Workflows` contains the four spec-required sequences plus
@@ -396,9 +418,10 @@ demo/
     public_works_projects.yaml
     education_registry.yaml
     subject_registry.yaml
-    disability_registry.yaml # optional; requires spdci-api-standards
+    disability_registry.yaml # optional SP DCI gateway; requires spdci-api-standards
     all_demos.yaml      # five core datasets, used by Cross-Demo Workflows
-    all_standards.yaml  # all_demos plus SP DCI, default for just demo-run
+    all_standards.yaml  # all_demos plus split SP DCI registry datasets
+    *.metadata.yaml     # split standard-facing metadata manifests
   data/
     *.xlsx              # synthetic, regenerated by generate_demo_data.py
   scripts/

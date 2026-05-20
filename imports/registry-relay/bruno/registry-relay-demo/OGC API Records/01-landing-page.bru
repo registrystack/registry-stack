@@ -1,0 +1,21 @@
+meta {
+  name: Records landing page
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/records
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the runtime OGC API Records landing page.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with links to conformance and record collections.
+}

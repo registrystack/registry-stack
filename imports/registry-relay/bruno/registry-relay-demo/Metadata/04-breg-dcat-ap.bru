@@ -1,0 +1,21 @@
+meta {
+  name: BRegDCAT-AP JSON-LD
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/metadata/dcat/bregdcat-ap
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the BRegDCAT-AP application-profile DCAT JSON-LD document.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json body carrying the BRegDCAT-AP profile metadata.
+}

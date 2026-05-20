@@ -58,7 +58,7 @@ fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
         })
         .collect::<Vec<_>>();
 
-    json!({
+    let obj = json!({
         "@context": context(),
         "@id": catalog.links.dcat_ap,
         "@type": "dcat:Catalog",
@@ -69,32 +69,19 @@ fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
         "dcat:landingPage": catalog.links.self_url,
         "dcat:dataset": datasets,
         "sh:shapesGraph": shapes,
-    })
-}
+    });
 
-#[must_use]
-pub fn entity_shape_document(
-    config: &Config,
-    registry: &EntityRegistry,
-    dataset_id: &str,
-    entity_name: &str,
-) -> Option<Value> {
-    let base_url = normalized_base_url(&config.catalog.base_url);
-    let catalog = catalog_document(config, registry);
-    let dataset = catalog
-        .datasets
-        .iter()
-        .find(|dataset| dataset.dataset_id == dataset_id)?;
-    let entity = dataset
-        .entities
-        .iter()
-        .find(|entity| entity.name == entity_name)?;
+    #[cfg(feature = "ogcapi-records")]
+    {
+        let mut obj = obj;
+        if let Some(service) = catalog_ogc_records_service(&catalog) {
+            obj["dcat:service"] = service;
+        }
+        obj
+    }
 
-    Some(json!({
-        "@context": context(),
-        "schema": entity_schema_object(&base_url, dataset, entity),
-        "shape": entity_shape(&base_url, dataset, entity),
-    }))
+    #[cfg(not(feature = "ogcapi-records"))]
+    obj
 }
 
 #[must_use]
@@ -190,6 +177,10 @@ fn dataset_standard_distributions(dataset: &DatasetMetadata) -> Vec<Value> {
     if let Some(ogc) = &dataset.standards.ogc_api_features {
         distributions.push(dataset_ogc_distribution(dataset, ogc));
     }
+    #[cfg(feature = "ogcapi-records")]
+    if let Some(records) = &dataset.standards.ogc_api_records {
+        distributions.push(dataset_ogc_records_distribution(dataset, records));
+    }
     if let Some(spdci) = &dataset.standards.spdci {
         distributions.extend(
             spdci
@@ -199,6 +190,68 @@ fn dataset_standard_distributions(dataset: &DatasetMetadata) -> Vec<Value> {
         );
     }
     distributions
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn dataset_ogc_records_distribution(
+    dataset: &DatasetMetadata,
+    records: &super::catalog::OgcApiRecordsMetadata,
+) -> Value {
+    let access_service = format!("{}#ogc-api-records-service", records.collection);
+    json!({
+        "@id": records.items,
+        "@type": "dcat:Distribution",
+        "dcterms:title": format!("{} OGC API Records service", dataset.title),
+        "dcterms:format": {
+            "@id": "registry_relay:OGCAPI-Records",
+        },
+        "dcat:accessURL": records.items,
+        "dcat:accessService": {
+            "@id": access_service,
+            "@type": "dcat:DataService",
+            "dcterms:title": format!("{} OGC API Records service", dataset.title),
+            "dspace:dataServiceType": "registry_relay:ogc-api-records",
+            "dcat:endpointURL": records.items,
+            "dcat:endpointDescription": openapi_url(&dataset.links.self_url),
+            "dcat:servesDataset": dataset.links.self_url,
+            "dcterms:conformsTo": ogc_records_conformance(),
+        },
+        "dcterms:conformsTo": ogc_records_conformance(),
+    })
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn catalog_ogc_records_service(catalog: &CatalogDocument) -> Option<Value> {
+    let records = catalog
+        .datasets
+        .iter()
+        .find_map(|dataset| dataset.standards.ogc_api_records.as_ref())?;
+    Some(json!({
+        "@id": format!("{}#ogc-api-records-service", records.landing),
+        "@type": "dcat:DataService",
+        "dcterms:title": format!("{} OGC API Records service", catalog.title),
+        "dspace:dataServiceType": "registry_relay:ogc-api-records",
+        "dcat:endpointURL": records.landing,
+        "dcat:endpointDescription": format!("{}/openapi.json", catalog.base_url),
+        "dcat:servesDataset": catalog
+            .datasets
+            .iter()
+            .filter(|dataset| dataset.standards.ogc_api_records.is_some())
+            .map(|dataset| dataset.links.self_url.clone())
+            .collect::<Vec<_>>(),
+        "dcterms:conformsTo": ogc_records_conformance(),
+    }))
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn ogc_records_conformance() -> Value {
+    json!([
+        "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core",
+        "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-collection",
+        "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-api",
+        "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/json",
+        "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/oas30",
+    ])
 }
 
 fn dataset_ogc_distribution(

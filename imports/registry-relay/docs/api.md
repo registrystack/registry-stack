@@ -23,6 +23,22 @@ Auth-gated data-plane routes:
 GET /openapi.json
 GET /catalog
 GET /catalog/dcat-ap.jsonld
+GET /metadata
+GET /metadata/catalog
+GET /metadata/dcat
+GET /metadata/dcat/{profile}
+GET /metadata/shacl
+GET /metadata/profiles
+GET /metadata/profiles/{profile}
+GET /metadata/datasets
+GET /metadata/datasets/{dataset_id}
+GET /metadata/datasets/{dataset_id}/entities
+GET /metadata/datasets/{dataset_id}/entities/{entity}
+GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
+GET /metadata/datasets/{dataset_id}/entities/{entity}/shacl
+GET /metadata/schema/{dataset_id}/{entity}/schema.json
+GET /metadata/ogc/records
+GET /metadata/ogc/records/{record_id}
 GET /datasets
 GET /datasets/{dataset_id}
 GET /datasets/{dataset_id}/{entity}/schema
@@ -139,15 +155,52 @@ Data-Purpose: service-intake-check
 
 When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_required`. Use stable, reviewable purpose names. Do not put secrets, bearer tokens, or personal data in this header because it is recorded in audit logs.
 
-## Catalog And OpenAPI
+## Metadata, Catalog, And OpenAPI
 
 `GET /catalog` and `GET /catalog/dcat-ap.jsonld` return only datasets visible to the authenticated principal's metadata scopes.
 
-Dataset summaries and catalog entries advertise optional standards adapters when the caller can see the bound entity metadata. OGC API Features datasets include links to the canonical `/ogc/v1` landing and dataset collection endpoints. SP DCI-bound datasets include the configured registry slug and sync endpoints under `/dci/{registry}/registry/sync/...`.
+Dataset summaries and catalog entries advertise optional standards adapters when the caller can see the bound entity metadata. OGC API Records datasets include links to the canonical `/ogc/v1/records` catalog-records surface when the `ogcapi-records` feature is enabled. OGC API Features datasets include links to the canonical `/ogc/v1` landing and dataset collection endpoints. SP DCI-bound datasets include the configured registry slug and sync endpoints under `/dci/{registry}/registry/sync/...`.
 
 The DCAT-AP JSON-LD export registers those standards endpoints as `dcat:DataService` entries that `dcat:servesDataset` the corresponding dataset. The standards routes remain canonical at their protocol roots; `/datasets/{dataset_id}` acts as the discovery surface that connects them back to the native dataset model.
 
+`GET /metadata/*` is the standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, verify, aggregate, claim-verification, or admin access.
+
+The older `/catalog`, `/catalog/dcat-ap.jsonld`, `/datasets`, and runtime entity routes remain operational discovery surfaces. Portable metadata consumers should use `/metadata/*` or static publication.
+
 `GET /openapi.json` is also auth-gated and metadata-filtered. The generated document includes only the operations and dataset/entity tags visible to the caller. `GET /docs` serves the local Scalar viewer and asks for a bearer token before fetching `GET /openapi.json`.
+
+Static publication uses the same portable metadata model without starting Relay. For local validation and artifact generation:
+
+```sh
+just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
+just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
+```
+
+The published bundle includes `index.json`, `metadata.yaml`, `catalog.json`, `dcat.jsonld`, `dcat.bregdcat-ap.jsonld`, `shacl.jsonld`, and per-entity JSON Schemas. Static artifacts are broad metadata publication surfaces; caller-scoped discovery still belongs to authenticated Relay routes.
+
+See [metadata.md](metadata.md) for the manifest model, publication layout, and split metadata startup errors.
+
+When enabled, OGC API Records exposes a metadata-only catalog view:
+
+```text
+GET /ogc/v1/records
+GET /ogc/v1/records/conformance
+GET /ogc/v1/records/collections
+GET /ogc/v1/records/collections/datasets
+GET /ogc/v1/records/collections/datasets/items
+GET /ogc/v1/records/collections/datasets/items/{dataset_id}
+```
+
+The initial Records surface has one collection, `datasets`, where each item is a record describing a visible `dcat:Dataset`. It uses the same metadata scopes as `/catalog`; it does not expose row data, bypass required filters, or claim searchable-catalog conformance.
+
+`GET /ogc/v1/records/collections/datasets/items` supports metadata-side discovery parameters:
+
+- `q`: case-insensitive text search across visible dataset and entity metadata.
+- `limit`: maximum records to return, from 1 to 1000.
+- `after`: opaque signed pagination cursor from a `rel=next` link.
+
+Dataset Records do not currently support `bbox` or `datetime` filtering because the catalog metadata only carries `spatial_coverage` IRIs and no temporal coverage field. The endpoint rejects unsupported spatial/search parameters instead of pretending those fields are filterable.
 
 ## Verify And Aggregates
 
@@ -195,15 +248,30 @@ Errors use RFC 9457 Problem Details with a stable `code` field:
 
 ```json
 {
-  "type": "https://data.example.gov/problems/auth/forbidden",
-  "title": "Forbidden",
+  "type": "https://data.example.gov/problems/auth/scope_denied",
+  "title": "Scope denied",
   "status": 403,
-  "code": "auth.forbidden",
-  "detail": "scope is not sufficient for this operation"
+  "code": "auth.scope_denied",
+  "detail": "required scope: social_registry:rows"
 }
 ```
 
 The exact text in `detail` is operator-facing but intentionally scrubbed. Do not depend on it programmatically. Use the HTTP status and `code`.
+
+Startup-only split metadata failures use stable codes in logs:
+
+| Code | Meaning |
+| --- | --- |
+| `metadata.manifest.file_not_found` | Configured metadata manifest cannot be read |
+| `metadata.manifest.parse_failed` | Metadata YAML did not deserialize |
+| `metadata.manifest.version_unsupported` | Metadata manifest schema version is not supported |
+| `metadata.manifest.validation_failed` | Manifest failed semantic validation |
+| `runtime.binding.dataset_missing` | Runtime dataset is absent from compiled metadata |
+| `runtime.binding.entity_missing` | Runtime entity is absent from compiled metadata |
+| `runtime.binding.table_missing` | Runtime entity points at an unknown runtime table |
+| `runtime.binding.field_missing` | Runtime field or claim binding is absent from compiled metadata |
+| `runtime.binding.filter_missing` | Runtime filter binding is absent from compiled metadata |
+| `runtime.binding.relationship_missing` | Runtime relationship binding is absent from compiled metadata |
 
 ## Provenance Opt-In
 

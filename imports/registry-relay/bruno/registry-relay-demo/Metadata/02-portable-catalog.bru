@@ -1,0 +1,21 @@
+meta {
+  name: Portable catalog
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/metadata/catalog
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the portable catalog JSON rendered from registry-metadata-core.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with datasets filtered to the caller's metadata scopes.
+}

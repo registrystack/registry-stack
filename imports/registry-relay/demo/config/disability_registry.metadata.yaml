@@ -1,0 +1,276 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from disability_registry.yaml.
+
+schema_version: registry-metadata/v1
+catalog:
+  id: spdci-registry-gateway
+  base_url: http://127.0.0.1:4242
+  title: SP DCI Registry Gateway Demo
+  publisher:
+    name: Ministry of Social Affairs (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+datasets:
+- id: disability_registry
+  title: SP DCI Disability Registry
+  description: Synthetic disability registry backed by the SP DCI demo workbook. It demonstrates disabled-status, disability-details, and disability-support lookups.
+  owner: Ministry of Social Affairs
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  conforms_to:
+  - spdci:extensions/dr/v1/DisabledPerson
+  entities:
+  - name: disabled_person
+    title: Disabled Person
+    description: Person record exposed through the SP DCI Disability Registry sync
+      adapter.
+    concept_uri: spdci:extensions/dr/v1/DisabledPerson
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: member_identifier
+      type: string
+      required: true
+    - name: given_name
+      type: string
+      required: true
+    - name: surname
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: birth_date
+      type: date
+      required: true
+    - name: disability_status
+      type: string
+      required: true
+    - name: disability_level
+      type: string
+    - name: impairment_type
+      type: string
+    - name: impairment_level
+      type: string
+    - name: human_assistance_type
+      type: string
+    - name: support_frequency
+      type: string
+    - name: support_status
+      type: string
+    - name: disability_details
+      type: string
+    - name: disability_support
+      type: string
+    - name: home_district
+      type: string
+    - name: age_band
+      type: string
+    - name: registration_date
+      type: date
+    - name: last_updated
+      type: date
+- id: civil_registry
+  title: SP DCI Civil Registry
+  description: Synthetic civil registry backed by the SP DCI demo workbook. It demonstrates the CRVS sync-search adapter without making the disability registry the system owner.
+  owner: Civil Registration Authority
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  conforms_to:
+  - spdci:extensions/crvs/v1/Person
+  entities:
+  - name: civil_person
+    title: Civil Person
+    description: Synthetic civil-registration person exposed through the SP DCI CRVS
+      sync-search adapter.
+    concept_uri: spdci:extensions/crvs/v1/Person
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: national_id
+      type: string
+      required: true
+    - name: given_name
+      type: string
+      required: true
+    - name: surname
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: birth_date
+      type: date
+      required: true
+    - name: birth_place
+      type: string
+      required: true
+    - name: address_line
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: phone
+      type: string
+      required: true
+    - name: email
+      type: string
+      required: true
+    - name: registration_date
+      type: date
+      required: true
+    - name: last_updated
+      type: date
+      required: true
+- id: social_registry
+  title: SP DCI Social Registry
+  description: Synthetic social registry backed by the SP DCI demo workbook. It demonstrates the Social Registry sync-search adapter as its own system boundary.
+  owner: Ministry of Social Protection
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  conforms_to:
+  - spdci:extensions/social/v1/Group
+  entities:
+  - name: social_group
+    title: Social Registry Group
+    description: Synthetic social-registry group exposed through the SP DCI Social
+      Registry sync-search adapter.
+    concept_uri: spdci:extensions/social/v1/Group
+    identifiers:
+    - name: group_id
+      kind: primary
+    fields:
+    - name: group_id
+      type: string
+      required: true
+    - name: group_type
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: address_line
+      type: string
+      required: true
+    - name: poverty_score
+      type: number
+      required: true
+    - name: poverty_score_type
+      type: string
+      required: true
+    - name: group_size
+      type: integer
+      required: true
+    - name: head_member_id
+      type: string
+      required: true
+    - name: head_national_id
+      type: string
+      required: true
+    - name: head_given_name
+      type: string
+      required: true
+    - name: head_surname
+      type: string
+      required: true
+    - name: head_sex
+      type: string
+      required: true
+    - name: head_birth_date
+      type: date
+      required: true
+    - name: head_disability_status
+      type: string
+      required: true
+    - name: registration_date
+      type: date
+      required: true
+    - name: last_updated
+      type: date
+      required: true
+- id: farmer_registry
+  title: SP DCI Farmer Registry
+  description: Synthetic farmer registry backed by the SP DCI demo workbook. It demonstrates the Farmer Registry sync-search adapter as its own system boundary.
+  owner: Ministry of Agriculture
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  conforms_to:
+  - spdci:extensions/fr/v1/FRPerson
+  entities:
+  - name: farmer
+    title: Farmer
+    description: Synthetic farmer record exposed through the SP DCI Farmer Registry
+      sync-search adapter.
+    concept_uri: spdci:extensions/fr/v1/FRPerson
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: family_id
+      type: string
+      required: true
+    - name: national_id
+      type: string
+      required: true
+    - name: given_name
+      type: string
+      required: true
+    - name: surname
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: birth_date
+      type: date
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: farm_place_name
+      type: string
+      required: true
+    - name: farm_type
+      type: string
+      required: true
+    - name: crop_type
+      type: string
+      required: true
+    - name: livestock_type
+      type: string
+      required: true
+    - name: livestock_count
+      type: integer
+      required: true
+    - name: irrigation
+      type: boolean
+      required: true
+    - name: registration_date
+      type: date
+      required: true
+    - name: last_updated
+      type: date
+      required: true
+vocabularies:
+  spdci: https://schema.spdci.org/

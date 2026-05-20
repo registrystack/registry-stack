@@ -1,6 +1,6 @@
 # registry-relay Development Guide
 
-This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [claim-verification.md](claim-verification.md), and [provenance.md](provenance.md).
+This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [metadata.md](metadata.md), [claim-verification.md](claim-verification.md), and [provenance.md](provenance.md).
 
 ## Local Setup
 
@@ -48,8 +48,34 @@ Useful focused examples:
 ```sh
 cargo test --test auth_flow
 cargo test --test catalog_entity
+cargo test --features ogcapi-records --test ogc_records_api
 cargo test --test api_docs
 cargo test provenance
+```
+
+Portable metadata checks are separate from the Relay runtime:
+
+```sh
+just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
+just metadata-validate-profiles
+cargo test --test demo_configs_load
+cargo test -p registry-metadata-core
+```
+
+The demo runtime configs are split-backed: every `demo/config/*.yaml` points
+at a sibling `*.metadata.yaml` manifest, and `demo_configs_load` validates the
+runtime bindings against those manifests. Keep [metadata.md](metadata.md)
+current when changing the manifest model, renderer outputs, publication layout,
+or `/metadata/*` routes.
+
+Render static artifacts during metadata work:
+
+```sh
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml catalog target/metadata/catalog.json
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml shacl target/metadata/shacl.jsonld
+just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
+just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
 ```
 
 DCAT-AP catalog validation runs at two levels:
@@ -107,10 +133,13 @@ src/config/       YAML model, loader, validation, provenance config
 src/entity/       entity registry built from config
 src/format/       CSV, XLSX, and Parquet decoders
 src/ingest/       source ingest, cache layout, refresh, readiness
-src/metadata/     catalog, DCAT-AP, and SHACL metadata
+src/metadata/     Relay adapters for runtime-derived metadata
 src/provenance/   VC-JWT issuance, DID Web, schemas, contexts, signers
 src/query/        entity and aggregate query planning
 src/server.rs     router composition and cross-cutting middleware
+crates/registry-metadata-core/  portable metadata manifest model and renderers
+crates/registry-metadata-cli/   metadata validation, rendering, and static publish CLI
+profiles/        ecosystem profile descriptors and fixture metadata manifests
 ```
 
 Storage tables are private. Public routes must go through entity config, scope checks, audit, and query planning.
@@ -119,12 +148,14 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 - Keep the public URL space entity-shaped. Do not expose table ids in data-plane paths.
 - Add config fields through `src/config/mod.rs` and validation in `src/config/validate.rs`.
+- Keep portable metadata in `crates/registry-metadata-core`; it must not depend on Relay runtime, Axum, DataFusion, auth, scopes, OpenAPI, or connector code.
 - Keep auth scopes independent. Metadata, rows, verify, claim verification, aggregate, and admin must not imply one another.
 - Treat audit as a product surface. New routes should populate endpoint kind, dataset/entity/table ids, purpose, row count, suppression count, and stable error code when applicable.
 - Prefer structured parsers and DataFusion expressions over string-built query logic.
 - Do not log raw keys, fingerprints, private JWKs, row values, or full environment dumps.
 - For user-visible API behavior, update [api.md](api.md) and focused integration tests in the same change.
 - For operator-visible config behavior, update [configuration.md](configuration.md), [ops.md](ops.md), and config-loader tests.
+- For portable metadata behavior, update [metadata.md](metadata.md), metadata-core tests, and split config binding tests.
 
 ## Adding An Endpoint
 

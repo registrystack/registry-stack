@@ -28,6 +28,8 @@ const TAG_CATALOG: &str = "Catalog";
 const TAG_PROVENANCE: &str = "Provenance";
 #[cfg(feature = "ogcapi-features")]
 const TAG_OGC: &str = "OGC API Features";
+#[cfg(feature = "ogcapi-records")]
+const TAG_OGC_RECORDS: &str = "OGC API Records";
 #[cfg(feature = "spdci-api-standards")]
 const TAG_SPD_CI: &str = "SP DCI";
 const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
@@ -166,6 +168,8 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
 
     #[cfg(feature = "ogcapi-features")]
     insert_ogc_paths(&mut paths);
+    #[cfg(feature = "ogcapi-records")]
+    insert_ogc_records_paths(&mut paths);
     if provenance_enabled(config) {
         insert_provenance_paths(&mut paths);
     }
@@ -590,26 +594,6 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 }
                 tag(&mut paths, &relationship_path, "get", &entity_tag);
             }
-
-            // SHACL shape (JSON-LD)
-            let shacl_path = format!(
-                "/catalog/datasets/{}/{}/schema.jsonld",
-                dataset.dataset_id, entity.name
-            );
-            paths.insert(
-                shacl_path.clone(),
-                jsonld_path_item(
-                    &format!("get_{stem}_shacl_shape"),
-                    "SHACL shape (JSON-LD)",
-                    &format!(
-                        "Returns the JSON-LD schema and SHACL shape for `{}` in `{}`. \
-                         Useful for shape validators and semantic catalog consumers.",
-                        entity.name, dataset.dataset_id,
-                    ),
-                    "Entity JSON-LD schema and SHACL shape",
-                ),
-            );
-            tag(&mut paths, &shacl_path, "get", &entity_tag);
         }
     }
 
@@ -687,6 +671,11 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
         "name": TAG_OGC,
         "description": "OGC API Features discovery and dataset-scoped feature collections.",
     }));
+    #[cfg(feature = "ogcapi-records")]
+    tags.push(json!({
+        "name": TAG_OGC_RECORDS,
+        "description": "OGC API Records catalog discovery over visible dataset metadata.",
+    }));
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         tags.push(json!({
@@ -732,6 +721,8 @@ fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
     }
     #[cfg(feature = "ogcapi-features")]
     groups.push(json!({ "name": "OGC", "tags": [TAG_OGC] }));
+    #[cfg(feature = "ogcapi-records")]
+    groups.push(json!({ "name": "OGC Records", "tags": [TAG_OGC_RECORDS] }));
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         groups.push(json!({ "name": "SP DCI", "tags": [TAG_SPD_CI] }));
@@ -1061,6 +1052,8 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     }
     #[cfg(feature = "ogcapi-features")]
     insert_ogc_schemas(&mut schemas);
+    #[cfg(feature = "ogcapi-records")]
+    insert_ogc_records_schemas(&mut schemas);
 
     for dataset in &catalog.datasets {
         for entity in &dataset.entities {
@@ -1182,13 +1175,18 @@ fn problem_details_schema() -> Value {
     })
 }
 
-#[cfg(feature = "ogcapi-features")]
-fn insert_ogc_schemas(schemas: &mut Map<String, Value>) {
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+fn insert_ogc_common_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert("OgcLink".to_string(), ogc_link_schema());
     schemas.insert("OgcLandingPage".to_string(), ogc_landing_page_schema());
     schemas.insert("OgcConformance".to_string(), ogc_conformance_schema());
     schemas.insert("OgcCollections".to_string(), ogc_collections_schema());
     schemas.insert("OgcCollection".to_string(), ogc_collection_schema());
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn insert_ogc_schemas(schemas: &mut Map<String, Value>) {
+    insert_ogc_common_schemas(schemas);
     schemas.insert(
         "GeoJsonFeatureCollection".to_string(),
         geojson_feature_collection_schema(),
@@ -1196,7 +1194,17 @@ fn insert_ogc_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert("GeoJsonFeature".to_string(), geojson_feature_schema());
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(feature = "ogcapi-records")]
+fn insert_ogc_records_schemas(schemas: &mut Map<String, Value>) {
+    insert_ogc_common_schemas(schemas);
+    schemas.insert(
+        "OgcRecordCollection".to_string(),
+        ogc_record_collection_schema(),
+    );
+    schemas.insert("OgcRecord".to_string(), ogc_record_schema());
+}
+
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_link_schema() -> Value {
     json!({
         "type": "object",
@@ -1211,7 +1219,7 @@ fn ogc_link_schema() -> Value {
     })
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_landing_page_schema() -> Value {
     json!({
         "type": "object",
@@ -1224,7 +1232,7 @@ fn ogc_landing_page_schema() -> Value {
     })
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_conformance_schema() -> Value {
     json!({
         "type": "object",
@@ -1235,7 +1243,7 @@ fn ogc_conformance_schema() -> Value {
     })
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_collections_schema() -> Value {
     json!({
         "type": "object",
@@ -1247,7 +1255,7 @@ fn ogc_collections_schema() -> Value {
     })
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_collection_schema() -> Value {
     json!({
         "type": "object",
@@ -1256,10 +1264,40 @@ fn ogc_collection_schema() -> Value {
             "id": { "type": "string" },
             "title": { "type": "string" },
             "description": { "type": "string" },
-            "itemType": { "type": "string", "enum": ["feature"] },
+            "itemType": { "type": "string", "enum": ["feature", "record"] },
             "crs": { "type": "array", "items": { "type": "string", "format": "uri" } },
             "storageCrs": { "type": "string", "format": "uri" },
             "extent": { "type": "object", "additionalProperties": true },
+            "properties": { "type": "object", "additionalProperties": true },
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn ogc_record_collection_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "numberMatched", "numberReturned", "features"],
+        "properties": {
+            "type": { "type": "string", "enum": ["FeatureCollection"] },
+            "numberMatched": { "type": "integer", "minimum": 0 },
+            "numberReturned": { "type": "integer", "minimum": 0 },
+            "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
+            "features": { "type": "array", "items": { "$ref": "#/components/schemas/OgcRecord" } },
+        },
+    })
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn ogc_record_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "type", "geometry", "properties"],
+        "properties": {
+            "id": { "type": "string" },
+            "type": { "type": "string", "enum": ["Feature"] },
+            "geometry": { "type": ["object", "null"], "additionalProperties": true },
             "properties": { "type": "object", "additionalProperties": true },
             "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } },
         },
@@ -2171,7 +2209,123 @@ fn insert_ogc_paths(paths: &mut Map<String, Value>) {
     );
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(feature = "ogcapi-records")]
+fn insert_ogc_records_paths(paths: &mut Map<String, Value>) {
+    paths.insert(
+        "/ogc/v1/records".to_string(),
+        ogc_json_path_item(
+            "get_ogc_records_landing_page",
+            "OGC API Records landing page",
+            "OgcLandingPage",
+        ),
+    );
+    tag(paths, "/ogc/v1/records", "get", TAG_OGC_RECORDS);
+
+    paths.insert(
+        "/ogc/v1/records/conformance".to_string(),
+        ogc_json_path_item(
+            "get_ogc_records_conformance",
+            "OGC API Records conformance",
+            "OgcConformance",
+        ),
+    );
+    tag(paths, "/ogc/v1/records/conformance", "get", TAG_OGC_RECORDS);
+
+    paths.insert(
+        "/ogc/v1/records/collections".to_string(),
+        ogc_json_path_item(
+            "list_ogc_record_collections",
+            "List OGC API Records collections",
+            "OgcCollections",
+        ),
+    );
+    tag(paths, "/ogc/v1/records/collections", "get", TAG_OGC_RECORDS);
+
+    paths.insert(
+        "/ogc/v1/records/collections/{collection_id}".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "Get OGC API Records collection",
+            "OgcCollection",
+            "application/json",
+            vec![path_parameter(
+                "collection_id",
+                "Records collection identifier",
+            )],
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/records/collections/{collection_id}",
+        "get",
+        TAG_OGC_RECORDS,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/records/collections/{collection_id}",
+        "get",
+        "get_ogc_record_collection",
+    );
+
+    paths.insert(
+        "/ogc/v1/records/collections/{collection_id}/items".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "List OGC API Records",
+            "OgcRecordCollection",
+            "application/geo+json",
+            vec![
+                path_parameter("collection_id", "Records collection identifier"),
+                query_parameter("limit", "Maximum records to return."),
+                query_parameter("after", "Opaque signed pagination cursor."),
+                query_parameter(
+                    "q",
+                    "Case-insensitive text search over visible record metadata.",
+                ),
+            ],
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/records/collections/{collection_id}/items",
+        "get",
+        TAG_OGC_RECORDS,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/records/collections/{collection_id}/items",
+        "get",
+        "list_ogc_records",
+    );
+
+    paths.insert(
+        "/ogc/v1/records/collections/{collection_id}/items/{record_id}".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "Get OGC API Record",
+            "OgcRecord",
+            "application/geo+json",
+            vec![
+                path_parameter("collection_id", "Records collection identifier"),
+                path_parameter("record_id", "Record identifier"),
+            ],
+        ),
+    );
+    tag(
+        paths,
+        "/ogc/v1/records/collections/{collection_id}/items/{record_id}",
+        "get",
+        TAG_OGC_RECORDS,
+    );
+    set_op_id(
+        paths,
+        "/ogc/v1/records/collections/{collection_id}/items/{record_id}",
+        "get",
+        "get_ogc_record",
+    );
+}
+
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_json_path_item(op_id: &str, summary: &str, schema: &str) -> Value {
     let mut item =
         ogc_path_item_with_params("get", summary, schema, "application/json", Vec::new());
@@ -2181,7 +2335,7 @@ fn ogc_json_path_item(op_id: &str, summary: &str, schema: &str) -> Value {
     item
 }
 
-#[cfg(feature = "ogcapi-features")]
+#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
 fn ogc_path_item_with_params(
     method: &str,
     summary: &str,
@@ -2844,6 +2998,7 @@ mod tests {
                 links: DatasetLinks {
                     self_url: "https://data.example.test/datasets/social_registry".to_string(),
                     ogc_collections: None,
+                    ogc_records: None,
                 },
                 standards: Default::default(),
                 entities: vec![EntityMetadata {

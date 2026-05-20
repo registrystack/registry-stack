@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "metadata.manifest.validation_failed",
+  "detail": "metadata manifest failed semantic validation",
+  "status": 500,
+  "title": "Metadata manifest validation failed",
+  "type": "https://data.example.gov/problems/metadata/manifest/validation_failed"
+}

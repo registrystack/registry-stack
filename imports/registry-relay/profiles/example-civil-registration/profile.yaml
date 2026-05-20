@@ -1,0 +1,73 @@
+schema_version: registry-relay-profile/v1
+profile:
+  id: example-civil-registration
+  version: "1"
+  name: Hypothetical Civil Registration Profile
+  upstream_system: Hypothetical civil registration app
+  upstream_url: https://civil-registration.example.gov/
+  description: Non-normative example metadata expectations for a fictional civil registration application.
+supported_input_artifacts:
+  - kind: metadata_manifest
+    media_type: application/yaml
+    description: Registry Relay portable metadata manifest with fictional civil registration concept references.
+required_concepts:
+  - name: person identifier
+    iri: person:Person.identifier
+  - name: birth date
+    iri: civreg:BirthRecord.child.birthDate
+  - name: sex
+    iri: person:Person.sex
+  - name: event registration date
+    iri: civreg:VitalEvent.registrationDate
+optional_concepts:
+  - name: death date
+    iri: civreg:DeathRecord.deceased.deathDate
+  - name: relationship to mother
+    iri: civreg:BirthRecord.mother
+required_identifiers:
+  - entity: person
+    name: person_id
+    kind: local
+cardinality_expectations:
+  - entity: person
+    field: person_id
+    min: 1
+    max: 1
+  - entity: person
+    field: birth_date
+    min: 0
+    max: 1
+  - entity: vital_event
+    field: event_id
+    min: 1
+    max: 1
+codelist_expectations:
+  - id: sex
+    required_codes:
+      - female
+      - male
+  - id: vital_event_type
+    required_codes:
+      - birth
+      - death
+unsupported_mappings:
+  - source: workflow task state
+    reason: Operational workflow state is runtime behavior, not portable metadata.
+  - source: record amendment history
+    reason: Amendment audit details require source-specific provenance and are not represented in this profile fixture.
+conformance_checks:
+  - id: example-civil-registration.required_concepts
+    severity: error
+    description: Manifest must include the required fictional civil registration and person schema concepts.
+  - id: example-civil-registration.identifiers
+    severity: error
+    description: Person metadata must expose a stable local person identifier.
+  - id: example-civil-registration.codelists
+    severity: error
+    description: Sex and vital event type codelists must include the required codes.
+fixtures:
+  - path: fixtures/metadata.yaml
+    manifest: true
+    expect: valid
+    description: Minimal civil registration fixture with person and vital event metadata.
+generator_command: null

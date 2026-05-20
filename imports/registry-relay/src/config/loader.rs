@@ -8,12 +8,22 @@
 //! operators can locate the offending file in their logs.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::error::{ConfigError, Error};
+use registry_metadata_core::{
+    self as metadata_core, CompiledMetadata, MetadataError as CoreMetadataError, MetadataManifest,
+};
+
+use crate::error::{ConfigError, Error, MetadataError};
 
 use super::validate;
 use super::Config;
+
+#[derive(Debug)]
+pub struct LoadedConfig {
+    pub runtime: Config,
+    pub metadata: Option<CompiledMetadata>,
+}
 
 /// Load and validate the YAML configuration at `path`.
 ///
@@ -54,6 +64,81 @@ pub fn load(path: &Path) -> Result<Config, Error> {
 
     validate::run(&config)?;
     Ok(config)
+}
+
+/// Load runtime config and, when configured, the split metadata manifest.
+pub fn load_with_metadata(path: &Path) -> Result<LoadedConfig, Error> {
+    let config = load(path)?;
+    let metadata = match config.metadata.as_ref() {
+        Some(metadata) => {
+            let manifest_path = resolve_relative_to_config(path, &metadata.manifest_path);
+            let compiled = load_metadata_manifest(&manifest_path)?;
+            validate::validate_runtime_bindings(&config, &compiled)?;
+            Some(compiled)
+        }
+        None => None,
+    };
+    Ok(LoadedConfig {
+        runtime: config,
+        metadata,
+    })
+}
+
+pub fn load_metadata_manifest(path: &Path) -> Result<CompiledMetadata, Error> {
+    let raw = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(
+                code = "metadata.manifest.file_not_found",
+                path = %path.display(),
+                error = %err,
+                "failed to read metadata manifest"
+            );
+            return Err(MetadataError::ManifestFileNotFound.into());
+        }
+    };
+    let manifest: MetadataManifest = match serde_yml::from_str(&raw) {
+        Ok(manifest) => manifest,
+        Err(err) => {
+            tracing::error!(
+                code = "metadata.manifest.parse_failed",
+                path = %path.display(),
+                error = %err,
+                "failed to parse metadata manifest YAML"
+            );
+            return Err(MetadataError::ManifestParseFailed.into());
+        }
+    };
+    metadata_core::compile_manifest(&manifest).map_err(|err| {
+        let code = match &err {
+            CoreMetadataError::VersionUnsupported => "metadata.manifest.version_unsupported",
+            CoreMetadataError::Validation { .. } => "metadata.manifest.validation_failed",
+        };
+        tracing::error!(
+            code = code,
+            path = %path.display(),
+            error = %err,
+            "metadata manifest failed validation"
+        );
+        match err {
+            CoreMetadataError::VersionUnsupported => {
+                Error::from(MetadataError::ManifestVersionUnsupported)
+            }
+            CoreMetadataError::Validation { .. } => {
+                Error::from(MetadataError::ManifestValidationFailed)
+            }
+        }
+    })
+}
+
+fn resolve_relative_to_config(config_path: &Path, target: &Path) -> PathBuf {
+    if target.is_absolute() {
+        return target.to_path_buf();
+    }
+    config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(target)
 }
 
 #[cfg(test)]

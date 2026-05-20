@@ -1,0 +1,173 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from public_works_projects.yaml.
+
+schema_version: registry-metadata/v1
+catalog:
+  id: public-works-projects
+  base_url: http://127.0.0.1:4242
+  title: Public Works Projects Gateway (Demo)
+  publisher:
+    name: Delivery Unit (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+datasets:
+- id: public_works_projects
+  title: Public Works Projects
+  description: Infrastructure projects, contracts, milestones, and disbursements tracked
+    by the delivery unit. Non-personal but commercially and politically sensitive.
+  owner: Delivery Unit
+  sensitivity: confidential
+  access_rights: non_public
+  update_frequency: monthly
+  entities:
+  - name: project
+    title: Infrastructure Project
+    description: An infrastructure project tracked by the delivery unit
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_name
+      type: string
+      required: true
+    - name: sector
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: asset_type
+      type: string
+      required: true
+    - name: asset_ref
+      type: string
+    - name: implementing_agency
+      type: string
+      required: true
+    - name: project_status
+      type: string
+      required: true
+    - name: start_date
+      type: date
+      required: true
+    - name: planned_end_date
+      type: date
+    - name: risk_rating
+      type: string
+      required: true
+    relationships:
+    - name: contracts
+      target_entity: contract
+      cardinality: many
+    - name: milestones
+      target_entity: milestone
+      cardinality: many
+    - name: disbursements
+      target_entity: disbursement
+      cardinality: many
+  - name: contract
+    title: Project Contract
+    description: A contract awarded under a project
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_id
+      type: string
+      required: true
+    - name: contractor_ref
+      type: string
+      required: true
+    - name: procurement_method
+      type: string
+      required: true
+    - name: contract_status
+      type: string
+      required: true
+    - name: contract_value
+      type: number
+      required: true
+      unit: USD
+    - name: signed_on
+      type: date
+    relationships:
+    - name: project
+      target_entity: project
+      cardinality: zero_or_one
+  - name: milestone
+    title: Project Milestone
+    description: A milestone on the delivery schedule of a project
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_id
+      type: string
+      required: true
+    - name: milestone_name
+      type: string
+      required: true
+    - name: milestone_status
+      type: string
+      required: true
+    - name: due_date
+      type: date
+      required: true
+    - name: completed_on
+      type: date
+    - name: delay_reason
+      type: string
+    relationships:
+    - name: project
+      target_entity: project
+      cardinality: zero_or_one
+  - name: disbursement
+    title: Project Disbursement
+    description: A payment disbursed against a project contract in a fiscal period
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_id
+      type: string
+      required: true
+    - name: contract_id
+      type: string
+      required: true
+    - name: fiscal_year
+      type: string
+      required: true
+    - name: quarter
+      type: string
+      required: true
+    - name: amount
+      type: number
+      required: true
+      unit: USD
+    - name: payment_status
+      type: string
+      required: true
+    relationships:
+    - name: project
+      target_entity: project
+      cardinality: zero_or_one
+    - name: contract
+      target_entity: contract
+      cardinality: zero_or_one

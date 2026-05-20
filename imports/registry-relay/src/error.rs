@@ -10,11 +10,11 @@
 //!
 //! ## Startup-only codes
 //!
-//! `config.*` and `ingest.*` codes are surfaced via stderr at startup
-//! or via `/ready`'s body, never as a direct response to a client
-//! request. They still implement [`IntoResponse`] for defence in
-//! depth: rendering one returns `500 Internal Server Error` with the
-//! correct stable code. See the per-variant [`Error::http_status`]
+//! `config.*`, `metadata.manifest.*`, `runtime.binding.*`, and `ingest.*`
+//! codes are surfaced via stderr at startup or via `/ready`'s body, never as a
+//! direct response to a client request. They still implement [`IntoResponse`]
+//! for defence in depth: rendering one returns `500 Internal Server Error`
+//! with the correct stable code. See the per-variant [`Error::http_status`]
 //! mapping for the exact status each code reports.
 //!
 //! ## Scrubbing
@@ -70,6 +70,10 @@ pub enum Error {
     Admin(#[from] AdminError),
     #[error("{0}")]
     Config(#[from] ConfigError),
+    #[error("{0}")]
+    Metadata(#[from] MetadataError),
+    #[error("{0}")]
+    RuntimeBinding(#[from] RuntimeBindingError),
     #[error("{0}")]
     Internal(#[from] InternalError),
     /// Provenance runtime errors.
@@ -294,6 +298,39 @@ pub enum ConfigError {
     SpdciMappingFeatureDisabled,
 }
 
+/// `metadata.manifest.*` startup codes for split metadata manifest loading and
+/// compilation. Details stay generic; concrete parser diagnostics and paths are
+/// logged at startup.
+#[derive(Debug, Error)]
+pub enum MetadataError {
+    #[error("metadata manifest file not found")]
+    ManifestFileNotFound,
+    #[error("metadata manifest parse failed")]
+    ManifestParseFailed,
+    #[error("metadata manifest version unsupported")]
+    ManifestVersionUnsupported,
+    #[error("metadata manifest validation failed")]
+    ManifestValidationFailed,
+}
+
+/// `runtime.binding.*` startup codes for runtime config references into the
+/// compiled portable metadata manifest.
+#[derive(Debug, Error)]
+pub enum RuntimeBindingError {
+    #[error("runtime dataset missing from metadata")]
+    DatasetMissing,
+    #[error("runtime entity missing from metadata")]
+    EntityMissing,
+    #[error("runtime table missing")]
+    TableMissing,
+    #[error("runtime field missing from metadata")]
+    FieldMissing,
+    #[error("runtime filter missing from metadata")]
+    FilterMissing,
+    #[error("runtime relationship missing from metadata")]
+    RelationshipMissing,
+}
+
 /// `provenance.*` runtime codes.
 #[derive(Debug, Error)]
 pub enum ProvenanceError {
@@ -349,6 +386,9 @@ pub enum OgcError {
     /// filter context required by the collection policy.
     #[error("ogc feature not found")]
     FeatureNotFound,
+    /// Record does not exist or is not visible to the caller.
+    #[error("ogc record not found")]
+    RecordNotFound,
 }
 
 /// `spatial.*` runtime codes.
@@ -415,6 +455,8 @@ impl Error {
             Error::Aggregate(e) => e.code(),
             Error::Admin(e) => e.code(),
             Error::Config(e) => e.code(),
+            Error::Metadata(e) => e.code(),
+            Error::RuntimeBinding(e) => e.code(),
             Error::Internal(e) => e.code(),
             Error::Provenance(e) => e.code(),
             Error::Spdci(e) => e.code(),
@@ -442,6 +484,8 @@ impl Error {
             Error::Aggregate(e) => e.http_status(),
             Error::Admin(e) => e.http_status(),
             Error::Config(e) => e.http_status(),
+            Error::Metadata(e) => e.http_status(),
+            Error::RuntimeBinding(e) => e.http_status(),
             Error::Internal(e) => e.http_status(),
             Error::Provenance(e) => e.http_status(),
             Error::Spdci(e) => e.http_status(),
@@ -465,6 +509,8 @@ impl Error {
             Error::Aggregate(e) => e.title(),
             Error::Admin(e) => e.title(),
             Error::Config(e) => e.title(),
+            Error::Metadata(e) => e.title(),
+            Error::RuntimeBinding(e) => e.title(),
             Error::Internal(e) => e.title(),
             Error::Provenance(e) => e.title(),
             Error::Spdci(e) => e.title(),
@@ -490,6 +536,8 @@ impl Error {
             Error::Aggregate(e) => e.detail().to_string(),
             Error::Admin(e) => e.detail().to_string(),
             Error::Config(e) => e.detail().to_string(),
+            Error::Metadata(e) => e.detail().to_string(),
+            Error::RuntimeBinding(e) => e.detail().to_string(),
             Error::Internal(e) => e.detail().to_string(),
             Error::Provenance(e) => e.detail().to_string(),
             Error::Spdci(e) => e.detail().to_string(),
@@ -1016,6 +1064,98 @@ impl ConfigError {
     }
 }
 
+impl MetadataError {
+    fn code(&self) -> &'static str {
+        match self {
+            MetadataError::ManifestFileNotFound => "metadata.manifest.file_not_found",
+            MetadataError::ManifestParseFailed => "metadata.manifest.parse_failed",
+            MetadataError::ManifestVersionUnsupported => "metadata.manifest.version_unsupported",
+            MetadataError::ManifestValidationFailed => "metadata.manifest.validation_failed",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        // Startup-only; fallback to 500 if ever rendered.
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            MetadataError::ManifestFileNotFound => "Metadata manifest file not found",
+            MetadataError::ManifestParseFailed => "Metadata manifest parse failed",
+            MetadataError::ManifestVersionUnsupported => "Metadata manifest version unsupported",
+            MetadataError::ManifestValidationFailed => "Metadata manifest validation failed",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            MetadataError::ManifestFileNotFound => "metadata manifest could not be read",
+            MetadataError::ManifestParseFailed => "metadata manifest did not deserialize",
+            MetadataError::ManifestVersionUnsupported => {
+                "metadata manifest schema_version is not supported"
+            }
+            MetadataError::ManifestValidationFailed => {
+                "metadata manifest failed semantic validation"
+            }
+        }
+    }
+}
+
+impl RuntimeBindingError {
+    fn code(&self) -> &'static str {
+        match self {
+            RuntimeBindingError::DatasetMissing => "runtime.binding.dataset_missing",
+            RuntimeBindingError::EntityMissing => "runtime.binding.entity_missing",
+            RuntimeBindingError::TableMissing => "runtime.binding.table_missing",
+            RuntimeBindingError::FieldMissing => "runtime.binding.field_missing",
+            RuntimeBindingError::FilterMissing => "runtime.binding.filter_missing",
+            RuntimeBindingError::RelationshipMissing => "runtime.binding.relationship_missing",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        // Startup-only; fallback to 500 if ever rendered.
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            RuntimeBindingError::DatasetMissing => "Runtime dataset missing from metadata",
+            RuntimeBindingError::EntityMissing => "Runtime entity missing from metadata",
+            RuntimeBindingError::TableMissing => "Runtime table missing",
+            RuntimeBindingError::FieldMissing => "Runtime field missing from metadata",
+            RuntimeBindingError::FilterMissing => "Runtime filter missing from metadata",
+            RuntimeBindingError::RelationshipMissing => {
+                "Runtime relationship missing from metadata"
+            }
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            RuntimeBindingError::DatasetMissing => {
+                "runtime dataset id is absent from the metadata manifest"
+            }
+            RuntimeBindingError::EntityMissing => {
+                "runtime entity name is absent from the metadata manifest"
+            }
+            RuntimeBindingError::TableMissing => {
+                "runtime entity references a table that is not configured"
+            }
+            RuntimeBindingError::FieldMissing => {
+                "runtime field binding is absent from the metadata manifest"
+            }
+            RuntimeBindingError::FilterMissing => {
+                "runtime filter binding is absent from the metadata manifest"
+            }
+            RuntimeBindingError::RelationshipMissing => {
+                "runtime relationship binding is absent from the metadata manifest"
+            }
+        }
+    }
+}
+
 impl ProvenanceError {
     fn code(&self) -> &'static str {
         match self {
@@ -1154,6 +1294,7 @@ impl OgcError {
         match self {
             OgcError::CollectionNotFound => "ogc.collection_not_found",
             OgcError::FeatureNotFound => "ogc.feature_not_found",
+            OgcError::RecordNotFound => "ogc.record_not_found",
         }
     }
 
@@ -1165,6 +1306,7 @@ impl OgcError {
         match self {
             OgcError::CollectionNotFound => "OGC collection not found",
             OgcError::FeatureNotFound => "OGC feature not found",
+            OgcError::RecordNotFound => "OGC record not found",
         }
     }
 
@@ -1176,6 +1318,7 @@ impl OgcError {
             OgcError::FeatureNotFound => {
                 "feature is not registered, visible, or within the required filter context"
             }
+            OgcError::RecordNotFound => "record is not registered or visible to the caller",
         }
     }
 }

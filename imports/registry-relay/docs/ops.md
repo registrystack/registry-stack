@@ -47,6 +47,18 @@ scripts/build-image.sh registry-relay:<version>
 
 Before promoting an image, inspect the effective config and verify that every referenced `hash_env` is supplied by the runtime environment. Do not bake API keys or API-key hashes into the image.
 
+If the runtime config uses `metadata.manifest_path`, validate the manifest and
+runtime bindings before promotion:
+
+```sh
+just metadata-validate path/to/metadata.yaml
+cargo test --test demo_configs_load
+```
+
+For standalone metadata publication, use `just metadata-publish` and publish the
+generated `index.json` as the discovery entry point. See [metadata.md](metadata.md)
+for the bundle layout.
+
 For releases that claim DCAT-AP interoperability, run the
 `dcat-ap-external-validation` GitHub Actions workflow or validate an
 exported `/catalog/dcat-ap.jsonld` with the SEMIC validator:
@@ -246,6 +258,8 @@ Config fails at startup:
 - Confirm each `hash_env` value is a `sha256:<64 lowercase hex chars>` fingerprint.
 - Confirm ids are lower-snake and unique.
 - Check vocabulary prefixes used by `concept_uri` and `conforms_to`.
+- For `metadata.manifest.*` errors, validate the portable metadata manifest.
+- For `runtime.binding.*` errors, compare runtime dataset, entity, field, filter, and relationship ids with the compiled metadata manifest.
 
 Protected endpoint returns 401:
 

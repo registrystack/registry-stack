@@ -4,6 +4,9 @@
 server:
   bind: 0.0.0.0:4242
 
+metadata:
+  manifest_path: public_works_projects.metadata.yaml
+
 catalog:
   title: Public Works Projects Gateway (Demo)
   base_url: http://127.0.0.1:4242

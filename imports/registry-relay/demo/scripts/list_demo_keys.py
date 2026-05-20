@@ -40,11 +40,16 @@ PERSONA_HINTS = {
 
 OPENAPI_WORDS = {
     "metadata": [
+        "Get metadata landing",
+        "Get portable metadata catalog",
+        "Get base DCAT",
+        "Get profile DCAT",
+        "Get SHACL graph",
         "List datasets",
         "Get dataset metadata",
-        "Get entity schema",
-        "Get catalog",
-        "Get DCAT-AP catalog",
+        "Get entity JSON Schema",
+        "Get entity SHACL",
+        "Get OGC records metadata",
     ],
     "aggregate": ["List aggregates", "Run aggregate"],
     "rows": ["List records", "Get record", "Get relationship"],
@@ -196,11 +201,15 @@ def operations_for(key: DemoKey) -> list[str]:
 def concise_operations_for(key: DemoKey) -> list[str]:
     levels = set(levels_for(key))
     if key.key_id == "catalog_viewer":
-        return ["List datasets", "Get dataset metadata", "Get entity schema"]
+        return [
+            "Get metadata landing",
+            "Get portable metadata catalog",
+            "Get entity JSON Schema",
+        ]
     if key.key_id == "planning_analyst":
         if "aggregate" in levels:
             return ["Run aggregate", "List aggregates"]
-        return ["List datasets", "Get dataset metadata"]
+        return ["Get metadata landing", "Get dataset metadata"]
     if key.key_id == "casework_system":
         operations = ["Get record", "Get relationship"]
         if "verify" in levels:

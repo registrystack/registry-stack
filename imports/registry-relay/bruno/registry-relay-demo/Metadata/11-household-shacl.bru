@@ -1,0 +1,21 @@
+meta {
+  name: Household SHACL shape
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/metadata/datasets/benefits_casework/entities/household/shacl
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the household entity SHACL JSON-LD shape from the portable metadata surface.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json describing household field constraints and relationships.
+}

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
-use registry_relay::api::{catalog_router, openapi_router};
+use registry_relay::api::{catalog_router, metadata_router, openapi_router};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config;
 use registry_relay::entity::EntityRegistry;
@@ -215,11 +215,158 @@ fn server_from_config(path: std::path::PathBuf, scopes: &[&str]) -> TestServer {
 
     TestServer::new(
         catalog_router::<()>()
+            .merge(metadata_router())
             .merge(openapi_router())
             .layer(Extension(registry))
             .layer(Extension(cfg))
             .layer(Extension(principal(scopes))),
     )
+}
+
+#[tokio::test]
+async fn metadata_catalog_uses_core_renderer_and_scopes_entities() {
+    let resp = server().get("/metadata/catalog").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["id"], "registry-relay");
+    assert_eq!(body["datasets"][0]["dataset_id"], "social_registry");
+    assert_eq!(body["datasets"][0]["entities"].as_array().unwrap().len(), 1);
+    let household = &body["datasets"][0]["entities"][0];
+    assert_eq!(household["name"], "household");
+    assert_eq!(
+        household["fields"][1]["codelist_scheme_iri"],
+        "https://example.test/vocab/codelists/Region"
+    );
+    assert!(!serde_json::to_string(&body)
+        .expect("metadata serializes")
+        .contains("households_table"));
+}
+
+#[tokio::test]
+async fn metadata_dataset_surfaces_use_scoped_compiled_metadata() {
+    let resp = server().get("/metadata/datasets").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let datasets = body["datasets"].as_array().expect("datasets array");
+    assert_eq!(datasets.len(), 1);
+    assert_eq!(datasets[0]["dataset_id"], "social_registry");
+    assert!(datasets
+        .iter()
+        .all(|dataset| dataset["dataset_id"] != "payments"));
+    assert_eq!(datasets[0]["entities"]["household"]["name"], "household");
+    assert!(datasets[0]["entities"].get("individual").is_none());
+
+    let detail_resp = server().get("/metadata/datasets/social_registry").await;
+    detail_resp.assert_status(StatusCode::OK);
+    let detail: Value = detail_resp.json();
+    assert_eq!(detail["dataset_id"], "social_registry");
+    assert_eq!(detail["entities"]["household"]["primary_key"], "id");
+    assert!(serde_json::to_string(&detail)
+        .expect("dataset detail serializes")
+        .contains("household"));
+    assert!(!serde_json::to_string(&detail)
+        .expect("dataset detail serializes")
+        .contains("households_table"));
+}
+
+#[tokio::test]
+async fn metadata_entity_surfaces_list_and_describe_visible_entities() {
+    let resp = server()
+        .get("/metadata/datasets/social_registry/entities")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(body["dataset_id"], "social_registry");
+    let entities = body["entities"].as_array().expect("entities array");
+    assert_eq!(entities.len(), 1);
+    assert_eq!(entities[0]["name"], "household");
+    assert!(entities.iter().all(|entity| entity["name"] != "individual"));
+
+    let entity_resp = server()
+        .get("/metadata/datasets/social_registry/entities/household")
+        .await;
+    entity_resp.assert_status(StatusCode::OK);
+    let entity: Value = entity_resp.json();
+    assert_eq!(entity["name"], "household");
+    assert_eq!(
+        entity["fields"]["region"]["codelist_scheme_iri"],
+        "https://example.test/vocab/codelists/Region"
+    );
+    assert!(!serde_json::to_string(&entity)
+        .expect("entity detail serializes")
+        .contains("region_code"));
+}
+
+#[tokio::test]
+async fn metadata_dataset_surfaces_do_not_reveal_hidden_datasets_or_entities() {
+    let hidden_dataset = server().get("/metadata/datasets/payments").await;
+    hidden_dataset.assert_status(StatusCode::NOT_FOUND);
+    let hidden_dataset_body: Value = hidden_dataset.json();
+    assert_eq!(hidden_dataset_body["code"], "schema.unknown_dataset");
+
+    let hidden_entity = server()
+        .get("/metadata/datasets/social_registry/entities/individual")
+        .await;
+    hidden_entity.assert_status(StatusCode::NOT_FOUND);
+    let hidden_entity_body: Value = hidden_entity.json();
+    assert_eq!(hidden_entity_body["code"], "schema.unknown_resource");
+}
+
+#[tokio::test]
+async fn metadata_entity_schema_is_draft_2020_12() {
+    let resp = server()
+        .get("/metadata/schema/social_registry/household/schema.json")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert_eq!(
+        body["$id"],
+        "https://data.example.test/metadata/schema/social_registry/household/schema.json"
+    );
+    assert_eq!(
+        body["properties"]["region"]["x-codelist"],
+        "https://example.test/vocab/codelists/Region"
+    );
+}
+
+#[tokio::test]
+async fn metadata_landing_links_resolve_to_profile_dcat() {
+    let landing_resp = server().get("/metadata").await;
+    landing_resp.assert_status(StatusCode::OK);
+    let landing: Value = landing_resp.json();
+    let breg_link = landing["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .find(|link| link["href"] == "/metadata/dcat/bregdcat-ap")
+        .expect("bregdcat link");
+
+    let resp = server()
+        .get(breg_link["href"].as_str().expect("href string"))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["@id"],
+        "https://data.example.test/metadata/dcat.bregdcat-ap.jsonld"
+    );
+}
+
+#[tokio::test]
+async fn metadata_routes_enforce_metadata_scope() {
+    let resp = server_with_scopes(&[]).get("/metadata/catalog").await;
+
+    resp.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "auth.scope_denied");
 }
 
 fn spatial_catalog_server() -> TestServer {
@@ -474,6 +621,101 @@ async fn catalog_and_dcat_advertise_ogc_links_for_spatial_entities() {
         entity_ogc["dcat:downloadURL"],
         "https://data.example.test/ogc/v1/datasets/social_registry/collections/households/items"
     );
+}
+
+#[cfg(feature = "ogcapi-records")]
+#[tokio::test]
+async fn catalog_and_dcat_advertise_ogc_records_for_visible_datasets() {
+    let server = server();
+
+    let catalog_resp = server.get("/catalog").await;
+    catalog_resp.assert_status(StatusCode::OK);
+    let catalog: Value = catalog_resp.json();
+    assert_eq!(
+        catalog["datasets"][0]["links"]["ogc_records"],
+        "https://data.example.test/ogc/v1/records/collections/datasets/items"
+    );
+    assert_eq!(
+        catalog["datasets"][0]["standards"]["ogc_api_records"]["landing"],
+        "https://data.example.test/ogc/v1/records"
+    );
+    assert_eq!(
+        catalog["datasets"][0]["standards"]["ogc_api_records"]["items"],
+        "https://data.example.test/ogc/v1/records/collections/datasets/items"
+    );
+
+    let dcat_resp = server.get("/catalog/dcat-ap.jsonld").await;
+    dcat_resp.assert_status(StatusCode::OK);
+    let dcat: Value = dcat_resp.json();
+    assert_eq!(
+        dcat["dcat:service"]["dspace:dataServiceType"],
+        "registry_relay:ogc-api-records"
+    );
+    assert_eq!(
+        dcat["dcat:service"]["dcat:endpointURL"],
+        "https://data.example.test/ogc/v1/records"
+    );
+    assert!(dcat["dcat:service"]["dcat:servesDataset"]
+        .as_array()
+        .expect("served datasets")
+        .iter()
+        .any(|dataset| dataset == "https://data.example.test/datasets/social_registry"));
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("distributions");
+    let records = distributions
+        .iter()
+        .find(|distribution| {
+            distribution["dcat:accessService"]["dspace:dataServiceType"]
+                == "registry_relay:ogc-api-records"
+        })
+        .expect("records distribution");
+    assert_eq!(
+        records["dcat:accessURL"],
+        "https://data.example.test/ogc/v1/records/collections/datasets/items"
+    );
+    assert!(records["dcterms:conformsTo"]
+        .as_array()
+        .expect("conformance")
+        .iter()
+        .any(|uri| uri == "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core"));
+    assert!(records["dcterms:conformsTo"]
+        .as_array()
+        .expect("conformance")
+        .iter()
+        .any(|uri| uri == "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/oas30"));
+    assert!(!records["dcterms:conformsTo"]
+        .as_array()
+        .expect("conformance")
+        .iter()
+        .any(
+            |uri| uri == "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/searchable-catalog"
+        ));
+}
+
+#[cfg(not(feature = "ogcapi-records"))]
+#[tokio::test]
+async fn catalog_does_not_advertise_ogc_records_when_feature_is_disabled() {
+    let server = server();
+
+    let catalog_resp = server.get("/catalog").await;
+    catalog_resp.assert_status(StatusCode::OK);
+    let catalog: Value = catalog_resp.json();
+    assert!(catalog["datasets"][0]["links"].get("ogc_records").is_none());
+    assert!(catalog["datasets"][0]["standards"]
+        .get("ogc_api_records")
+        .is_none());
+
+    let dcat_resp = server.get("/catalog/dcat-ap.jsonld").await;
+    dcat_resp.assert_status(StatusCode::OK);
+    let dcat: Value = dcat_resp.json();
+    let distributions = dcat["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("distributions");
+    assert!(distributions.iter().all(|distribution| {
+        distribution["dcat:accessService"]["dspace:dataServiceType"]
+            != "registry_relay:ogc-api-records"
+    }));
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -806,7 +1048,15 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         body["dcat:dataset"][0]["dcterms:accrualPeriodicity"],
         "http://publications.europa.eu/resource/authority/frequency/MONTHLY"
     );
-    let distribution = &body["dcat:dataset"][0]["dcat:distribution"][0];
+    let distribution = body["dcat:dataset"][0]["dcat:distribution"]
+        .as_array()
+        .expect("distributions")
+        .iter()
+        .find(|distribution| {
+            distribution["dcat:accessService"]["dspace:dataServiceType"]
+                == "registry_relay:entity-rest"
+        })
+        .expect("entity REST distribution");
     assert_eq!(
         distribution["dcterms:format"]["@id"],
         "registry_relay:HttpData-PULL"
@@ -876,11 +1126,15 @@ async fn dcat_ap_filters_same_dataset_sibling_entities_by_metadata_scope() {
     let distributions = body["dcat:dataset"][0]["dcat:distribution"]
         .as_array()
         .expect("distributions");
-    assert_eq!(distributions.len(), 1);
-    assert_eq!(
-        distributions[0]["dcat:accessURL"],
-        "https://data.example.test/datasets/social_registry/individual"
-    );
+    assert!(distributions.iter().any(|distribution| {
+        distribution["dcat:accessService"]["dspace:dataServiceType"] == "registry_relay:entity-rest"
+            && distribution["dcat:accessURL"]
+                == "https://data.example.test/datasets/social_registry/individual"
+    }));
+    assert!(distributions
+        .iter()
+        .all(|distribution| distribution["dcat:accessURL"]
+            != "https://data.example.test/datasets/social_registry/household"));
     let shapes = body["sh:shapesGraph"].as_array().expect("shapes graph");
     assert_eq!(shapes.len(), 1);
     assert_eq!(shapes[0]["sh:name"], "individual");
@@ -963,21 +1217,6 @@ async fn export_generated_dcat_ap_catalog_when_path_is_set() {
         serde_json::to_vec_pretty(&body).expect("catalog serializes"),
     )
     .expect("write exported catalog");
-}
-
-#[tokio::test]
-async fn single_entity_schema_jsonld_returns_schema_and_shape() {
-    let resp = server()
-        .get("/catalog/datasets/social_registry/household/schema.jsonld")
-        .await;
-
-    resp.assert_status(StatusCode::OK);
-    assert_eq!(resp.header("content-type"), "application/ld+json");
-    let body: Value = resp.json();
-    assert_eq!(body["schema"]["dataset_id"], "social_registry");
-    assert_eq!(body["schema"]["entity"], "household");
-    assert_eq!(body["schema"]["relationships"][0]["target"], "individual");
-    assert_eq!(body["shape"]["@type"], "sh:NodeShape");
 }
 
 #[tokio::test]
@@ -1145,6 +1384,38 @@ async fn openapi_json_includes_ogc_api_features_surface_when_feature_enabled() {
     assert!(body["components"]["schemas"]["GeoJsonFeature"].is_object());
 }
 
+#[cfg(feature = "ogcapi-records")]
+#[tokio::test]
+async fn openapi_json_includes_ogc_api_records_surface_when_feature_enabled() {
+    let resp = server().get("/openapi.json").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    for path in [
+        "/ogc/v1/records",
+        "/ogc/v1/records/conformance",
+        "/ogc/v1/records/collections",
+        "/ogc/v1/records/collections/{collection_id}",
+        "/ogc/v1/records/collections/{collection_id}/items",
+        "/ogc/v1/records/collections/{collection_id}/items/{record_id}",
+    ] {
+        assert!(body["paths"][path]["get"].is_object(), "missing {path}");
+        assert_eq!(
+            body["paths"][path]["get"]["tags"],
+            serde_json::json!(["OGC API Records"]),
+            "{path} should be grouped under the OGC Records tag"
+        );
+    }
+
+    assert_eq!(
+        body["paths"]["/ogc/v1/records/collections/{collection_id}/items"]["get"]["responses"]
+            ["200"]["content"]["application/geo+json"]["schema"]["$ref"],
+        "#/components/schemas/OgcRecordCollection"
+    );
+    assert!(body["components"]["schemas"]["OgcRecord"].is_object());
+}
+
 #[tokio::test]
 async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready_public() {
     let resp = server().get("/openapi.json").await;
@@ -1199,7 +1470,6 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
     //   - Service: /health, /ready
     //   - Catalog: /catalog, /datasets, /datasets/{id}, DCAT-AP
     //   - "<dataset> / <entity>": every per-entity operation, including
-    //     the per-entity SHACL shape under /catalog/datasets/...
     // The document-level `tags` array fixes sidebar order.
     let resp = server().get("/openapi.json").await;
     resp.assert_status(StatusCode::OK);
@@ -1226,7 +1496,6 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
         "/datasets/social_registry/household/aggregates",
         "/datasets/social_registry/household/aggregates/{aggregate_id}",
         "/datasets/social_registry/household/{id}/members",
-        "/catalog/datasets/social_registry/household/schema.jsonld",
     ] {
         assert_eq!(
             body["paths"][path]["get"]["tags"],
@@ -1362,10 +1631,6 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
         (
             "/datasets/social_registry/household/{id}/members",
             "get_social_registry_household_members",
-        ),
-        (
-            "/catalog/datasets/social_registry/household/schema.jsonld",
-            "get_social_registry_household_shacl_shape",
         ),
     ] {
         assert_eq!(
@@ -1514,25 +1779,6 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
 }
 
 #[tokio::test]
-async fn single_entity_schema_jsonld_returns_etag_and_honors_if_none_match() {
-    let server = server();
-    let resp = server
-        .get("/catalog/datasets/social_registry/household/schema.jsonld")
-        .await;
-
-    resp.assert_status(StatusCode::OK);
-    let etag = resp.header("etag").to_str().expect("etag").to_string();
-
-    let cached = server
-        .get("/catalog/datasets/social_registry/household/schema.jsonld")
-        .add_header("if-none-match", &etag)
-        .await;
-
-    cached.assert_status(StatusCode::NOT_MODIFIED);
-    assert_eq!(cached.header("etag").to_str().expect("etag"), etag);
-}
-
-#[tokio::test]
 async fn catalog_filters_entities_inside_same_dataset_by_metadata_scope() {
     let resp = server_with_scopes(&["social_registry:individual:metadata"])
         .get("/catalog")
@@ -1562,12 +1808,12 @@ async fn verify_only_scope_cannot_read_catalog() {
 #[tokio::test]
 async fn metadata_scope_for_one_dataset_cannot_read_other_dataset_schema() {
     let resp = server()
-        .get("/catalog/datasets/payments/payment/schema.jsonld")
+        .get("/metadata/schema/payments/payment/schema.json")
         .await;
 
-    resp.assert_status(StatusCode::FORBIDDEN);
+    resp.assert_status(StatusCode::NOT_FOUND);
     let body: Value = resp.json();
-    assert_eq!(body["code"], "auth.scope_denied");
+    assert_eq!(body["code"], "schema.unknown_resource");
 }
 
 #[tokio::test]
@@ -1588,7 +1834,7 @@ async fn relationship_concept_uri_with_unknown_prefix_is_rejected() {
 #[tokio::test]
 async fn single_entity_schema_returns_not_found_for_unknown_entity() {
     let resp = server()
-        .get("/catalog/datasets/social_registry/missing/schema.jsonld")
+        .get("/metadata/schema/social_registry/missing/schema.json")
         .await;
 
     resp.assert_status(StatusCode::NOT_FOUND);

@@ -31,7 +31,7 @@ pub mod provenance;
 pub mod validate;
 pub mod vocabularies;
 
-pub use loader::load;
+pub use loader::{load, load_metadata_manifest, load_with_metadata, LoadedConfig};
 pub use provenance::{
     ClaimValidity, DelegatedIssuerConfig, GatewayIssuerConfig, IssuerConfig, KmsProvider,
     KmsSignerConfig, ProvenanceAlgorithm, ProvenanceConfig, RetiredKeyConfig, SignerConfig,
@@ -43,6 +43,8 @@ pub use provenance::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
+    #[serde(default)]
+    pub metadata: Option<MetadataConfig>,
     pub catalog: CatalogConfig,
     #[serde(default)]
     pub vocabularies: BTreeMap<String, String>,
@@ -62,6 +64,13 @@ pub struct Config {
     /// stable taxonomy code.
     #[serde(default)]
     pub standards: StandardsConfig,
+}
+
+/// Optional split metadata manifest loaded alongside the runtime config.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataConfig {
+    pub manifest_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -13,7 +13,8 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use crate::claim_verification::{decode_binding_key, ClaimVerificationKeyError};
-use crate::error::{ConfigError, Error};
+use crate::error::{ConfigError, Error, RuntimeBindingError};
+use registry_metadata_core::CompiledMetadata;
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -49,6 +50,143 @@ pub fn run(config: &Config) -> Result<(), Error> {
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    Ok(())
+}
+
+/// Validate runtime bindings against a compiled split metadata manifest.
+pub fn validate_runtime_bindings(
+    config: &Config,
+    metadata: &CompiledMetadata,
+) -> Result<(), RuntimeBindingError> {
+    for dataset in &config.datasets {
+        let Some(metadata_dataset) = metadata.dataset(dataset.id.as_str()) else {
+            tracing::error!(
+                code = "runtime.binding.dataset_missing",
+                dataset_id = %dataset.id,
+                "runtime dataset is not declared in the metadata manifest"
+            );
+            return Err(RuntimeBindingError::DatasetMissing);
+        };
+        let tables = dataset
+            .table_configs()
+            .map(|table| (table.id.as_str(), table))
+            .collect::<BTreeMap<_, _>>();
+        for entity in &dataset.entities {
+            let Some(metadata_entity) = metadata_dataset.entities.get(&entity.name) else {
+                tracing::error!(
+                    code = "runtime.binding.entity_missing",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    "runtime entity is not declared in the metadata manifest"
+                );
+                return Err(RuntimeBindingError::EntityMissing);
+            };
+            let table = tables.get(entity.table.as_str()).ok_or_else(|| {
+                tracing::error!(
+                    code = "runtime.binding.table_missing",
+                    dataset_id = %dataset.id,
+                    entity = %entity.name,
+                    table_id = %entity.table,
+                    "runtime entity references an unknown backing table"
+                );
+                RuntimeBindingError::TableMissing
+            })?;
+            let exposed_fields = exposed_entity_fields(entity, table)
+                .map_err(|_| RuntimeBindingError::FieldMissing)?;
+            for field in exposed_fields.keys() {
+                if !metadata_entity.fields.contains_key(field) {
+                    tracing::error!(
+                        code = "runtime.binding.field_missing",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        field = %field,
+                        "runtime field is not declared in the metadata manifest"
+                    );
+                    return Err(RuntimeBindingError::FieldMissing);
+                }
+            }
+            for filter in &entity.api.allowed_filters {
+                if !metadata_entity.fields.contains_key(&filter.field) {
+                    tracing::error!(
+                        code = "runtime.binding.filter_missing",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        field = %filter.field,
+                        "runtime allowed filter is not declared in the metadata manifest"
+                    );
+                    return Err(RuntimeBindingError::FilterMissing);
+                }
+            }
+            for field in &entity.api.required_filters {
+                if !metadata_entity.fields.contains_key(field) {
+                    tracing::error!(
+                        code = "runtime.binding.filter_missing",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        field = %field,
+                        "runtime required filter is not declared in the metadata manifest"
+                    );
+                    return Err(RuntimeBindingError::FilterMissing);
+                }
+            }
+            if let Some(claim_verification) = &entity.claim_verification {
+                for (ruleset_id, ruleset) in &claim_verification.rulesets {
+                    for field in ruleset.match_fields.values() {
+                        if !metadata_entity.fields.contains_key(field) {
+                            tracing::error!(
+                                code = "runtime.binding.field_missing",
+                                dataset_id = %dataset.id,
+                                entity = %entity.name,
+                                ruleset = %ruleset_id,
+                                field = %field,
+                                "claim verification binding references a field not declared in the metadata manifest"
+                            );
+                            return Err(RuntimeBindingError::FieldMissing);
+                        }
+                    }
+                }
+            }
+            for relationship in &entity.relationships {
+                if !metadata_dataset.entities.contains_key(&relationship.target) {
+                    tracing::error!(
+                        code = "runtime.binding.relationship_missing",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        relationship = %relationship.name,
+                        target = %relationship.target,
+                        "relationship target is not declared in the metadata manifest"
+                    );
+                    return Err(RuntimeBindingError::RelationshipMissing);
+                }
+                let Some(metadata_relationship) = metadata_entity
+                    .relationships
+                    .iter()
+                    .find(|candidate| candidate.name == relationship.name)
+                else {
+                    tracing::error!(
+                        code = "runtime.binding.relationship_missing",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        relationship = %relationship.name,
+                        "runtime relationship is not declared in the metadata manifest"
+                    );
+                    return Err(RuntimeBindingError::RelationshipMissing);
+                };
+                if metadata_relationship.target != relationship.target {
+                    tracing::error!(
+                        code = "runtime.binding.relationship_missing",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        relationship = %relationship.name,
+                        manifest_target = %metadata_relationship.target,
+                        runtime_target = %relationship.target,
+                        "runtime relationship target does not match the metadata manifest"
+                    );
+                    return Err(RuntimeBindingError::RelationshipMissing);
+                }
+            }
+        }
+    }
     Ok(())
 }
 

@@ -494,7 +494,6 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
             EndpointKind::Admin
         }
         "/datasets" | "/catalog" | "/catalog/dcat-ap.jsonld" => EndpointKind::Catalog,
-        "/catalog/datasets/{dataset_id}/{entity}/schema.jsonld" => EndpointKind::Schema,
         "/datasets/{dataset_id}" => EndpointKind::Dataset,
         "/datasets/{dataset_id}/{entity}/schema" => EndpointKind::Schema,
         "/datasets/{dataset_id}/{entity}/verify" => EndpointKind::Verify,
@@ -515,8 +514,6 @@ fn endpoint_kind_from_path(path: &str) -> EndpointKind {
         EndpointKind::Ready
     } else if path == "/metrics" || path.starts_with("/admin") {
         EndpointKind::Admin
-    } else if path.starts_with("/catalog/datasets/") {
-        EndpointKind::Schema
     } else if path == "/datasets" || path == "/catalog" || path.starts_with("/catalog/") {
         EndpointKind::Catalog
     } else if path == "/openapi.json" || path.starts_with("/openapi") {

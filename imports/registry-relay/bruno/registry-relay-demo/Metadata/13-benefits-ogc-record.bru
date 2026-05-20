@@ -1,0 +1,21 @@
+meta {
+  name: Benefits OGC record body
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/metadata/ogc/records/benefits_casework
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads one link-free OGC API Records body from the portable metadata surface.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with the benefits_casework dataset represented as a catalog record body.
+}

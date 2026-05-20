@@ -64,6 +64,8 @@ pub struct DatasetLinks {
     pub self_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ogc_collections: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ogc_records: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -71,12 +73,14 @@ pub struct DatasetStandardsMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ogc_api_features: Option<OgcApiFeaturesMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ogc_api_records: Option<OgcApiRecordsMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub spdci: Option<SpdciStandardsMetadata>,
 }
 
 impl DatasetStandardsMetadata {
     fn is_empty(&self) -> bool {
-        self.ogc_api_features.is_none() && self.spdci.is_none()
+        self.ogc_api_features.is_none() && self.ogc_api_records.is_none() && self.spdci.is_none()
     }
 }
 
@@ -85,6 +89,14 @@ pub struct OgcApiFeaturesMetadata {
     pub landing: String,
     pub conformance: String,
     pub collections: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct OgcApiRecordsMetadata {
+    pub landing: String,
+    pub conformance: String,
+    pub collection: String,
+    pub items: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -306,6 +318,7 @@ fn dataset_links(base_url: &str, dataset_id: &str, entities: &[EntityMetadata]) 
     DatasetLinks {
         self_url: format!("{base_url}/datasets/{dataset_id}"),
         ogc_collections: ogc_collections_url(base_url, dataset_id, entities),
+        ogc_records: ogc_records_url(base_url, entities),
     }
 }
 
@@ -317,6 +330,7 @@ fn dataset_standards(
 ) -> DatasetStandardsMetadata {
     DatasetStandardsMetadata {
         ogc_api_features: ogc_api_features_metadata(base_url, dataset_id, entities),
+        ogc_api_records: ogc_api_records_metadata(base_url, entities),
         spdci: spdci_metadata(config, base_url, dataset_id, entities),
     }
 }
@@ -364,6 +378,37 @@ fn ogc_api_features_metadata(
     _dataset_id: &str,
     _entities: &[EntityMetadata],
 ) -> Option<OgcApiFeaturesMetadata> {
+    None
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn ogc_records_url(base_url: &str, entities: &[EntityMetadata]) -> Option<String> {
+    (!entities.is_empty()).then(|| format!("{base_url}/ogc/v1/records/collections/datasets/items"))
+}
+
+#[cfg(not(feature = "ogcapi-records"))]
+fn ogc_records_url(_base_url: &str, _entities: &[EntityMetadata]) -> Option<String> {
+    None
+}
+
+#[cfg(feature = "ogcapi-records")]
+fn ogc_api_records_metadata(
+    base_url: &str,
+    entities: &[EntityMetadata],
+) -> Option<OgcApiRecordsMetadata> {
+    (!entities.is_empty()).then(|| OgcApiRecordsMetadata {
+        landing: format!("{base_url}/ogc/v1/records"),
+        conformance: format!("{base_url}/ogc/v1/records/conformance"),
+        collection: format!("{base_url}/ogc/v1/records/collections/datasets"),
+        items: format!("{base_url}/ogc/v1/records/collections/datasets/items"),
+    })
+}
+
+#[cfg(not(feature = "ogcapi-records"))]
+fn ogc_api_records_metadata(
+    _base_url: &str,
+    _entities: &[EntityMetadata],
+) -> Option<OgcApiRecordsMetadata> {
     None
 }
 
@@ -480,7 +525,7 @@ pub fn entity_metadata(
                 .and_then(|uri| expand_uri(config, uri)),
             links: RelationshipLinks {
                 target_schema: format!(
-                    "{base_url}/catalog/datasets/{dataset_id}/{}/schema.jsonld",
+                    "{base_url}/metadata/schema/{dataset_id}/{}/schema.json",
                     relationship.target
                 ),
             },
@@ -520,7 +565,7 @@ pub fn entity_metadata(
         links: EntityLinks {
             collection: format!("{base_url}/datasets/{dataset_id}/{}", entity.name),
             schema: format!(
-                "{base_url}/catalog/datasets/{dataset_id}/{}/schema.jsonld",
+                "{base_url}/metadata/schema/{dataset_id}/{}/schema.json",
                 entity.name
             ),
             ogc_collection,

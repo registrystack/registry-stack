@@ -683,8 +683,6 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Health
     } else if path == "/ready" {
         EndpointKind::Ready
-    } else if path.starts_with("/catalog/datasets/") {
-        EndpointKind::Schema
     } else if path == "/datasets" || path == "/catalog" || path.starts_with("/catalog/") {
         EndpointKind::Catalog
     } else if path.starts_with("/admin") {
@@ -760,11 +758,6 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
             relationship: Some((*relationship).to_string()),
             ..AuditContextExt::default()
         },
-        ["catalog", "datasets", dataset, entity, "schema.jsonld"] => AuditContextExt {
-            dataset_id: Some((*dataset).to_string()),
-            entity_name: Some((*entity).to_string()),
-            ..AuditContextExt::default()
-        },
         ["ogc", "v1", "datasets", dataset, "collections", collection, "items"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             collection_id: Some((*collection).to_string()),
@@ -814,10 +807,6 @@ mod tests {
         assert_eq!(
             classify_endpoint("/catalog/dcat-ap.jsonld"),
             EndpointKind::Catalog
-        );
-        assert_eq!(
-            classify_endpoint("/catalog/datasets/social_registry/individual/schema.jsonld"),
-            EndpointKind::Schema
         );
         assert_eq!(classify_endpoint("/admin/reload"), EndpointKind::Admin);
         assert_eq!(

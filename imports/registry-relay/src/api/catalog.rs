@@ -4,21 +4,19 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use axum::extract::Path;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::audit::ErrorCodeExt;
-use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::Config;
 use crate::entity::EntityRegistry;
-use crate::error::{AuthError, Error, SchemaError};
+use crate::error::{AuthError, Error};
 use crate::metadata;
 
 const JSON_LD: HeaderValue = HeaderValue::from_static("application/ld+json");
@@ -33,16 +31,6 @@ where
     Router::new()
         .route("/catalog", get(catalog))
         .route("/catalog/dcat-ap.jsonld", get(dcat_ap))
-        .route(
-            "/catalog/datasets/{dataset_id}/{entity}/schema.jsonld",
-            get(entity_schema),
-        )
-}
-
-#[derive(Debug, Deserialize)]
-struct EntityPath {
-    dataset_id: String,
-    entity: String,
 }
 
 async fn catalog(
@@ -85,46 +73,6 @@ async fn dcat_ap(
         metadata::dcat_ap_document_for_entity_ids(&config, &registry, &visible_entity_ids),
         &headers,
     )
-}
-
-async fn entity_schema(
-    Path(path): Path<EntityPath>,
-    headers: HeaderMap,
-    config: Option<Extension<Arc<Config>>>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some((config, registry)) = metadata_state(config, registry) else {
-        return metadata_unavailable(
-            "entity schema catalog route matched, but metadata state is not installed",
-        );
-    };
-    if registry.dataset(&path.dataset_id).is_none() {
-        return Error::from(SchemaError::UnknownDataset).into_response();
-    }
-    let Some(entity) = config
-        .datasets
-        .iter()
-        .find(|dataset| dataset.id.as_str() == path.dataset_id)
-        .and_then(|dataset| {
-            dataset
-                .entities
-                .iter()
-                .find(|entity| entity.name == path.entity)
-        })
-    else {
-        return Error::from(SchemaError::UnknownResource).into_response();
-    };
-    if let Err(error) = require_principal_scope(principal, &entity.access.metadata_scope) {
-        return error.into_response();
-    }
-    let Some(document) =
-        metadata::entity_shape_document(&config, &registry, &path.dataset_id, &path.entity)
-    else {
-        return Error::from(SchemaError::UnknownResource).into_response();
-    };
-
-    json_ld_response(document, &headers)
 }
 
 fn metadata_state(
@@ -233,16 +181,6 @@ fn visible_metadata_entity_ids(
     } else {
         Ok(entity_ids)
     }
-}
-
-fn require_principal_scope(
-    principal: Option<Extension<Principal>>,
-    required: &str,
-) -> Result<(), Error> {
-    let Some(Extension(principal)) = principal else {
-        return Err(AuthError::MissingCredential.into());
-    };
-    require_scope(&principal, required)
 }
 
 fn metadata_unavailable(detail: &'static str) -> Response {
