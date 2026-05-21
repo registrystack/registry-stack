@@ -10,6 +10,11 @@ use thiserror::Error;
 
 const DATASETS_COLLECTION_ID: &str = "datasets";
 const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
+const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/authority/data-theme";
+const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
+const EU_FILE_TYPE_JSON: &str = "http://publications.europa.eu/resource/authority/file-type/JSON";
+const IANA_JSON_MEDIA_TYPE: &str = "https://www.iana.org/assignments/media-types/application/json";
+const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1142,6 +1147,7 @@ pub fn render_base_dcat(compiled: &CompiledMetadata) -> Value {
         "dcterms:description": compiled.catalog().description,
         "dcterms:publisher": publisher_agent(compiled.catalog()),
         "dcat:landingPage": compiled.catalog().base_url,
+        "dcat:themeTaxonomy": [EU_DATA_THEME_SCHEME, EUROVOC_THEME_SCHEME],
         "dcterms:conformsTo": compiled.catalog().conforms_to,
         "dcat:dataset": compiled
             .datasets()
@@ -1172,7 +1178,7 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
             dataset
                 .public_services
                 .iter()
-                .map(move |service| public_service_node(dataset, service))
+                .map(move |service| public_service_node(compiled.catalog(), dataset, service))
         })
         .collect::<Vec<_>>();
     let has_public_service_terms = !public_services.is_empty()
@@ -1243,14 +1249,104 @@ fn dcat_range_reference_nodes(document: &Value) -> Vec<Value> {
         "foaf:Document",
         &mut typed_iris,
     );
+    collect_typed_reference_iris(
+        document,
+        "dcat:mediaType",
+        "dcterms:MediaType",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcat:themeTaxonomy",
+        "skos:ConceptScheme",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcterms:spatial",
+        "dcterms:Location",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcterms:conformsTo",
+        "dcterms:Standard",
+        &mut typed_iris,
+    );
+    let mut controlled_terms = BTreeMap::new();
+    collect_controlled_reference_iris(
+        document,
+        "adms:status",
+        "http://purl.org/adms/status/1.0",
+        &mut controlled_terms,
+    );
+    collect_controlled_reference_iris(
+        document,
+        "dcat:theme",
+        EU_DATA_THEME_SCHEME,
+        &mut controlled_terms,
+    );
+    collect_controlled_reference_iris(
+        document,
+        "dcatap:availability",
+        "http://data.europa.eu/r5r/availability/1.0",
+        &mut controlled_terms,
+    );
+    collect_controlled_reference_iris(
+        document,
+        "dcterms:accessRights",
+        "http://publications.europa.eu/resource/authority/access-right",
+        &mut controlled_terms,
+    );
+    collect_controlled_reference_iris(
+        document,
+        "dcterms:accrualPeriodicity",
+        "http://publications.europa.eu/resource/authority/frequency",
+        &mut controlled_terms,
+    );
+    collect_controlled_reference_iris(
+        document,
+        "dcterms:format",
+        "http://publications.europa.eu/resource/authority/file-type",
+        &mut controlled_terms,
+    );
+    collect_controlled_reference_iris(
+        document,
+        "dcterms:type",
+        "http://purl.org/adms/publishertype/1.0",
+        &mut controlled_terms,
+    );
+    let controlled_schemes = controlled_terms.values().cloned().collect::<BTreeSet<_>>();
     typed_iris
         .into_iter()
-        .map(|(iri, node_type)| {
-            json!({
+        .map(|(iri, node_type)| match node_type.as_str() {
+            "skos:ConceptScheme" => json!({
                 "@id": iri,
                 "@type": node_type,
-            })
+                "dcterms:title": controlled_term_label(&iri),
+                "skos:prefLabel": controlled_term_label(&iri),
+            }),
+            _ => json!({
+                "@id": iri,
+                "@type": node_type,
+            }),
         })
+        .chain(controlled_schemes.into_iter().map(|scheme| {
+            json!({
+                "@id": scheme,
+                "@type": "skos:ConceptScheme",
+                "dcterms:title": controlled_term_label(&scheme),
+                "skos:prefLabel": controlled_term_label(&scheme),
+            })
+        }))
+        .chain(controlled_terms.into_iter().map(|(iri, scheme)| {
+            json!({
+                "@id": iri,
+                "@type": "skos:Concept",
+                "skos:inScheme": scheme,
+                "skos:prefLabel": controlled_term_label(&iri),
+            })
+        }))
         .collect()
 }
 
@@ -1284,6 +1380,38 @@ fn collect_typed_reference_iris(
     }
 }
 
+fn collect_controlled_reference_iris(
+    value: &Value,
+    predicate: &str,
+    scheme: &str,
+    iris: &mut BTreeMap<String, String>,
+) {
+    let mut values = BTreeSet::new();
+    collect_reference_values(value, predicate, &mut values);
+    for value in values {
+        iris.insert(value, scheme.to_string());
+    }
+}
+
+fn collect_reference_values(value: &Value, predicate: &str, values: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get(predicate) {
+                collect_string_values(reference, values);
+            }
+            for nested in object.values() {
+                collect_reference_values(nested, predicate, values);
+            }
+        }
+        Value::Array(items) => {
+            for nested in items {
+                collect_reference_values(nested, predicate, values);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn collect_string_values(value: &Value, values: &mut BTreeSet<String>) {
     match value {
         Value::String(value) => {
@@ -1301,6 +1429,13 @@ fn collect_string_values(value: &Value, values: &mut BTreeSet<String>) {
         }
         _ => {}
     }
+}
+
+fn controlled_term_label(iri: &str) -> String {
+    iri.rsplit(&['/', '#'][..])
+        .find(|part| !part.is_empty())
+        .unwrap_or(iri)
+        .replace(['_', '-'], " ")
 }
 
 fn standard_reference_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
@@ -2597,9 +2732,10 @@ fn entity_api_distribution(
         "dcterms:title": format!("{} API", entity.title),
         "dcterms:conformsTo": distribution_conforms_to(dataset),
         "dcterms:format": {
-            "@id": "https://www.iana.org/assignments/media-types/application/json",
+            "@id": EU_FILE_TYPE_JSON,
             "@type": ["dcterms:MediaType", "dcterms:MediaTypeOrExtent"],
         },
+        "dcat:mediaType": IANA_JSON_MEDIA_TYPE,
         "dcat:accessURL": access_url,
         "dcat:accessService": {
             "@id": format!("{access_url}#service"),
@@ -2773,6 +2909,10 @@ fn publisher_agent(catalog: &CompiledCatalog) -> Value {
     });
     if let Some(iri) = catalog.publisher_iri.as_deref() {
         agent["@id"] = json!(iri);
+        if iri.starts_with("http://publications.europa.eu/resource/authority/corporate-body/") {
+            agent["skos:inScheme"] =
+                json!("http://publications.europa.eu/resource/authority/corporate-body");
+        }
     }
     if let Some(authority_type) = catalog.authority_type.as_deref() {
         agent["dcterms:type"] = json!(authority_type);
@@ -2780,12 +2920,18 @@ fn publisher_agent(catalog: &CompiledCatalog) -> Value {
     agent
 }
 
-fn public_service_node(dataset: &CompiledDataset, service: &CompiledPublicService) -> Value {
+fn public_service_node(
+    catalog: &CompiledCatalog,
+    dataset: &CompiledDataset,
+    service: &CompiledPublicService,
+) -> Value {
     let mut node = json!({
         "@id": service.id,
         "@type": "cpsv:PublicService",
+        "dcterms:identifier": service.id,
         "dcterms:title": service.title,
         "dcterms:description": service.description,
+        "cv:hasCompetentAuthority": public_organisation_agent(catalog),
         "cpsv:produces": dataset_url(dataset),
     });
     let requirements = dataset
@@ -2798,6 +2944,23 @@ fn public_service_node(dataset: &CompiledDataset, service: &CompiledPublicServic
         node["cpsv:holdsRequirement"] = Value::Array(requirements);
     }
     node
+}
+
+fn public_organisation_agent(catalog: &CompiledCatalog) -> Value {
+    let mut agent = publisher_agent(catalog);
+    agent["@type"] = json!(["foaf:Agent", "cv:PublicOrganisation"]);
+    agent["dcterms:identifier"] = json!(catalog
+        .publisher_iri
+        .as_deref()
+        .and_then(|iri| iri.rsplit('/').next())
+        .unwrap_or(&catalog.publisher));
+    agent["dcterms:title"] = json!(catalog.publisher);
+    agent["skos:prefLabel"] = json!(catalog.publisher);
+    agent["dcterms:spatial"] = json!({
+        "@id": EU_LOCATION_IRI,
+        "@type": "dcterms:Location",
+    });
+    agent
 }
 
 fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
@@ -3548,12 +3711,20 @@ fn jsonld_context() -> Value {
         "xsd": "http://www.w3.org/2001/XMLSchema#",
         "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },
+        "dcat:accessService": { "@type": "@id" },
+        "dcat:dataset": { "@type": "@id" },
+        "dcat:distribution": { "@type": "@id" },
         "dcat:endpointDescription": { "@type": "@id" },
         "dcat:endpointURL": { "@type": "@id" },
         "dcat:landingPage": { "@type": "@id" },
+        "dcat:mediaType": { "@type": "@id" },
+        "dcat:servesDataset": { "@type": "@id" },
+        "dcat:theme": { "@type": "@id" },
+        "dcat:themeTaxonomy": { "@type": "@id" },
         "dcterms:accessRights": { "@type": "@id" },
         "dcterms:accrualPeriodicity": { "@type": "@id" },
         "dcterms:conformsTo": { "@type": "@id" },
+        "dcterms:format": { "@type": "@id" },
         "dcterms:isPartOf": { "@type": "@id" },
         "dcterms:spatial": { "@type": "@id" },
         "dcterms:type": { "@type": "@id" },
@@ -3594,6 +3765,7 @@ fn jsonld_context_with_public_service_terms() -> Value {
     let mut context = jsonld_context_with_policy_terms();
     if let Some(object) = context.as_object_mut() {
         object.insert("cpsv".to_string(), json!("http://purl.org/vocab/cpsv#"));
+        object.insert("cv".to_string(), json!("http://data.europa.eu/m8g/"));
         object.insert("dcatap".to_string(), json!("http://data.europa.eu/r5r/"));
         object.insert(
             "eli".to_string(),
@@ -3606,6 +3778,10 @@ fn jsonld_context_with_public_service_terms() -> Value {
         object.insert("cpsv:produces".to_string(), json!({ "@type": "@id" }));
         object.insert(
             "cpsv:holdsRequirement".to_string(),
+            json!({ "@type": "@id" }),
+        );
+        object.insert(
+            "cv:hasCompetentAuthority".to_string(),
             json!({ "@type": "@id" }),
         );
     }

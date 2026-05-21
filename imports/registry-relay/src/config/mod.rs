@@ -311,15 +311,16 @@ pub struct CatalogConfig {
     pub publisher: String,
     #[serde(default)]
     pub participant_id: Option<String>,
-    /// BRegDCAT-AP: type IRI for the `foaf:Agent` publisher. When set,
-    /// emits `dcterms:type` on the publisher node.
+    /// BRegDCAT-AP: identifier IRI for the `foaf:Agent` publisher. Use a
+    /// controlled-vocabulary corporate body IRI when publishing strict
+    /// BRegDCAT-AP.
+    #[serde(default)]
+    pub publisher_iri: Option<String>,
+    /// BRegDCAT-AP: type IRI for the `foaf:Agent` publisher. When set, emits
+    /// `dcterms:type` on the publisher node.
     ///
-    /// The preferred vocabulary per SEMIC is the EU corporate-body
-    /// classification scheme:
-    /// `http://publications.europa.eu/resource/authority/corporate-body-classification/<TERM>`.
-    /// The legacy ADMS publishertype scheme
-    /// (`http://purl.org/adms/publishertype/NationalAuthority`, etc.) is also
-    /// accepted by validators but is no longer the recommended default.
+    /// BRegDCAT-AP 2.1.0 SHACL checks publisher type values against the ADMS
+    /// publishertype scheme (`http://purl.org/adms/publishertype/...`).
     /// The relay does not enforce a vocabulary: any IRI passes through.
     #[serde(default)]
     pub authority_type: Option<String>,

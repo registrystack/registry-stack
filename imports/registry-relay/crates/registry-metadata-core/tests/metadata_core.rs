@@ -504,18 +504,27 @@ fn dcat_profiles_render_separate_artifacts() {
         json!("example-civil-registration")
     );
     let included = breg["@included"].as_array().expect("@included");
+    let standard_ids = included
+        .iter()
+        .filter(|node| node["@type"] == "dcterms:Standard")
+        .map(|node| node["@id"].as_str().expect("standard id"))
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
         included
             .iter()
             .filter(|node| node["@type"] == "dcterms:Standard")
             .count(),
-        1,
+        standard_ids.len(),
         "conformsTo standard nodes must not be duplicated when BReg builds on base DCAT"
     );
     assert!(included.iter().any(|node| {
         node["@id"] == "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"
             && node["@type"] == "dcterms:Standard"
     }));
+    assert!(
+        standard_ids.contains("https://spec.openapis.org/oas/v3.1.0"),
+        "distribution-level OpenAPI standard reference must be typed"
+    );
     assert_eq!(
         render_dcat_profile(&compiled, "bregdcat-ap").unwrap()["@id"],
         breg["@id"]

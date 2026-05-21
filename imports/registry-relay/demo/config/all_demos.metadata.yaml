@@ -8,6 +8,8 @@ catalog:
   title: Government Demo Registry Relay (All Demos)
   publisher:
     name: Government Data Reuse Cell (Demo)
+    iri: http://publications.europa.eu/resource/authority/corporate-body/DIGIT
+    authority_type: http://purl.org/adms/publishertype/NationalAuthority
   standards:
     dcat: '3.0'
     shacl: '1.1'

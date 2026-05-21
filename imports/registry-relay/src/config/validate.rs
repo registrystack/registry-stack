@@ -298,10 +298,22 @@ pub fn validate_runtime_bindings(
 }
 
 /// BRegDCAT-AP catalog-level IRI fields must resolve via the configured
-/// vocabulary registry. Without this check, a typo'd `authority_type` or
-/// `default_spatial_coverage` would be silently dropped at emit time.
+/// vocabulary registry. Without this check, a typo'd `publisher_iri`,
+/// `authority_type`, or `default_spatial_coverage` would be silently dropped
+/// at emit time.
 fn validate_catalog_uris(config: &Config) -> Result<(), ConfigError> {
     let registry = &config.vocabularies;
+    if let Some(uri) = config.catalog.publisher_iri.as_deref() {
+        if super::vocabularies::expand(uri, registry).is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "catalog.publisher_iri",
+                uri = %uri,
+                "publisher_iri is neither absolute nor a registered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     if let Some(uri) = config.catalog.authority_type.as_deref() {
         if super::vocabularies::expand(uri, registry).is_none() {
             tracing::error!(

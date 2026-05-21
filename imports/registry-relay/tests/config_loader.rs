@@ -404,6 +404,16 @@ fn invalid_authority_type_rejected() {
 }
 
 #[test]
+fn invalid_publisher_iri_rejected() {
+    env::set_var(
+        "TEST_KEY_HASH_PUBLISHER_IRI",
+        make_fingerprint(b"publisher-iri-test"),
+    );
+    let result = config::load(&fixture_path("invalid_publisher_iri.yaml"));
+    assert_config_code(result, "config.validation_error");
+}
+
+#[test]
 fn invalid_default_spatial_coverage_rejected() {
     env::set_var(
         "TEST_KEY_HASH_DEF_SPATIAL",

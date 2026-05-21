@@ -5,7 +5,16 @@
       "@type": "@id"
     },
     "dcat": "http://www.w3.org/ns/dcat#",
+    "dcat:accessService": {
+      "@type": "@id"
+    },
     "dcat:accessURL": {
+      "@type": "@id"
+    },
+    "dcat:dataset": {
+      "@type": "@id"
+    },
+    "dcat:distribution": {
       "@type": "@id"
     },
     "dcat:endpointDescription": {
@@ -17,6 +26,18 @@
     "dcat:landingPage": {
       "@type": "@id"
     },
+    "dcat:mediaType": {
+      "@type": "@id"
+    },
+    "dcat:servesDataset": {
+      "@type": "@id"
+    },
+    "dcat:theme": {
+      "@type": "@id"
+    },
+    "dcat:themeTaxonomy": {
+      "@type": "@id"
+    },
     "dcterms": "http://purl.org/dc/terms/",
     "dcterms:accessRights": {
       "@type": "@id"
@@ -25,6 +46,9 @@
       "@type": "@id"
     },
     "dcterms:conformsTo": {
+      "@type": "@id"
+    },
+    "dcterms:format": {
       "@type": "@id"
     },
     "dcterms:isPartOf": {
@@ -109,8 +133,52 @@
       "@type": "foaf:Document"
     },
     {
+      "@id": "http://eurovoc.europa.eu/100141",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "100141",
+      "skos:prefLabel": "100141"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/data-theme",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "data theme",
+      "skos:prefLabel": "data theme"
+    },
+    {
       "@id": "https://civil-registration.example.gov",
       "@type": "foaf:Document"
+    },
+    {
+      "@id": "https://spec.openapis.org/oas/v3.1.0",
+      "@type": "dcterms:Standard"
+    },
+    {
+      "@id": "https://www.iana.org/assignments/media-types/application/json",
+      "@type": "dcterms:MediaType"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/file-type",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "file type",
+      "skos:prefLabel": "file type"
+    },
+    {
+      "@id": "http://purl.org/adms/publishertype/1.0",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "1.0",
+      "skos:prefLabel": "1.0"
+    },
+    {
+      "@id": "http://data.europa.eu/eli/ontology#PublicAuthority",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://purl.org/adms/publishertype/1.0",
+      "skos:prefLabel": "PublicAuthority"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://publications.europa.eu/resource/authority/file-type",
+      "skos:prefLabel": "JSON"
     },
     {
       "@id": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
@@ -119,6 +187,42 @@
     {
       "@id": "http://publications.europa.eu/resource/authority/frequency/UNKNOWN",
       "@type": "dcterms:Frequency"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/access-right",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "access right",
+      "skos:prefLabel": "access right"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/frequency",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "frequency",
+      "skos:prefLabel": "frequency"
+    },
+    {
+      "@id": "http://purl.org/adms/status/1.0",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "1.0",
+      "skos:prefLabel": "1.0"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://publications.europa.eu/resource/authority/access-right",
+      "skos:prefLabel": "RESTRICTED"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/frequency/UNKNOWN",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://publications.europa.eu/resource/authority/frequency",
+      "skos:prefLabel": "UNKNOWN"
+    },
+    {
+      "@id": "http://purl.org/adms/status/UnderDevelopment",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://purl.org/adms/status/1.0",
+      "skos:prefLabel": "UnderDevelopment"
     }
   ],
   "@type": "dcat:Catalog",
@@ -141,12 +245,13 @@
             "dcterms:title": "Person REST access service"
           },
           "dcat:accessURL": "https://civil-registration.example.gov/datasets/vital-events/person",
+          "dcat:mediaType": "https://www.iana.org/assignments/media-types/application/json",
           "dcterms:conformsTo": [
             "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
             "https://spec.openapis.org/oas/v3.1.0"
           ],
           "dcterms:format": {
-            "@id": "https://www.iana.org/assignments/media-types/application/json",
+            "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
             "@type": [
               "dcterms:MediaType",
               "dcterms:MediaTypeOrExtent"
@@ -167,12 +272,13 @@
             "dcterms:title": "Vital Event REST access service"
           },
           "dcat:accessURL": "https://civil-registration.example.gov/datasets/vital-events/vital_event",
+          "dcat:mediaType": "https://www.iana.org/assignments/media-types/application/json",
           "dcterms:conformsTo": [
             "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
             "https://spec.openapis.org/oas/v3.1.0"
           ],
           "dcterms:format": {
-            "@id": "https://www.iana.org/assignments/media-types/application/json",
+            "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
             "@type": [
               "dcterms:MediaType",
               "dcterms:MediaTypeOrExtent"
@@ -271,6 +377,10 @@
     }
   ],
   "dcat:landingPage": "https://civil-registration.example.gov",
+  "dcat:themeTaxonomy": [
+    "http://publications.europa.eu/resource/authority/data-theme",
+    "http://eurovoc.europa.eu/100141"
+  ],
   "dcterms:conformsTo": [
     "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"
   ],

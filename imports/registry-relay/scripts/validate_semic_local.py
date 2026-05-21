@@ -133,6 +133,20 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to write the SHACL report graph as Turtle.",
     )
     parser.add_argument(
+        "--fail-on-warnings",
+        action="store_true",
+        help=(
+            "Treat SHACL warnings as a failing result. By default only SHACL "
+            "violations fail, because several vendored SEMIC profiles use "
+            "warnings for recommended vocabulary hints."
+        ),
+    )
+    parser.add_argument(
+        "--show-report",
+        action="store_true",
+        help="Print the full SHACL report text even when validation conforms.",
+    )
+    parser.add_argument(
         "--list-profiles",
         action="store_true",
         help="List supported local profiles and exit.",
@@ -169,6 +183,7 @@ def run_validation() -> int:
         shacl_graph=shapes_graph,
         inference="rdfs",
         abort_on_first=False,
+        allow_warnings=not args.fail_on_warnings,
     )
 
     if args.save_report:
@@ -183,8 +198,9 @@ def run_validation() -> int:
         f"({len(data_graph)} data triples, {len(shapes_graph)} shape triples "
         f"from {len(shapes_paths)} vendored file(s))."
     )
-    if not conforms:
+    if not conforms or args.show_report:
         print(report_text, file=sys.stderr)
+    if not conforms:
         return 1
     return 0
 

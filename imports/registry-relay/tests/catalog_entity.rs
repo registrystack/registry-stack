@@ -498,7 +498,14 @@ fn assert_structural_dcat_shacl(body: &Value) {
     assert_eq!(body["@context"]["odrl"], "http://www.w3.org/ns/odrl/2/");
     assert_eq!(body["@context"]["sh"], "http://www.w3.org/ns/shacl#");
     assert_eq!(body["@context"]["xsd"], "http://www.w3.org/2001/XMLSchema#");
+    assert_eq!(body["@context"]["dcat:accessService"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:dataset"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:distribution"]["@type"], "@id");
     assert_eq!(body["@context"]["dcat:landingPage"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:mediaType"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:servesDataset"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcat:themeTaxonomy"]["@type"], "@id");
+    assert_eq!(body["@context"]["dcterms:format"]["@type"], "@id");
     assert_eq!(body["@context"]["odrl:action"]["@type"], "@id");
     assert_eq!(body["@context"]["odrl:assigner"]["@type"], "@id");
     assert_eq!(body["@context"]["odrl:hasPolicy"]["@type"], "@id");
@@ -696,15 +703,13 @@ fn bregdcat_server() -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let path = write_config(&tmp);
     let mut body = std::fs::read_to_string(&path).expect("read config");
-    // Add spatial_coverage and status on the dataset, authority_type on catalog,
+    // Add spatial_coverage and status on the dataset, publisher vocabulary on catalog,
     // and a second dataset with a codelist field to test dct:references.
-    // authority_type uses the EU corporate-body-classification scheme, which is
-    // the current SEMIC-recommended vocabulary for BRegDCAT-AP publisher type.
-    // The legacy ADMS publishertype scheme (http://purl.org/adms/publishertype/...)
-    // is also accepted by validators but is no longer the recommended default.
+    // BRegDCAT-AP 2.1.0 checks publisher values against the EU corporate-body
+    // scheme and publisher type values against ADMS publishertype.
     body = body.replace(
         "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test",
-        "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test\n  authority_type: http://publications.europa.eu/resource/authority/corporate-body-classification/NAT_AUTH\n  default_spatial_coverage: http://publications.europa.eu/resource/authority/country/NLD",
+        "catalog:\n  title: Program Data Catalog\n  base_url: https://data.example.test/\n  publisher: Ministry of Delivery\n  participant_id: did:web:data.example.test\n  publisher_iri: http://publications.europa.eu/resource/authority/corporate-body/DIGIT\n  authority_type: http://purl.org/adms/publishertype/NationalAuthority\n  default_spatial_coverage: http://publications.europa.eu/resource/authority/country/NLD",
     );
     body = body.replace(
         "  - id: social_registry\n    title: Social Registry\n    description: Synthetic registry\n    owner: Social Ministry\n    sensitivity: personal\n    access_rights: restricted\n    update_frequency: monthly",
@@ -839,13 +844,21 @@ async fn bregdcat_publisher_has_dct_type_when_authority_type_configured() {
     let body: Value = resp.json();
     // Catalog-level publisher.
     assert_eq!(
+        body["dcterms:publisher"]["@id"],
+        "http://publications.europa.eu/resource/authority/corporate-body/DIGIT"
+    );
+    assert_eq!(
+        body["dcterms:publisher"]["skos:inScheme"],
+        "http://publications.europa.eu/resource/authority/corporate-body"
+    );
+    assert_eq!(
         body["dcterms:publisher"]["dcterms:type"],
-        "http://publications.europa.eu/resource/authority/corporate-body-classification/NAT_AUTH"
+        "http://purl.org/adms/publishertype/NationalAuthority"
     );
     // Dataset-level publisher inherits the same publisher_agent.
     assert_eq!(
         body["dcat:dataset"][0]["dcterms:publisher"]["dcterms:type"],
-        "http://publications.europa.eu/resource/authority/corporate-body-classification/NAT_AUTH"
+        "http://purl.org/adms/publishertype/NationalAuthority"
     );
 }
 
@@ -938,6 +951,13 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(body["@type"], "dcat:Catalog");
     assert_structural_dcat_shacl(&body);
     assert_eq!(body["dcterms:description"], "");
+    assert_eq!(
+        body["dcat:themeTaxonomy"],
+        serde_json::json!([
+            "http://publications.europa.eu/resource/authority/data-theme",
+            "http://eurovoc.europa.eu/100141"
+        ])
+    );
     assert_eq!(body["@context"]["foaf"], "http://xmlns.com/foaf/0.1/");
     assert_eq!(body["dcterms:publisher"]["@type"], "foaf:Agent");
     assert_eq!(
@@ -989,12 +1009,29 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         .expect("entity REST distribution");
     assert_eq!(
         distribution["dcterms:format"]["@id"],
+        "http://publications.europa.eu/resource/authority/file-type/JSON"
+    );
+    assert_eq!(
+        distribution["dcat:mediaType"],
         "https://www.iana.org/assignments/media-types/application/json"
     );
     assert_eq!(
         distribution["dcat:accessService"]["dcat:endpointDescription"],
         "https://data.example.test/openapi.json"
     );
+    assert_eq!(
+        distribution["dcat:accessService"]["dcat:servesDataset"],
+        "#dataset-social_registry"
+    );
+
+    let included = body["@included"].as_array().expect("included nodes");
+    assert!(included.iter().any(|node| {
+        node["@id"] == "http://publications.europa.eu/resource/authority/file-type/JSON"
+            && node["skos:inScheme"] == "http://publications.europa.eu/resource/authority/file-type"
+    }));
+    assert!(included.iter().any(|node| {
+        node["@id"] == "https://spec.openapis.org/oas/v3.1.0" && node["@type"] == "dcterms:Standard"
+    }));
 
     let shapes = body["sh:shapesGraph"].as_array().expect("shapes graph");
     assert!(shapes.iter().all(|shape| shape["sh:name"] != "individual"));

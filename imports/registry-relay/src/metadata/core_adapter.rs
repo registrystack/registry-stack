@@ -80,7 +80,7 @@ fn catalog_manifest(config: &Config) -> core::CatalogManifest {
         description: None,
         publisher: core::PublisherManifest {
             name: config.catalog.publisher.clone(),
-            iri: None,
+            iri: config.catalog.publisher_iri.clone(),
             authority_type: config.catalog.authority_type.clone(),
         },
         participant_id: config.catalog.participant_id.clone(),
