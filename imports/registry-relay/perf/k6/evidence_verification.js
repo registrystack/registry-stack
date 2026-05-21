@@ -41,13 +41,13 @@
 //   REGISTRY_RELAY_BASE_URL          (default: http://127.0.0.1:18080)
 //   REGISTRY_RELAY_DATASET_ID        (default: clinic_capacity)
 //   REGISTRY_RELAY_ENTITY            (default: facility)
-//   REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION  -- required; must carry clinic_capacity:evidence_verification scope
+//   REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION  -- required; must carry clinic_capacity:evidence_verification scope
 //
 // Setup prerequisite: run generate_perf_keys.py to emit
-// REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION and REGISTRY_RELAY_PROVENANCE_JWK,
+// REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION and REGISTRY_RELAY_PROVENANCE_JWK,
 // then start the server with a perf config that includes both the
-// metadata, claim_verification, and provenance blocks (all three perf/config/*.yaml
-// files have them).
+// metadata, claim_verification matching-engine, and provenance blocks (all
+// three perf/config/*.yaml files have them).
 
 import http from 'k6/http';
 import { check, fail, group } from 'k6';
@@ -70,10 +70,10 @@ const REGION_OFFERING_ID = __ENV.REGISTRY_RELAY_REGION_EVIDENCE_OFFERING_ID || '
 // Token helper
 // ---------------------------------------------------------------------------
 
-function claimVerificationToken() {
-  const token = __ENV.REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION || '';
+function evidenceVerificationToken() {
+  const token = __ENV.REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION || '';
   if (!token) {
-    fail('Required env var REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION is not set.');
+    fail('Required env var REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION is not set.');
   }
   return token;
 }
@@ -110,14 +110,14 @@ export const options = {
     { duration: '2m',  target: 20 },
     { duration: '30s', target: 0  },
   ],
-  tags: { scenario: 'claim_verification', expected_status: 'false' },
+  tags: { scenario: 'evidence_verification', expected_status: 'false' },
   thresholds: Object.assign(
     {
       'http_req_duration{decision_expected:match}':     ['p(95)<50',  'p(99)<150'],
       'http_req_duration{decision_expected:mismatch}':  ['p(95)<50',  'p(99)<150'],
       'http_req_duration{decision_expected:ambiguous}': ['p(95)<150', 'p(99)<400'],
     },
-    thresholdsFor('claim_verification'),
+    thresholdsFor('evidence_verification'),
   ),
 };
 
@@ -126,9 +126,9 @@ export const options = {
 // ---------------------------------------------------------------------------
 
 export function setup() {
-  const token = claimVerificationToken();
+  const token = evidenceVerificationToken();
   logScenarioStart({
-    scenario: 'claim_verification',
+    scenario: 'evidence_verification',
     expectedResponse: '200 application/vnd.registry-relay.evidence-verification+jwt',
     vus: 20,
     duration: '3m',
@@ -209,5 +209,5 @@ export default function (ctx) {
 // ---------------------------------------------------------------------------
 
 export function handleSummary(data) {
-  return handleSummaryFor('claim_verification', data);
+  return handleSummaryFor('evidence_verification', data);
 }

@@ -8,8 +8,8 @@ Each persona gets a freshly generated raw key (32 random bytes, base64url-encode
 no padding) and a SHA-256 fingerprint of that key. The fingerprint is what goes
 in the registry-relay config's hash_env; the raw key is what Bruno sends as Bearer.
 
-The script also emits the claim-verification HMAC binding key required by the
-demo disability registry config.
+The script also emits the internal HMAC binding key used by evidence
+verification rulesets.
 
 Re-running always generates fresh keys. Old keys are not preserved.
 """
@@ -54,7 +54,7 @@ def generate_raw_key() -> str:
 
 
 def generate_claim_verification_binding_key() -> str:
-    """Return the configured hex: form expected by claim verification."""
+    """Return the configured hex: form expected by the ruleset hasher."""
     return f"hex:{secrets.token_bytes(32).hex()}"
 
 
@@ -155,7 +155,7 @@ def main() -> int:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(export_block, encoding="utf-8")
         print(
-            f"wrote {len(pairs)} key pairs and claim-verification binding key to {dest}",
+            f"wrote {len(pairs)} key pairs and evidence-verification binding key to {dest}",
             file=sys.stderr,
         )
 

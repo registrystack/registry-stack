@@ -167,7 +167,7 @@ const THRESHOLDS = {
   // backstop; per-decision-path budgets are set inline in
   // evidence verification scenario via tagged thresholds and are tighter for the
   // unique-lookup paths (match / mismatch).
-  'claim_verification': {
+  'evidence_verification': {
     'http_req_duration{expected_status:false}': ['p(95)<200', 'p(99)<500'],
   },
 };

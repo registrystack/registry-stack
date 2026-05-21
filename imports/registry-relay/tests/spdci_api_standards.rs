@@ -169,7 +169,7 @@ datasets:
           metadata_scope: disability_registry:metadata
           aggregate_scope: disability_registry:aggregate
           read_scope: disability_registry:rows
-          verify_scope: disability_registry:verify
+          evidence_verification_scope: disability_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -246,7 +246,7 @@ async fn try_server_with_options(
     ));
     let mut app = spdci_router::<()>()
         .layer(Extension(principal(&[
-            "disability_registry:verify",
+            "disability_registry:evidence_verification",
             "disability_registry:rows",
         ])))
         .layer(Extension(readiness))

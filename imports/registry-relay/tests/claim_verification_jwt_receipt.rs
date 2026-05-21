@@ -65,6 +65,16 @@ fn split_and_verify(compact_jws: &str, vk: &VerifyingKey) -> (Value, Value) {
     (decode_part(parts[0]), decode_part(parts[1]))
 }
 
+fn sample_cccev_evidence(decision: &str) -> Value {
+    json!({
+        "@type": "cccev:Evidence",
+        "cccev:supportsValue": {
+            "@type": "cccev:SupportedValue",
+            "cccev:value": decision,
+        }
+    })
+}
+
 #[test]
 fn receipt_header_payload_shape_and_signature_verify() {
     let (signer, vk) = build_signer("did:web:data.example.gov#key-1");
@@ -75,7 +85,7 @@ fn receipt_header_payload_shape_and_signature_verify() {
         &signer,
         EvidenceVerificationReceiptInputs {
             issuer: "did:web:data.example.gov".to_string(),
-            subject: "client:benefits-service".to_string(),
+            subject: "did:web:data.example.gov".to_string(),
             audience: "client:benefits-service".to_string(),
             issued_at,
             valid_until,
@@ -99,6 +109,7 @@ fn receipt_header_payload_shape_and_signature_verify() {
             claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
             claim_hash: "hmac-sha256:4a1f9c2b8d7e0f".to_string(),
             evidence_hash: Some("hmac-sha256:9f14a0d2bc331e".to_string()),
+            cccev_evidence: sample_cccev_evidence("match"),
         },
     )
     .expect("receipt encodes");
@@ -119,8 +130,9 @@ fn receipt_header_payload_shape_and_signature_verify() {
     );
 
     assert_eq!(payload["iss"], "did:web:data.example.gov");
-    assert_eq!(payload["sub"], "client:benefits-service");
+    assert_eq!(payload["sub"], "did:web:data.example.gov");
     assert_eq!(payload["aud"], "client:benefits-service");
+    assert_ne!(payload["sub"], payload["aud"]);
     assert_eq!(payload["iat"], issued_at.unix_timestamp());
     assert_eq!(payload["nbf"], issued_at.unix_timestamp() - 5);
     assert_eq!(payload["exp"], valid_until.unix_timestamp());
@@ -145,13 +157,19 @@ fn receipt_header_payload_shape_and_signature_verify() {
     assert_eq!(payload["level_of_assurance"], "substantial");
     assert_eq!(payload["dataset"], "civil_registry");
     assert_eq!(payload["entity"], "birth_record");
-    assert!(payload["disclaimer"]
-        .as_str()
-        .is_some_and(|value| value.contains("not official source credentials")));
+    assert_eq!(
+        payload["disclaimer"],
+        "This token records that a verification check was executed. It does not attest that the subject holds any status or right."
+    );
     assert_eq!(payload["purpose_declared"], "benefits-eligibility");
     assert_eq!(payload["checked_at"], "2026-05-17T10:30:00Z");
     assert_eq!(payload["claim_hash"], "hmac-sha256:4a1f9c2b8d7e0f");
     assert_eq!(payload["evidence_hash"], "hmac-sha256:9f14a0d2bc331e");
+    assert_eq!(payload["cccev_evidence"]["@type"], "cccev:Evidence");
+    assert_eq!(
+        payload["cccev_evidence"]["cccev:supportsValue"]["cccev:value"],
+        "match"
+    );
 
     for forbidden in [
         "@context",
@@ -195,7 +213,7 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
     let receipt = state
         .issue_evidence_verification_receipt(EvidenceVerificationReceiptContext {
             subject: "client:benefits-service".to_string(),
-            audience: "client:benefits-service".to_string(),
+            audience: "client:casework-system".to_string(),
             verification_id: "01J5K8M0000000000000000ABD".to_string(),
             decision: "mismatch".to_string(),
             requirement: None,
@@ -212,6 +230,7 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
             claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
             claim_hash: "hmac-sha256:abc".to_string(),
             evidence_hash: None,
+            cccev_evidence: sample_cccev_evidence("mismatch"),
             issued_at,
         })
         .expect("state issues receipt");
@@ -224,9 +243,68 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
     assert_eq!(header["typ"], "evidence-verification-receipt+jwt");
     assert_eq!(header["kid"], "did:web:data.example.gov#receipt");
     assert_eq!(payload["exp"], issued_at.unix_timestamp() + 300);
+    assert_eq!(payload["sub"], "client:benefits-service");
+    assert_eq!(payload["aud"], "client:casework-system");
+    assert_ne!(payload["sub"], payload["aud"]);
+    assert_eq!(
+        payload["cccev_evidence"]["cccev:supportsValue"]["cccev:value"],
+        "mismatch"
+    );
     assert!(payload.get("purpose_declared").is_none());
     assert!(
         payload.get("evidence_hash").is_none(),
         "evidence_hash should be omitted when no evidence was submitted"
     );
+}
+
+#[test]
+fn provenance_state_caps_receipt_validity_at_five_minutes() {
+    let (signer, _vk) = build_signer("did:web:data.example.gov#receipt");
+    let signer: Arc<dyn Signer> = Arc::new(signer);
+    let state = ProvenanceState::new(ResolvedProvenanceConfig {
+        enabled: true,
+        mode: IssuerMode::Gateway,
+        issuer_did: "did:web:data.example.gov".to_string(),
+        verification_method_id: "did:web:data.example.gov#receipt".to_string(),
+        accepted_media_types: vec![EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
+        claim_validity: ResolvedClaimValidity {
+            verify_result: Duration::from_secs(86_400),
+            aggregate_result: Duration::from_secs(86_400),
+            entity_record: Duration::from_secs(86_400),
+        },
+        urls: ResolvedUrls {
+            provenance_context_url: "https://gw.example/contexts/provenance/v1.jsonld".to_string(),
+            schema_base_url: "https://gw.example/schemas".to_string(),
+        },
+        signer,
+        retired_keys: vec![],
+    });
+
+    let issued_at = OffsetDateTime::from_unix_timestamp(1_779_013_800).unwrap();
+    let receipt = state
+        .issue_evidence_verification_receipt(EvidenceVerificationReceiptContext {
+            subject: "did:web:data.example.gov".to_string(),
+            audience: "client:benefits-service".to_string(),
+            verification_id: "01J5K8M0000000000000000ABE".to_string(),
+            decision: "match".to_string(),
+            requirement: None,
+            evidence_type: "https://data.example.gov/evidence-types/birth-record-facts".to_string(),
+            evidence_offering: "https://data.example.gov/evidence-offerings/birth-record-facts"
+                .to_string(),
+            issuing_authority: json!({ "id": "civil_registry_authority" }),
+            jurisdiction: None,
+            level_of_assurance: None,
+            dataset: "civil_registry".to_string(),
+            entity: "birth_record".to_string(),
+            purpose_declared: None,
+            checked_at: "2026-05-17T10:30:00Z".to_string(),
+            claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
+            claim_hash: "hmac-sha256:abc".to_string(),
+            evidence_hash: None,
+            cccev_evidence: sample_cccev_evidence("match"),
+            issued_at,
+        })
+        .expect("state issues receipt");
+
+    assert_eq!(receipt.exp, issued_at.unix_timestamp() + 300);
 }

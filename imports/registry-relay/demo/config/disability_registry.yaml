@@ -42,7 +42,6 @@ auth:
       scopes:
         - disability_registry:metadata
         - disability_registry:rows
-        - disability_registry:claim_verification
         - civil_registry:metadata
         - civil_registry:rows
         - social_registry:metadata
@@ -54,7 +53,6 @@ auth:
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
         - disability_registry:evidence_verification
-        - disability_registry:claim_verification
         - civil_registry:evidence_verification
         - social_registry:evidence_verification
         - farmer_registry:evidence_verification
@@ -308,7 +306,6 @@ datasets:
           aggregate_scope:   disability_registry:aggregate
           read_scope:        disability_registry:rows
           evidence_verification_scope: disability_registry:evidence_verification
-          claim_verification_scope: disability_registry:claim_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -441,6 +438,7 @@ datasets:
           metadata_scope:    civil_registry:metadata
           aggregate_scope:   civil_registry:aggregate
           read_scope:        civil_registry:rows
+          evidence_verification_scope: civil_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000

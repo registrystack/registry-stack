@@ -112,6 +112,8 @@ pub struct EvidenceVerificationRateLimitConfig {
     pub burst: u32,
     #[serde(default = "default_evidence_rate_limit_window_seconds")]
     pub window_seconds: u64,
+    #[serde(default = "default_evidence_rate_limit_max_buckets")]
+    pub max_buckets: usize,
 }
 
 impl Default for EvidenceVerificationRateLimitConfig {
@@ -120,6 +122,7 @@ impl Default for EvidenceVerificationRateLimitConfig {
             enabled: default_evidence_rate_limit_enabled(),
             burst: default_evidence_rate_limit_burst(),
             window_seconds: default_evidence_rate_limit_window_seconds(),
+            max_buckets: default_evidence_rate_limit_max_buckets(),
         }
     }
 }
@@ -134,6 +137,10 @@ const fn default_evidence_rate_limit_burst() -> u32 {
 
 const fn default_evidence_rate_limit_window_seconds() -> u64 {
     60
+}
+
+const fn default_evidence_rate_limit_max_buckets() -> usize {
+    8192
 }
 
 /// External standards adapters layered over configured entities.
@@ -1027,8 +1034,6 @@ pub struct EntityAccessConfig {
     pub metadata_scope: String,
     pub aggregate_scope: String,
     pub read_scope: String,
-    #[serde(default)]
-    pub verify_scope: Option<String>,
     #[serde(default)]
     pub evidence_verification_scope: String,
     #[serde(default)]

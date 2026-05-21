@@ -36,6 +36,7 @@ class Scenario:
     row_path: str
     purpose: str
     explanation: str
+    negative_evidence_type: str
 
 
 SCENARIOS = {
@@ -59,6 +60,7 @@ SCENARIOS = {
             "A downstream service submits benefits status facts and receives a "
             "registry-backed match decision without reading the person row."
         ),
+        negative_evidence_type="https://demo.example.gov/evidence-types/education-student-record",
     ),
     "education": Scenario(
         name="education",
@@ -82,6 +84,7 @@ SCENARIOS = {
             "A scholarship or support workflow verifies current enrollment "
             "facts before doing any broader linkage or casework."
         ),
+        negative_evidence_type="https://demo.example.gov/evidence-types/benefits-person-record",
     ),
     "disability": Scenario(
         name="disability",
@@ -101,6 +104,7 @@ SCENARIOS = {
             "A benefits workflow verifies certified disability status through "
             "the disability registry, not by reading the disability row."
         ),
+        negative_evidence_type="https://demo.example.gov/evidence-types/farmer-status",
     ),
     "farmer": Scenario(
         name="farmer",
@@ -122,6 +126,7 @@ SCENARIOS = {
             "An agricultural subsidy workflow verifies farmer registration "
             "facts through the farmer registry using the advertised national_id lookup."
         ),
+        negative_evidence_type="https://demo.example.gov/evidence-types/disability-status",
     ),
 }
 
@@ -465,6 +470,38 @@ def main() -> int:
     print_result(
         result,
         f"Filtered discovery returned {len(filtered_ids)} provider offering(s): {', '.join(filtered_ids)}",
+    )
+
+    wrong_filter_path = (
+        "/metadata/evidence-offerings?"
+        f"evidence_type={quote(scenario.negative_evidence_type, safe=':/')}"
+    )
+    print_request("GET", wrong_filter_path)
+    result = request(
+        base_url=args.base_url,
+        method="GET",
+        path=wrong_filter_path,
+        token=catalog_token,
+        output_dir=args.output,
+        step="04b-wrong-evidence-type",
+    )
+    ensure_expected(result, {200}, "negative evidence type discovery")
+    wrong_payload = result.json_body()
+    wrong_items = (
+        wrong_payload.get("evidence_offerings", [])
+        if isinstance(wrong_payload, dict)
+        else []
+    )
+    wrong_ids = [item.get("id") for item in wrong_items if isinstance(item, dict)]
+    if offering_id in wrong_ids:
+        raise SystemExit(
+            f"semantic discovery incorrectly returned {offering_id} for "
+            f"{scenario.negative_evidence_type}; response written to {result.path}"
+        )
+    print_result(
+        result,
+        "Negative discovery check passed: a different evidence type did not "
+        f"return {offering_id}.",
     )
 
     chapter(

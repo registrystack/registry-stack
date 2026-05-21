@@ -244,7 +244,6 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -342,7 +341,7 @@ fn build_entity_harness(env_name: &str) -> Harness {
         .layer(Extension(principal(&[
             "social_registry:metadata",
             "social_registry:rows",
-            "social_registry:verify",
+            "social_registry:evidence_verification",
         ])))
         .layer(Extension(state));
     let router = with_audit(router, sink_arc);
@@ -766,7 +765,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
         ScopeSet::from_iter([
             "social_registry:metadata",
             "social_registry:rows",
-            "social_registry:verify",
+            "social_registry:evidence_verification",
         ]),
         fingerprint(FULL_STACK_RAW_API_KEY),
     )
@@ -857,7 +856,7 @@ async fn entity_record_returns_plain_json_when_provenance_state_is_absent() {
         .layer(Extension(principal(&[
             "social_registry:metadata",
             "social_registry:rows",
-            "social_registry:verify",
+            "social_registry:evidence_verification",
         ])));
     let router = with_audit(router, sink_arc);
     let server = TestServer::new(router);

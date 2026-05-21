@@ -75,7 +75,7 @@ const ENTITY_TEMPLATE: &str = "      - name: {ENT}
           metadata_scope: {DS}:metadata
           aggregate_scope: {DS}:aggregate
           read_scope: {DS}:rows
-          verify_scope: {DS}:verify
+          evidence_verification_scope: {DS}:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000

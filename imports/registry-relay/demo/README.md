@@ -327,7 +327,24 @@ Run the education story instead with:
 python3 demo/scripts/evidence_offerings_demo.py --scenario education
 ```
 
-To request a signed evidence-verification JWT receipt for the matching step:
+The standards bundle also demonstrates domain-specific evidence discovery for
+farmer-registration and disability-status checks:
+
+```bash
+just demo-run demo/config/all_standards.yaml spdci-api-standards,standards-cel-mapping
+python3 demo/scripts/evidence_offerings_demo.py --scenario farmer
+python3 demo/scripts/evidence_offerings_demo.py --scenario disability
+```
+
+Those scenarios show that semantic discovery returns only providers that
+publish the requested evidence type, verifies submitted facts through the
+declared offering, and keeps the verification persona away from source rows.
+
+The `--signed-receipt` flag requests
+`application/vnd.registry-relay.evidence-verification+jwt` for the matching
+step. The stock demo configs keep provenance signing disabled, so use that flag
+only with a config that enables `provenance.accepted_media_types` for the
+evidence-verification receipt media type and supplies a signer JWK.
 
 ```bash
 python3 demo/scripts/evidence_offerings_demo.py --scenario benefits --signed-receipt

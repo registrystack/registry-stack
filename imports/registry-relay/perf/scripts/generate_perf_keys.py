@@ -18,7 +18,7 @@ the output path. Raw tokens and hashes are never printed to stdout.
 Also emits:
 
 - CLAIM_VERIFICATION_BINDING_KEY: hex: prefixed 32-byte secret for the
-  claim_verification HMAC key.
+  internal matching HMAC key used by evidence verification.
 - REGISTRY_RELAY_PROVENANCE_JWK: JSON-encoded Ed25519 private JWK used by
   the provenance signer to issue signed evidence-verification receipts.
 
@@ -51,7 +51,7 @@ KEY_DEFS = [
     ("perf_metadata",           "PERF_METADATA_KEY_HASH",           ["clinic_capacity:metadata"]),
     ("perf_aggregate",          "PERF_AGGREGATE_KEY_HASH",          ["clinic_capacity:aggregate"]),
     ("perf_no_scope",           "PERF_NO_SCOPE_KEY_HASH",           ["other:metadata"]),
-    ("perf_claim_verification", "PERF_CLAIM_VERIFICATION_KEY_HASH", ["clinic_capacity:evidence_verification"]),
+    ("perf_evidence_verification", "PERF_EVIDENCE_VERIFICATION_KEY_HASH", ["clinic_capacity:evidence_verification"]),
 ]
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"
@@ -69,7 +69,7 @@ def generate_token() -> str:
 
 
 def generate_binding_key() -> str:
-    """Return a hex: prefixed 32-byte random secret for claim_verification HMAC."""
+    """Return a hex: prefixed 32-byte random secret for matching HMAC."""
     return f"hex:{secrets.token_hex(32)}"
 
 
@@ -124,7 +124,7 @@ def build_env_lines(
         f"REGISTRY_RELAY_TOKEN_METADATA={tokens['perf_metadata']}",
         f"REGISTRY_RELAY_TOKEN_AGGREGATE={tokens['perf_aggregate']}",
         f"REGISTRY_RELAY_TOKEN_NO_SCOPE={tokens['perf_no_scope']}",
-        f"REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION={tokens['perf_claim_verification']}",
+        f"REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION={tokens['perf_evidence_verification']}",
         f"REGISTRY_RELAY_TOKEN_INVALID={INVALID_TOKEN_VALUE}",
         "#",
         "# Routing defaults",
@@ -199,7 +199,7 @@ def main() -> None:
         "REGISTRY_RELAY_TOKEN_METADATA",
         "REGISTRY_RELAY_TOKEN_AGGREGATE",
         "REGISTRY_RELAY_TOKEN_NO_SCOPE",
-        "REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION",
+        "REGISTRY_RELAY_TOKEN_EVIDENCE_VERIFICATION",
         "REGISTRY_RELAY_TOKEN_INVALID",
         "REGISTRY_RELAY_BASE_URL",
         "REGISTRY_RELAY_DATASET_ID",

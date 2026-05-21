@@ -36,6 +36,7 @@ pub struct EvidenceVerificationReceiptInputs {
     pub claim_salt: String,
     pub claim_hash: String,
     pub evidence_hash: Option<String>,
+    pub cccev_evidence: Value,
     pub issued_at: OffsetDateTime,
     pub valid_until: OffsetDateTime,
 }
@@ -84,7 +85,7 @@ pub fn encode(
         "exp": exp,
         "jti": &jti,
         "receipt_type": EVIDENCE_VERIFICATION_RECEIPT_TYPE,
-        "disclaimer": "Registry Relay evidence-verification receipts attest only to a registry comparison event. They are not official source credentials and do not decide eligibility.",
+        "disclaimer": "This token records that a verification check was executed. It does not attest that the subject holds any status or right.",
         "verification_id": &inputs.verification_id,
         "decision": &inputs.decision,
         "evidence_type": &inputs.evidence_type,
@@ -95,6 +96,7 @@ pub fn encode(
         "checked_at": &inputs.checked_at,
         "claim_salt": &inputs.claim_salt,
         "claim_hash": &inputs.claim_hash,
+        "cccev_evidence": &inputs.cccev_evidence,
     });
     if let Some(requirement) = &inputs.requirement {
         payload["requirement"] = Value::String(requirement.clone());

@@ -80,7 +80,6 @@ datasets:
           metadata_scope: disability_registry:metadata
           aggregate_scope: disability_registry:aggregate
           read_scope: disability_registry:rows
-          verify_scope: disability_registry:verify
         api:
           default_limit: 100
           max_limit: 1000

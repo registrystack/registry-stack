@@ -32,6 +32,7 @@ use crate::query::{ClaimVerificationQuery, EntityQueryEngine};
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const MAX_EVIDENCE_VERIFICATION_BODY_BYTES: u64 = 64 * 1024;
+const MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY: Duration = Duration::from_secs(5 * 60);
 const CLAIM_SALT_BYTES: usize = 16;
 
 #[derive(Debug)]
@@ -39,13 +40,14 @@ pub struct EvidenceVerificationLimiter {
     enabled: bool,
     burst: u32,
     window: Duration,
+    max_buckets: usize,
     buckets: Mutex<HashMap<(String, String), RateBucket>>,
 }
 
 #[derive(Debug, Clone)]
 struct RateBucket {
-    window_started: Instant,
-    count: u32,
+    last_refill: Instant,
+    tokens: f64,
 }
 
 impl EvidenceVerificationLimiter {
@@ -55,6 +57,7 @@ impl EvidenceVerificationLimiter {
             enabled: config.enabled,
             burst: config.burst,
             window: Duration::from_secs(config.window_seconds),
+            max_buckets: config.max_buckets.max(1),
             buckets: Mutex::new(HashMap::new()),
         }
     }
@@ -69,25 +72,55 @@ impl EvidenceVerificationLimiter {
             .buckets
             .lock()
             .expect("evidence verification rate-limit mutex is not poisoned");
-        let bucket = buckets.entry(key).or_insert_with(|| RateBucket {
-            window_started: now,
-            count: 0,
-        });
-        if now.duration_since(bucket.window_started) >= self.window {
-            bucket.window_started = now;
-            bucket.count = 0;
+        self.evict_stale_buckets(&mut buckets, now);
+        if !buckets.contains_key(&key) && buckets.len() >= self.max_buckets {
+            evict_oldest_bucket(&mut buckets);
         }
-        if bucket.count >= self.burst {
-            let elapsed = now.duration_since(bucket.window_started);
-            let retry_after = self
-                .window
-                .saturating_sub(elapsed)
-                .as_secs()
-                .saturating_add(1);
+        let bucket = buckets.entry(key).or_insert_with(|| RateBucket {
+            last_refill: now,
+            tokens: f64::from(self.burst),
+        });
+        self.refill_bucket(bucket, now);
+        if bucket.tokens < 1.0 {
+            let retry_after = self.retry_after_seconds(bucket.tokens);
             return Err(retry_after.max(1));
         }
-        bucket.count = bucket.count.saturating_add(1);
+        bucket.tokens -= 1.0;
         Ok(())
+    }
+
+    fn refill_bucket(&self, bucket: &mut RateBucket, now: Instant) {
+        let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+        if elapsed <= 0.0 {
+            return;
+        }
+        let refill_per_second = f64::from(self.burst) / self.window.as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(f64::from(self.burst));
+        bucket.last_refill = now;
+    }
+
+    fn retry_after_seconds(&self, tokens: f64) -> u64 {
+        let refill_per_second = f64::from(self.burst) / self.window.as_secs_f64();
+        ((1.0 - tokens).max(0.0) / refill_per_second).ceil() as u64
+    }
+
+    fn evict_stale_buckets(
+        &self,
+        buckets: &mut HashMap<(String, String), RateBucket>,
+        now: Instant,
+    ) {
+        let stale_after = self.window.saturating_mul(2).max(Duration::from_secs(60));
+        buckets.retain(|_, bucket| now.duration_since(bucket.last_refill) < stale_after);
+    }
+}
+
+fn evict_oldest_bucket(buckets: &mut HashMap<(String, String), RateBucket>) {
+    if let Some(oldest) = buckets
+        .iter()
+        .min_by_key(|(_, bucket)| bucket.last_refill)
+        .map(|(key, _)| key.clone())
+    {
+        buckets.remove(&oldest);
     }
 }
 
@@ -196,6 +229,13 @@ async fn verify_evidence_offering(
     else {
         return evidence_verification_headers(offering_not_found());
     };
+    if let Some(required_scope) = ruleset.scope.as_deref() {
+        if !principal.scopes.contains(required_scope) {
+            return evidence_verification_headers(request_error_response(
+                EvidenceVerificationRequestError::RulesetNotAllowed,
+            ));
+        }
+    }
     if let Err(error) = validate_evidence_request(&request, ruleset) {
         return evidence_verification_headers(request_error_response(error));
     }
@@ -335,13 +375,14 @@ async fn verify_evidence_offering(
             "evidence offering route matched, but evidence type has no requirement binding",
         ));
     };
-    let body = EvidenceVerificationResponse {
+    let mut body = EvidenceVerificationResponse {
         verification_id,
         decision: decision.to_string(),
         checked_at,
         requirement,
         evidence_type: offering.evidence_type_iri,
         evidence_offering: offering.iri,
+        information_concepts: offering.information_concepts,
         issuing_authority: offering.issuing_authority,
         jurisdiction: offering.jurisdiction,
         level_of_assurance: offering.level_of_assurance,
@@ -351,7 +392,9 @@ async fn verify_evidence_offering(
         claim_hash,
         evidence_hash,
         ingest_version: result.ingest_version,
+        cccev_evidence: Value::Null,
     };
+    body.cccev_evidence = build_cccev_evidence(&body, None, None);
     let response = if let Some(state) = signed_receipt_state {
         issue_evidence_receipt_response(state, &principal, &body, purpose)
     } else {
@@ -400,6 +443,8 @@ struct EvidenceVerificationResponse {
     requirement: String,
     evidence_type: String,
     evidence_offering: String,
+    #[serde(skip_serializing)]
+    information_concepts: Vec<String>,
     issuing_authority: metadata_core::CompiledIssuingAuthority,
     #[serde(skip_serializing_if = "Option::is_none")]
     jurisdiction: Option<metadata_core::JurisdictionManifest>,
@@ -412,6 +457,7 @@ struct EvidenceVerificationResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_hash: Option<String>,
     ingest_version: Option<String>,
+    cccev_evidence: Value,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -587,6 +633,20 @@ fn issue_evidence_receipt_response(
         None => None,
     };
     let issued_at = OffsetDateTime::now_utc();
+    let validity = state
+        .config()
+        .claim_validity
+        .verify_result
+        .min(MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY);
+    let validity = match time::Duration::try_from(validity) {
+        Ok(value) => value,
+        Err(_) => return Error::from(InternalError::Unhandled).into_response(),
+    };
+    let valid_until = match issued_at.checked_add(validity) {
+        Some(value) => value,
+        None => return Error::from(InternalError::Unhandled).into_response(),
+    };
+    let cccev_evidence = build_cccev_evidence(body, Some(issued_at), Some(valid_until));
     let signed =
         match state.issue_evidence_verification_receipt(EvidenceVerificationReceiptContext {
             subject: subject.clone(),
@@ -606,6 +666,7 @@ fn issue_evidence_receipt_response(
             claim_salt: body.claim_salt.clone(),
             claim_hash: body.claim_hash.clone(),
             evidence_hash: body.evidence_hash.clone(),
+            cccev_evidence,
             issued_at,
         }) {
             Ok(signed) => signed,
@@ -627,6 +688,115 @@ fn issue_evidence_receipt_response(
         exp: signed.exp,
     });
     response
+}
+
+fn build_cccev_evidence(
+    body: &EvidenceVerificationResponse,
+    issued_at: Option<OffsetDateTime>,
+    valid_until: Option<OffsetDateTime>,
+) -> Value {
+    let evidence_id = format!(
+        "urn:registry-relay:evidence-verification:{}",
+        body.verification_id
+    );
+    let period_id = format!("{evidence_id}#validity");
+    let value_id = format!("{evidence_id}#decision");
+    let mut validity_period = json!({
+        "@id": period_id,
+        "@type": "time:ProperInterval",
+        "time:hasBeginning": typed_datetime(&body.checked_at),
+    });
+    if let Some(issued_at) = issued_at.and_then(format_rfc3339) {
+        validity_period["registry_relay:issuedAt"] = typed_datetime(&issued_at);
+    }
+    if let Some(valid_until) = valid_until.and_then(format_rfc3339) {
+        validity_period["time:hasEnd"] = typed_datetime(&valid_until);
+    }
+
+    let issuing_authority = body
+        .issuing_authority
+        .iri
+        .as_deref()
+        .map(iri_object)
+        .unwrap_or_else(|| {
+            json!({
+                "@type": "foaf:Agent",
+                "dcterms:identifier": body.issuing_authority.id,
+                "foaf:name": body.issuing_authority.name,
+            })
+        });
+    let decision_concept = "https://registry-relay.dev/ns#verificationDecision";
+    let mut supports_concept = body
+        .information_concepts
+        .iter()
+        .map(|iri| iri_object(iri))
+        .collect::<Vec<_>>();
+    supports_concept.push(iri_object(decision_concept));
+
+    json!({
+        "@context": {
+            "cccev": "http://data.europa.eu/m8g/",
+            "dcterms": "http://purl.org/dc/terms/",
+            "foaf": "http://xmlns.com/foaf/0.1/",
+            "registry_relay": "https://registry-relay.dev/ns#",
+            "skos": "http://www.w3.org/2004/02/skos/core#",
+            "time": "http://www.w3.org/2006/time#",
+            "xsd": "http://www.w3.org/2001/XMLSchema#",
+            "cccev:isProvidedBy": { "@type": "@id" },
+            "cccev:providesValueFor": { "@type": "@id" },
+            "cccev:supportsConcept": { "@type": "@id" },
+            "cccev:supportsRequirement": { "@type": "@id" },
+            "cccev:supportsValue": { "@type": "@id" },
+            "cccev:validityPeriod": { "@type": "@id" },
+            "dcterms:conformsTo": { "@type": "@id" },
+            "dcterms:publisher": { "@type": "@id" },
+            "time:hasBeginning": { "@type": "xsd:dateTime" },
+            "time:hasEnd": { "@type": "xsd:dateTime" },
+            "registry_relay:evidenceOffering": { "@type": "@id" }
+        },
+        "@id": evidence_id,
+        "@type": "cccev:Evidence",
+        "dcterms:identifier": body.verification_id,
+        "dcterms:conformsTo": iri_object(&body.evidence_type),
+        "dcterms:publisher": issuing_authority,
+        "cccev:isProvidedBy": issuing_authority,
+        "cccev:supportsRequirement": iri_object(&body.requirement),
+        "cccev:supportsConcept": supports_concept,
+        "cccev:supportsValue": {
+            "@id": value_id,
+            "@type": "cccev:SupportedValue",
+            "dcterms:identifier": "verification-decision",
+            "cccev:providesValueFor": {
+                "@id": decision_concept,
+                "@type": "cccev:InformationConcept",
+                "dcterms:identifier": "verification-decision",
+                "skos:prefLabel": "Verification decision",
+            },
+            "cccev:value": body.decision,
+        },
+        "cccev:validityPeriod": validity_period,
+        "registry_relay:evidenceOffering": iri_object(&body.evidence_offering),
+        "registry_relay:decision": body.decision,
+        "registry_relay:claimHash": body.claim_hash,
+        "registry_relay:evidenceHash": body.evidence_hash,
+        "registry_relay:dataset": body.dataset_id,
+        "registry_relay:entity": body.entity,
+    })
+}
+
+fn typed_datetime(value: &str) -> Value {
+    json!({
+        "@value": value,
+        "@type": "xsd:dateTime",
+    })
+}
+
+fn format_rfc3339(value: OffsetDateTime) -> Option<String> {
+    value.format(&Rfc3339).ok()
+}
+
+fn iri_object(iri: &str) -> Value {
+    json!({ "@id": iri })
 }
 
 fn evidence_receipt_error_to_response(error: IssueError) -> Response {
@@ -804,4 +974,53 @@ fn query_unavailable(detail: &'static str) -> Response {
 fn with_audit_context(mut response: Response, context: AuditContextExt) -> Response {
     response.extensions_mut().insert(context);
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limiter(burst: u32, window_seconds: u64, max_buckets: usize) -> EvidenceVerificationLimiter {
+        EvidenceVerificationLimiter::new(&EvidenceVerificationRateLimitConfig {
+            enabled: true,
+            burst,
+            window_seconds,
+            max_buckets,
+        })
+    }
+
+    #[test]
+    fn limiter_refills_gradually_instead_of_resetting_fixed_windows() {
+        let limiter = limiter(2, 2, 16);
+
+        assert!(limiter.check("client-a", "offering-a").is_ok());
+        assert!(limiter.check("client-a", "offering-a").is_ok());
+        assert!(limiter.check("client-a", "offering-a").is_err());
+
+        std::thread::sleep(Duration::from_millis(1_100));
+
+        assert!(
+            limiter.check("client-a", "offering-a").is_ok(),
+            "one token should refill before the whole two-second window resets"
+        );
+        assert!(
+            limiter.check("client-a", "offering-a").is_err(),
+            "only one token should have refilled"
+        );
+    }
+
+    #[test]
+    fn limiter_bounds_bucket_count() {
+        let limiter = limiter(10, 60, 2);
+
+        assert!(limiter.check("client-a", "offering-a").is_ok());
+        assert!(limiter.check("client-b", "offering-b").is_ok());
+        assert!(limiter.check("client-c", "offering-c").is_ok());
+
+        let buckets = limiter
+            .buckets
+            .lock()
+            .expect("evidence verification rate-limit mutex is not poisoned");
+        assert_eq!(buckets.len(), 2);
+    }
 }

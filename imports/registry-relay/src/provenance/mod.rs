@@ -44,6 +44,8 @@ pub use jwt_vc::{ClaimType, SignedEnvelope, VcCredentialProfile, VcEnvelopeInput
 pub use negotiate::{negotiate, NegotiationOutcome};
 pub use signer::{Signer, SignerError, SigningAlgorithm};
 
+const MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY: Duration = Duration::from_secs(5 * 60);
+
 /// Issuer mode resolved at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssuerMode {
@@ -212,6 +214,7 @@ pub struct EvidenceVerificationReceiptContext {
     pub claim_salt: String,
     pub claim_hash: String,
     pub evidence_hash: Option<String>,
+    pub cccev_evidence: serde_json::Value,
     pub issued_at: OffsetDateTime,
 }
 
@@ -314,22 +317,23 @@ impl ProvenanceState {
 
     /// Issue a signed evidence-verification JWT receipt.
     ///
-    /// The v1 receipt uses the existing verify-result validity window,
-    /// keeping the server-to-server receipt short-lived without adding
-    /// a separate configuration surface.
+    /// The v1 receipt uses the existing verify-result validity window, capped
+    /// at five minutes so server-to-server evidence receipts stay short-lived.
     pub fn issue_evidence_verification_receipt(
         &self,
         ctx: EvidenceVerificationReceiptContext,
     ) -> Result<SignedReceipt, IssueError> {
         let cfg = &self.inner;
+        let validity = cfg
+            .claim_validity
+            .verify_result
+            .min(MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY);
         let valid_until = ctx
             .issued_at
-            .checked_add(time::Duration::try_from(cfg.claim_validity.verify_result).map_err(
-                |err| {
-                    tracing::error!(error = %err, "provenance.evidence_verification.validity_overflow");
-                    IssueError::IssuanceFailed
-                },
-            )?)
+            .checked_add(time::Duration::try_from(validity).map_err(|err| {
+                tracing::error!(error = %err, "provenance.evidence_verification.validity_overflow");
+                IssueError::IssuanceFailed
+            })?)
             .ok_or_else(|| {
                 tracing::error!("provenance.evidence_verification.validity_add_overflow");
                 IssueError::IssuanceFailed
@@ -357,6 +361,7 @@ impl ProvenanceState {
                 claim_salt: ctx.claim_salt,
                 claim_hash: ctx.claim_hash,
                 evidence_hash: ctx.evidence_hash,
+                cccev_evidence: ctx.cccev_evidence,
             },
         )
         .map_err(|err| {

@@ -178,7 +178,6 @@ fn claim_verification_dataset(access_scope_line: &str, claim_verification_body: 
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
 {access_scope_line}
         api:
           default_limit: 100

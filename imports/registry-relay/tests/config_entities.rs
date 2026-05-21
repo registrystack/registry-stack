@@ -98,7 +98,6 @@ fn valid_dataset() -> String {
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -122,7 +121,6 @@ fn valid_dataset() -> String {
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -196,7 +194,6 @@ fn dataset_with_required_filters(required_filters: &str) -> String {
           metadata_scope: my_dataset:metadata
           aggregate_scope: my_dataset:aggregate
           read_scope: my_dataset:rows
-          verify_scope: my_dataset:verify
         api:
           default_limit: 100
           max_limit: 1000

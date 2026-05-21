@@ -73,7 +73,6 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -110,7 +109,6 @@ datasets:
           metadata_scope: payments:metadata
           aggregate_scope: payments:aggregate
           read_scope: payments:rows
-          verify_scope: payments:verify
         api:
           default_limit: 100
           max_limit: 1000

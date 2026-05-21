@@ -74,11 +74,23 @@ requirements:
   - id: name_requirement
     iri: https://data.example.test/requirements/name
     title: Name requirement
+    rdf_type: cccev:Criterion
+    reference_frameworks:
+      - iri: https://data.example.test/reference-frameworks/name-law
+        identifier: name-law
 evidence_types:
   - id: name_evidence
     iri: https://data.example.test/evidence-types/name
     title: Name evidence
     proves: [name_requirement]
+    information_concepts:
+      - https://data.example.test/concepts/given-name
+  - id: alternate_name_evidence
+    iri: https://data.example.test/evidence-types/alternate-name
+    title: Alternate name evidence
+    proves: [name_requirement]
+    information_concepts:
+      - https://data.example.test/concepts/given-name
 datasets:
   - id: social_registry
     title: Social Registry
@@ -120,6 +132,36 @@ datasets:
           kind: registry-relay-verification
           conforms_to: registry_relay:evidence-verification-v1
           ruleset: exact-name-targeted
+      - id: individual_alternate_name_evidence
+        iri: https://data.example.test/evidence-offerings/individual-alternate-name
+        title: Alternate individual name evidence
+        evidence_type: alternate_name_evidence
+        issuing_authority:
+          id: test_authority
+          iri: did:web:data.example.test
+          name: Test Authority
+          country: ZZ
+        entity: individual
+        lookup_keys: [given_name]
+        access:
+          kind: registry-relay-verification
+          conforms_to: registry_relay:evidence-verification-v1
+          ruleset: exact-name
+      - id: individual_hidden_name_evidence
+        iri: https://data.example.test/evidence-offerings/individual-hidden-name
+        title: Hidden individual name evidence
+        evidence_type: name_evidence
+        issuing_authority:
+          id: test_authority
+          iri: did:web:data.example.test
+          name: Test Authority
+          country: ZZ
+        entity: individual
+        lookup_keys: [given_name]
+        access:
+          kind: registry-relay-verification
+          conforms_to: registry_relay:evidence-verification-v1
+          ruleset: hidden-name
     entities:
       - name: individual
         fields:
@@ -138,7 +180,7 @@ datasets:
 const ENTITY_ROUTE_SCOPES: &[&str] = &[
     "social_registry:metadata",
     "social_registry:rows",
-    "social_registry:verify",
+    "social_registry:evidence_verification",
     "social_registry:evidence_verification",
     "social_registry:claim_verification",
 ];
@@ -244,6 +286,7 @@ async fn server_with_query_and_rate_limit(burst: u32, window_seconds: u64) -> Te
                 enabled: true,
                 burst,
                 window_seconds,
+                max_buckets: 1024,
             },
         ))),
     )
@@ -355,7 +398,6 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
           evidence_verification_scope: social_registry:evidence_verification
           claim_verification_scope: social_registry:claim_verification
         api:
@@ -383,7 +425,6 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
           evidence_verification_scope: social_registry:evidence_verification
           claim_verification_scope: social_registry:claim_verification
         api:
@@ -1048,7 +1089,6 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1069,7 +1109,9 @@ audit:
         entity_router::<()>()
             .merge(aggregates_router::<()>())
             .layer(Extension(registry))
-            .layer(Extension(principal(&["social_registry:verify"]))),
+            .layer(Extension(principal(&[
+                "social_registry:evidence_verification",
+            ]))),
     );
 
     for url in [
@@ -1141,12 +1183,14 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
     assert_eq!(list.header("cache-control"), "private");
     assert_eq!(list.header("vary"), "Authorization");
     let body: Value = list.json();
+    let offerings = body["evidence_offerings"].as_array().expect("offerings");
+    let name_offering = offerings
+        .iter()
+        .find(|offering| offering["id"] == "individual_name_evidence")
+        .expect("individual name evidence offering is listed");
+    assert_eq!(name_offering["id"], "individual_name_evidence");
     assert_eq!(
-        body["evidence_offerings"][0]["id"],
-        "individual_name_evidence"
-    );
-    assert_eq!(
-        body["evidence_offerings"][0]["verification_request_schema_url"],
+        name_offering["verification_request_schema_url"],
         "https://data.example.test/metadata/schema/social_registry/individual/schema.json"
     );
 
@@ -1160,7 +1204,7 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
             .as_array()
             .expect("offerings")
             .len(),
-        2
+        3
     );
 
     let empty = server.get("/metadata/evidence-offerings?country=NO").await;
@@ -1176,8 +1220,13 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
         .await;
     detail.assert_status(StatusCode::OK);
     assert_eq!(detail.header("cache-control"), "private");
+    assert_eq!(detail.header("vary"), "Authorization");
     let body: Value = detail.json();
     assert_eq!(body["id"], "individual_name_evidence");
+    assert_eq!(
+        body["information_concepts"],
+        serde_json::json!(["https://data.example.test/concepts/given-name"])
+    );
 
     let hidden = server_with_query_and_scopes(&["social_registry:evidence_verification"]).await;
     let hidden_resp = hidden
@@ -1186,6 +1235,83 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
     hidden_resp.assert_status(StatusCode::NOT_FOUND);
     let body: Value = hidden_resp.json();
     assert_eq!(body["code"], "offering.not_found");
+}
+
+#[tokio::test]
+async fn bregdcat_evidence_terms_use_cccev_relationships() {
+    let server = server_with_query().await;
+
+    let resp = server.get("/metadata/dcat/bregdcat-ap").await;
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let serialized = serde_json::to_string(&body).expect("json serializes");
+    assert!(
+        !serialized.contains("registry_relay:provesRequirement"),
+        "CCCEV output must not emit a custom inverse for evidence-type membership"
+    );
+    assert!(
+        !serialized.contains("registry_relay:informationConcept"),
+        "Information concepts must be CCCEV nodes and links"
+    );
+
+    let graph = body["@graph"].as_array().expect("json-ld graph");
+    let by_id = |id: &str| {
+        graph
+            .iter()
+            .find(|node| node["@id"] == id)
+            .unwrap_or_else(|| panic!("missing JSON-LD node {id}"))
+    };
+
+    let requirement = by_id("https://data.example.test/requirements/name");
+    assert_eq!(requirement["@type"], "http://data.europa.eu/m8g/Criterion");
+    assert_eq!(
+        requirement["cccev:hasConcept"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/concepts/given-name"
+        }])
+    );
+    assert_eq!(
+        requirement["cccev:isDerivedFrom"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/reference-frameworks/name-law"
+        }])
+    );
+
+    assert_eq!(
+        requirement["cccev:hasEvidenceTypeList"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/requirements/name#evidence-type-list-alternate_name_evidence"
+        }, {
+            "@id": "https://data.example.test/requirements/name#evidence-type-list-name_evidence"
+        }])
+    );
+
+    let list =
+        by_id("https://data.example.test/requirements/name#evidence-type-list-name_evidence");
+    assert_eq!(list["@type"], "cccev:EvidenceTypeList");
+    assert_eq!(
+        list["cccev:specifiesEvidenceType"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/evidence-types/name"
+        }])
+    );
+
+    let evidence_type = by_id("https://data.example.test/evidence-types/name");
+    assert_eq!(evidence_type["@type"], "cccev:EvidenceType");
+    assert_eq!(
+        evidence_type["cccev:isSpecifiedIn"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/requirements/name#evidence-type-list-name_evidence"
+        }])
+    );
+
+    let concept = by_id("https://data.example.test/concepts/given-name");
+    assert_eq!(concept["@type"], "cccev:InformationConcept");
+    assert_eq!(concept["dcterms:identifier"], "given-name");
+
+    let framework = by_id("https://data.example.test/reference-frameworks/name-law");
+    assert_eq!(framework["@type"], "cccev:ReferenceFramework");
+    assert_eq!(framework["dcterms:identifier"], "name-law");
 }
 
 #[tokio::test]
@@ -1227,6 +1353,52 @@ async fn evidence_verification_returns_match_mismatch_and_ambiguous_decisions() 
         body["requirement"],
         "https://data.example.test/requirements/name"
     );
+    assert_eq!(body["cccev_evidence"]["@type"], "cccev:Evidence");
+    assert_eq!(
+        body["cccev_evidence"]["dcterms:conformsTo"],
+        serde_json::json!({
+            "@id": "https://data.example.test/evidence-types/name"
+        })
+    );
+    assert_eq!(
+        body["cccev_evidence"]["cccev:supportsRequirement"],
+        serde_json::json!({
+            "@id": "https://data.example.test/requirements/name"
+        })
+    );
+    assert_eq!(
+        body["cccev_evidence"]["cccev:supportsConcept"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/concepts/given-name"
+        }, {
+            "@id": "https://registry-relay.dev/ns#verificationDecision"
+        }])
+    );
+    assert_eq!(
+        body["cccev_evidence"]["cccev:supportsValue"]["cccev:value"],
+        "match"
+    );
+    assert_eq!(
+        body["cccev_evidence"]["cccev:supportsValue"]["cccev:providesValueFor"],
+        serde_json::json!({
+            "@id": "https://registry-relay.dev/ns#verificationDecision",
+            "@type": "cccev:InformationConcept",
+            "dcterms:identifier": "verification-decision",
+            "skos:prefLabel": "Verification decision"
+        })
+    );
+    assert_eq!(
+        body["cccev_evidence"]["dcterms:publisher"],
+        serde_json::json!({
+            "@id": "did:web:data.example.test"
+        })
+    );
+    assert_eq!(
+        body["cccev_evidence"]["cccev:isProvidedBy"],
+        serde_json::json!({
+            "@id": "did:web:data.example.test"
+        })
+    );
     assert!(body["claim_salt"]
         .as_str()
         .is_some_and(|salt| salt.len() == 32 && salt.chars().all(|ch| ch.is_ascii_hexdigit())));
@@ -1259,6 +1431,43 @@ async fn evidence_verification_returns_match_mismatch_and_ambiguous_decisions() 
     ambiguous.assert_status(StatusCode::OK);
     let body: Value = ambiguous.json();
     assert_eq!(body["decision"], "ambiguous");
+}
+
+#[tokio::test]
+async fn evidence_verification_enforces_ruleset_specific_scope() {
+    let without_ruleset_scope = server_with_query().await;
+    let denied = without_ruleset_scope
+        .post("/evidence-offerings/individual_hidden_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = denied.json();
+    assert_eq!(body["code"], "evidence_verification.ruleset_not_allowed");
+
+    let with_ruleset_scope = server_with_query_and_scopes(&[
+        "social_registry:metadata",
+        "social_registry:rows",
+        "social_registry:evidence_verification",
+        "social_registry:claim_verification:hidden",
+    ])
+    .await;
+    let allowed = with_ruleset_scope
+        .post("/evidence-offerings/individual_hidden_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    allowed.assert_status(StatusCode::OK);
+    let body: Value = allowed.json();
+    assert_eq!(body["decision"], "match");
 }
 
 #[tokio::test]
@@ -1306,7 +1515,7 @@ async fn evidence_verification_subject_targeting_requires_targeted_scope() {
     let with_targeted = server_with_query_and_scopes(&[
         "social_registry:metadata",
         "social_registry:rows",
-        "social_registry:verify",
+        "social_registry:evidence_verification",
         "social_registry:evidence_verification",
         "social_registry:evidence_verification:targeted",
     ])
@@ -1577,6 +1786,25 @@ async fn evidence_verification_returns_signed_receipt_when_receipt_profile_is_en
         "https://data.example.test/evidence-types/name"
     );
     assert_eq!(payload["issuing_authority"]["id"], "test_authority");
+    assert_eq!(payload["cccev_evidence"]["@type"], "cccev:Evidence");
+    assert_eq!(
+        payload["cccev_evidence"]["dcterms:conformsTo"],
+        serde_json::json!({
+            "@id": "https://data.example.test/evidence-types/name"
+        })
+    );
+    assert_eq!(
+        payload["cccev_evidence"]["cccev:supportsConcept"],
+        serde_json::json!([{
+            "@id": "https://data.example.test/concepts/given-name"
+        }, {
+            "@id": "https://registry-relay.dev/ns#verificationDecision"
+        }])
+    );
+    assert_eq!(
+        payload["cccev_evidence"]["cccev:validityPeriod"]["time:hasEnd"]["@type"],
+        "xsd:dateTime"
+    );
     assert_eq!(
         payload["purpose_declared"],
         "https://data.example.test/purposes/testing"
@@ -1714,7 +1942,6 @@ datasets:
           metadata_scope: test_dataset:metadata
           aggregate_scope: test_dataset:aggregate
           read_scope: test_dataset:rows
-          verify_scope: test_dataset:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1733,7 +1960,6 @@ datasets:
           metadata_scope: test_dataset:metadata
           aggregate_scope: test_dataset:aggregate
           read_scope: test_dataset:rows
-          verify_scope: test_dataset:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1824,7 +2050,7 @@ audit:
             .layer(Extension(principal(&[
                 "test_dataset:metadata",
                 "test_dataset:rows",
-                "test_dataset:verify",
+                "test_dataset:evidence_verification",
             ]))),
     )
 }

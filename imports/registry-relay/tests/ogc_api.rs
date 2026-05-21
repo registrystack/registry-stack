@@ -100,7 +100,6 @@ datasets:
           metadata_scope: civic_registry:metadata
           aggregate_scope: civic_registry:aggregate
           read_scope: civic_registry:rows
-          verify_scope: civic_registry:verify
         api:
           default_limit: 100
           max_limit: 1000

@@ -596,6 +596,7 @@ evidence_verification:
     enabled: true
     burst: 120
     window_seconds: 60
+    max_buckets: 8192
 
 access:
   evidence_verification_scope: social_registry:evidence_verification

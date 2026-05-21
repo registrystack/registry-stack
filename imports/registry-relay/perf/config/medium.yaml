@@ -36,7 +36,7 @@ auth:
       scopes:
 
     - id: perf_evidence_verification
-      hash_env: PERF_CLAIM_VERIFICATION_KEY_HASH
+      hash_env: PERF_EVIDENCE_VERIFICATION_KEY_HASH
       scopes:
         - clinic_capacity:evidence_verification
 

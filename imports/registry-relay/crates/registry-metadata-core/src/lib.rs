@@ -231,6 +231,15 @@ pub struct RequirementManifest {
     pub rdf_type: Option<String>,
     #[serde(default)]
     pub procedure_contexts: Vec<String>,
+    #[serde(default)]
+    pub reference_frameworks: Vec<ReferenceFrameworkManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceFrameworkManifest {
+    pub iri: String,
+    pub identifier: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -527,6 +536,13 @@ pub struct CompiledRequirement {
     pub description: String,
     pub rdf_type: String,
     pub procedure_contexts: Vec<String>,
+    pub reference_frameworks: Vec<CompiledReferenceFramework>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledReferenceFramework {
+    pub iri: String,
+    pub identifier: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -551,6 +567,7 @@ pub struct CompiledEvidenceOffering {
     pub evidence_type: String,
     pub evidence_type_iri: String,
     pub requirement_iris: Vec<String>,
+    pub information_concepts: Vec<String>,
     pub issuing_authority: CompiledIssuingAuthority,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jurisdiction: Option<JurisdictionManifest>,
@@ -1459,6 +1476,20 @@ fn validate_requirements<'a>(
             &manifest.vocabularies,
             errors,
         );
+        for (framework_index, framework) in requirement.reference_frameworks.iter().enumerate() {
+            let framework_path = format!("{path}.reference_frameworks[{framework_index}]");
+            validate_uri(
+                &framework.iri,
+                format!("{framework_path}.iri"),
+                &manifest.vocabularies,
+                errors,
+            );
+            validate_non_empty(
+                &framework.identifier,
+                format!("{framework_path}.identifier"),
+                errors,
+            );
+        }
     }
     ids
 }
@@ -2106,6 +2137,16 @@ fn compile_requirement(
             .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
             .unwrap_or_else(|| "http://data.europa.eu/m8g/Requirement".to_string()),
         procedure_contexts: requirement.procedure_contexts.clone(),
+        reference_frameworks: requirement
+            .reference_frameworks
+            .iter()
+            .filter_map(|framework| {
+                Some(CompiledReferenceFramework {
+                    iri: expand_uri(&framework.iri, &manifest.vocabularies)?,
+                    identifier: framework.identifier.clone(),
+                })
+            })
+            .collect(),
     }
 }
 
@@ -2180,6 +2221,9 @@ fn compile_evidence_offering(
             }),
         requirement_iris: evidence_type
             .map(|evidence_type| evidence_type.requirement_iris.clone())
+            .unwrap_or_default(),
+        information_concepts: evidence_type
+            .map(|evidence_type| evidence_type.information_concepts.clone())
             .unwrap_or_default(),
         issuing_authority: CompiledIssuingAuthority {
             id: offering.issuing_authority.id.clone(),
@@ -2759,25 +2803,64 @@ fn public_service_node(dataset: &CompiledDataset, service: &CompiledPublicServic
 fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
     let mut nodes = Vec::new();
     for requirement in compiled.requirements() {
+        let evidence_types = evidence_types_for_requirement(compiled, &requirement.id);
+        let information_concepts = compiled
+            .evidence_types()
+            .filter(|evidence_type| evidence_type.proves.contains(&requirement.id))
+            .flat_map(|evidence_type| evidence_type.information_concepts.iter())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|iri| iri_object(iri))
+            .collect::<Vec<_>>();
+        let evidence_type_lists = evidence_types
+            .iter()
+            .map(|evidence_type| {
+                iri_object(&evidence_type_list_iri(
+                    &requirement.iri,
+                    &evidence_type.id,
+                    evidence_types.len() > 1,
+                ))
+            })
+            .collect::<Vec<_>>();
         nodes.push(json!({
             "@id": requirement.iri,
             "@type": requirement.rdf_type,
             "dcterms:identifier": requirement.id,
             "dcterms:title": requirement.title,
+            "skos:prefLabel": requirement.title,
             "dcterms:description": requirement.description,
-            "cccev:hasEvidenceTypeList": {
-                "@id": format!("{}#evidence-type-list", requirement.iri),
-            },
-        }));
-        nodes.push(json!({
-            "@id": format!("{}#evidence-type-list", requirement.iri),
-            "@type": "cccev:EvidenceTypeList",
-            "cccev:specifiesEvidenceType": compiled
-                .evidence_types()
-                .filter(|evidence_type| evidence_type.proves.contains(&requirement.id))
-                .map(|evidence_type| iri_object(&evidence_type.iri))
+            "cccev:hasConcept": information_concepts,
+            "cccev:isDerivedFrom": requirement
+                .reference_frameworks
+                .iter()
+                .map(|framework| iri_object(&framework.iri))
                 .collect::<Vec<_>>(),
+            "cccev:hasEvidenceTypeList": evidence_type_lists,
         }));
+        for evidence_type in &evidence_types {
+            nodes.push(json!({
+                "@id": evidence_type_list_iri(
+                    &requirement.iri,
+                    &evidence_type.id,
+                    evidence_types.len() > 1,
+                ),
+                "@type": "cccev:EvidenceTypeList",
+                "dcterms:identifier": evidence_type_list_identifier(
+                    &requirement.id,
+                    &evidence_type.id,
+                    evidence_types.len() > 1,
+                ),
+                "skos:prefLabel": format!("Evidence type {} for {}", evidence_type.title, requirement.title),
+                "cccev:specifiesEvidenceType": [iri_object(&evidence_type.iri)],
+            }));
+        }
+        for framework in &requirement.reference_frameworks {
+            nodes.push(json!({
+                "@id": framework.iri,
+                "@type": "cccev:ReferenceFramework",
+                "dcterms:identifier": framework.identifier,
+            }));
+        }
     }
     for evidence_type in compiled.evidence_types() {
         nodes.push(json!({
@@ -2785,9 +2868,36 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             "@type": "cccev:EvidenceType",
             "dcterms:identifier": evidence_type.id,
             "dcterms:title": evidence_type.title,
+            "skos:prefLabel": evidence_type.title,
             "dcterms:description": evidence_type.description,
-            "registry_relay:provesRequirement": evidence_type.requirement_iris.iter().map(|iri| iri_object(iri)).collect::<Vec<_>>(),
-            "registry_relay:informationConcept": evidence_type.information_concepts.iter().map(|iri| iri_object(iri)).collect::<Vec<_>>(),
+            "cccev:isSpecifiedIn": evidence_type
+                .proves
+                .iter()
+                .filter_map(|requirement_id| {
+                    let requirement = compiled
+                        .requirements()
+                        .find(|candidate| candidate.id == *requirement_id)?;
+                    let evidence_types = evidence_types_for_requirement(compiled, requirement_id);
+                    Some(iri_object(&evidence_type_list_iri(
+                        &requirement.iri,
+                        &evidence_type.id,
+                        evidence_types.len() > 1,
+                    )))
+                })
+                .collect::<Vec<_>>(),
+        }));
+    }
+    for concept_iri in compiled
+        .evidence_types()
+        .flat_map(|evidence_type| evidence_type.information_concepts.iter())
+        .collect::<BTreeSet<_>>()
+    {
+        let identifier = information_concept_identifier(concept_iri);
+        nodes.push(json!({
+            "@id": concept_iri,
+            "@type": "cccev:InformationConcept",
+            "dcterms:identifier": identifier,
+            "skos:prefLabel": identifier,
         }));
     }
     for offering in compiled.evidence_offerings() {
@@ -2804,6 +2914,53 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
         }));
     }
     nodes
+}
+
+fn evidence_types_for_requirement<'a>(
+    compiled: &'a CompiledMetadata,
+    requirement_id: &str,
+) -> Vec<&'a CompiledEvidenceType> {
+    compiled
+        .evidence_types()
+        .filter(|evidence_type| evidence_type.proves.iter().any(|id| id == requirement_id))
+        .collect()
+}
+
+fn evidence_type_list_iri(
+    requirement_iri: &str,
+    evidence_type_id: &str,
+    disambiguate: bool,
+) -> String {
+    let suffix = if disambiguate {
+        format!("evidence-type-list-{evidence_type_id}")
+    } else {
+        "evidence-type-list".to_string()
+    };
+    if requirement_iri.contains('#') {
+        format!("{requirement_iri}-{suffix}")
+    } else {
+        format!("{requirement_iri}#{suffix}")
+    }
+}
+
+fn evidence_type_list_identifier(
+    requirement_id: &str,
+    evidence_type_id: &str,
+    disambiguate: bool,
+) -> String {
+    if disambiguate {
+        format!("{requirement_id}-{evidence_type_id}-evidence-type-list")
+    } else {
+        format!("{requirement_id}-evidence-type-list")
+    }
+}
+
+fn information_concept_identifier(concept_iri: &str) -> String {
+    concept_iri
+        .rsplit(['#', '/'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(concept_iri)
+        .to_string()
 }
 
 fn issuing_authority_node(authority: &CompiledIssuingAuthority) -> Value {
@@ -3459,13 +3616,18 @@ fn jsonld_context_with_evidence_terms() -> Value {
     let mut context = jsonld_context_with_public_service_terms();
     if let Some(object) = context.as_object_mut() {
         object.insert("cccev".to_string(), json!("http://data.europa.eu/m8g/"));
+        object.insert(
+            "skos".to_string(),
+            json!("http://www.w3.org/2004/02/skos/core#"),
+        );
         for term in [
+            "cccev:hasConcept",
             "cccev:hasEvidenceTypeList",
+            "cccev:isDerivedFrom",
+            "cccev:isSpecifiedIn",
             "cccev:specifiesEvidenceType",
             "registry_relay:evidenceType",
-            "registry_relay:informationConcept",
             "registry_relay:issuingAuthority",
-            "registry_relay:provesRequirement",
             "registry_relay:servesEntity",
         ] {
             object.insert(term.to_string(), json!({ "@type": "@id" }));

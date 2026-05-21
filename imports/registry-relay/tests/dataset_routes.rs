@@ -82,7 +82,7 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -98,7 +98,7 @@ datasets:
           metadata_scope: social_registry:individual:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -135,7 +135,6 @@ datasets:
           metadata_scope: payments:metadata
           aggregate_scope: payments:aggregate
           read_scope: payments:rows
-          verify_scope: payments:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -225,8 +224,10 @@ async fn datasets_filter_entities_inside_visible_dataset_by_metadata_scope() {
 }
 
 #[tokio::test]
-async fn verify_only_scope_cannot_read_datasets() {
-    let resp = server(&["social_registry:verify"]).get("/datasets").await;
+async fn evidence_verification_only_scope_cannot_read_datasets() {
+    let resp = server(&["social_registry:evidence_verification"])
+        .get("/datasets")
+        .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
     let body: Value = resp.json();

@@ -79,6 +79,13 @@ fn validate_evidence_rate_limit(
         );
         return Err(ConfigError::ValidationError);
     }
+    if rate_limit.max_buckets == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "evidence_verification.rate_limit.max_buckets must be greater than zero when enabled"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 
@@ -390,6 +397,15 @@ fn validate_spdci_disability_registry(
         &disability.entity,
         "standards.spdci.disability_registry",
     )?;
+    if entity.access.evidence_verification_scope.trim().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %disability.dataset,
+            entity = %disability.entity,
+            "standards.spdci.disability_registry requires evidence_verification_scope"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     for required in [
         disability.query_field.as_str(),
         disability.disabled_status_field.as_str(),
@@ -452,6 +468,16 @@ fn validate_spdci_registry(
         &registry.entity,
         "standards.spdci.registries",
     )?;
+    if entity.access.evidence_verification_scope.trim().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            registry = name,
+            dataset_id = %registry.dataset,
+            entity = %registry.entity,
+            "standards.spdci.registries entries require evidence_verification_scope"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     for (query_name, field) in registry
         .identifiers
         .iter()
