@@ -566,7 +566,9 @@ Do not log raw geometry, row values, API keys, fingerprints, or full request bod
 
 ## Catalog And Metadata
 
-The existing `/catalog` and `/catalog/dcat-ap.jsonld` responses should advertise OGC access services for spatial entities when the feature is enabled.
+The canonical `/metadata/*` surfaces stay route-neutral. OGC access services
+for spatial entities are advertised by the OGC API routes and the Relay-native
+dataset discovery surfaces, not by a legacy `/catalog` route.
 
 This requires a dedicated catalog code path for OGC distributions. It is not just a hook in the current DCAT-AP extension shape.
 

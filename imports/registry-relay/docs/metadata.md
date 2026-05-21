@@ -1,6 +1,8 @@
 # Portable Metadata
 
 Registry Relay separates portable metadata from runtime configuration.
+The standards assumptions behind this publication model are documented in
+[`../STANDARDS_ASSUMPTIONS.md`](../STANDARDS_ASSUMPTIONS.md).
 
 Portable metadata describes what a registry means: catalogs, datasets, entities,
 fields, identifiers, relationships, vocabularies, codelists, standards, and
@@ -44,6 +46,7 @@ The metadata manifest keeps standard-facing semantics:
 
 - catalog id, base URL, publisher, standards, and application profiles
 - dataset title, description, status, access rights, conformance, and coverage
+- descriptive ODRL policy Offers for dataset discovery and governance review
 - entity names, titles, identifiers, fields, relationships, concepts, and units
 - SHACL constraints, JSON Schema constraints, codelists, and vocabularies
 - profile claims for ecosystem-specific validation
@@ -80,6 +83,22 @@ datasets:
     owner: Civil Registration Authority
     access_rights: restricted
     sensitivity: personal
+    policy:
+      uid: https://metadata.example.gov/datasets/vital_events#offer
+      assigner: did:web:civil-registration.example.gov
+      profile:
+        - https://example.gov/odrl/profile/government-data-sharing
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://example.gov/purpose/service-eligibility
+          duties:
+            - action: odrl:attribute
+      prohibitions:
+        - action: odrl:sell
     entities:
       - name: birth_registration
         title: Birth Registration
@@ -105,6 +124,74 @@ codelists:
       - code: male
       - code: unknown
 ```
+
+## ODRL Policy Metadata
+
+Datasets may include an optional `policy` block. Registry Relay publishes this
+as descriptive ODRL metadata for catalog discovery and governance review. It
+does not evaluate the policy, enforce purposes or duties at request time, create
+an ODRL Agreement, negotiate Dataspace Protocol contracts, or grant access by
+itself.
+
+The serialized v0.1 shape is:
+
+```yaml
+datasets:
+  - id: farmer_registry
+    title: Farmer Registry
+    policy:
+      uid: https://data.example.gov/datasets/farmer_registry#offer
+      assigner: did:web:agriculture.example.gov
+      profile:
+        - https://example.gov/odrl/profile/government-data-sharing
+      permissions:
+        - action: odrl:use
+          target: https://data.example.gov/datasets/farmer_registry
+          assignee: did:web:benefits.example.gov
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://example.gov/purpose/social-protection-eligibility
+          duties:
+            - action: odrl:attribute
+            - action: odrl:delete
+              constraints:
+                - left_operand: odrl:elapsedTime
+                  operator: odrl:lteq
+                  right_operand:
+                    value: P90D
+                  datatype: xsd:duration
+      prohibitions:
+        - action: odrl:sell
+        - action: https://example.gov/odrl/action/reidentify
+```
+
+If `policy` is omitted, metadata renderers may emit the default minimal
+`odrl:Offer`: one `odrl:use` permission, explicit dataset target, explicit
+assigner, and no invented purpose, recipient, duty, assignee, or prohibition.
+The assigner defaults from the dataset policy, catalog participant id, dataset
+publisher IRI, or catalog base URL in that order.
+
+Policies are dataset-scoped. `GET /metadata/policies` returns the ODRL offers
+for datasets visible to the caller, and
+`GET /metadata/datasets/{dataset_id}/policy` returns one visible dataset's
+offer. A catalog-level policy should only describe publication terms for the
+catalog document itself, not access conditions for every dataset.
+
+Policy values used for strict discovery should be IRIs or compact IRIs expanded
+from `vocabularies`. Built-in compact terms include `odrl:*`, `dcterms:*`, and
+`xsd:*`; deployment-specific actions, purposes, recipients, units, assigners,
+assignees, and targets should use full IRIs or configured prefixes. The
+`right_operand` object must contain exactly one of `iri` or `value`: use `iri`
+for controlled terms such as `odrl:purpose` and `odrl:recipient`, and use
+`value` for typed literals such as durations, counts, or dates.
+
+Validation rejects unresolved compact IRIs, unsupported URI schemes, empty
+configured policies, rules or duties without actions, constraints without a
+left operand, operator, or right operand, and literal operands where controlled
+IRI operands are required. See [odrl-policy-spec.md](odrl-policy-spec.md) for
+the complete implementation contract.
 
 ## Validation
 
@@ -205,10 +292,12 @@ GET /metadata/catalog
 GET /metadata/dcat
 GET /metadata/dcat/{profile}
 GET /metadata/shacl
+GET /metadata/policies
 GET /metadata/profiles
 GET /metadata/profiles/{profile}
 GET /metadata/datasets
 GET /metadata/datasets/{dataset_id}
+GET /metadata/datasets/{dataset_id}/policy
 GET /metadata/datasets/{dataset_id}/entities
 GET /metadata/datasets/{dataset_id}/entities/{entity}
 GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
@@ -221,9 +310,9 @@ GET /metadata/ogc/records/{record_id}
 These routes use the caller's `metadata` scopes. They do not grant row access,
 verify access, aggregate access, claim-verification access, or admin access.
 
-The older `/catalog`, `/catalog/dcat-ap.jsonld`, `/datasets`, and runtime
-entity routes remain operational discovery surfaces for Relay clients. Portable
-metadata consumers should use `/metadata/*` or static publication.
+`/metadata/*` is the canonical standards-facing metadata surface. `/datasets`
+and runtime entity routes remain operational data-plane discovery surfaces for
+Relay clients.
 
 ## Profiles
 

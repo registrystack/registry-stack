@@ -79,10 +79,44 @@ relationships are present in the metadata model.
 Keep operational details in this runtime config: sources, tables, physical
 columns, scopes, filters, aggregates, standards adapters, ingest, and refresh.
 Keep standard-facing meaning in the manifest: catalog, datasets, entities,
-fields, constraints, vocabularies, codelists, profiles, and conformance claims.
+fields, constraints, vocabularies, codelists, profiles, conformance claims, and
+descriptive ODRL policy metadata.
 
 See [metadata.md](metadata.md) for the manifest schema, static publication, and
 the `metadata.manifest.*` / `runtime.binding.*` startup error codes.
+
+ODRL policy belongs in the portable metadata manifest, not in runtime dataset
+bindings. A dataset `policy` block is published as an `odrl:Offer` for discovery
+and review evidence only. It does not change API-key scopes, OIDC authorization,
+row filtering, claim verification, SP DCI behavior, or any other runtime access
+decision.
+
+```yaml
+metadata:
+  manifest_path: ./disability_registry.metadata.yaml
+
+# In disability_registry.metadata.yaml:
+datasets:
+  - id: disability_registry
+    policy:
+      uid: https://demo.example.gov/datasets/disability_registry#illustrative-offer
+      assigner: did:web:social-affairs.demo.example.gov
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/disability-benefit-eligibility
+          duties:
+            - action: odrl:attribute
+      prohibitions:
+        - action: odrl:sell
+```
+
+The demo policy IRIs under `demo.example.gov` are hypothetical examples for
+catalog consumers. They are not official policy, legal advice, or a declaration
+that a client has been approved to use the data.
 
 ## Optional Social Protection Digital Convergence Initiative (SP DCI) Sync Adapter
 
@@ -248,7 +282,7 @@ TOKEN="$(./scripts/mint-zitadel-token.sh)"
 cargo run -- --config config/example.oidc.yaml
 
 # 4. Hit a protected endpoint with the minted bearer.
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/catalog
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/metadata/catalog
 ```
 
 The `tests/oidc_zitadel.rs` integration test exercises the same path and asserts the granular failure modes above. The test reads `OIDC_ISSUER`, `OIDC_SA_CLIENT_ID`, and `OIDC_SA_CLIENT_SECRET` from the environment, so source the bootstrap env file first:

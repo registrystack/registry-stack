@@ -64,8 +64,8 @@ Required public endpoints:
 - `GET /datasets/{dataset_id}/{entity}`
 - `GET /datasets/{dataset_id}/{entity}/{id}`
 - `GET /datasets/{dataset_id}/{entity}/aggregates`
-- `GET /catalog`
-- `GET /catalog/dcat-ap.jsonld`
+- `GET /metadata/catalog`
+- `GET /metadata/dcat/bregdcat-ap`
 
 Required admin-only observability endpoint:
 
@@ -252,7 +252,7 @@ Expected:
 
 ### DCAT-AP Catalog Generation
 
-Run `/catalog/dcat-ap.jsonld` in isolation.
+Run `/metadata/dcat/bregdcat-ap` in isolation.
 
 Expected:
 

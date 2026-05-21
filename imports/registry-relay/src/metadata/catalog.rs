@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use registry_metadata_core as metadata_core;
 use serde::Serialize;
 
 use crate::config::vocabularies;
@@ -43,6 +44,8 @@ pub struct DatasetMetadata {
     pub access_rights: &'static str,
     pub update_frequency: &'static str,
     pub conforms_to: Vec<String>,
+    /// DCAT-AP `dcatap:applicableLegislation` IRIs.
+    pub applicable_legislation: Vec<String>,
     /// BRegDCAT-AP `dct:spatial` IRI, if configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spatial_coverage: Option<String>,
@@ -52,10 +55,21 @@ pub struct DatasetMetadata {
     /// stronger). The emitter maps this to the canonical
     /// `http://purl.org/adms/status/<Term>` IRI.
     pub adms_status: AdmsStatus,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub public_services: Vec<PublicServiceMetadata>,
+    #[serde(skip)]
+    pub compiled_policy: Option<metadata_core::CompiledDatasetPolicy>,
     pub links: DatasetLinks,
     #[serde(skip_serializing_if = "DatasetStandardsMetadata::is_empty")]
     pub standards: DatasetStandardsMetadata,
     pub entities: Vec<EntityMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PublicServiceMetadata {
+    pub id: String,
+    pub title: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -230,8 +244,8 @@ fn catalog_document_with_entity_filter(
             .as_deref()
             .and_then(|uri| vocabularies::expand(uri, &config.vocabularies)),
         links: CatalogLinks {
-            self_url: format!("{base_url}/catalog"),
-            dcat_ap: format!("{base_url}/catalog/dcat-ap.jsonld"),
+            self_url: format!("{base_url}/metadata/catalog"),
+            dcat_ap: format!("{base_url}/metadata/dcat/bregdcat-ap"),
         },
         datasets,
     }
@@ -306,12 +320,42 @@ fn dataset_metadata_with_entity_filter(
             .iter()
             .filter_map(|uri| expand_uri(config, uri))
             .collect(),
+        applicable_legislation: dataset
+            .applicable_legislation
+            .iter()
+            .filter_map(|uri| expand_uri(config, uri))
+            .collect(),
         spatial_coverage,
         adms_status: dataset.status.unwrap_or(AdmsStatus::UnderDevelopment),
+        public_services: dataset
+            .public_services
+            .iter()
+            .enumerate()
+            .map(|(index, service)| PublicServiceMetadata {
+                id: service
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("#service-{}-{}", dataset_id, index + 1)),
+                title: service.title.clone(),
+                description: service.description.clone().unwrap_or_default(),
+            })
+            .collect(),
+        compiled_policy: None,
         links,
         standards,
         entities,
     })
+}
+
+pub fn attach_compiled_policies(
+    catalog: &mut CatalogDocument,
+    compiled: &metadata_core::CompiledMetadata,
+) {
+    for dataset in &mut catalog.datasets {
+        dataset.compiled_policy = compiled
+            .dataset(&dataset.dataset_id)
+            .map(|compiled_dataset| compiled_dataset.policy.clone());
+    }
 }
 
 fn dataset_links(base_url: &str, dataset_id: &str, entities: &[EntityMetadata]) -> DatasetLinks {

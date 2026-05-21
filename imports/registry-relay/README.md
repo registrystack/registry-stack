@@ -17,7 +17,7 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 
 ## Current Status
 
-0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, optional audit chaining, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include DSP-facing participant id, ODRL offer, transfer format, and access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
+0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, optional audit chaining, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include DSP-facing participant id evidence, dataset-scoped ODRL Offers, standards-shaped media type metadata, and DCAT access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
 
 ## Repository Map
 
@@ -25,6 +25,8 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [docs/configuration.md](docs/configuration.md): operator-facing configuration reference.
 - [docs/api.md](docs/api.md): authentication, endpoint, filtering, pagination, and error contract.
 - [docs/metadata.md](docs/metadata.md): portable metadata manifests, static publication, and `/metadata/*` routes.
+- [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
+  Registry Relay publication choices, and downstream interpretation boundaries.
 - [docs/claim-verification.md](docs/claim-verification.md): submitted-claims verification guide, examples, privacy model, and signed receipts.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
@@ -166,15 +168,15 @@ The public URL space is entity-shaped:
 ```text
 GET /docs
 GET /openapi.json
-GET /catalog
-GET /catalog/dcat-ap.jsonld
 GET /metadata
 GET /metadata/catalog
 GET /metadata/dcat
 GET /metadata/dcat/{profile}
 GET /metadata/shacl
+GET /metadata/policies
 GET /metadata/datasets
 GET /metadata/datasets/{dataset_id}
+GET /metadata/datasets/{dataset_id}/policy
 GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
 GET /ogc/v1/records                         (feature: ogcapi-records)
 GET /ogc/v1/records/collections             (feature: ogcapi-records)
@@ -201,13 +203,13 @@ See [docs/api.md](docs/api.md) for scope requirements, query parameters, paginat
 
 ## DCAT-AP And SHACL Validation
 
-The generated `/catalog/dcat-ap.jsonld` document is JSON-LD with embedded entity SHACL node shapes. To validate a saved catalog or a running endpoint with a real SHACL engine:
+The generated `/metadata/dcat/bregdcat-ap` document is JSON-LD with embedded entity SHACL node shapes. To validate a saved catalog or a running endpoint with a real SHACL engine:
 
 ```sh
-just validate-catalog-shacl catalog=target/catalog.dcat-ap.jsonld
+just validate-catalog-shacl catalog=target/metadata.bregdcat-ap.jsonld
 uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
   python scripts/validate_dcat_shacl.py \
-  --catalog http://127.0.0.1:8080/catalog/dcat-ap.jsonld \
+  --catalog http://127.0.0.1:8080/metadata/dcat/bregdcat-ap \
   --header "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY"
 ```
 
@@ -216,7 +218,7 @@ The recipe uses `uv` to run `pyshacl` and the local smoke profile at `tests/fixt
 ```sh
 uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
   python scripts/validate_dcat_shacl.py \
-  --catalog target/catalog.dcat-ap.jsonld \
+  --catalog target/metadata.bregdcat-ap.jsonld \
   --shapes path/to/external-dcat-ap-shapes.ttl
 ```
 
@@ -227,15 +229,25 @@ to the European Commission SEMIC SHACL validator:
 
 ```sh
 curl -H "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY" \
-  http://127.0.0.1:8080/catalog/dcat-ap.jsonld \
-  > target/catalog.dcat-ap.jsonld
+  http://127.0.0.1:8080/metadata/dcat/bregdcat-ap \
+  > target/metadata.bregdcat-ap.jsonld
 
-just validate-catalog-semic catalog=target/catalog.dcat-ap.jsonld
+just validate-catalog-semic catalog=target/metadata.bregdcat-ap.jsonld
 ```
 
 The default SEMIC profile is `dcatap.3_0_1_base`. Use
 `validation_type=dcatap.3_0_1_full` or another SEMIC validation type when
 you need a stricter release check.
+
+For repeatable offline diagnostics against the vendored SEMIC SHACL resources,
+run the local compatibility check. This is useful for BRegDCAT-AP gap reports
+and CI triage when the external validator is unavailable, but it is not a
+replacement for the live SEMIC ITB validation service:
+
+```sh
+just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld
+just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld profile=dcatap.2_0_0
+```
 
 ## Container Image
 

@@ -11,7 +11,7 @@ use crate::entity::EntityRegistry;
 use super::catalog::{
     catalog_document, catalog_document_for_dataset_ids, catalog_document_for_entity_ids,
     entity_class_uri, field_property_uri, normalized_base_url, CatalogDocument, DatasetMetadata,
-    EntityMetadata, FieldMetadata,
+    EntityMetadata, FieldMetadata, PublicServiceMetadata,
 };
 
 #[must_use]
@@ -40,12 +40,12 @@ pub fn dcat_ap_document_for_entity_ids(
     dcat_ap_document_from_catalog(catalog)
 }
 
-fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
+pub(crate) fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
     let authority_type = catalog.authority_type.as_deref();
     let datasets = catalog
         .datasets
         .iter()
-        .map(|dataset| dcat_dataset(dataset, authority_type))
+        .map(|dataset| dcat_dataset(dataset, authority_type, &catalog.participant_id))
         .collect::<Vec<_>>();
     let shapes = catalog
         .datasets
@@ -57,11 +57,22 @@ fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
                 .map(|entity| entity_shape(&catalog.base_url, dataset, entity))
         })
         .collect::<Vec<_>>();
+    let public_services = catalog
+        .datasets
+        .iter()
+        .flat_map(|dataset| {
+            dataset
+                .public_services
+                .iter()
+                .map(move |service| public_service_node(dataset, service))
+        })
+        .collect::<Vec<_>>();
 
-    let obj = json!({
+    let mut obj = json!({
         "@context": context(),
         "@id": catalog.links.dcat_ap,
         "@type": "dcat:Catalog",
+        "dcterms:identifier": slug_identifier(&catalog.title),
         "dspace:participantId": catalog.participant_id,
         "dcterms:title": catalog.title,
         "dcterms:description": format!("DCAT-AP catalog for {}", catalog.title),
@@ -70,6 +81,21 @@ fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
         "dcat:dataset": datasets,
         "sh:shapesGraph": shapes,
     });
+    if !public_services.is_empty() {
+        // JSON-LD `@included` carries related CPSV evidence without
+        // inventing a Registry Relay source-of-truth predicate.
+        obj["@context"] = context_with_public_service_terms();
+        append_included_nodes(&mut obj, public_services);
+    } else if catalog
+        .datasets
+        .iter()
+        .any(|dataset| !dataset.applicable_legislation.is_empty())
+    {
+        obj["@context"] = context_with_public_service_terms();
+    }
+    let mut reference_nodes = standard_reference_nodes(&obj);
+    reference_nodes.extend(dcat_range_reference_nodes(&obj));
+    append_included_nodes(&mut obj, reference_nodes);
 
     #[cfg(feature = "ogcapi-records")]
     {
@@ -105,7 +131,11 @@ pub fn entity_schema_document(
     Some(entity_schema_object(&base_url, dataset, entity))
 }
 
-fn dcat_dataset(dataset: &DatasetMetadata, authority_type: Option<&str>) -> Value {
+fn dcat_dataset(
+    dataset: &DatasetMetadata,
+    authority_type: Option<&str>,
+    default_assigner: &str,
+) -> Value {
     let mut distributions = dataset_standard_distributions(dataset);
     distributions.extend(
         dataset
@@ -144,12 +174,15 @@ fn dcat_dataset(dataset: &DatasetMetadata, authority_type: Option<&str>) -> Valu
         "dcterms:conformsTo": dataset.conforms_to,
         "adms:status": adms_status_uri(dataset.adms_status),
         "dcat:landingPage": dataset.links.self_url,
-        "odrl:hasPolicy": dataset_offer(dataset),
+        "odrl:hasPolicy": dataset_offer(dataset, default_assigner),
         "dcat:distribution": distributions,
     });
 
     if let Some(spatial) = dataset.spatial_coverage.as_deref() {
         obj["dcterms:spatial"] = json!(spatial);
+    }
+    if !dataset.applicable_legislation.is_empty() {
+        obj["dcatap:applicableLegislation"] = json!(dataset.applicable_legislation);
     }
 
     // Project convention: surface distinct codelist IRIs used by this
@@ -164,7 +197,15 @@ fn dcat_dataset(dataset: &DatasetMetadata, authority_type: Option<&str>) -> Valu
         obj["dcterms:references"] = Value::Array(
             codelist_iris
                 .iter()
-                .map(|iri| json!({ "@id": iri, "@type": "skos:ConceptScheme" }))
+                .map(|iri| {
+                    let label = codelist_label(iri);
+                    json!({
+                        "@id": iri,
+                        "@type": "skos:ConceptScheme",
+                        "dcterms:title": label,
+                        "skos:prefLabel": label,
+                    })
+                })
                 .collect(),
         );
     }
@@ -192,6 +233,199 @@ fn dataset_standard_distributions(dataset: &DatasetMetadata) -> Vec<Value> {
     distributions
 }
 
+fn media_type_format(media_type: &str) -> Value {
+    json!({
+        "@id": format!("https://www.iana.org/assignments/media-types/{media_type}"),
+        "@type": ["dcterms:MediaType", "dcterms:MediaTypeOrExtent"],
+        "rdfs:label": media_type,
+    })
+}
+
+fn standard_reference_nodes(document: &Value) -> Vec<Value> {
+    // `dcterms:conformsTo` points at standards or profiles in DCAT-AP.
+    // We type every configured target accordingly instead of guessing which
+    // vocabularies are "known" to Registry Relay.
+    let mut iris = BTreeSet::new();
+    collect_conforms_to_iris(document, &mut iris);
+    iris.into_iter()
+        .map(|iri| {
+            json!({
+                "@id": iri,
+                "@type": "dcterms:Standard",
+            })
+        })
+        .collect()
+}
+
+fn dcat_range_reference_nodes(document: &Value) -> Vec<Value> {
+    let mut typed_iris = BTreeSet::new();
+    collect_typed_reference_iris(
+        document,
+        "dcterms:accessRights",
+        "dcterms:RightsStatement",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcterms:accrualPeriodicity",
+        "dcterms:Frequency",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcat:landingPage",
+        "foaf:Document",
+        &mut typed_iris,
+    );
+    typed_iris
+        .into_iter()
+        .map(|(iri, node_type)| {
+            json!({
+                "@id": iri,
+                "@type": node_type,
+            })
+        })
+        .collect()
+}
+
+fn collect_typed_reference_iris(
+    value: &Value,
+    predicate: &str,
+    node_type: &str,
+    iris: &mut BTreeSet<(String, String)>,
+) {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get(predicate) {
+                let mut values = BTreeSet::new();
+                collect_string_values(reference, &mut values);
+                iris.extend(
+                    values
+                        .into_iter()
+                        .map(|value| (value, node_type.to_string())),
+                );
+            }
+            for nested in object.values() {
+                collect_typed_reference_iris(nested, predicate, node_type, iris);
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                collect_typed_reference_iris(nested, predicate, node_type, iris);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_conforms_to_iris(value: &Value, iris: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(conforms_to) = object.get("dcterms:conformsTo") {
+                collect_string_values(conforms_to, iris);
+            }
+            for nested in object.values() {
+                collect_conforms_to_iris(nested, iris);
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                collect_conforms_to_iris(nested, iris);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_string_values(value: &Value, values: &mut BTreeSet<String>) {
+    match value {
+        Value::String(value) => {
+            values.insert(value.clone());
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_string_values(item, values);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(id) = object.get("@id").and_then(Value::as_str) {
+                values.insert(id.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn append_included_nodes(document: &mut Value, nodes: Vec<Value>) {
+    if nodes.is_empty() {
+        return;
+    }
+    let mut existing = document
+        .get_mut("@included")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let mut seen = existing
+        .iter()
+        .filter_map(included_node_key)
+        .collect::<BTreeSet<_>>();
+    for node in nodes {
+        if included_node_key(&node).is_some_and(|key| seen.insert(key)) {
+            existing.push(node);
+        }
+    }
+    document["@included"] = Value::Array(existing);
+}
+
+fn included_node_key(node: &Value) -> Option<(String, String)> {
+    let object = node.as_object()?;
+    Some((
+        object.get("@id")?.as_str()?.to_string(),
+        object.get("@type")?.as_str()?.to_string(),
+    ))
+}
+
+fn codelist_label(iri: &str) -> String {
+    let token = iri
+        .trim_end_matches('/')
+        .rsplit(['/', '#'])
+        .next()
+        .unwrap_or(iri);
+    humanize_token(token)
+}
+
+fn slug_identifier(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn humanize_token(value: &str) -> String {
+    value
+        .split(['_', '-', '/'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(feature = "ogcapi-records")]
 fn dataset_ogc_records_distribution(
     dataset: &DatasetMetadata,
@@ -202,15 +436,13 @@ fn dataset_ogc_records_distribution(
         "@id": records.items,
         "@type": "dcat:Distribution",
         "dcterms:title": format!("{} OGC API Records service", dataset.title),
-        "dcterms:format": {
-            "@id": "registry_relay:OGCAPI-Records",
-        },
+        "dcterms:format": media_type_format("application/geo+json"),
         "dcat:accessURL": records.items,
         "dcat:accessService": {
             "@id": access_service,
             "@type": "dcat:DataService",
+            "dcterms:identifier": format!("{}:ogc-api-records", dataset.dataset_id),
             "dcterms:title": format!("{} OGC API Records service", dataset.title),
-            "dspace:dataServiceType": "registry_relay:ogc-api-records",
             "dcat:endpointURL": records.items,
             "dcat:endpointDescription": openapi_url(&dataset.links.self_url),
             "dcat:servesDataset": dataset.links.self_url,
@@ -229,8 +461,8 @@ fn catalog_ogc_records_service(catalog: &CatalogDocument) -> Option<Value> {
     Some(json!({
         "@id": format!("{}#ogc-api-records-service", records.landing),
         "@type": "dcat:DataService",
+        "dcterms:identifier": "catalog:ogc-api-records",
         "dcterms:title": format!("{} OGC API Records service", catalog.title),
-        "dspace:dataServiceType": "registry_relay:ogc-api-records",
         "dcat:endpointURL": records.landing,
         "dcat:endpointDescription": format!("{}/openapi.json", catalog.base_url),
         "dcat:servesDataset": catalog
@@ -263,15 +495,13 @@ fn dataset_ogc_distribution(
         "@id": ogc.collections,
         "@type": "dcat:Distribution",
         "dcterms:title": format!("{} OGC API Features service", dataset.title),
-        "dcterms:format": {
-            "@id": "registry_relay:OGCAPI-Features",
-        },
+        "dcterms:format": media_type_format("application/json"),
         "dcat:accessURL": ogc.collections,
         "dcat:accessService": {
             "@id": access_service,
             "@type": "dcat:DataService",
+            "dcterms:identifier": format!("{}:ogc-api-features", dataset.dataset_id),
             "dcterms:title": format!("{} OGC API Features service", dataset.title),
-            "dspace:dataServiceType": "registry_relay:ogc-api-features",
             "dcat:endpointURL": ogc.collections,
             "dcat:endpointDescription": openapi_url(&dataset.links.self_url),
             "dcat:servesDataset": dataset.links.self_url,
@@ -296,21 +526,17 @@ fn dataset_spdci_distribution(
         "@id": registry.sync_search,
         "@type": "dcat:Distribution",
         "dcterms:title": format!("{} SP DCI {} sync service", dataset.title, registry.registry),
-        "dcterms:format": {
-            "@id": "registry_relay:SPDCI-Sync",
-        },
+        "dcterms:format": media_type_format("application/json"),
         "dcat:accessURL": registry.sync_search,
         "dcat:accessService": {
             "@id": access_service,
             "@type": "dcat:DataService",
+            "dcterms:identifier": format!("{}:spdci-sync:{}", dataset.dataset_id, registry.registry),
             "dcterms:title": format!("{} SP DCI {} sync service", dataset.title, registry.registry),
-            "dspace:dataServiceType": "registry_relay:spdci-sync",
             "dcat:endpointURL": registry.sync_search,
             "dcat:endpointDescription": openapi_url(&dataset.links.self_url),
             "dcat:servesDataset": dataset.links.self_url,
             "dcterms:conformsTo": "https://spdci.org/",
-            "registry_relay:registryName": registry.registry,
-            "registry_relay:recordType": registry.record_type,
         },
         "dcterms:conformsTo": "https://spdci.org/",
     })
@@ -337,18 +563,16 @@ fn entity_rest_distribution(entity: &EntityMetadata) -> Value {
         "@id": entity.links.collection,
         "@type": "dcat:Distribution",
         "dcterms:title": entity.title.as_deref().unwrap_or(entity.name.as_str()),
-        "dcterms:format": {
-            "@id": "registry_relay:HttpData-PULL",
-        },
+        "dcterms:format": media_type_format("application/json"),
         "dcat:accessURL": entity.links.collection,
         "dcat:accessService": {
             "@id": access_service,
             "@type": "dcat:DataService",
+            "dcterms:identifier": format!("{}:entity-rest:{}", entity.name, entity.primary_key),
             "dcterms:title": format!(
                 "{} REST access service",
                 entity.title.as_deref().unwrap_or(entity.name.as_str())
             ),
-            "dspace:dataServiceType": "registry_relay:entity-rest",
             "dcat:endpointURL": entity.links.collection,
             "dcat:endpointDescription": openapi_url(&entity.links.collection),
             "dcterms:conformsTo": entity.links.schema,
@@ -369,19 +593,17 @@ fn entity_ogc_distribution(entity: &EntityMetadata) -> Option<Value> {
             "{} OGC API Features collection",
             entity.title.as_deref().unwrap_or(entity.name.as_str())
         ),
-        "dcterms:format": {
-            "@id": "registry_relay:OGCAPI-Features",
-        },
+        "dcterms:format": media_type_format("application/geo+json"),
         "dcat:accessURL": collection,
         "dcat:downloadURL": items,
         "dcat:accessService": {
             "@id": access_service,
             "@type": "dcat:DataService",
+            "dcterms:identifier": format!("{}:ogc-api-features", entity.name),
             "dcterms:title": format!(
                 "{} OGC API Features service",
                 entity.title.as_deref().unwrap_or(entity.name.as_str())
             ),
-            "dspace:dataServiceType": "registry_relay:ogc-api-features",
             "dcat:endpointURL": collection,
             "dcat:endpointDescription": openapi_url(collection),
             "dcterms:conformsTo": "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
@@ -393,16 +615,162 @@ fn entity_ogc_distribution(entity: &EntityMetadata) -> Option<Value> {
     }))
 }
 
-fn dataset_offer(dataset: &DatasetMetadata) -> Value {
+fn dataset_offer(dataset: &DatasetMetadata, default_assigner: &str) -> Value {
+    if let Some(policy) = dataset.compiled_policy.as_ref() {
+        return compiled_dataset_offer(dataset, policy);
+    }
+
+    let default_uid = format!("{}#offer", dataset.links.self_url);
     json!({
-        "@id": format!("{}#offer", dataset.links.self_url),
+        "@id": default_uid,
         "@type": "odrl:Offer",
-        "odrl:permission": [{
-            "odrl:action": {
-                "@id": "odrl:use",
-            },
-        }],
+        "odrl:uid": default_uid,
+        "odrl:assigner": iri_object(default_assigner),
+        "odrl:permission": [default_policy_rule(default_assigner, &dataset.links.self_url)],
     })
+}
+
+fn compiled_dataset_offer(
+    dataset: &DatasetMetadata,
+    policy: &registry_metadata_core::CompiledDatasetPolicy,
+) -> Value {
+    let uid = legacy_policy_dataset_iri(dataset, &policy.uid);
+    let mut offer = json!({
+        "@id": uid,
+        "@type": "odrl:Offer",
+        "odrl:uid": uid,
+        "odrl:assigner": iri_object(&policy.assigner),
+        "odrl:permission": policy
+            .permissions
+            .iter()
+            .map(|rule| compiled_policy_rule(dataset, rule, &policy.assigner))
+            .collect::<Vec<_>>(),
+    });
+    if !policy.profile.is_empty() {
+        offer["odrl:profile"] = json!(policy
+            .profile
+            .iter()
+            .map(|iri| iri_object(iri))
+            .collect::<Vec<_>>());
+    }
+    if !policy.prohibitions.is_empty() {
+        offer["odrl:prohibition"] = json!(policy
+            .prohibitions
+            .iter()
+            .map(|rule| compiled_policy_rule(dataset, rule, &policy.assigner))
+            .collect::<Vec<_>>());
+    }
+    offer
+}
+
+fn default_policy_rule(assigner: &str, target: &str) -> Value {
+    json!({
+        "odrl:target": iri_object(target),
+        "odrl:assigner": iri_object(assigner),
+        "odrl:action": iri_object("odrl:use"),
+    })
+}
+
+fn compiled_policy_rule(
+    dataset: &DatasetMetadata,
+    rule: &registry_metadata_core::CompiledPolicyRule,
+    assigner: &str,
+) -> Value {
+    let target = legacy_policy_dataset_iri(dataset, &rule.target);
+    let mut value = json!({
+        "odrl:target": iri_object(&target),
+        "odrl:assigner": iri_object(assigner),
+        "odrl:action": iri_object(&rule.action),
+    });
+    if let Some(assignee) = rule.assignee.as_deref() {
+        value["odrl:assignee"] = iri_object(assignee);
+    }
+    if !rule.constraints.is_empty() {
+        value["odrl:constraint"] = json!(rule
+            .constraints
+            .iter()
+            .map(compiled_policy_constraint)
+            .collect::<Vec<_>>());
+    }
+    if !rule.duties.is_empty() {
+        value["odrl:duty"] = json!(rule
+            .duties
+            .iter()
+            .map(|duty| compiled_policy_duty(dataset, duty))
+            .collect::<Vec<_>>());
+    }
+    value
+}
+
+fn compiled_policy_duty(
+    dataset: &DatasetMetadata,
+    duty: &registry_metadata_core::CompiledPolicyDuty,
+) -> Value {
+    let mut value = json!({
+        "odrl:action": iri_object(&duty.action),
+    });
+    if let Some(target) = duty.target.as_deref() {
+        let target = legacy_policy_dataset_iri(dataset, target);
+        value["odrl:target"] = iri_object(&target);
+    }
+    if let Some(assignee) = duty.assignee.as_deref() {
+        value["odrl:assignee"] = iri_object(assignee);
+    }
+    if !duty.constraints.is_empty() {
+        value["odrl:constraint"] = json!(duty
+            .constraints
+            .iter()
+            .map(compiled_policy_constraint)
+            .collect::<Vec<_>>());
+    }
+    value
+}
+
+fn compiled_policy_constraint(
+    constraint: &registry_metadata_core::CompiledPolicyConstraint,
+) -> Value {
+    let mut value = json!({
+        "odrl:leftOperand": iri_object(&constraint.left_operand),
+        "odrl:operator": iri_object(&constraint.operator),
+        "odrl:rightOperand": compiled_policy_operand(&constraint.right_operand, constraint.datatype.as_deref()),
+    });
+    if let Some(unit) = constraint.unit.as_deref() {
+        value["odrl:unit"] = iri_object(unit);
+    }
+    value
+}
+
+fn compiled_policy_operand(
+    operand: &registry_metadata_core::CompiledPolicyOperandValue,
+    datatype: Option<&str>,
+) -> Value {
+    match operand {
+        registry_metadata_core::CompiledPolicyOperandValue::Iri(iri) => iri_object(iri),
+        registry_metadata_core::CompiledPolicyOperandValue::Literal(value) => {
+            if let Some(datatype) = datatype {
+                json!({
+                    "@value": value,
+                    "@type": datatype,
+                })
+            } else {
+                json!(value)
+            }
+        }
+    }
+}
+
+fn iri_object(iri: &str) -> Value {
+    json!({ "@id": iri })
+}
+
+fn legacy_policy_dataset_iri(dataset: &DatasetMetadata, iri: &str) -> String {
+    if iri == format!("#dataset-{}", dataset.dataset_id) {
+        return dataset.links.self_url.clone();
+    }
+    if iri == format!("#dataset-{}-offer", dataset.dataset_id) {
+        return format!("{}#offer", dataset.links.self_url);
+    }
+    iri.to_string()
 }
 
 fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetadata) -> Value {
@@ -586,6 +954,16 @@ fn publisher_agent(name: &str, authority_type: Option<&str>) -> Value {
     agent
 }
 
+fn public_service_node(dataset: &DatasetMetadata, service: &PublicServiceMetadata) -> Value {
+    json!({
+        "@id": service.id,
+        "@type": "cpsv:PublicService",
+        "dcterms:title": service.title,
+        "dcterms:description": service.description,
+        "cpsv:produces": dataset.links.self_url,
+    })
+}
+
 fn adms_status_uri(status: AdmsStatus) -> &'static str {
     match status {
         AdmsStatus::UnderDevelopment => "http://purl.org/adms/status/UnderDevelopment",
@@ -619,7 +997,7 @@ fn frequency_uri(frequency: &str) -> &'static str {
 }
 
 fn context() -> Value {
-    json!({
+    let mut context = json!({
         "adms": "http://www.w3.org/ns/adms#",
         "dcat": "http://www.w3.org/ns/dcat#",
         "dcterms": "http://purl.org/dc/terms/",
@@ -647,12 +1025,45 @@ fn context() -> Value {
         "dcterms:isPartOf": { "@type": "@id" },
         "dcterms:spatial": { "@type": "@id" },
         "dcterms:type": { "@type": "@id" },
-        "odrl:action": { "@type": "@id" },
-        "odrl:hasPolicy": { "@type": "@id" },
         "sh:class": { "@type": "@id" },
         "sh:datatype": { "@type": "@id" },
         "sh:nodeKind": { "@type": "@id" },
         "sh:path": { "@type": "@id" },
         "sh:targetClass": { "@type": "@id" },
-    })
+    });
+    if let Some(object) = context.as_object_mut() {
+        for term in [
+            "odrl:action",
+            "odrl:assignee",
+            "odrl:assigner",
+            "odrl:hasPolicy",
+            "odrl:leftOperand",
+            "odrl:operator",
+            "odrl:profile",
+            "odrl:target",
+            "odrl:uid",
+            "odrl:unit",
+        ] {
+            object.insert(term.to_string(), json!({ "@type": "@id" }));
+        }
+    }
+    context
+}
+
+fn context_with_public_service_terms() -> Value {
+    let mut context = context();
+    if let Some(object) = context.as_object_mut() {
+        object.insert("cpsv".to_string(), json!("http://purl.org/vocab/cpsv#"));
+        object.insert("dcatap".to_string(), json!("http://data.europa.eu/r5r/"));
+        object.insert(
+            "eli".to_string(),
+            json!("http://data.europa.eu/eli/ontology#"),
+        );
+        object.insert(
+            "dcatap:applicableLegislation".to_string(),
+            json!({ "@type": "@id" }),
+        );
+        object.insert("cpsv:produces".to_string(), json!({ "@type": "@id" }));
+    }
+    context
 }

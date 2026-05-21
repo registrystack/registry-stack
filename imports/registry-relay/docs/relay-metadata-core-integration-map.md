@@ -12,9 +12,9 @@ validation, and renderer APIs consumed by Relay through a small adapter.
   `config::Config`.
 - `src/entity/mod.rs` compiles runtime entity state with
   `EntityRegistry::from_config(&Config)`.
-- `src/api/catalog.rs` scopes visible metadata by the caller's metadata scopes,
-  then calls `metadata::catalog::catalog_document_for_entity_ids` or
-  `metadata::dcat_ap_document_for_entity_ids`.
+- `src/api/metadata.rs` scopes visible metadata by the caller's metadata scopes,
+  then renders the canonical `/metadata/*` surfaces through
+  `registry-metadata-core`.
 - `src/api/datasets.rs` builds dataset summaries directly from `Config` and
   caller scopes.
 - `src/metadata/catalog.rs` joins `Config` and `EntityRegistry` into the current
@@ -49,8 +49,8 @@ Implemented in this branch:
 
 1. Added the dependency to `Cargo.toml` for `registry-relay`.
 2. Added `src/metadata/core_adapter.rs`.
-3. Kept `/catalog`, `/catalog/dcat-ap.jsonld`, and the standards-facing
-   `/metadata/*` route auth checks Relay-owned.
+3. Kept the standards-facing `/metadata/*` route auth checks Relay-owned and
+   removed the old public `/catalog` aliases.
 4. Replaced only the pure metadata construction inside `src/metadata/catalog.rs`
    and `src/metadata/shacl.rs` with calls through the adapter.
 5. Left OpenAPI, OGC HTTP routes, entity row routes, auth, audit, cache, and

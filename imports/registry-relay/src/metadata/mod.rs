@@ -3,7 +3,7 @@
 //!
 //! The public REST model is the entity registry, while `Config`
 //! carries human metadata and semantic annotations. This module joins
-//! those two views into stable JSON documents for catalog routes.
+//! those two views into stable JSON documents for metadata routes.
 
 pub mod catalog;
 pub mod core_adapter;

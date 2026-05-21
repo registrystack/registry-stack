@@ -147,6 +147,7 @@ fn dataset_manifest(
         access_rights: access_rights(dataset.access_rights),
         update_frequency: update_frequency(dataset.update_frequency),
         conforms_to: dataset.conforms_to.clone(),
+        applicable_legislation: dataset.applicable_legislation.clone(),
         spatial_coverage: dataset
             .spatial_coverage
             .clone()
@@ -156,6 +157,19 @@ fn dataset_manifest(
                 .status
                 .unwrap_or(config::AdmsStatus::UnderDevelopment),
         )),
+        public_services: dataset
+            .public_services
+            .iter()
+            .map(|service| core::PublicServiceManifest {
+                id: service.id.clone(),
+                title: core::LocalizedText::Plain(service.title.clone()),
+                description: service
+                    .description
+                    .as_ref()
+                    .map(|description| core::LocalizedText::Plain(description.clone())),
+            })
+            .collect(),
+        policy: None,
         entities,
     })
 }

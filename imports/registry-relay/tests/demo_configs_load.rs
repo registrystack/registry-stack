@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 use registry_relay::config::{self, AuditSinkConfig};
 use sha2::{Digest, Sha256};
 
+#[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
+use registry_metadata_core::render_base_dcat;
+#[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
+use serde_json::Value;
+
 fn make_fingerprint(plaintext: &[u8]) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plaintext)))
 }
@@ -261,6 +266,65 @@ fn spdci_demo_configs_load_and_validate() {
         "all_standards.yaml",
         &all_standards_path,
         all_standards.datasets.len(),
+    );
+    assert_all_standards_odrl_policies_render(&all_standards_path);
+}
+
+#[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
+fn assert_all_standards_odrl_policies_render(path: &Path) {
+    let loaded = config::load_with_metadata(path).expect("all_standards split metadata loads");
+    let metadata = loaded.metadata.expect("all_standards metadata compiles");
+    let dcat = render_base_dcat(&metadata);
+    assert_demo_policy(
+        &dcat,
+        "farmer_registry",
+        "did:web:agriculture.demo.example.gov",
+        "https://demo.example.gov/purpose/agricultural-subsidy-eligibility",
+    );
+    assert_demo_policy(
+        &dcat,
+        "disability_registry",
+        "did:web:social-affairs.demo.example.gov",
+        "https://demo.example.gov/purpose/disability-benefit-eligibility",
+    );
+    assert_demo_policy(
+        &dcat,
+        "education_registry",
+        "did:web:education.demo.example.gov",
+        "https://demo.example.gov/purpose/student-support-planning",
+    );
+}
+
+#[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
+fn assert_demo_policy(dcat: &Value, dataset_id: &str, assigner: &str, purpose: &str) {
+    let dataset = dcat["dcat:dataset"]
+        .as_array()
+        .expect("dcat datasets")
+        .iter()
+        .find(|dataset| dataset["dcterms:identifier"] == dataset_id)
+        .unwrap_or_else(|| panic!("missing dataset {dataset_id}"));
+    let policy = &dataset["odrl:hasPolicy"];
+
+    assert_eq!(policy["@type"], "odrl:Offer");
+    assert_eq!(policy["odrl:assigner"]["@id"], assigner);
+    assert!(policy["odrl:uid"]
+        .as_str()
+        .is_some_and(|uid| uid.ends_with("#illustrative-offer")));
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:constraint"][0]["odrl:rightOperand"]["@id"],
+        purpose
+    );
+    assert!(
+        policy["odrl:permission"][0]["odrl:duty"]
+            .as_array()
+            .is_some_and(|duties| !duties.is_empty()),
+        "{dataset_id} should render at least one duty"
+    );
+    assert!(
+        policy["odrl:prohibition"]
+            .as_array()
+            .is_some_and(|prohibitions| !prohibitions.is_empty()),
+        "{dataset_id} should render at least one prohibition"
     );
 }
 

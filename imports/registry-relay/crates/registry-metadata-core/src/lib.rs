@@ -117,12 +117,99 @@ pub struct DatasetManifest {
     pub update_frequency: UpdateFrequency,
     #[serde(default)]
     pub conforms_to: Vec<String>,
+    /// DCAT-AP `dcatap:applicableLegislation` IRIs. These are standard
+    /// evidence links only; downstream systems may use them to infer legal
+    /// readiness, but Registry Relay does not publish an authority verdict.
+    #[serde(default)]
+    pub applicable_legislation: Vec<String>,
     #[serde(default)]
     pub spatial_coverage: Option<String>,
     #[serde(default)]
     pub status: Option<AdmsStatus>,
+    /// Related CPSV public services that produce this dataset. Published as
+    /// JSON-LD `cpsv:PublicService` nodes with `cpsv:produces`; consumers can
+    /// interpret that evidence, but the manifest does not declare
+    /// source-of-truth status.
+    #[serde(default)]
+    pub public_services: Vec<PublicServiceManifest>,
+    #[serde(default)]
+    pub policy: Option<DatasetPolicyManifest>,
     #[serde(default)]
     pub entities: Vec<EntityManifest>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DatasetPolicyManifest {
+    #[serde(default)]
+    pub uid: Option<String>,
+    #[serde(default)]
+    pub assigner: Option<String>,
+    #[serde(default)]
+    pub profile: Vec<String>,
+    #[serde(default)]
+    pub permissions: Vec<PolicyRuleManifest>,
+    #[serde(default)]
+    pub prohibitions: Vec<PolicyRuleManifest>,
+    #[serde(default)]
+    pub obligations: Vec<PolicyDutyManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyRuleManifest {
+    pub action: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub constraints: Vec<PolicyConstraintManifest>,
+    #[serde(default)]
+    pub duties: Vec<PolicyDutyManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDutyManifest {
+    pub action: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub constraints: Vec<PolicyConstraintManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyConstraintManifest {
+    pub left_operand: String,
+    pub operator: String,
+    pub right_operand: PolicyOperandValue,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub datatype: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyOperandValue {
+    #[serde(default)]
+    pub iri: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PublicServiceManifest {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -323,10 +410,66 @@ pub struct CompiledDataset {
     pub access_rights: AccessRights,
     pub update_frequency: UpdateFrequency,
     pub conforms_to: Vec<String>,
+    pub applicable_legislation: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spatial_coverage: Option<String>,
     pub adms_status: AdmsStatus,
+    pub public_services: Vec<CompiledPublicService>,
+    pub policy: CompiledDatasetPolicy,
     pub entities: BTreeMap<String, CompiledEntity>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledDatasetPolicy {
+    pub uid: String,
+    pub assigner: String,
+    pub profile: Vec<String>,
+    pub permissions: Vec<CompiledPolicyRule>,
+    pub prohibitions: Vec<CompiledPolicyRule>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledPolicyRule {
+    pub action: String,
+    pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    pub constraints: Vec<CompiledPolicyConstraint>,
+    pub duties: Vec<CompiledPolicyDuty>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledPolicyDuty {
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    pub constraints: Vec<CompiledPolicyConstraint>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledPolicyConstraint {
+    pub left_operand: String,
+    pub operator: String,
+    pub right_operand: CompiledPolicyOperandValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datatype: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub enum CompiledPolicyOperandValue {
+    Iri(String),
+    Literal(String),
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledPublicService {
+    pub id: String,
+    pub title: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -551,9 +694,35 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &manifest.vocabularies,
             &mut errors,
         );
+        validate_uri_list(
+            &dataset.applicable_legislation,
+            format!("{path}.applicable_legislation"),
+            &manifest.vocabularies,
+            &mut errors,
+        );
         validate_optional_uri(
             dataset.spatial_coverage.as_deref(),
             format!("{path}.spatial_coverage"),
+            &manifest.vocabularies,
+            &mut errors,
+        );
+        for (service_index, service) in dataset.public_services.iter().enumerate() {
+            let service_path = format!("{path}.public_services[{service_index}]");
+            validate_non_empty(
+                &service.title.text(),
+                format!("{service_path}.title"),
+                &mut errors,
+            );
+            if service.id.as_deref().is_some_and(str::is_empty) {
+                errors.push(ValidationError::new(
+                    format!("{service_path}.id"),
+                    "service id must not be empty",
+                ));
+            }
+        }
+        validate_dataset_policy(
+            dataset.policy.as_ref(),
+            &path,
             &manifest.vocabularies,
             &mut errors,
         );
@@ -663,17 +832,25 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
 }
 
 pub fn render_base_dcat(compiled: &CompiledMetadata) -> Value {
-    json!({
-        "@context": jsonld_context(),
+    let mut catalog = json!({
+        "@context": jsonld_context_with_policy_terms(),
         "@id": format!("{}/metadata/dcat.jsonld", compiled.catalog().base_url),
         "@type": "dcat:Catalog",
+        "dcterms:identifier": compiled.catalog().id,
         "dcterms:title": compiled.catalog().title,
         "dcterms:description": compiled.catalog().description,
         "dcterms:publisher": publisher_agent(compiled.catalog()),
         "dcat:landingPage": compiled.catalog().base_url,
         "dcterms:conformsTo": compiled.catalog().conforms_to,
-        "dcat:dataset": compiled.datasets().map(base_dcat_dataset).collect::<Vec<_>>(),
-    })
+        "dcat:dataset": compiled
+            .datasets()
+            .map(|dataset| base_dcat_dataset(compiled, dataset))
+            .collect::<Vec<_>>(),
+    });
+    let mut included = standard_reference_nodes(compiled);
+    included.extend(dcat_range_reference_nodes(&catalog));
+    append_included_nodes(&mut catalog, included);
+    catalog
 }
 
 pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
@@ -683,7 +860,36 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
         compiled.catalog().base_url
     ));
     catalog["dspace:participantId"] = json!(compiled.catalog().participant_id);
-    catalog["dcat:dataset"] = Value::Array(compiled.datasets().map(breg_dcat_dataset).collect());
+    catalog["dcat:dataset"] = Value::Array(
+        compiled
+            .datasets()
+            .map(|dataset| breg_dcat_dataset(compiled, dataset))
+            .collect(),
+    );
+    let public_services = compiled
+        .datasets()
+        .flat_map(|dataset| {
+            dataset
+                .public_services
+                .iter()
+                .map(move |service| public_service_node(dataset, service))
+        })
+        .collect::<Vec<_>>();
+    let has_public_service_terms = !public_services.is_empty()
+        || compiled
+            .datasets()
+            .any(|dataset| !dataset.applicable_legislation.is_empty());
+    let mut included = standard_reference_nodes(compiled);
+    included.extend(public_services);
+    included.extend(dcat_range_reference_nodes(&catalog));
+    if has_public_service_terms {
+        // JSON-LD `@included` keeps related CPSV evidence in the same
+        // document without claiming that BRegDCAT-AP has a proprietary
+        // source-of-truth flag. Consumers may interpret the standard
+        // `cpsv:produces` relation downstream.
+        catalog["@context"] = jsonld_context_with_public_service_terms();
+    }
+    append_included_nodes(&mut catalog, included);
     catalog["sh:shapesGraph"] = Value::Array(
         compiled
             .datasets()
@@ -696,6 +902,156 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
             .collect(),
     );
     catalog
+}
+
+pub fn render_policy_collection(compiled: &CompiledMetadata) -> Value {
+    json!({
+        "@context": jsonld_context_with_policy_terms(),
+        "@id": format!("{}/metadata/policies", compiled.catalog().base_url),
+        "dcterms:title": "Dataset access policies",
+        "dcterms:isPartOf": format!("{}/metadata/dcat.jsonld", compiled.catalog().base_url),
+        "@graph": compiled
+            .datasets()
+            .map(render_dataset_policy)
+            .collect::<Vec<_>>(),
+    })
+}
+
+pub fn render_dataset_policy_document(
+    compiled: &CompiledMetadata,
+    dataset_id: &str,
+) -> Option<Value> {
+    let mut policy = render_dataset_policy(compiled.dataset(dataset_id)?);
+    policy["@context"] = json!(jsonld_context_with_policy_terms());
+    Some(policy)
+}
+
+fn dcat_range_reference_nodes(document: &Value) -> Vec<Value> {
+    let mut typed_iris = BTreeSet::new();
+    collect_typed_reference_iris(
+        document,
+        "dcterms:accessRights",
+        "dcterms:RightsStatement",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcterms:accrualPeriodicity",
+        "dcterms:Frequency",
+        &mut typed_iris,
+    );
+    collect_typed_reference_iris(
+        document,
+        "dcat:landingPage",
+        "foaf:Document",
+        &mut typed_iris,
+    );
+    typed_iris
+        .into_iter()
+        .map(|(iri, node_type)| {
+            json!({
+                "@id": iri,
+                "@type": node_type,
+            })
+        })
+        .collect()
+}
+
+fn collect_typed_reference_iris(
+    value: &Value,
+    predicate: &str,
+    node_type: &str,
+    iris: &mut BTreeSet<(String, String)>,
+) {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get(predicate) {
+                let mut values = BTreeSet::new();
+                collect_string_values(reference, &mut values);
+                iris.extend(
+                    values
+                        .into_iter()
+                        .map(|value| (value, node_type.to_string())),
+                );
+            }
+            for nested in object.values() {
+                collect_typed_reference_iris(nested, predicate, node_type, iris);
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                collect_typed_reference_iris(nested, predicate, node_type, iris);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_string_values(value: &Value, values: &mut BTreeSet<String>) {
+    match value {
+        Value::String(value) => {
+            values.insert(value.clone());
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_string_values(item, values);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(id) = object.get("@id").and_then(Value::as_str) {
+                values.insert(id.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn standard_reference_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
+    // `dcterms:conformsTo` has a standards/profile meaning in DCAT-AP
+    // validation. If a value is not intended to identify a standard or
+    // application profile, publishers should not place it in `conforms_to`.
+    let mut iris = BTreeSet::new();
+    iris.extend(compiled.catalog().conforms_to.iter().cloned());
+    for dataset in compiled.datasets() {
+        iris.extend(dataset.conforms_to.iter().cloned());
+    }
+    iris.into_iter()
+        .map(|iri| {
+            json!({
+                "@id": iri,
+                "@type": "dcterms:Standard",
+            })
+        })
+        .collect()
+}
+
+fn append_included_nodes(document: &mut Value, nodes: Vec<Value>) {
+    if nodes.is_empty() {
+        return;
+    }
+    let mut existing = document
+        .get_mut("@included")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let mut seen = existing
+        .iter()
+        .filter_map(included_node_key)
+        .collect::<BTreeSet<_>>();
+    for node in nodes {
+        if included_node_key(&node).is_some_and(|key| seen.insert(key)) {
+            existing.push(node);
+        }
+    }
+    document["@included"] = Value::Array(existing);
+}
+
+fn included_node_key(node: &Value) -> Option<(String, String)> {
+    let object = node.as_object()?;
+    Some((
+        object.get("@id")?.as_str()?.to_string(),
+        object.get("@type")?.as_str()?.to_string(),
+    ))
 }
 
 pub fn render_dcat_profile(compiled: &CompiledMetadata, profile: &str) -> Option<Value> {
@@ -868,6 +1224,241 @@ fn validate_entities(
     }
 }
 
+fn validate_dataset_policy(
+    policy: Option<&DatasetPolicyManifest>,
+    dataset_path: &str,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(policy) = policy else {
+        return;
+    };
+    let policy_path = format!("{dataset_path}.policy");
+    validate_optional_policy_iri(
+        policy.uid.as_deref(),
+        format!("{policy_path}.uid"),
+        vocabularies,
+        errors,
+    );
+    validate_optional_policy_iri(
+        policy.assigner.as_deref(),
+        format!("{policy_path}.assigner"),
+        vocabularies,
+        errors,
+    );
+    validate_policy_iri_list(
+        &policy.profile,
+        format!("{policy_path}.profile"),
+        vocabularies,
+        errors,
+    );
+    if policy.permissions.is_empty() && policy.prohibitions.is_empty() {
+        errors.push(ValidationError::new(
+            policy_path.clone(),
+            "policy must declare at least one permission or prohibition",
+        ));
+    }
+    if !policy.obligations.is_empty() {
+        errors.push(ValidationError::new(
+            format!("{policy_path}.obligations"),
+            "top-level ODRL obligations are not supported in v0.1",
+        ));
+    }
+    for (index, rule) in policy.permissions.iter().enumerate() {
+        validate_policy_rule(
+            rule,
+            &format!("{policy_path}.permissions[{index}]"),
+            vocabularies,
+            errors,
+        );
+    }
+    for (index, rule) in policy.prohibitions.iter().enumerate() {
+        validate_policy_rule(
+            rule,
+            &format!("{policy_path}.prohibitions[{index}]"),
+            vocabularies,
+            errors,
+        );
+        if !rule.duties.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{policy_path}.prohibitions[{index}].duties"),
+                "prohibition duties are not supported in v0.1",
+            ));
+        }
+    }
+}
+
+fn validate_policy_rule(
+    rule: &PolicyRuleManifest,
+    path: &str,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    validate_policy_iri(&rule.action, format!("{path}.action"), vocabularies, errors);
+    validate_optional_policy_iri(
+        rule.target.as_deref(),
+        format!("{path}.target"),
+        vocabularies,
+        errors,
+    );
+    validate_optional_policy_iri(
+        rule.assignee.as_deref(),
+        format!("{path}.assignee"),
+        vocabularies,
+        errors,
+    );
+    for (index, constraint) in rule.constraints.iter().enumerate() {
+        validate_policy_constraint(
+            constraint,
+            &format!("{path}.constraints[{index}]"),
+            vocabularies,
+            errors,
+        );
+    }
+    for (index, duty) in rule.duties.iter().enumerate() {
+        validate_policy_duty(
+            duty,
+            &format!("{path}.duties[{index}]"),
+            vocabularies,
+            errors,
+        );
+    }
+}
+
+fn validate_policy_duty(
+    duty: &PolicyDutyManifest,
+    path: &str,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    validate_policy_iri(&duty.action, format!("{path}.action"), vocabularies, errors);
+    validate_optional_policy_iri(
+        duty.target.as_deref(),
+        format!("{path}.target"),
+        vocabularies,
+        errors,
+    );
+    validate_optional_policy_iri(
+        duty.assignee.as_deref(),
+        format!("{path}.assignee"),
+        vocabularies,
+        errors,
+    );
+    for (index, constraint) in duty.constraints.iter().enumerate() {
+        validate_policy_constraint(
+            constraint,
+            &format!("{path}.constraints[{index}]"),
+            vocabularies,
+            errors,
+        );
+    }
+}
+
+fn validate_policy_constraint(
+    constraint: &PolicyConstraintManifest,
+    path: &str,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let left_operand = expand_policy_uri(&constraint.left_operand, vocabularies);
+    validate_policy_iri(
+        &constraint.left_operand,
+        format!("{path}.left_operand"),
+        vocabularies,
+        errors,
+    );
+    validate_policy_iri(
+        &constraint.operator,
+        format!("{path}.operator"),
+        vocabularies,
+        errors,
+    );
+    let has_iri = constraint.right_operand.iri.is_some();
+    let has_value = constraint.right_operand.value.is_some();
+    match (has_iri, has_value) {
+        (true, false) => {
+            if let Some(iri) = constraint.right_operand.iri.as_deref() {
+                validate_policy_iri(iri, format!("{path}.right_operand"), vocabularies, errors);
+            }
+        }
+        (false, true) => {
+            if left_operand
+                .as_deref()
+                .is_some_and(policy_left_operand_requires_iri)
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}.right_operand"),
+                    "right operand must be an IRI for this left operand",
+                ));
+            }
+        }
+        _ => errors.push(ValidationError::new(
+            format!("{path}.right_operand"),
+            "right operand must contain exactly one of iri or value",
+        )),
+    }
+    validate_optional_policy_iri(
+        constraint.unit.as_deref(),
+        format!("{path}.unit"),
+        vocabularies,
+        errors,
+    );
+    validate_optional_policy_iri(
+        constraint.datatype.as_deref(),
+        format!("{path}.datatype"),
+        vocabularies,
+        errors,
+    );
+}
+
+fn validate_policy_iri(
+    value: &str,
+    path: impl Into<String>,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if expand_policy_uri(value, vocabularies).is_none() {
+        errors.push(ValidationError::new(
+            path,
+            "policy IRI must be absolute or use a configured or built-in vocabulary prefix",
+        ));
+    }
+}
+
+fn validate_optional_policy_iri(
+    value: Option<&str>,
+    path: impl Into<String>,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(value) = value {
+        validate_policy_iri(value, path, vocabularies, errors);
+    }
+}
+
+fn validate_policy_iri_list(
+    values: &[String],
+    path: impl Into<String>,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let path = path.into();
+    for (index, value) in values.iter().enumerate() {
+        validate_policy_iri(value, format!("{path}[{index}]"), vocabularies, errors);
+    }
+}
+
+fn policy_left_operand_requires_iri(left_operand: &str) -> bool {
+    matches!(
+        left_operand,
+        "http://www.w3.org/ns/odrl/2/purpose"
+            | "http://www.w3.org/ns/odrl/2/recipient"
+            | "http://www.w3.org/ns/odrl/2/spatial"
+            | "http://www.w3.org/ns/odrl/2/industry"
+            | "http://www.w3.org/ns/odrl/2/systemDevice"
+    )
+}
+
 fn compile_dataset(
     manifest: &MetadataManifest,
     base_url: &str,
@@ -904,12 +1495,178 @@ fn compile_dataset(
             .iter()
             .filter_map(|iri| expand_uri(iri, &manifest.vocabularies))
             .collect(),
+        applicable_legislation: dataset
+            .applicable_legislation
+            .iter()
+            .filter_map(|iri| expand_uri(iri, &manifest.vocabularies))
+            .collect(),
         spatial_coverage: dataset
             .spatial_coverage
             .as_deref()
             .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
         adms_status: dataset.status.unwrap_or(AdmsStatus::UnderDevelopment),
+        public_services: dataset
+            .public_services
+            .iter()
+            .enumerate()
+            .map(|(index, service)| CompiledPublicService {
+                id: service
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("#service-{}-{}", dataset.id, index + 1)),
+                title: service.title.text(),
+                description: service
+                    .description
+                    .as_ref()
+                    .map(LocalizedText::text)
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        policy: compile_dataset_policy(manifest, base_url, dataset),
         entities,
+    }
+}
+
+fn compile_dataset_policy(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    dataset: &DatasetManifest,
+) -> CompiledDatasetPolicy {
+    let dataset_target = format!("{base_url}/datasets/{}", dataset.id);
+    let default_uid = format!("{dataset_target}#offer");
+    let default_assigner = manifest
+        .catalog
+        .participant_id
+        .as_deref()
+        .or(manifest.catalog.publisher.iri.as_deref())
+        .and_then(|iri| expand_policy_uri(iri, &manifest.vocabularies))
+        .unwrap_or_else(|| base_url.to_string());
+    let Some(policy) = dataset.policy.as_ref() else {
+        return CompiledDatasetPolicy {
+            uid: default_uid,
+            assigner: default_assigner.clone(),
+            profile: Vec::new(),
+            permissions: vec![CompiledPolicyRule {
+                action: "odrl:use".to_string(),
+                target: dataset_target,
+                assignee: None,
+                constraints: Vec::new(),
+                duties: Vec::new(),
+            }],
+            prohibitions: Vec::new(),
+        };
+    };
+    let assigner = policy
+        .assigner
+        .as_deref()
+        .and_then(|iri| expand_policy_uri(iri, &manifest.vocabularies))
+        .unwrap_or(default_assigner);
+    let uid = policy
+        .uid
+        .as_deref()
+        .and_then(|iri| expand_policy_uri(iri, &manifest.vocabularies))
+        .unwrap_or(default_uid);
+    CompiledDatasetPolicy {
+        uid,
+        assigner: assigner.clone(),
+        profile: policy
+            .profile
+            .iter()
+            .filter_map(|iri| expand_policy_uri(iri, &manifest.vocabularies))
+            .collect(),
+        permissions: policy
+            .permissions
+            .iter()
+            .map(|rule| compile_policy_rule(rule, &dataset_target, &manifest.vocabularies))
+            .collect(),
+        prohibitions: policy
+            .prohibitions
+            .iter()
+            .map(|rule| compile_policy_rule(rule, &dataset_target, &manifest.vocabularies))
+            .collect(),
+    }
+}
+
+fn compile_policy_rule(
+    rule: &PolicyRuleManifest,
+    default_target: &str,
+    vocabularies: &BTreeMap<String, String>,
+) -> CompiledPolicyRule {
+    CompiledPolicyRule {
+        action: expand_policy_uri(&rule.action, vocabularies)
+            .unwrap_or_else(|| rule.action.clone()),
+        target: rule
+            .target
+            .as_deref()
+            .and_then(|iri| expand_policy_uri(iri, vocabularies))
+            .unwrap_or_else(|| default_target.to_string()),
+        assignee: rule
+            .assignee
+            .as_deref()
+            .and_then(|iri| expand_policy_uri(iri, vocabularies)),
+        constraints: rule
+            .constraints
+            .iter()
+            .map(|constraint| compile_policy_constraint(constraint, vocabularies))
+            .collect(),
+        duties: rule
+            .duties
+            .iter()
+            .map(|duty| compile_policy_duty(duty, vocabularies))
+            .collect(),
+    }
+}
+
+fn compile_policy_duty(
+    duty: &PolicyDutyManifest,
+    vocabularies: &BTreeMap<String, String>,
+) -> CompiledPolicyDuty {
+    CompiledPolicyDuty {
+        action: expand_policy_uri(&duty.action, vocabularies)
+            .unwrap_or_else(|| duty.action.clone()),
+        target: duty
+            .target
+            .as_deref()
+            .and_then(|iri| expand_policy_uri(iri, vocabularies)),
+        assignee: duty
+            .assignee
+            .as_deref()
+            .and_then(|iri| expand_policy_uri(iri, vocabularies)),
+        constraints: duty
+            .constraints
+            .iter()
+            .map(|constraint| compile_policy_constraint(constraint, vocabularies))
+            .collect(),
+    }
+}
+
+fn compile_policy_constraint(
+    constraint: &PolicyConstraintManifest,
+    vocabularies: &BTreeMap<String, String>,
+) -> CompiledPolicyConstraint {
+    let right_operand = if let Some(iri) = constraint.right_operand.iri.as_deref() {
+        CompiledPolicyOperandValue::Iri(
+            expand_policy_uri(iri, vocabularies).unwrap_or_else(|| iri.to_string()),
+        )
+    } else {
+        CompiledPolicyOperandValue::Literal(
+            constraint.right_operand.value.clone().unwrap_or_default(),
+        )
+    };
+    CompiledPolicyConstraint {
+        left_operand: expand_policy_uri(&constraint.left_operand, vocabularies)
+            .unwrap_or_else(|| constraint.left_operand.clone()),
+        operator: expand_policy_uri(&constraint.operator, vocabularies)
+            .unwrap_or_else(|| constraint.operator.clone()),
+        right_operand,
+        unit: constraint
+            .unit
+            .as_deref()
+            .and_then(|iri| expand_policy_uri(iri, vocabularies)),
+        datatype: constraint
+            .datatype
+            .as_deref()
+            .and_then(|iri| expand_policy_uri(iri, vocabularies)),
     }
 }
 
@@ -998,7 +1755,7 @@ fn compile_entity(
 }
 
 fn catalog_dataset_json(dataset: &CompiledDataset) -> Value {
-    json!({
+    let mut dataset_json = json!({
         "dataset_id": dataset.dataset_id,
         "title": dataset.title,
         "description": dataset.description,
@@ -1008,7 +1765,14 @@ fn catalog_dataset_json(dataset: &CompiledDataset) -> Value {
         "update_frequency": update_frequency_name(dataset.update_frequency),
         "conforms_to": dataset.conforms_to,
         "entities": dataset.entities.values().map(catalog_entity_json).collect::<Vec<_>>(),
-    })
+    });
+    if !dataset.applicable_legislation.is_empty() {
+        dataset_json["applicable_legislation"] = json!(dataset.applicable_legislation);
+    }
+    if !dataset.public_services.is_empty() {
+        dataset_json["public_services"] = json!(dataset.public_services);
+    }
+    dataset_json
 }
 
 fn catalog_entity_json(entity: &CompiledEntity) -> Value {
@@ -1038,27 +1802,234 @@ fn catalog_field_json(field: &CompiledField) -> Value {
     })
 }
 
-fn base_dcat_dataset(dataset: &CompiledDataset) -> Value {
-    json!({
+fn base_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
+    let mut obj = json!({
         "@id": dataset_url(dataset),
         "@type": "dcat:Dataset",
         "dcterms:identifier": dataset.dataset_id,
         "dcterms:title": dataset.title,
         "dcterms:description": dataset.description,
         "dcterms:conformsTo": dataset.conforms_to,
-    })
+        "dcat:landingPage": dataset_url(dataset),
+        "dcat:distribution": dataset
+            .entities
+            .values()
+            .map(|entity| entity_api_distribution(compiled, dataset, entity))
+            .collect::<Vec<_>>(),
+    });
+    obj["odrl:hasPolicy"] = render_dataset_policy(dataset);
+    obj
 }
 
-fn breg_dcat_dataset(dataset: &CompiledDataset) -> Value {
-    let mut obj = base_dcat_dataset(dataset);
+fn breg_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
+    let mut obj = base_dcat_dataset(compiled, dataset);
+    obj["dcterms:publisher"] = json!(publisher_agent(compiled.catalog()));
     obj["dcterms:rightsHolder"] = json!(dataset.owner);
     obj["dcterms:accessRights"] = json!(access_rights_uri(dataset.access_rights));
     obj["dcterms:accrualPeriodicity"] = json!(frequency_uri(dataset.update_frequency));
     obj["adms:status"] = json!(adms_status_uri(dataset.adms_status));
+    let codelists = dataset_codelist_references(compiled, dataset);
+    if !codelists.is_empty() {
+        // Registry Relay interpretation: DCAT/BRegDCAT-AP do not define a
+        // dedicated property for field codelist linkage. We use standard
+        // `dcterms:references` from the dataset to the SKOS concept schemes
+        // used by its field constraints, without claiming source-of-truth
+        // semantics beyond "this dataset references these schemes".
+        obj["dcterms:references"] = json!(codelists);
+    }
+    if !dataset.applicable_legislation.is_empty() {
+        obj["dcatap:applicableLegislation"] = json!(dataset.applicable_legislation);
+    }
     if let Some(spatial) = dataset.spatial_coverage.as_deref() {
         obj["dcterms:spatial"] = json!(spatial);
     }
     obj
+}
+
+fn entity_api_distribution(
+    compiled: &CompiledMetadata,
+    dataset: &CompiledDataset,
+    entity: &CompiledEntity,
+) -> Value {
+    let access_url = format!(
+        "{}/datasets/{}/{}",
+        compiled.catalog().base_url,
+        dataset.dataset_id,
+        entity.name
+    );
+    json!({
+        "@id": format!("{}#distribution-{}", dataset_url(dataset), entity.name),
+        "@type": "dcat:Distribution",
+        "dcterms:title": format!("{} API", entity.title),
+        "dcterms:conformsTo": distribution_conforms_to(dataset),
+        "dcterms:format": {
+            "@id": "https://www.iana.org/assignments/media-types/application/json",
+            "@type": ["dcterms:MediaType", "dcterms:MediaTypeOrExtent"],
+        },
+        "dcat:accessURL": access_url,
+        "dcat:accessService": {
+            "@id": format!("{access_url}#service"),
+            "@type": "dcat:DataService",
+            "dcterms:identifier": format!("{}:{}:entity-api", dataset.dataset_id, entity.name),
+            "dcterms:title": format!("{} REST access service", entity.title),
+            "dcat:endpointURL": access_url,
+            "dcat:endpointDescription": format!("{}/openapi.json", compiled.catalog().base_url),
+            "dcat:servesDataset": dataset_url(dataset),
+        },
+    })
+}
+
+fn distribution_conforms_to(dataset: &CompiledDataset) -> Vec<String> {
+    let mut conforms_to = dataset.conforms_to.clone();
+    conforms_to.push("https://spec.openapis.org/oas/v3.1.0".to_string());
+    conforms_to.sort();
+    conforms_to.dedup();
+    conforms_to
+}
+
+fn dataset_codelist_references(
+    compiled: &CompiledMetadata,
+    dataset: &CompiledDataset,
+) -> Vec<Value> {
+    let mut schemes = BTreeSet::new();
+    for entity in dataset.entities.values() {
+        for field in entity.fields.values() {
+            if let Some(scheme) = field.codelist_scheme_iri.as_deref() {
+                schemes.insert(scheme.to_string());
+            }
+        }
+    }
+    schemes
+        .into_iter()
+        .filter_map(|scheme| {
+            compiled
+                .codelists()
+                .find(|codelist| codelist.scheme_iri == scheme)
+                .map(codelist_shape)
+        })
+        .collect()
+}
+
+fn render_dataset_policy(dataset: &CompiledDataset) -> Value {
+    let policy = &dataset.policy;
+    let mut offer = json!({
+        "@id": policy.uid,
+        "@type": "odrl:Offer",
+        "odrl:uid": policy.uid,
+        "odrl:assigner": iri_object(&policy.assigner),
+        "odrl:permission": policy
+            .permissions
+            .iter()
+            .map(|rule| render_policy_rule(rule, policy))
+            .collect::<Vec<_>>(),
+    });
+    if !policy.profile.is_empty() {
+        offer["odrl:profile"] = json!(policy
+            .profile
+            .iter()
+            .map(|iri| iri_object(iri))
+            .collect::<Vec<_>>());
+    }
+    if !policy.prohibitions.is_empty() {
+        offer["odrl:prohibition"] = json!(policy
+            .prohibitions
+            .iter()
+            .map(|rule| render_policy_rule(rule, policy))
+            .collect::<Vec<_>>());
+    }
+    offer
+}
+
+fn render_policy_rule(rule: &CompiledPolicyRule, policy: &CompiledDatasetPolicy) -> Value {
+    let mut value = json!({
+        "odrl:target": iri_object(&rule.target),
+        "odrl:assigner": iri_object(&policy.assigner),
+        "odrl:action": iri_object(&rule.action),
+    });
+    if let Some(assignee) = rule.assignee.as_deref() {
+        value["odrl:assignee"] = iri_object(assignee);
+    }
+    if !rule.constraints.is_empty() {
+        value["odrl:constraint"] = json!(rule
+            .constraints
+            .iter()
+            .map(render_policy_constraint)
+            .collect::<Vec<_>>());
+    }
+    if !rule.duties.is_empty() {
+        value["odrl:duty"] = json!(rule
+            .duties
+            .iter()
+            .map(render_policy_duty)
+            .collect::<Vec<_>>());
+    }
+    value
+}
+
+fn render_policy_duty(duty: &CompiledPolicyDuty) -> Value {
+    let mut value = json!({
+        "odrl:action": iri_object(&duty.action),
+    });
+    if let Some(target) = duty.target.as_deref() {
+        value["odrl:target"] = iri_object(target);
+    }
+    if let Some(assignee) = duty.assignee.as_deref() {
+        value["odrl:assignee"] = iri_object(assignee);
+    }
+    if !duty.constraints.is_empty() {
+        value["odrl:constraint"] = json!(duty
+            .constraints
+            .iter()
+            .map(render_policy_constraint)
+            .collect::<Vec<_>>());
+    }
+    value
+}
+
+fn render_policy_constraint(constraint: &CompiledPolicyConstraint) -> Value {
+    let mut value = json!({
+        "odrl:leftOperand": iri_object(&constraint.left_operand),
+        "odrl:operator": iri_object(&constraint.operator),
+        "odrl:rightOperand": render_policy_operand(&constraint.right_operand, constraint.datatype.as_deref()),
+    });
+    if let Some(unit) = constraint.unit.as_deref() {
+        value["odrl:unit"] = iri_object(unit);
+    }
+    value
+}
+
+fn render_policy_operand(operand: &CompiledPolicyOperandValue, datatype: Option<&str>) -> Value {
+    match operand {
+        CompiledPolicyOperandValue::Iri(iri) => iri_object(iri),
+        CompiledPolicyOperandValue::Literal(value) => {
+            if let Some(datatype) = datatype {
+                json!({
+                    "@value": value,
+                    "@type": policy_jsonld_iri(datatype),
+                })
+            } else {
+                json!(value)
+            }
+        }
+    }
+}
+
+fn iri_object(iri: &str) -> Value {
+    json!({ "@id": policy_jsonld_iri(iri) })
+}
+
+fn policy_jsonld_iri(iri: &str) -> String {
+    iri.strip_prefix("http://www.w3.org/ns/odrl/2/")
+        .map(|suffix| format!("odrl:{suffix}"))
+        .or_else(|| {
+            iri.strip_prefix("http://www.w3.org/2001/XMLSchema#")
+                .map(|suffix| format!("xsd:{suffix}"))
+        })
+        .or_else(|| {
+            iri.strip_prefix("http://purl.org/dc/terms/")
+                .map(|suffix| format!("dcterms:{suffix}"))
+        })
+        .unwrap_or_else(|| iri.to_string())
 }
 
 fn publisher_agent(catalog: &CompiledCatalog) -> Value {
@@ -1073,6 +2044,16 @@ fn publisher_agent(catalog: &CompiledCatalog) -> Value {
         agent["dcterms:type"] = json!(authority_type);
     }
     agent
+}
+
+fn public_service_node(dataset: &CompiledDataset, service: &CompiledPublicService) -> Value {
+    json!({
+        "@id": service.id,
+        "@type": "cpsv:PublicService",
+        "dcterms:title": service.title,
+        "dcterms:description": service.description,
+        "cpsv:produces": dataset_url(dataset),
+    })
 }
 
 fn entity_shape(
@@ -1186,6 +2167,8 @@ fn codelist_shape(codelist: &CompiledCodelist) -> Value {
         "@id": codelist.scheme_iri,
         "@type": "skos:ConceptScheme",
         "dcterms:identifier": codelist.id,
+        "dcterms:title": humanize_identifier(&codelist.id),
+        "skos:prefLabel": humanize_identifier(&codelist.id),
         "skos:hasTopConcept": codelist.concepts.iter().map(|concept| {
             json!({
                 "@id": concept
@@ -1203,6 +2186,21 @@ fn codelist_shape(codelist: &CompiledCodelist) -> Value {
         scheme["rdfs:seeAlso"] = json!(external_ref);
     }
     scheme
+}
+
+fn humanize_identifier(value: &str) -> String {
+    value
+        .split(['_', '-', '/'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn entity_json_schema(
@@ -1385,11 +2383,29 @@ fn validate_optional_uri(
 }
 
 fn expand_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<String> {
-    if uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("urn:") {
+    if uri.starts_with("http://")
+        || uri.starts_with("https://")
+        || uri.starts_with("urn:")
+        || uri.starts_with("did:")
+    {
         return Some(uri.to_string());
     }
     let (prefix, suffix) = uri.split_once(':')?;
     let base = vocabularies.get(prefix)?;
+    Some(format!("{base}{suffix}"))
+}
+
+fn expand_policy_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<String> {
+    if let Some(expanded) = expand_uri(uri, vocabularies) {
+        return Some(expanded);
+    }
+    let (prefix, suffix) = uri.split_once(':')?;
+    let base = match prefix {
+        "odrl" => "http://www.w3.org/ns/odrl/2/",
+        "dcterms" => "http://purl.org/dc/terms/",
+        "xsd" => "http://www.w3.org/2001/XMLSchema#",
+        _ => return None,
+    };
     Some(format!("{base}{suffix}"))
 }
 
@@ -1398,7 +2414,11 @@ fn normalized_base_url(base_url: &str) -> String {
 }
 
 fn dataset_url(dataset: &CompiledDataset) -> String {
-    format!("#dataset-{}", dataset.dataset_id)
+    dataset_url_from_id(&dataset.dataset_id)
+}
+
+fn dataset_url_from_id(dataset_id: &str) -> String {
+    format!("#dataset-{dataset_id}")
 }
 
 fn entity_schema_id(
@@ -1579,6 +2599,8 @@ fn jsonld_context() -> Value {
         "xsd": "http://www.w3.org/2001/XMLSchema#",
         "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },
+        "dcat:endpointDescription": { "@type": "@id" },
+        "dcat:endpointURL": { "@type": "@id" },
         "dcat:landingPage": { "@type": "@id" },
         "dcterms:accessRights": { "@type": "@id" },
         "dcterms:accrualPeriodicity": { "@type": "@id" },
@@ -1596,4 +2618,43 @@ fn jsonld_context() -> Value {
         "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
         "rdfs:seeAlso": { "@type": "@id" },
     })
+}
+
+fn jsonld_context_with_policy_terms() -> Value {
+    let mut context = jsonld_context();
+    if let Some(object) = context.as_object_mut() {
+        for term in [
+            "odrl:action",
+            "odrl:assignee",
+            "odrl:assigner",
+            "odrl:hasPolicy",
+            "odrl:leftOperand",
+            "odrl:operator",
+            "odrl:profile",
+            "odrl:target",
+            "odrl:uid",
+            "odrl:unit",
+        ] {
+            object.insert(term.to_string(), json!({ "@type": "@id" }));
+        }
+    }
+    context
+}
+
+fn jsonld_context_with_public_service_terms() -> Value {
+    let mut context = jsonld_context_with_policy_terms();
+    if let Some(object) = context.as_object_mut() {
+        object.insert("cpsv".to_string(), json!("http://purl.org/vocab/cpsv#"));
+        object.insert("dcatap".to_string(), json!("http://data.europa.eu/r5r/"));
+        object.insert(
+            "eli".to_string(),
+            json!("http://data.europa.eu/eli/ontology#"),
+        );
+        object.insert(
+            "dcatap:applicableLegislation".to_string(),
+            json!({ "@type": "@id" }),
+        );
+        object.insert("cpsv:produces".to_string(), json!({ "@type": "@id" }));
+    }
+    context
 }

@@ -47,16 +47,24 @@ deny:
     if [ -x "$HOME/.cargo/bin/cargo-deny" ]; then "$HOME/.cargo/bin/cargo-deny" check; else cargo deny check; fi
 
 # Validate a generated DCAT-AP JSON-LD catalog with pySHACL.
-# Usage: just validate-catalog-shacl catalog=target/catalog.dcat-ap.jsonld
-#        just validate-catalog-shacl catalog=http://127.0.0.1:8080/catalog/dcat-ap.jsonld
+# Usage: just validate-catalog-shacl catalog=target/metadata.bregdcat-ap.jsonld
+#        just validate-catalog-shacl catalog=http://127.0.0.1:8080/metadata/dcat/bregdcat-ap
 validate-catalog-shacl catalog:
-    uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' python scripts/validate_dcat_shacl.py --catalog {{catalog}}
+    catalog_arg="{{catalog}}"; uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' python scripts/validate_dcat_shacl.py --catalog "${catalog_arg#catalog=}"
 
 # Validate a generated DCAT-AP JSON-LD catalog with the external SEMIC validator.
-# Usage: just validate-catalog-semic catalog=target/catalog.dcat-ap.jsonld
-#        just validate-catalog-semic catalog=http://127.0.0.1:8080/catalog/dcat-ap.jsonld validation_type=dcatap.3_0_1_full
+# Usage: just validate-catalog-semic catalog=target/metadata.bregdcat-ap.jsonld
+#        just validate-catalog-semic catalog=http://127.0.0.1:8080/metadata/dcat/bregdcat-ap validation_type=dcatap.3_0_1_full
 validate-catalog-semic catalog validation_type="dcatap.3_0_1_base":
-    python scripts/validate_semic_dcat_ap.py --catalog {{catalog}} --validation-type {{validation_type}}
+    catalog_arg="{{catalog}}"; validation_type_arg="{{validation_type}}"; python scripts/validate_semic_dcat_ap.py --catalog "${catalog_arg#catalog=}" --validation-type "${validation_type_arg#validation_type=}"
+
+# Validate a generated DCAT-AP JSON-LD catalog with vendored SEMIC SHACL shapes.
+# This is an offline compatibility/gap check; keep validate-catalog-semic as
+# the external conformance signal.
+# Usage: just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld
+#        just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld profile=bregdcatap.2_1_0
+validate-catalog-semic-local catalog profile="bregdcatap.2_1_0":
+    catalog_arg="{{catalog}}"; profile_arg="{{profile}}"; uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' python scripts/validate_semic_local.py --catalog "${catalog_arg#catalog=}" --profile "${profile_arg#profile=}"
 
 # Validate one portable metadata manifest.
 # Usage: just metadata-validate

@@ -136,35 +136,94 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     mark_public(&mut paths, "/ready", "get");
     tag(&mut paths, "/ready", "get", TAG_SERVICE);
 
-    // ---- Catalog ----
+    // ---- Portable metadata ----
     insert_json_path(
         &mut paths,
-        "/catalog",
+        "/metadata",
         "get",
-        "Catalog overview",
-        "CatalogDocument",
+        "Metadata landing page",
+        "MetadataLanding",
     );
-    set_op_id(&mut paths, "/catalog", "get", "get_catalog");
+    set_op_id(&mut paths, "/metadata", "get", "get_metadata_landing");
     set_description(
         &mut paths,
-        "/catalog",
+        "/metadata",
         "get",
-        "Returns the gateway's catalog overview: datasets and entities visible to the \
-         calling principal, with links to dataset-level metadata and SHACL/DCAT-AP artifacts.",
+        "Lists canonical metadata publication links and embeds the scoped metadata catalog.",
     );
-    tag(&mut paths, "/catalog", "get", TAG_CATALOG);
+    tag(&mut paths, "/metadata", "get", TAG_CATALOG);
+
+    insert_json_path(
+        &mut paths,
+        "/metadata/catalog",
+        "get",
+        "Portable metadata catalog",
+        "MetadataCatalogDocument",
+    );
+    set_op_id(
+        &mut paths,
+        "/metadata/catalog",
+        "get",
+        "get_metadata_catalog",
+    );
+    set_description(
+        &mut paths,
+        "/metadata/catalog",
+        "get",
+        "Returns the canonical route-neutral metadata catalog for datasets and entities visible \
+         to the calling principal.",
+    );
+    tag(&mut paths, "/metadata/catalog", "get", TAG_CATALOG);
 
     paths.insert(
-        "/catalog/dcat-ap.jsonld".to_string(),
+        "/metadata/dcat".to_string(),
         jsonld_path_item(
-            "get_catalog_dcat_ap",
-            "DCAT-AP catalog (JSON-LD)",
-            "Returns the catalog as a DCAT-AP 3 JSON-LD document. Useful for federating \
-             with dataspace catalogs (IDS, EDC) or generic DCAT consumers.",
-            "DCAT-AP JSON-LD catalog",
+            "get_metadata_dcat",
+            "Base DCAT catalog (JSON-LD)",
+            "Returns the visible metadata catalog as a base DCAT JSON-LD document.",
+            "Base DCAT JSON-LD catalog",
         ),
     );
-    tag(&mut paths, "/catalog/dcat-ap.jsonld", "get", TAG_CATALOG);
+    tag(&mut paths, "/metadata/dcat", "get", TAG_CATALOG);
+
+    paths.insert(
+        "/metadata/dcat/bregdcat-ap".to_string(),
+        jsonld_path_item(
+            "get_metadata_dcat_bregdcat_ap",
+            "BRegDCAT-AP catalog (JSON-LD)",
+            "Returns the visible metadata catalog as a BRegDCAT-AP JSON-LD document.",
+            "BRegDCAT-AP JSON-LD catalog",
+        ),
+    );
+    tag(&mut paths, "/metadata/dcat/bregdcat-ap", "get", TAG_CATALOG);
+
+    paths.insert(
+        "/metadata/policies".to_string(),
+        jsonld_path_item(
+            "get_metadata_policies",
+            "Visible dataset policies (ODRL JSON-LD)",
+            "Returns the ODRL access-policy documents for datasets visible to the calling principal.",
+            "ODRL JSON-LD policy collection",
+        ),
+    );
+    tag(&mut paths, "/metadata/policies", "get", TAG_CATALOG);
+
+    paths.insert(
+        "/metadata/datasets/{dataset_id}/policy".to_string(),
+        jsonld_path_item_with_params(
+            "get_metadata_dataset_policy",
+            "Dataset policy (ODRL JSON-LD)",
+            "Returns the ODRL access-policy document for one visible dataset.",
+            "ODRL JSON-LD dataset policy",
+            vec![path_parameter("dataset_id", "Dataset identifier")],
+        ),
+    );
+    tag(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}/policy",
+        "get",
+        TAG_CATALOG,
+    );
 
     #[cfg(feature = "ogcapi-features")]
     insert_ogc_paths(&mut paths);
@@ -1001,7 +1060,11 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     let mut schemas = Map::new();
     schemas.insert("HealthResponse".to_string(), health_schema());
     schemas.insert("ReadinessResponse".to_string(), readiness_schema());
-    schemas.insert("CatalogDocument".to_string(), catalog_document_schema());
+    schemas.insert("MetadataLanding".to_string(), metadata_landing_schema());
+    schemas.insert(
+        "MetadataCatalogDocument".to_string(),
+        catalog_document_schema(),
+    );
     schemas.insert("DatasetList".to_string(), dataset_list_schema());
     schemas.insert("DatasetSummary".to_string(), dataset_summary_schema());
     schemas.insert("Pagination".to_string(), pagination_schema());
@@ -1119,7 +1182,15 @@ fn readiness_schema() -> Value {
 fn catalog_document_schema() -> Value {
     json!({
         "type": "object",
-        "description": "Catalog overview. See `/catalog` for the live document.",
+        "description": "Portable metadata catalog. See `/metadata/catalog` for the live document.",
+    })
+}
+
+fn metadata_landing_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Portable metadata landing document with links and an embedded scoped catalog.",
+        "additionalProperties": true,
     })
 }
 
@@ -2489,11 +2560,28 @@ fn jsonld_path_item(
     description: &str,
     response_description: &str,
 ) -> Value {
+    jsonld_path_item_with_params(
+        op_id,
+        summary,
+        description,
+        response_description,
+        Vec::new(),
+    )
+}
+
+fn jsonld_path_item_with_params(
+    op_id: &str,
+    summary: &str,
+    description: &str,
+    response_description: &str,
+    parameters: Vec<Value>,
+) -> Value {
     json!({
         "get": {
             "operationId": op_id,
             "summary": summary,
             "description": description,
+            "parameters": parameters,
             "responses": {
                 "200": {
                     "description": response_description,
@@ -2980,8 +3068,8 @@ mod tests {
             participant_id: "did:web:data.example.test".to_string(),
             authority_type: None,
             links: CatalogLinks {
-                self_url: "https://data.example.test/catalog".to_string(),
-                dcat_ap: "https://data.example.test/catalog/dcat-ap.jsonld".to_string(),
+                self_url: "https://data.example.test/metadata/catalog".to_string(),
+                dcat_ap: "https://data.example.test/metadata/dcat/bregdcat-ap".to_string(),
             },
             datasets: vec![DatasetMetadata {
                 dataset_id: "social_registry".to_string(),
@@ -2993,8 +3081,11 @@ mod tests {
                 access_rights: "restricted",
                 update_frequency: "monthly",
                 conforms_to: Vec::new(),
+                applicable_legislation: Vec::new(),
                 spatial_coverage: None,
                 adms_status: AdmsStatus::Completed,
+                public_services: Vec::new(),
+                compiled_policy: None,
                 links: DatasetLinks {
                     self_url: "https://data.example.test/datasets/social_registry".to_string(),
                     ogc_collections: None,

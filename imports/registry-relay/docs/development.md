@@ -90,11 +90,20 @@ local SHACL smoke profile. For a manual external check against the
 European Commission SEMIC validator, run:
 
 ```sh
-just validate-catalog-semic catalog=target/dcat-ap/catalog.dcat-ap.jsonld
+just validate-catalog-semic catalog=target/dcat-ap/metadata.bregdcat-ap.jsonld
 ```
 
 or trigger the `dcat-ap-external-validation` GitHub Actions workflow.
 The default external profile is `dcatap.3_0_1_base`.
+
+For offline diagnostics against the vendored SEMIC SHACL resources, run:
+
+```sh
+just validate-catalog-semic-local catalog=target/dcat-ap/metadata.bregdcat-ap.jsonld
+```
+
+The local recipe defaults to `bregdcatap.2_1_0` and is a compatibility/gap
+check only. Keep the external SEMIC recipe as the release validation signal.
 
 ## Coverage Metrics
 

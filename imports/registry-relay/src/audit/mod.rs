@@ -683,7 +683,7 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Health
     } else if path == "/ready" {
         EndpointKind::Ready
-    } else if path == "/datasets" || path == "/catalog" || path.starts_with("/catalog/") {
+    } else if path == "/datasets" || path == "/metadata" || path.starts_with("/metadata/") {
         EndpointKind::Catalog
     } else if path.starts_with("/admin") {
         EndpointKind::Admin
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(classify_endpoint("/ready"), EndpointKind::Ready);
         assert_eq!(classify_endpoint("/datasets"), EndpointKind::Catalog);
         assert_eq!(
-            classify_endpoint("/catalog/dcat-ap.jsonld"),
+            classify_endpoint("/metadata/dcat/bregdcat-ap"),
             EndpointKind::Catalog
         );
         assert_eq!(classify_endpoint("/admin/reload"), EndpointKind::Admin);

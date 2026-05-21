@@ -124,11 +124,6 @@
         sh:path dcat:endpointDescription ;
         sh:minCount 1 ;
         sh:nodeKind sh:IRI ;
-    ] ;
-    sh:property [
-        sh:path dspace:dataServiceType ;
-        sh:minCount 1 ;
-        sh:nodeKind sh:Literal ;
     ] .
 
 <https://registry-relay.dev/shapes/OdrlOfferSmokeShape>

@@ -194,7 +194,6 @@ fn build_app_with_provenance_metadata_and_metrics(
         .merge(api::datasets_router())
         .merge(api::entity_router())
         .merge(api::aggregates_router())
-        .merge(api::catalog_router())
         .merge(api::metadata_router())
         .merge(api::openapi_router());
     #[cfg(feature = "ogcapi-features")]

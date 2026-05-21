@@ -1472,6 +1472,17 @@ fn validate_dataset_uris(
             return Err(ConfigError::ValidationError);
         }
     }
+    for uri in &dataset.applicable_legislation {
+        if super::vocabularies::expand(uri, registry).is_none() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                uri = %uri,
+                "applicable_legislation URI uses an unregistered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     if let Some(uri) = dataset.spatial_coverage.as_deref() {
         if super::vocabularies::expand(uri, registry).is_none() {
             tracing::error!(
@@ -1480,6 +1491,24 @@ fn validate_dataset_uris(
                 field = "spatial_coverage",
                 uri = %uri,
                 "spatial_coverage IRI is neither absolute nor a registered vocabulary prefix"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    for service in &dataset.public_services {
+        if service.title.trim().is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                "public service title must not be empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if service.id.as_deref().is_some_and(str::is_empty) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                "public service id must not be empty"
             );
             return Err(ConfigError::ValidationError);
         }

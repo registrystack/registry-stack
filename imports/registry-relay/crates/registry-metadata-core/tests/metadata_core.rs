@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_metadata_core::{
-    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_dcat_profile,
-    render_entity_schema_draft_2020_12, render_entity_shacl, render_ogc_records_items,
-    render_shacl, validate_manifest, MetadataError, MetadataManifest,
+    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
+    render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
+    render_entity_shacl, render_ogc_records_items, render_policy_collection, render_shacl,
+    validate_manifest, MetadataError, MetadataManifest,
 };
 use serde_json::{json, Value};
 
@@ -94,6 +95,218 @@ fn validation_rejects_duplicate_entities() {
 }
 
 #[test]
+fn policy_manifest_validates_and_renders_odrl_offer() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.catalog.participant_id = Some("did:web:civil-registration.example.gov".to_string());
+    manifest.datasets[0].policy = Some(registry_metadata_core::DatasetPolicyManifest {
+        uid: Some("https://civil-registration.example.gov/datasets/vital-events#offer".to_string()),
+        assigner: Some("did:web:civil-registration.example.gov".to_string()),
+        profile: vec![
+            "https://civil-registration.example.gov/odrl/profile/data-sharing".to_string(),
+        ],
+        permissions: vec![registry_metadata_core::PolicyRuleManifest {
+            action: "odrl:use".to_string(),
+            target: None,
+            assignee: None,
+            constraints: vec![
+                registry_metadata_core::PolicyConstraintManifest {
+                    left_operand: "odrl:purpose".to_string(),
+                    operator: "odrl:isA".to_string(),
+                    right_operand: registry_metadata_core::PolicyOperandValue {
+                        iri: Some(
+                            "https://civil-registration.example.gov/purpose/service-delivery"
+                                .to_string(),
+                        ),
+                        value: None,
+                    },
+                    unit: None,
+                    datatype: None,
+                },
+                registry_metadata_core::PolicyConstraintManifest {
+                    left_operand: "odrl:count".to_string(),
+                    operator: "odrl:lteq".to_string(),
+                    right_operand: registry_metadata_core::PolicyOperandValue {
+                        iri: None,
+                        value: Some("10".to_string()),
+                    },
+                    unit: None,
+                    datatype: None,
+                },
+            ],
+            duties: vec![registry_metadata_core::PolicyDutyManifest {
+                action: "odrl:attribute".to_string(),
+                target: None,
+                assignee: None,
+                constraints: Vec::new(),
+            }],
+        }],
+        prohibitions: vec![registry_metadata_core::PolicyRuleManifest {
+            action: "odrl:sell".to_string(),
+            target: None,
+            assignee: None,
+            constraints: Vec::new(),
+            duties: Vec::new(),
+        }],
+        obligations: Vec::new(),
+    });
+
+    validate_manifest(&manifest).expect("policy validates");
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let dcat = render_base_dcat(&compiled);
+    let policy = &dcat["dcat:dataset"][0]["odrl:hasPolicy"];
+
+    assert_eq!(policy["@type"], json!("odrl:Offer"));
+    assert_eq!(
+        policy["odrl:uid"],
+        json!("https://civil-registration.example.gov/datasets/vital-events#offer")
+    );
+    assert_eq!(
+        policy["odrl:assigner"]["@id"],
+        json!("did:web:civil-registration.example.gov")
+    );
+    assert!(policy["odrl:profile"].is_array());
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:target"]["@id"],
+        json!("https://civil-registration.example.gov/datasets/vital-events")
+    );
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:action"]["@id"],
+        json!("odrl:use")
+    );
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:constraint"][0]["odrl:leftOperand"]["@id"],
+        json!("odrl:purpose")
+    );
+    assert!(
+        dcat["@context"].get("odrl:rightOperand").is_none(),
+        "rightOperand must not be globally coerced to @id because literal operands are valid"
+    );
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:constraint"][1]["odrl:rightOperand"],
+        json!("10")
+    );
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:duty"][0]["odrl:action"]["@id"],
+        json!("odrl:attribute")
+    );
+    assert_eq!(
+        policy["odrl:prohibition"][0]["odrl:action"]["@id"],
+        json!("odrl:sell")
+    );
+    assert!(policy.get("odrl:obligation").is_none());
+}
+
+#[test]
+fn default_policy_is_minimal_and_deterministic() {
+    let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
+    let dcat = render_base_dcat(&compiled);
+    let policy = &dcat["dcat:dataset"][0]["odrl:hasPolicy"];
+
+    assert_eq!(
+        policy["@id"],
+        json!("https://civil-registration.example.gov/datasets/vital-events#offer")
+    );
+    assert_eq!(policy["odrl:permission"].as_array().unwrap().len(), 1);
+    let permission = &policy["odrl:permission"][0];
+    assert_eq!(permission["odrl:action"]["@id"], json!("odrl:use"));
+    assert_eq!(
+        permission["odrl:target"]["@id"],
+        json!("https://civil-registration.example.gov/datasets/vital-events")
+    );
+    assert!(permission.get("odrl:assignee").is_none());
+    assert!(permission.get("odrl:constraint").is_none());
+    assert!(permission.get("odrl:duty").is_none());
+    assert!(policy.get("odrl:prohibition").is_none());
+}
+
+#[test]
+fn policy_documents_are_dataset_scoped_json_ld() {
+    let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
+
+    let collection = render_policy_collection(&compiled);
+    assert_eq!(
+        collection["@id"],
+        json!("https://civil-registration.example.gov/metadata/policies")
+    );
+    assert_eq!(
+        collection["@context"]["odrl"],
+        json!("http://www.w3.org/ns/odrl/2/")
+    );
+    assert_eq!(collection["@graph"].as_array().expect("graph").len(), 1);
+    assert_eq!(
+        collection["@graph"][0]["odrl:permission"][0]["odrl:target"]["@id"],
+        json!("https://civil-registration.example.gov/datasets/vital-events")
+    );
+
+    let policy =
+        render_dataset_policy_document(&compiled, "vital-events").expect("dataset policy renders");
+    assert_eq!(
+        policy["@id"],
+        json!("https://civil-registration.example.gov/datasets/vital-events#offer")
+    );
+    assert_eq!(policy["@type"], json!("odrl:Offer"));
+    assert!(render_dataset_policy_document(&compiled, "missing").is_none());
+}
+
+#[test]
+fn policy_validation_rejects_ambiguous_or_textual_terms() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.datasets[0].policy = Some(registry_metadata_core::DatasetPolicyManifest {
+        uid: Some("ftp://example.gov/policy".to_string()),
+        assigner: Some("did:web:civil-registration.example.gov".to_string()),
+        profile: Vec::new(),
+        permissions: vec![registry_metadata_core::PolicyRuleManifest {
+            action: "use".to_string(),
+            target: None,
+            assignee: None,
+            constraints: vec![registry_metadata_core::PolicyConstraintManifest {
+                left_operand: "odrl:purpose".to_string(),
+                operator: "odrl:isA".to_string(),
+                right_operand: registry_metadata_core::PolicyOperandValue {
+                    iri: None,
+                    value: Some("service delivery".to_string()),
+                },
+                unit: None,
+                datatype: None,
+            }],
+            duties: vec![registry_metadata_core::PolicyDutyManifest {
+                action: "attribute".to_string(),
+                target: None,
+                assignee: None,
+                constraints: Vec::new(),
+            }],
+        }],
+        prohibitions: Vec::new(),
+        obligations: vec![registry_metadata_core::PolicyDutyManifest {
+            action: "odrl:reviewPolicy".to_string(),
+            target: None,
+            assignee: None,
+            constraints: Vec::new(),
+        }],
+    });
+
+    let err = validate_manifest(&manifest).expect_err("policy should fail validation");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[0].policy.uid"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[0].policy.permissions[0].action"));
+    assert!(errors.iter().any(|error| {
+        error.path == "datasets[0].policy.permissions[0].constraints[0].right_operand"
+    }));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[0].policy.permissions[0].duties[0].action"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[0].policy.obligations"));
+}
+
+#[test]
 fn compile_expands_vocabularies_and_codelist_schemes() {
     let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
     let catalog = render_catalog(&compiled);
@@ -156,8 +369,67 @@ fn dcat_profiles_render_separate_artifacts() {
         json!("https://civil-registration.example.gov/authority")
     );
     assert_eq!(
+        base["dcterms:identifier"],
+        json!("example-civil-registration")
+    );
+    assert_eq!(
+        breg["dcterms:identifier"],
+        json!("example-civil-registration")
+    );
+    let included = breg["@included"].as_array().expect("@included");
+    assert_eq!(
+        included
+            .iter()
+            .filter(|node| node["@type"] == "dcterms:Standard")
+            .count(),
+        1,
+        "conformsTo standard nodes must not be duplicated when BReg builds on base DCAT"
+    );
+    assert!(included.iter().any(|node| {
+        node["@id"] == "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"
+            && node["@type"] == "dcterms:Standard"
+    }));
+    assert_eq!(
         render_dcat_profile(&compiled, "bregdcat-ap").unwrap()["@id"],
         breg["@id"]
+    );
+}
+
+#[test]
+fn breg_dcat_emits_standard_public_service_evidence_without_source_truth_claims() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.datasets[0].applicable_legislation =
+        vec!["http://data.europa.eu/eli/reg/2024/1/oj".to_string()];
+    manifest.datasets[0].public_services = vec![registry_metadata_core::PublicServiceManifest {
+        id: Some("civil-registration-service".to_string()),
+        title: registry_metadata_core::LocalizedText::Plain("Civil registration".to_string()),
+        description: Some(registry_metadata_core::LocalizedText::Plain(
+            "Public service producing civil registration data".to_string(),
+        )),
+    }];
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let breg = render_breg_dcat_ap(&compiled);
+    let dataset = &breg["dcat:dataset"][0];
+
+    assert_eq!(
+        dataset["dcatap:applicableLegislation"],
+        json!(["http://data.europa.eu/eli/reg/2024/1/oj"])
+    );
+    assert_eq!(
+        breg["@context"]["cpsv"],
+        json!("http://purl.org/vocab/cpsv#")
+    );
+    let included = breg["@included"].as_array().expect("@included");
+    let service = included
+        .iter()
+        .find(|node| node["@type"] == "cpsv:PublicService")
+        .expect("public service node");
+    assert_eq!(service["@id"], json!("civil-registration-service"));
+    assert_eq!(service["dcterms:title"], json!("Civil registration"));
+    assert_eq!(service["cpsv:produces"], json!("#dataset-vital-events"));
+    assert!(
+        service["registry_relay:sourceOfTruth"].is_null(),
+        "Registry Relay publishes standard CPSV evidence, not an authority verdict"
     );
 }
 
@@ -253,96 +525,8 @@ fn ogc_records_items_are_link_free() {
     assert!(items["features"][0].get("links").is_none());
 }
 
-const EXAMPLE_CIVIL_REGISTRATION_FIXTURE: &str = r#"
-schema_version: registry-metadata/v1
-catalog:
-  id: example-civil-registration
-  base_url: https://civil-registration.example.gov
-  title:
-    en: Civil Registration Metadata
-  publisher:
-    name: Civil Registration Authority
-    iri: https://civil-registration.example.gov/authority
-    authority_type: eli:PublicAuthority
-  participant_id: https://civil-registration.example.gov/authority
-  conforms_to:
-    - https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/
-  application_profiles:
-    - id: bregdcat-ap
-      version: "3.0.0"
-vocabularies:
-  person: https://person-schema.example.gov/vocab/
-  civreg: https://civil-registration.example.gov/vocab/
-  eli: http://data.europa.eu/eli/ontology#
-profiles:
-  - id: example-civil-registration
-    version: "1"
-datasets:
-  - id: vital-events
-    title:
-      en: Vital Events
-    status: under_development
-    access_rights: restricted
-    entities:
-      - name: person
-        title:
-          en: Person
-        identifiers:
-          - name: person_id
-            kind: local
-        fields:
-          - name: person_id
-            type: string
-            required: true
-            constraints:
-              min_length: 1
-              max_length: 64
-              pattern: "^[A-Za-z0-9-]+$"
-            concepts:
-              - person:Person.identifier
-          - name: birth_date
-            type: date
-            concepts:
-              - person:Person.birthDate
-              - civreg:BirthRecord.child.birthDate
-          - name: sex
-            type: code
-            codelist: sex
-            concepts:
-              - person:Person.sex
-      - name: vital_event
-        identifiers:
-          - name: event_id
-            kind: local
-        fields:
-          - name: event_id
-            type: string
-            required: true
-          - name: event_type
-            type: code
-            required: true
-            codelist: vital_event_type
-            constraints:
-              in: [birth, death]
-codelists:
-  - id: sex
-    scheme_iri: https://civil-registration.example.gov/codelists/sex
-    external_ref: https://civil-registration.example.gov/codelists/sex.ttl
-    concepts:
-      - code: female
-        iri: https://civil-registration.example.gov/codelists/sex/female
-        label:
-          en: Female
-      - code: male
-        iri: https://civil-registration.example.gov/codelists/sex/male
-        label:
-          en: Male
-  - id: vital_event_type
-    scheme_iri: https://civil-registration.example.gov/codelists/vital-event-type
-    concepts:
-      - code: birth
-      - code: death
-"#;
+const EXAMPLE_CIVIL_REGISTRATION_FIXTURE: &str =
+    include_str!("../../../profiles/example-civil-registration/fixtures/metadata.yaml");
 
 const EXAMPLE_SOCIAL_BENEFITS_FIXTURE: &str = r#"
 schema_version: registry-metadata/v1

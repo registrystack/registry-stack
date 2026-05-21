@@ -61,10 +61,10 @@ for the bundle layout.
 
 For releases that claim DCAT-AP interoperability, run the
 `dcat-ap-external-validation` GitHub Actions workflow or validate an
-exported `/catalog/dcat-ap.jsonld` with the SEMIC validator:
+exported `/metadata/dcat/bregdcat-ap` with the SEMIC validator:
 
 ```sh
-just validate-catalog-semic catalog=target/catalog.dcat-ap.jsonld
+just validate-catalog-semic catalog=target/metadata.bregdcat-ap.jsonld
 ```
 
 The release workflow uploads both the generated catalog and the SEMIC

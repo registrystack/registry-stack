@@ -1,1 +1,209 @@
-{"@context":{"adms":"http://www.w3.org/ns/adms#","adms:status":{"@type":"@id"},"dcat":"http://www.w3.org/ns/dcat#","dcat:accessURL":{"@type":"@id"},"dcat:landingPage":{"@type":"@id"},"dcterms":"http://purl.org/dc/terms/","dcterms:accessRights":{"@type":"@id"},"dcterms:accrualPeriodicity":{"@type":"@id"},"dcterms:conformsTo":{"@type":"@id"},"dcterms:isPartOf":{"@type":"@id"},"dcterms:spatial":{"@type":"@id"},"dcterms:type":{"@type":"@id"},"dspace":"https://w3id.org/dspace/2025/1/","foaf":"http://xmlns.com/foaf/0.1/","odrl":"http://www.w3.org/ns/odrl/2/","rdfs":"http://www.w3.org/2000/01/rdf-schema#","rdfs:seeAlso":{"@type":"@id"},"registry_relay":"https://registry-relay.dev/ns#","sh":"http://www.w3.org/ns/shacl#","sh:class":{"@type":"@id"},"sh:datatype":{"@type":"@id"},"sh:nodeKind":{"@type":"@id"},"sh:path":{"@type":"@id"},"sh:targetClass":{"@type":"@id"},"skos":"http://www.w3.org/2004/02/skos/core#","skos:hasTopConcept":{"@type":"@id"},"skos:inScheme":{"@type":"@id"},"xsd":"http://www.w3.org/2001/XMLSchema#"},"@graph":[{"@id":"https://civil-registration.example.gov/metadata/schema/vital-events/person/schema.json","@type":"sh:NodeShape","dcterms:identifier":"vital-events:person","dcterms:isPartOf":"#dataset-vital-events","registry_relay:primaryKey":"person_id","sh:name":"person","sh:nodeKind":"sh:IRI","sh:property":[{"@type":"sh:PropertyShape","sh:datatype":"xsd:date","sh:maxCount":1,"sh:minCount":0,"sh:name":"birth_date","sh:nodeKind":"sh:Literal","sh:path":"https://person-schema.example.gov/vocab/Person.birthDate"},{"@type":"sh:PropertyShape","sh:datatype":"xsd:string","sh:maxCount":1,"sh:maxLength":64,"sh:minCount":1,"sh:minLength":1,"sh:name":"person_id","sh:nodeKind":"sh:Literal","sh:path":"https://person-schema.example.gov/vocab/Person.identifier","sh:pattern":"^[A-Za-z0-9-]+$"},{"@type":"sh:PropertyShape","sh:datatype":"xsd:string","sh:maxCount":1,"sh:minCount":0,"sh:name":"sex","sh:nodeKind":"sh:Literal","sh:path":"https://person-schema.example.gov/vocab/Person.sex","skos:inScheme":"https://civil-registration.example.gov/codelists/sex"}],"sh:targetClass":"https://civil-registration.example.gov/datasets/vital-events/person/schema"},{"@id":"https://civil-registration.example.gov/metadata/schema/vital-events/vital_event/schema.json","@type":"sh:NodeShape","dcterms:identifier":"vital-events:vital_event","dcterms:isPartOf":"#dataset-vital-events","registry_relay:primaryKey":"event_id","sh:name":"vital_event","sh:nodeKind":"sh:IRI","sh:property":[{"@type":"sh:PropertyShape","sh:datatype":"xsd:string","sh:maxCount":1,"sh:minCount":1,"sh:name":"event_id","sh:nodeKind":"sh:Literal","sh:path":"https://civil-registration.example.gov/datasets/vital-events/vital_event/fields/event_id"},{"@type":"sh:PropertyShape","sh:datatype":"xsd:string","sh:in":["birth","death"],"sh:maxCount":1,"sh:minCount":1,"sh:name":"event_type","sh:nodeKind":"sh:Literal","sh:path":"https://civil-registration.example.gov/datasets/vital-events/vital_event/fields/event_type","skos:inScheme":"https://civil-registration.example.gov/codelists/vital-event-type"}],"sh:targetClass":"https://civil-registration.example.gov/datasets/vital-events/vital_event/schema"},{"@id":"https://civil-registration.example.gov/codelists/sex","@type":"skos:ConceptScheme","dcterms:identifier":"sex","rdfs:seeAlso":"https://civil-registration.example.gov/codelists/sex.ttl","skos:hasTopConcept":[{"@id":"https://civil-registration.example.gov/codelists/sex/female","@type":"skos:Concept","skos:inScheme":"https://civil-registration.example.gov/codelists/sex","skos:notation":"female","skos:prefLabel":"Female"},{"@id":"https://civil-registration.example.gov/codelists/sex/male","@type":"skos:Concept","skos:inScheme":"https://civil-registration.example.gov/codelists/sex","skos:notation":"male","skos:prefLabel":"Male"}]},{"@id":"https://civil-registration.example.gov/codelists/vital-event-type","@type":"skos:ConceptScheme","dcterms:identifier":"vital_event_type","skos:hasTopConcept":[{"@id":"https://civil-registration.example.gov/codelists/vital-event-type/birth","@type":"skos:Concept","skos:inScheme":"https://civil-registration.example.gov/codelists/vital-event-type","skos:notation":"birth","skos:prefLabel":null},{"@id":"https://civil-registration.example.gov/codelists/vital-event-type/death","@type":"skos:Concept","skos:inScheme":"https://civil-registration.example.gov/codelists/vital-event-type","skos:notation":"death","skos:prefLabel":null}]}]}
+{
+  "@context": {
+    "adms": "http://www.w3.org/ns/adms#",
+    "adms:status": {
+      "@type": "@id"
+    },
+    "dcat": "http://www.w3.org/ns/dcat#",
+    "dcat:accessURL": {
+      "@type": "@id"
+    },
+    "dcat:endpointDescription": {
+      "@type": "@id"
+    },
+    "dcat:endpointURL": {
+      "@type": "@id"
+    },
+    "dcat:landingPage": {
+      "@type": "@id"
+    },
+    "dcterms": "http://purl.org/dc/terms/",
+    "dcterms:accessRights": {
+      "@type": "@id"
+    },
+    "dcterms:accrualPeriodicity": {
+      "@type": "@id"
+    },
+    "dcterms:conformsTo": {
+      "@type": "@id"
+    },
+    "dcterms:isPartOf": {
+      "@type": "@id"
+    },
+    "dcterms:spatial": {
+      "@type": "@id"
+    },
+    "dcterms:type": {
+      "@type": "@id"
+    },
+    "dspace": "https://w3id.org/dspace/2025/1/",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "odrl": "http://www.w3.org/ns/odrl/2/",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "rdfs:seeAlso": {
+      "@type": "@id"
+    },
+    "registry_relay": "https://registry-relay.dev/ns#",
+    "sh": "http://www.w3.org/ns/shacl#",
+    "sh:class": {
+      "@type": "@id"
+    },
+    "sh:datatype": {
+      "@type": "@id"
+    },
+    "sh:nodeKind": {
+      "@type": "@id"
+    },
+    "sh:path": {
+      "@type": "@id"
+    },
+    "sh:targetClass": {
+      "@type": "@id"
+    },
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "skos:hasTopConcept": {
+      "@type": "@id"
+    },
+    "skos:inScheme": {
+      "@type": "@id"
+    },
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@graph": [
+    {
+      "@id": "https://civil-registration.example.gov/metadata/schema/vital-events/person/schema.json",
+      "@type": "sh:NodeShape",
+      "dcterms:identifier": "vital-events:person",
+      "dcterms:isPartOf": "#dataset-vital-events",
+      "registry_relay:primaryKey": "person_id",
+      "sh:name": "person",
+      "sh:nodeKind": "sh:IRI",
+      "sh:property": [
+        {
+          "@type": "sh:PropertyShape",
+          "sh:datatype": "xsd:date",
+          "sh:maxCount": 1,
+          "sh:minCount": 0,
+          "sh:name": "birth_date",
+          "sh:nodeKind": "sh:Literal",
+          "sh:path": "https://person-schema.example.gov/vocab/Person.birthDate"
+        },
+        {
+          "@type": "sh:PropertyShape",
+          "sh:datatype": "xsd:string",
+          "sh:maxCount": 1,
+          "sh:maxLength": 64,
+          "sh:minCount": 1,
+          "sh:minLength": 1,
+          "sh:name": "person_id",
+          "sh:nodeKind": "sh:Literal",
+          "sh:path": "https://person-schema.example.gov/vocab/Person.identifier",
+          "sh:pattern": "^[A-Za-z0-9-]+$"
+        },
+        {
+          "@type": "sh:PropertyShape",
+          "sh:datatype": "xsd:string",
+          "sh:maxCount": 1,
+          "sh:minCount": 0,
+          "sh:name": "sex",
+          "sh:nodeKind": "sh:Literal",
+          "sh:path": "https://person-schema.example.gov/vocab/Person.sex",
+          "skos:inScheme": "https://civil-registration.example.gov/codelists/sex"
+        }
+      ],
+      "sh:targetClass": "https://civil-registration.example.gov/datasets/vital-events/person/schema"
+    },
+    {
+      "@id": "https://civil-registration.example.gov/metadata/schema/vital-events/vital_event/schema.json",
+      "@type": "sh:NodeShape",
+      "dcterms:identifier": "vital-events:vital_event",
+      "dcterms:isPartOf": "#dataset-vital-events",
+      "registry_relay:primaryKey": "event_id",
+      "sh:name": "vital_event",
+      "sh:nodeKind": "sh:IRI",
+      "sh:property": [
+        {
+          "@type": "sh:PropertyShape",
+          "sh:datatype": "xsd:string",
+          "sh:maxCount": 1,
+          "sh:minCount": 1,
+          "sh:name": "event_id",
+          "sh:nodeKind": "sh:Literal",
+          "sh:path": "https://civil-registration.example.gov/vocab/VitalEvent.identifier"
+        },
+        {
+          "@type": "sh:PropertyShape",
+          "sh:datatype": "xsd:string",
+          "sh:in": [
+            "birth",
+            "death"
+          ],
+          "sh:maxCount": 1,
+          "sh:minCount": 1,
+          "sh:name": "event_type",
+          "sh:nodeKind": "sh:Literal",
+          "sh:path": "https://civil-registration.example.gov/vocab/VitalEvent.type",
+          "skos:inScheme": "https://civil-registration.example.gov/codelists/vital-event-type"
+        },
+        {
+          "@type": "sh:PropertyShape",
+          "sh:datatype": "xsd:date",
+          "sh:maxCount": 1,
+          "sh:minCount": 0,
+          "sh:name": "registration_date",
+          "sh:nodeKind": "sh:Literal",
+          "sh:path": "https://civil-registration.example.gov/vocab/VitalEvent.registrationDate"
+        }
+      ],
+      "sh:targetClass": "https://civil-registration.example.gov/datasets/vital-events/vital_event/schema"
+    },
+    {
+      "@id": "https://civil-registration.example.gov/codelists/sex",
+      "@type": "skos:ConceptScheme",
+      "dcterms:identifier": "sex",
+      "dcterms:title": "Sex",
+      "rdfs:seeAlso": "https://civil-registration.example.gov/codelists/sex.ttl",
+      "skos:hasTopConcept": [
+        {
+          "@id": "https://civil-registration.example.gov/codelists/sex/female",
+          "@type": "skos:Concept",
+          "skos:inScheme": "https://civil-registration.example.gov/codelists/sex",
+          "skos:notation": "female",
+          "skos:prefLabel": "Female"
+        },
+        {
+          "@id": "https://civil-registration.example.gov/codelists/sex/male",
+          "@type": "skos:Concept",
+          "skos:inScheme": "https://civil-registration.example.gov/codelists/sex",
+          "skos:notation": "male",
+          "skos:prefLabel": "Male"
+        }
+      ],
+      "skos:prefLabel": "Sex"
+    },
+    {
+      "@id": "https://civil-registration.example.gov/codelists/vital-event-type",
+      "@type": "skos:ConceptScheme",
+      "dcterms:identifier": "vital_event_type",
+      "dcterms:title": "Vital Event Type",
+      "rdfs:seeAlso": "https://civil-registration.example.gov/codelists/vital-event-type.ttl",
+      "skos:hasTopConcept": [
+        {
+          "@id": "https://civil-registration.example.gov/codelists/vital-event-type/birth",
+          "@type": "skos:Concept",
+          "skos:inScheme": "https://civil-registration.example.gov/codelists/vital-event-type",
+          "skos:notation": "birth",
+          "skos:prefLabel": "Birth"
+        },
+        {
+          "@id": "https://civil-registration.example.gov/codelists/vital-event-type/death",
+          "@type": "skos:Concept",
+          "skos:inScheme": "https://civil-registration.example.gov/codelists/vital-event-type",
+          "skos:notation": "death",
+          "skos:prefLabel": "Death"
+        }
+      ],
+      "skos:prefLabel": "Vital Event Type"
+    }
+  ]
+}

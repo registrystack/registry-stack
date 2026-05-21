@@ -21,17 +21,17 @@ Auth-gated data-plane routes:
 
 ```text
 GET /openapi.json
-GET /catalog
-GET /catalog/dcat-ap.jsonld
 GET /metadata
 GET /metadata/catalog
 GET /metadata/dcat
 GET /metadata/dcat/{profile}
 GET /metadata/shacl
+GET /metadata/policies
 GET /metadata/profiles
 GET /metadata/profiles/{profile}
 GET /metadata/datasets
 GET /metadata/datasets/{dataset_id}
+GET /metadata/datasets/{dataset_id}/policy
 GET /metadata/datasets/{dataset_id}/entities
 GET /metadata/datasets/{dataset_id}/entities/{entity}
 GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
@@ -157,15 +157,17 @@ When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_r
 
 ## Metadata, Catalog, And OpenAPI
 
-`GET /catalog` and `GET /catalog/dcat-ap.jsonld` return only datasets visible to the authenticated principal's metadata scopes.
+`GET /metadata/catalog` and `GET /metadata/dcat/bregdcat-ap` return only datasets visible to the authenticated principal's metadata scopes.
 
-Dataset summaries and catalog entries advertise optional standards adapters when the caller can see the bound entity metadata. OGC API Records datasets include links to the canonical `/ogc/v1/records` catalog-records surface when the `ogcapi-records` feature is enabled. OGC API Features datasets include links to the canonical `/ogc/v1` landing and dataset collection endpoints. SP DCI-bound datasets include the configured registry slug and sync endpoints under `/dci/{registry}/registry/sync/...`.
+The metadata catalog is route-neutral and does not inline Relay-specific runtime
+adapters. Standards routes remain canonical at their protocol roots, such as
+`/ogc/v1/records`, `/ogc/v1`, and `/dci/{registry}/registry/sync/...`.
+`/datasets/{dataset_id}` acts as the Relay-native discovery surface that
+connects them back to the native dataset model.
 
-The DCAT-AP JSON-LD export registers those standards endpoints as `dcat:DataService` entries that `dcat:servesDataset` the corresponding dataset. The standards routes remain canonical at their protocol roots; `/datasets/{dataset_id}` acts as the discovery surface that connects them back to the native dataset model.
+`GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, verify, aggregate, claim-verification, or admin access.
 
-`GET /metadata/*` is the standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, verify, aggregate, claim-verification, or admin access.
-
-The older `/catalog`, `/catalog/dcat-ap.jsonld`, `/datasets`, and runtime entity routes remain operational discovery surfaces. Portable metadata consumers should use `/metadata/*` or static publication.
+Relay-native discovery remains under `/datasets` and runtime entity routes. Portable metadata consumers should use `/metadata/*` or static publication.
 
 `GET /openapi.json` is also auth-gated and metadata-filtered. The generated document includes only the operations and dataset/entity tags visible to the caller. `GET /docs` serves the local Scalar viewer and asks for a bearer token before fetching `GET /openapi.json`.
 
@@ -192,7 +194,7 @@ GET /ogc/v1/records/collections/datasets/items
 GET /ogc/v1/records/collections/datasets/items/{dataset_id}
 ```
 
-The initial Records surface has one collection, `datasets`, where each item is a record describing a visible `dcat:Dataset`. It uses the same metadata scopes as `/catalog`; it does not expose row data, bypass required filters, or claim searchable-catalog conformance.
+The initial Records surface has one collection, `datasets`, where each item is a record describing a visible `dcat:Dataset`. It uses the same metadata scopes as `/metadata/catalog`; it does not expose row data, bypass required filters, or claim searchable-catalog conformance.
 
 `GET /ogc/v1/records/collections/datasets/items` supports metadata-side discovery parameters:
 

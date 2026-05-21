@@ -25,6 +25,40 @@ datasets:
   update_frequency: monthly
   conforms_to:
   - spdci:extensions/dr/v1/DisabledPerson
+  applicable_legislation:
+  - https://demo.example.gov/legislation/disability-registry-act
+  public_services:
+  - id: https://demo.example.gov/services/disability-registration
+    title: Disability registration service
+    description: Public service responsible for registering and maintaining certified disability status in the demo environment.
+  policy:
+    uid: https://demo.example.gov/datasets/disability_registry#illustrative-offer
+    assigner: did:web:social-affairs.demo.example.gov
+    profile:
+    - https://demo.example.gov/odrl/profile/illustrative-government-data-sharing
+    permissions:
+    - action: odrl:use
+      constraints:
+      - left_operand: odrl:purpose
+        operator: odrl:isA
+        right_operand:
+          iri: https://demo.example.gov/purpose/disability-benefit-eligibility
+      - left_operand: odrl:recipient
+        operator: odrl:isA
+        right_operand:
+          iri: https://demo.example.gov/recipient/social-protection-program
+      duties:
+      - action: odrl:attribute
+      - action: odrl:delete
+        constraints:
+        - left_operand: odrl:elapsedTime
+          operator: odrl:lteq
+          right_operand:
+            value: P90D
+          datatype: xsd:duration
+    prohibitions:
+    - action: odrl:sell
+    - action: https://demo.example.gov/odrl/action/reidentify
   entities:
   - name: disabled_person
     title: Disabled Person
@@ -214,6 +248,30 @@ datasets:
   update_frequency: monthly
   conforms_to:
   - spdci:extensions/fr/v1/FRPerson
+  applicable_legislation:
+  - https://demo.example.gov/legislation/farmer-registry-act
+  public_services:
+  - id: https://demo.example.gov/services/farmer-registration
+    title: Farmer registration service
+    description: Public service responsible for registering and maintaining farmer status in the demo environment.
+  policy:
+    uid: https://demo.example.gov/datasets/farmer_registry#illustrative-offer
+    assigner: did:web:agriculture.demo.example.gov
+    profile:
+    - https://demo.example.gov/odrl/profile/illustrative-government-data-sharing
+    permissions:
+    - action: odrl:use
+      constraints:
+      - left_operand: odrl:purpose
+        operator: odrl:isA
+        right_operand:
+          iri: https://demo.example.gov/purpose/agricultural-subsidy-eligibility
+      duties:
+      - action: odrl:attribute
+      - action: odrl:inform
+    prohibitions:
+    - action: odrl:sell
+    - action: https://demo.example.gov/odrl/action/reidentify
   entities:
   - name: farmer
     title: Farmer

@@ -317,8 +317,9 @@ The collection is grouped by capability and dataset:
 - `Metadata` exercises the split-manifest `/metadata/*` surface, including
   portable catalog JSON, base DCAT, BRegDCAT-AP, SHACL, JSON Schema, and
   link-free OGC record bodies;
-- `Catalog` keeps the older operational `/catalog` discovery endpoints that
-  remain available for Relay-native consumers;
+- `Catalog` exercises the canonical `/metadata/catalog`,
+  `/metadata/dcat/bregdcat-ap`, and `/metadata/policies` publication
+  endpoints;
 - per-dataset folders (`Benefits Casework`, `Clinic Capacity`,
   `Public Works Projects`, `Education Registry`, `Subject Registry`) contain
   positive flows plus the spec-listed dataset-local negative checks;

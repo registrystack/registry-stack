@@ -2196,6 +2196,12 @@ datasets:
     update_frequency: monthly
     conforms_to:
       - spdci:extensions/dr/v1/DisabledPerson
+    applicable_legislation:
+      - https://demo.example.gov/legislation/disability-registry-act
+    public_services:
+      - id: https://demo.example.gov/services/disability-registration
+        title: Disability registration service
+        description: Public service responsible for registering and maintaining certified disability status in the demo environment.
     defaults:
       refresh:
         mode: manual
@@ -2623,6 +2629,12 @@ datasets:
     update_frequency: monthly
     conforms_to:
       - spdci:extensions/fr/v1/FRPerson
+    applicable_legislation:
+      - https://demo.example.gov/legislation/farmer-registry-act
+    public_services:
+      - id: https://demo.example.gov/services/farmer-registration
+        title: Farmer registration service
+        description: Public service responsible for registering and maintaining farmer status in the demo environment.
     defaults:
       refresh:
         mode: manual

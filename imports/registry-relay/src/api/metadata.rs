@@ -36,10 +36,15 @@ where
         .route("/metadata/dcat", get(dcat))
         .route("/metadata/dcat/{profile}", get(dcat_profile))
         .route("/metadata/shacl", get(shacl))
+        .route("/metadata/policies", get(policies))
         .route("/metadata/profiles", get(profiles))
         .route("/metadata/profiles/{profile}", get(profile))
         .route("/metadata/datasets", get(datasets))
         .route("/metadata/datasets/{dataset_id}", get(dataset))
+        .route(
+            "/metadata/datasets/{dataset_id}/policy",
+            get(dataset_policy),
+        )
         .route(
             "/metadata/datasets/{dataset_id}/entities",
             get(dataset_entities),
@@ -94,6 +99,7 @@ async fn metadata_landing(
                 { "rel": "alternate", "href": "/metadata/dcat", "type": "application/ld+json" },
                 { "rel": "alternate", "href": "/metadata/dcat/bregdcat-ap", "type": "application/ld+json" },
                 { "rel": "describedby", "href": "/metadata/shacl", "type": "application/ld+json" },
+                { "rel": "describedby", "href": "/metadata/policies", "type": "application/ld+json" },
             ],
             "catalog": metadata_core::render_catalog(&compiled),
         }),
@@ -159,6 +165,20 @@ async fn shacl(
         Err(response) => return *response,
     };
     json_ld_response(metadata_core::render_shacl(&compiled), &headers)
+}
+
+async fn policies(
+    headers: HeaderMap,
+    config: Option<Extension<Arc<Config>>>,
+    registry: Option<Extension<Arc<EntityRegistry>>>,
+    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    principal: Option<Extension<Principal>>,
+) -> Response {
+    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+        Ok(compiled) => compiled,
+        Err(response) => return *response,
+    };
+    json_ld_response(metadata_core::render_policy_collection(&compiled), &headers)
 }
 
 async fn entity_schema(
@@ -281,6 +301,25 @@ async fn dataset(
         return Error::from(SchemaError::UnknownDataset).into_response();
     };
     json_response(dataset, &headers)
+}
+
+async fn dataset_policy(
+    Path(path): Path<DatasetPath>,
+    headers: HeaderMap,
+    config: Option<Extension<Arc<Config>>>,
+    registry: Option<Extension<Arc<EntityRegistry>>>,
+    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    principal: Option<Extension<Principal>>,
+) -> Response {
+    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+        Ok(compiled) => compiled,
+        Err(response) => return *response,
+    };
+    let Some(document) = metadata_core::render_dataset_policy_document(&compiled, &path.dataset_id)
+    else {
+        return Error::from(SchemaError::UnknownDataset).into_response();
+    };
+    json_ld_response(document, &headers)
 }
 
 async fn dataset_entities(

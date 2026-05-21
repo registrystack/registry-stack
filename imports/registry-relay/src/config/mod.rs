@@ -244,7 +244,7 @@ pub struct CorsConfig {
     pub allowed_origins: Vec<String>,
 }
 
-/// Catalog-level metadata surfaced by `/catalog` and DCAT-AP outputs.
+/// Catalog-level metadata surfaced by `/metadata/*` and DCAT outputs.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
@@ -501,6 +501,11 @@ pub struct DatasetConfig {
     pub update_frequency: UpdateFrequency,
     #[serde(default)]
     pub conforms_to: Vec<String>,
+    /// DCAT-AP `dcatap:applicableLegislation` IRIs. This is evidence
+    /// published for standard consumers, not an application-specific
+    /// authorization or source-of-truth verdict.
+    #[serde(default)]
+    pub applicable_legislation: Vec<String>,
     /// BRegDCAT-AP: `dct:spatial` IRI for this dataset. Overrides the
     /// catalog-level `default_spatial_coverage` when set.
     #[serde(default)]
@@ -510,12 +515,27 @@ pub struct DatasetConfig {
     /// claim and forces an explicit opt-in to anything stronger.
     #[serde(default)]
     pub status: Option<AdmsStatus>,
+    /// CPSV public services that produce this dataset. Registry Relay emits
+    /// them as standard `cpsv:PublicService` nodes; consumers decide how to
+    /// interpret that evidence.
+    #[serde(default)]
+    pub public_services: Vec<PublicServiceConfig>,
     #[serde(default)]
     pub defaults: DatasetDefaultsConfig,
     #[serde(default)]
     pub tables: Vec<ResourceConfig>,
     #[serde(default)]
     pub entities: Vec<EntityConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicServiceConfig {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Optional table defaults for reducing repetition within one dataset.

@@ -124,6 +124,18 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
+    policy:
+      uid: https://metadata.example.test/datasets/social_registry#offer
+      assigner: did:web:metadata.example.test
+      profile:
+        - https://metadata.example.test/odrl/profile/data-sharing
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://metadata.example.test/purpose/social-protection-planning
     entities:
       - name: household
         title: Household
@@ -376,6 +388,47 @@ async fn metadata_routes_prefer_split_manifest_extension() {
     assert_eq!(body["id"], "split-demo");
     assert_eq!(body["title"], "Split Metadata Catalog");
     assert_eq!(body["base_url"], "https://metadata.example.test");
+}
+
+#[tokio::test]
+async fn metadata_dcat_profile_uses_split_manifest_policy_when_available() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_metadata_manifest(&tmp, true);
+    let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
+    let loaded = config::load_with_metadata(&runtime_path).expect("split config loads");
+    let metadata = Arc::new(loaded.metadata.expect("metadata is compiled"));
+    let runtime = Arc::new(loaded.runtime);
+    let registry = Arc::new(EntityRegistry::from_config(&runtime).expect("registry compiles"));
+    let server = TestServer::new(
+        metadata_router()
+            .layer(Extension(metadata))
+            .layer(Extension(registry))
+            .layer(Extension(runtime))
+            .layer(Extension(principal(&["social_registry:metadata"]))),
+    );
+
+    let resp = server.get("/metadata/dcat/bregdcat-ap").await;
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    let dataset = &body["dcat:dataset"][0];
+    let policy = &dataset["odrl:hasPolicy"];
+
+    assert_eq!(
+        policy["odrl:uid"],
+        "https://metadata.example.test/datasets/social_registry#offer"
+    );
+    assert_eq!(
+        policy["odrl:profile"][0]["@id"],
+        "https://metadata.example.test/odrl/profile/data-sharing"
+    );
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:target"]["@id"],
+        "https://metadata.example.test/datasets/social_registry"
+    );
+    assert_eq!(
+        policy["odrl:permission"][0]["odrl:constraint"][0]["odrl:rightOperand"]["@id"],
+        "https://metadata.example.test/purpose/social-protection-planning"
+    );
 }
 
 fn principal(scopes: &[&str]) -> Principal {

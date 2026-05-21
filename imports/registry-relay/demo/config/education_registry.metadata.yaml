@@ -26,6 +26,24 @@ datasets:
   sensitivity: personal
   access_rights: restricted
   update_frequency: termly
+  policy:
+    uid: https://demo.example.gov/datasets/education_registry#illustrative-offer
+    assigner: did:web:education.demo.example.gov
+    profile:
+    - https://demo.example.gov/odrl/profile/illustrative-government-data-sharing
+    permissions:
+    - action: odrl:use
+      constraints:
+      - left_operand: odrl:purpose
+        operator: odrl:isA
+        right_operand:
+          iri: https://demo.example.gov/purpose/student-support-planning
+      duties:
+      - action: odrl:reviewPolicy
+      - action: odrl:attribute
+    prohibitions:
+    - action: odrl:sell
+    - action: https://demo.example.gov/odrl/action/reidentify
   entities:
   - name: student
     title: Student
