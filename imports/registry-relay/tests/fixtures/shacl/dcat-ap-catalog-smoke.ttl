@@ -1,6 +1,5 @@
 @prefix dcat: <http://www.w3.org/ns/dcat#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
-@prefix dspace: <https://w3id.org/dspace/2025/1/> .
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix odrl: <http://www.w3.org/ns/odrl/2/> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -15,11 +14,6 @@
     ] ;
     sh:property [
         sh:path dcterms:description ;
-        sh:minCount 1 ;
-        sh:nodeKind sh:Literal ;
-    ] ;
-    sh:property [
-        sh:path dspace:participantId ;
         sh:minCount 1 ;
         sh:nodeKind sh:Literal ;
     ] ;

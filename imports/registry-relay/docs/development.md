@@ -1,6 +1,6 @@
 # registry-relay Development Guide
 
-This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [metadata.md](metadata.md), [claim-verification.md](claim-verification.md), and [provenance.md](provenance.md).
+This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [metadata.md](metadata.md), [evidence-verification.md](evidence-verification.md), and [provenance.md](provenance.md).
 
 ## Local Setup
 
@@ -158,7 +158,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 - Keep the public URL space entity-shaped. Do not expose table ids in data-plane paths.
 - Add config fields through `src/config/mod.rs` and validation in `src/config/validate.rs`.
 - Keep portable metadata in `crates/registry-metadata-core`; it must not depend on Relay runtime, Axum, DataFusion, auth, scopes, OpenAPI, or connector code.
-- Keep auth scopes independent. Metadata, rows, verify, claim verification, aggregate, and admin must not imply one another.
+- Keep auth scopes independent. Metadata, rows, evidence verification, aggregate, and admin must not imply one another.
 - Treat audit as a product surface. New routes should populate endpoint kind, dataset/entity/table ids, purpose, row count, suppression count, and stable error code when applicable.
 - Prefer structured parsers and DataFusion expressions over string-built query logic.
 - Do not log raw keys, fingerprints, private JWKs, row values, or full environment dumps.
@@ -186,6 +186,6 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 ## Documentation Style
 
-Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, `docs/claim-verification.md`, and `docs/ops.md` operationally current.
+Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, `docs/evidence-verification.md`, and `docs/ops.md` operationally current.
 
 Inline Rust docs should explain invariants and boundaries that are easy to break while editing. Avoid comments that repeat obvious field names or preserve obsolete implementation scaffolding after the code has matured.

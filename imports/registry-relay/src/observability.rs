@@ -497,6 +497,7 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
         "/datasets/{dataset_id}" => EndpointKind::Dataset,
         "/datasets/{dataset_id}/{entity}/schema" => EndpointKind::Schema,
         "/datasets/{dataset_id}/{entity}/verify" => EndpointKind::Verify,
+        "/evidence-offerings/{offering_id}/verifications" => EndpointKind::EvidenceVerification,
         "/datasets/{dataset_id}/{entity}" => EndpointKind::Rows,
         "/datasets/{dataset_id}/{entity}/{id}" => EndpointKind::Rows,
         "/datasets/{dataset_id}/{entity}/{id}/{relationship}" => EndpointKind::Rows,
@@ -518,10 +519,20 @@ fn endpoint_kind_from_path(path: &str) -> EndpointKind {
         EndpointKind::Catalog
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
+    } else if path.starts_with("/evidence-offerings/") {
+        classify_evidence_offering_endpoint(path)
     } else if path.starts_with("/datasets/") {
         classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
+    }
+}
+
+fn classify_evidence_offering_endpoint(path: &str) -> EndpointKind {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["evidence-offerings", _offering, "verifications"] => EndpointKind::EvidenceVerification,
+        _ => EndpointKind::Other,
     }
 }
 
@@ -548,6 +559,7 @@ fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::Dataset => "dataset",
         EndpointKind::Schema => "schema",
         EndpointKind::Verify => "verify",
+        EndpointKind::EvidenceVerification => "evidence_verification",
         EndpointKind::Rows => "rows",
         EndpointKind::AggregateList => "aggregate_list",
         EndpointKind::Aggregate => "aggregate",

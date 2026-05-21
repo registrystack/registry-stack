@@ -39,7 +39,7 @@ Use that bundled reference as the source of truth for V1 syntax, constraints, ro
 4. Check entity projections.
    - If `fields` is present, hidden columns must not appear in schema, row output, filters, aggregates, catalog output, OpenAPI, or SHACL.
    - Exactly one exposed entity field must map to the backing table primary key.
-   - Exposed field names, not hidden storage names, should drive public filters, aggregate columns, and verify parameters.
+   - Exposed field names, not hidden storage names, should drive public filters, aggregate columns, and evidence verification parameters.
    - Semantic annotations should be declarative only: URI expansion is allowed, URI fetching or inference is not part of V1.
 
 5. Check relationships.
@@ -51,12 +51,12 @@ Use that bundled reference as the source of truth for V1 syntax, constraints, ro
    - Cross-dataset and multi-hop relationships are out of scope for V1.
 
 6. Check access isolation.
-   - Each entity must have `metadata_scope`, `aggregate_scope`, `read_scope`, and `verify_scope`.
+   - Each entity must have `metadata_scope`, `aggregate_scope`, and `read_scope`; entities backing evidence offerings must also have `evidence_verification_scope`.
    - API keys should have the minimum scopes needed by their consumer.
    - Aggregate-only keys must not read rows.
-   - Verify-only keys must not access catalog, schema, rows, aggregates, or claim verification.
+   - Evidence-verification-only keys must not access catalog, schema, rows, or aggregates.
    - `admin` should be separate from data scopes and used only for reload.
-   - If personal data is exposed, prefer `require_purpose_header: true` for entities with row or verify access.
+   - If personal data is exposed, prefer `require_purpose_header: true` for entities with row or evidence-verification access.
 
 7. Check query controls.
    - Filters must be explicit allowlists.
@@ -109,7 +109,7 @@ If there are no findings, say that clearly and still name the checks that ran an
 - Entity `allowed_filters` references a storage column hidden by projection.
 - Entity primary key column is hidden or exposed twice.
 - `has_many` FK is checked on the wrong table.
-- Verify-only API key accidentally also receives metadata or row scopes.
+- Evidence-verification-only API key accidentally also receives metadata or row scopes.
 - Aggregate groups by a related field without declaring `joins`.
 - Aggregate measure references `household.region`; V1 measures must be base-entity exposed fields.
 - Config example drifts from the bundled V1 contract.

@@ -69,7 +69,7 @@ auth:
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_API_KEY_HASH
       scopes:
-        - social_registry:verify
+        - social_registry:evidence_verification
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_API_KEY_HASH
       scopes:
@@ -169,7 +169,7 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -208,7 +208,7 @@ datasets:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
-          verify_scope: social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -378,8 +378,7 @@ Scope forms:
 - `<dataset>:metadata`
 - `<dataset>:aggregate`
 - `<dataset>:rows`
-- `<dataset>:verify`
-- `<dataset>:claim_verification`
+- `<dataset>:evidence_verification`
 
 Deployments may use finer strings such as `<dataset>:<entity>:read` if every configured scope and key grant matches, but dataset-grained strings are the V1 default.
 
@@ -388,11 +387,10 @@ Scope meanings:
 - `metadata`: catalog, dataset details, schema.
 - `aggregate`: configured aggregate endpoints only.
 - `rows`: collection, single-record, nested relationship, and expansion row reads.
-- `verify`: one-bit existence check only.
-- `claim_verification`: submitted-claim comparison only.
+- `evidence_verification`: evidence-offering verification events only.
 - `admin`: reload and future admin operations.
 
-Scopes are independent. Aggregate access does not imply row access. Verify access does not imply metadata, aggregate, row, claim-verification, or admin access.
+Scopes are independent. Aggregate access does not imply row access. Evidence-verification access does not imply metadata, aggregate, row, or admin access.
 
 ## Dataset
 
@@ -584,10 +582,10 @@ access:
   metadata_scope: social_registry:metadata
   aggregate_scope: social_registry:aggregate
   read_scope: social_registry:rows
-  verify_scope: social_registry:verify
+  evidence_verification_scope: social_registry:evidence_verification
 ```
 
-Use distinct scopes unless there is a deliberate deployment reason not to. Keep verify-only and aggregate-only consumers isolated.
+Use distinct scopes unless there is a deliberate deployment reason not to. Keep evidence-verification-only and aggregate-only consumers isolated.
 
 ## Entity API
 
@@ -632,7 +630,7 @@ Query syntax:
 
 Unknown query parameters, unknown filter fields, and unallowed operators should fail with a 400-style problem response.
 
-Use `require_purpose_header: true` for personal row or verify access unless the deployment explicitly does not require purpose logging. Purpose header value is opaque and logged for accountability.
+Use `require_purpose_header: true` for personal row or evidence-verification access unless the deployment explicitly does not require purpose logging. Purpose header value is opaque and logged for accountability.
 
 ## Aggregates
 
@@ -719,7 +717,6 @@ Public entity-oriented routes:
 - `GET /datasets/{dataset_id}/{entity}`
 - `GET /datasets/{dataset_id}/{entity}/{id}`
 - `GET /datasets/{dataset_id}/{entity}/{id}/{relationship}`
-- `GET /datasets/{dataset_id}/{entity}/verify`
 - `GET /datasets/{dataset_id}/{entity}/aggregates`
 - `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}`
 - `POST /admin/reload`
@@ -792,10 +789,10 @@ Before delivering a config:
 - Every referenced table, entity, relationship, field, scope, aggregate, and vocabulary prefix resolves.
 - Public names are entity-oriented and do not leak storage table IDs.
 - Every entity has exactly one exposed primary-key field.
-- Hidden storage columns do not appear in public filters, aggregate measures, aggregate groups, schemas, docs, or verify parameters.
-- Verify-only scope grants only verify.
+- Hidden storage columns do not appear in public filters, aggregate measures, aggregate groups, schemas, docs, or evidence verification parameters.
+- Evidence-verification-only scope grants only verify.
 - Aggregate-only scope grants only aggregates.
-- Personal row or verify access requires purpose headers unless explicitly waived.
+- Personal row or evidence-verification access requires purpose headers unless explicitly waived.
 - Aggregates have disclosure control and no small-group leaks.
 - No total counts or offset pagination are introduced.
 - Audit sink is configured and will not log secrets or row-level personal data.

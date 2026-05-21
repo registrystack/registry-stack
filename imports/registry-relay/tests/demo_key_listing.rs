@@ -46,11 +46,12 @@ fn demo_key_listing_uses_openapi_words_and_generated_raw_keys() {
 
     for expected in [
         "metadataKey",
+        "evidenceVerificationKey",
         "raw-casework-token",
         "List datasets",
         "Run aggregate",
         "Get record",
-        "Verify record exists",
+        "Create evidence verification",
     ] {
         assert!(
             all_demos.contains(expected),
@@ -69,8 +70,8 @@ fn demo_key_listing_uses_openapi_words_and_generated_raw_keys() {
 
     let disability = run_key_listing("demo/config/disability_registry.yaml", Some(&env_path));
     assert!(
-        disability.contains("Create claim verification"),
-        "disability key listing should expose submitted-claim wording:\n{disability}"
+        disability.contains("Create evidence verification"),
+        "disability key listing should expose evidence-verification wording:\n{disability}"
     );
 
     std::fs::remove_file(env_path).expect("remove fixture env file");

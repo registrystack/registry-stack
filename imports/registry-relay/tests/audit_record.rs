@@ -43,6 +43,11 @@ fn sample_record() -> AuditRecord {
         underlying_kind: None,
         collection_id: None,
         primary_key: None,
+        offering_id: None,
+        verification_id: None,
+        verification_decision: None,
+        claim_hash: None,
+        evidence_hash: None,
         scopes_used: vec!["catalog".to_string()],
         query_params: serde_json::json!({}),
         purpose: Some("ci-smoke".to_string()),
@@ -82,6 +87,11 @@ fn record_serialises_to_expected_field_shape() {
         "underlying_kind",
         "collection_id",
         "primary_key",
+        "offering_id",
+        "verification_id",
+        "verification_decision",
+        "claim_hash",
+        "evidence_hash",
         "scopes_used",
         "query_params",
         "purpose",
@@ -130,6 +140,11 @@ fn record_field_types_match_contract() {
     assert!(json["underlying_kind"].is_null());
     assert!(json["collection_id"].is_null());
     assert!(json["primary_key"].is_null());
+    assert!(json["offering_id"].is_null());
+    assert!(json["verification_id"].is_null());
+    assert!(json["verification_decision"].is_null());
+    assert!(json["claim_hash"].is_null());
+    assert!(json["evidence_hash"].is_null());
     assert!(json["row_count"].is_null());
     assert!(json["null_geometry_count"].is_null());
     assert!(json["invalid_geometry_count"].is_null());
@@ -306,6 +321,7 @@ fn endpoint_kind_renders_canonical_strings() {
         (Dataset, "dataset"),
         (Schema, "schema"),
         (Verify, "verify"),
+        (EvidenceVerification, "evidence_verification"),
         (Rows, "rows"),
         (AggregateList, "aggregate_list"),
         (Aggregate, "aggregate"),

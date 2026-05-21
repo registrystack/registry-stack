@@ -15,6 +15,38 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
+requirements:
+- id: disability_status_requirement
+  iri: https://demo.example.gov/requirements/disability-status
+  title: Disability status requirement
+  description: Requirement for verifying certified disability status.
+- id: social_registry_group_requirement
+  iri: https://demo.example.gov/requirements/social-registry-group
+  title: Social registry group requirement
+  description: Requirement for verifying social registry group membership.
+- id: farmer_status_requirement
+  iri: https://demo.example.gov/requirements/farmer-status
+  title: Farmer status requirement
+  description: Requirement for verifying registered farmer status.
+evidence_types:
+- id: disability_status_evidence
+  iri: https://demo.example.gov/evidence-types/disability-status
+  title: Disability status evidence
+  description: Evidence that a person has a disability registry status.
+  proves:
+  - disability_status_requirement
+- id: social_registry_group_evidence
+  iri: https://demo.example.gov/evidence-types/social-registry-group
+  title: Social registry group evidence
+  description: Evidence that a household or group is present in the social registry.
+  proves:
+  - social_registry_group_requirement
+- id: farmer_status_evidence
+  iri: https://demo.example.gov/evidence-types/farmer-status
+  title: Farmer status evidence
+  description: Evidence that a person is registered as a farmer.
+  proves:
+  - farmer_status_requirement
 datasets:
 - id: benefits_casework
   title: Benefits Casework
@@ -748,6 +780,30 @@ datasets:
     prohibitions:
     - action: odrl:sell
     - action: https://demo.example.gov/odrl/action/reidentify
+  evidence_offerings:
+  - id: disability_status_evidence_offering
+    iri: https://demo.example.gov/evidence-offerings/disability-status
+    title: Disability status evidence
+    description: Registry Relay verification for disability status by member identifier.
+    evidence_type: disability_status_evidence
+    issuing_authority:
+      id: ministry_of_social_affairs
+      iri: did:web:social-affairs.demo.example.gov
+      name: Ministry of Social Affairs
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: disabled_person
+    lookup_keys:
+    - member_identifier
+    access:
+      kind: registry-relay-verification
+      conforms_to: registry_relay:evidence-verification-v1
+      ruleset: disability-status-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/disability-benefit-eligibility
   entities:
   - name: disabled_person
     title: Disabled Person
@@ -870,6 +926,30 @@ datasets:
   update_frequency: monthly
   conforms_to:
   - spdci:extensions/social/v1/Group
+  evidence_offerings:
+  - id: social_registry_group_evidence_offering
+    iri: https://demo.example.gov/evidence-offerings/social-registry-group
+    title: Social registry group evidence
+    description: Registry Relay verification for social registry group records.
+    evidence_type: social_registry_group_evidence
+    issuing_authority:
+      id: ministry_of_social_protection
+      iri: did:web:social-protection.demo.example.gov
+      name: Ministry of Social Protection
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: social_group
+    lookup_keys:
+    - group_id
+    access:
+      kind: registry-relay-verification
+      conforms_to: registry_relay:evidence-verification-v1
+      ruleset: social-group-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/social-protection-eligibility
   entities:
   - name: social_group
     title: Social Registry Group
@@ -961,6 +1041,30 @@ datasets:
     prohibitions:
     - action: odrl:sell
     - action: https://demo.example.gov/odrl/action/reidentify
+  evidence_offerings:
+  - id: farmer_status_evidence_offering
+    iri: https://demo.example.gov/evidence-offerings/farmer-status
+    title: Farmer status evidence
+    description: Registry Relay verification for farmer status by national identifier.
+    evidence_type: farmer_status_evidence
+    issuing_authority:
+      id: ministry_of_agriculture
+      iri: did:web:agriculture.demo.example.gov
+      name: Ministry of Agriculture
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: farmer
+    lookup_keys:
+    - national_id
+    access:
+      kind: registry-relay-verification
+      conforms_to: registry_relay:evidence-verification-v1
+      ruleset: farmer-status-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/agricultural-subsidy-eligibility
   entities:
   - name: farmer
     title: Farmer

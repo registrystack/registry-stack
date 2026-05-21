@@ -95,6 +95,137 @@ fn validation_rejects_duplicate_entities() {
 }
 
 #[test]
+fn validation_rejects_duplicate_evidence_offering_ids_globally() {
+    let manifest: MetadataManifest = serde_yml::from_str(
+        r#"
+schema_version: registry-metadata/v1
+catalog:
+  id: duplicate-offerings
+  base_url: https://data.example.test
+  title: Duplicate Offerings
+  publisher:
+    name: Example Authority
+requirements:
+  - id: requirement
+    iri: https://data.example.test/requirements/example
+    title: Example requirement
+evidence_types:
+  - id: evidence
+    iri: https://data.example.test/evidence-types/example
+    title: Example evidence
+    proves: [requirement]
+datasets:
+  - id: first
+    title: First
+    entities:
+      - name: person
+        fields:
+          - name: id
+            type: string
+    evidence_offerings:
+      - id: duplicate_evidence
+        title: First evidence
+        evidence_type: evidence
+        issuing_authority:
+          id: authority
+          name: Authority
+          country: ZZ
+        entity: person
+        lookup_keys: [id]
+        access:
+          kind: registry-relay-verification
+          ruleset: exact
+  - id: second
+    title: Second
+    entities:
+      - name: person
+        fields:
+          - name: id
+            type: string
+    evidence_offerings:
+      - id: duplicate_evidence
+        title: Second evidence
+        evidence_type: evidence
+        issuing_authority:
+          id: authority
+          name: Authority
+          country: ZZ
+        entity: person
+        lookup_keys: [id]
+        access:
+          kind: registry-relay-verification
+          ruleset: exact
+"#,
+    )
+    .expect("manifest parses");
+
+    let err = validate_manifest(&manifest).expect_err("duplicate offering should fail validation");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path.ends_with("datasets[1].evidence_offerings[0].id")
+            && error.message.contains("unique globally")
+    }));
+}
+
+#[test]
+fn validation_rejects_blank_issuing_authority_country() {
+    let manifest: MetadataManifest = serde_yml::from_str(
+        r#"
+schema_version: registry-metadata/v1
+catalog:
+  id: blank-country
+  base_url: https://data.example.test
+  title: Blank Country
+  publisher:
+    name: Example Authority
+requirements:
+  - id: requirement
+    iri: https://data.example.test/requirements/example
+    title: Example requirement
+evidence_types:
+  - id: evidence
+    iri: https://data.example.test/evidence-types/example
+    title: Example evidence
+    proves: [requirement]
+datasets:
+  - id: first
+    title: First
+    entities:
+      - name: person
+        fields:
+          - name: id
+            type: string
+    evidence_offerings:
+      - id: person_evidence
+        title: Person evidence
+        evidence_type: evidence
+        issuing_authority:
+          id: authority
+          name: Authority
+          country: ""
+        entity: person
+        lookup_keys: [id]
+        access:
+          kind: registry-relay-verification
+          ruleset: exact
+"#,
+    )
+    .expect("manifest parses");
+
+    let err = validate_manifest(&manifest).expect_err("blank country should fail validation");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors.iter().any(|error| {
+        error
+            .path
+            .ends_with("evidence_offerings[0].issuing_authority.country")
+    }));
+}
+
+#[test]
 fn policy_manifest_validates_and_renders_odrl_offer() {
     let mut manifest = fixture("example-civil-registration");
     manifest.catalog.participant_id = Some("did:web:civil-registration.example.gov".to_string());
@@ -363,10 +494,6 @@ fn dcat_profiles_render_separate_artifacts() {
     assert_eq!(
         breg["@id"],
         json!("https://civil-registration.example.gov/metadata/dcat.bregdcat-ap.jsonld")
-    );
-    assert_eq!(
-        breg["dspace:participantId"],
-        json!("https://civil-registration.example.gov/authority")
     );
     assert_eq!(
         base["dcterms:identifier"],

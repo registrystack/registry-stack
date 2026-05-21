@@ -1,26 +1,36 @@
 meta {
-  name: Verify person exists
+  name: Verify person evidence
   type: http
   seq: 4
 }
 
-get {
-  url: {{baseUrl}}/datasets/benefits_casework/person/verify?id={{benefitsPersonAlias}}
-  body: none
+post {
+  url: {{baseUrl}}/evidence-offerings/{{benefitsPersonEvidenceOfferingId}}/verifications
+  body: json
   auth: bearer
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 headers {
   Data-Purpose: {{purpose}}
 }
 
+body:json {
+  {
+    "claims": {
+      "id": "{{benefitsPersonAlias}}",
+      "eligibility_status": "eligible",
+      "benefit_role": "member"
+    }
+  }
+}
+
 docs {
-  Verifies that person per-2001 exists in benefits_casework without reading row data.
-  Uses verification_service persona (verifyKey). Purpose header is required.
-  Expected: 200 with { "exists": true, "ingest_version": "..." }.
-  This is the intended use: a downstream system checks eligibility without seeing PII.
+  Creates an evidence verification event for submitted benefits person status facts without reading row data.
+  Uses verification_service persona (evidenceVerificationKey). Purpose header is required.
+  Expected: 200 with decision, verification_id, claim_hash, and offering metadata.
+  This is the intended use: a downstream system checks submitted facts without seeing PII.
 }

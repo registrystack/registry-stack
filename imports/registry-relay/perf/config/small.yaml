@@ -10,6 +10,9 @@ catalog:
   base_url: http://127.0.0.1:18080
   publisher: Perf Test Harness
 
+metadata:
+  manifest_path: clinic_capacity.metadata.yaml
+
 auth:
   mode: api_key
   api_keys:
@@ -32,10 +35,10 @@ auth:
       hash_env: PERF_NO_SCOPE_KEY_HASH
       scopes:
 
-    - id: perf_claim_verification
+    - id: perf_evidence_verification
       hash_env: PERF_CLAIM_VERIFICATION_KEY_HASH
       scopes:
-        - clinic_capacity:claim_verification
+        - clinic_capacity:evidence_verification
 
 claim_verification:
   binding_key_id: perf-clinic-capacity-v1
@@ -43,12 +46,12 @@ claim_verification:
   # generate_perf_keys.py emits CLAIM_VERIFICATION_BINDING_KEY.
   binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
-# Provenance signer for the claim-verification JWT receipt path.
+# Provenance signer for the evidence-verification JWT receipt path.
 # See perf/config/medium.yaml for the full comment.
 provenance:
   enabled: true
   accepted_media_types:
-    - application/vnd.registry-relay.claim-verification+jwt
+    - application/vnd.registry-relay.evidence-verification+jwt
   schema_base_url: http://127.0.0.1:18080/schemas
   context_base_url: http://127.0.0.1:18080/contexts
   claim_validity:
@@ -58,7 +61,7 @@ provenance:
   issuer:
     mode: gateway
     did: did:web:127.0.0.1%3A18080
-    verification_method_id: did:web:127.0.0.1%3A18080#perf-claim-verification-v1
+    verification_method_id: did:web:127.0.0.1%3A18080#perf-evidence-verification-v1
     signer:
       kind: software
       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
@@ -134,8 +137,7 @@ datasets:
           metadata_scope:           clinic_capacity:metadata
           aggregate_scope:          clinic_capacity:aggregate
           read_scope:               clinic_capacity:rows
-          verify_scope:             clinic_capacity:verify
-          claim_verification_scope: clinic_capacity:claim_verification
+          evidence_verification_scope: clinic_capacity:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -175,7 +177,7 @@ datasets:
               allow_subject_id_targeting: false
               diagnostics: false
               expose_ambiguous: false
-              scope: clinic_capacity:claim_verification
+              scope: clinic_capacity:evidence_verification
 
             # Drives the ambiguous decision path.
             # candidate_lookup on region_code (20 distinct values, ~50 rows each in 1k)
@@ -192,7 +194,7 @@ datasets:
               allow_subject_id_targeting: false
               diagnostics: false
               expose_ambiguous: true
-              scope: clinic_capacity:claim_verification
+              scope: clinic_capacity:evidence_verification
 
 audit:
   sink: file

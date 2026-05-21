@@ -36,7 +36,6 @@
     "dcterms:type": {
       "@type": "@id"
     },
-    "dspace": "https://w3id.org/dspace/2025/1/",
     "foaf": "http://xmlns.com/foaf/0.1/",
     "odrl": "http://www.w3.org/ns/odrl/2/",
     "odrl:action": {

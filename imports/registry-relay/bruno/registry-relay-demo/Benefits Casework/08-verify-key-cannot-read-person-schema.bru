@@ -11,12 +11,12 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 docs {
-  Attempts to read the person schema using the verification_service key (verifyKey).
-  verifyKey holds only benefits_casework:verify; schema access requires benefits_casework:metadata.
+  Attempts to read the person schema using the verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey holds only benefits_casework:evidence_verification; schema access requires benefits_casework:metadata.
   expected: 403 auth.scope_denied
   Dataset-local restatement of the cross-cutting check in the Auth Boundaries folder.
 }

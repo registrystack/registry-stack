@@ -36,7 +36,7 @@ BRUNO_VAR_MAP = {
     "catalog_viewer": "metadataKey",
     "planning_analyst": "aggregateKey",
     "casework_system": "rowsKey",
-    "verification_service": "verifyKey",
+    "verification_service": "evidenceVerificationKey",
     "linkage_service": "linkageKey",
     "operations_admin": "adminKey",
 }

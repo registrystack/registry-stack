@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP-layer issuance helper: Accept negotiation + VC issuance.
 //!
-//! Three protected handlers use this helper (`/verify`,
-//! `/aggregates/{id}`, and `/{entity}/{id}`). The shape is the same in
-//! all three places:
+//! Protected handlers use this helper for aggregate and entity-record
+//! credential issuance. The shape is the same in both places:
 //!
 //! 1. Build the normal plain JSON response.
 //! 2. Ask [`crate::provenance::negotiate`] whether the caller opted in
@@ -32,8 +31,7 @@ use crate::audit::ProvenanceIssuanceExt;
 use crate::config::Config;
 use crate::error::{Error, ProvenanceError};
 use crate::provenance::claim::{
-    aggregate_result_subject, entity_record_subject, verify_result_subject, AggregateResultInput,
-    EntityRecordInput, VerifyResultInput,
+    aggregate_result_subject, entity_record_subject, AggregateResultInput, EntityRecordInput,
 };
 use crate::provenance::publicschema::PublicSchemaVcRegistry;
 use crate::provenance::{
@@ -130,41 +128,6 @@ fn issue_error_to_response(err: IssueError) -> Response {
         IssueError::IssuanceFailed => Error::from(ProvenanceError::IssuanceFailed),
     };
     error.into_response()
-}
-
-/// Issue a `VerifyResult` VC. Returns the signed-VC response when the
-/// caller opted in and provenance is live; otherwise returns
-/// `plain_response` untouched.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn maybe_issue_verify_result(
-    state: Option<&Arc<ProvenanceState>>,
-    config: Option<&Arc<Config>>,
-    headers: &HeaderMap,
-    plain_response: Response,
-    dataset: &str,
-    entity: &str,
-    subject_id: &str,
-    predicate: &str,
-    value: Value,
-    as_of_rfc3339: String,
-) -> Response {
-    let Some(state) = signed_vc_requested(state, headers) else {
-        return plain_response;
-    };
-    let Some(config) = config else {
-        return plain_response;
-    };
-    let subject_uri = entity_subject_uri(config, dataset, entity, subject_id);
-    let subject = verify_result_subject(&VerifyResultInput {
-        subject_uri: subject_uri.clone(),
-        dataset: dataset.to_string(),
-        entity: entity.to_string(),
-        subject_id: subject_id.to_string(),
-        predicate: predicate.to_string(),
-        value,
-        as_of_rfc3339,
-    });
-    issue_response(state, ClaimType::VerifyResult, subject_uri, subject, None)
 }
 
 /// Inputs for [`maybe_issue_aggregate_result`]. Carrying them in a

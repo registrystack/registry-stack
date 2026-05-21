@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Claim-verification signed JWT receipt shape and signing tests.
+//! Evidence-verification signed JWT receipt shape and signing tests.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,12 +9,12 @@ use base64::Engine;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
 use registry_relay::provenance::jwt_receipt::{
-    self, ClaimVerificationReceiptInputs, CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE,
-    CLAIM_VERIFICATION_RECEIPT_TYPE,
+    self, EvidenceVerificationReceiptInputs, EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE,
+    EVIDENCE_VERIFICATION_RECEIPT_TYPE,
 };
 use registry_relay::provenance::signers::software::SoftwareSigner;
 use registry_relay::provenance::{
-    ClaimVerificationReceiptContext, IssuerMode, ProvenanceState, ResolvedClaimValidity,
+    EvidenceVerificationReceiptContext, IssuerMode, ProvenanceState, ResolvedClaimValidity,
     ResolvedProvenanceConfig, ResolvedUrls, Signer, SigningAlgorithm,
 };
 use serde_json::{json, Value};
@@ -73,19 +73,30 @@ fn receipt_header_payload_shape_and_signature_verify() {
 
     let receipt = jwt_receipt::encode(
         &signer,
-        ClaimVerificationReceiptInputs {
+        EvidenceVerificationReceiptInputs {
             issuer: "did:web:data.example.gov".to_string(),
             subject: "client:benefits-service".to_string(),
             audience: "client:benefits-service".to_string(),
             issued_at,
             valid_until,
             verification_id: "01J5K8M0000000000000000ABC".to_string(),
+            decision: "match".to_string(),
+            requirement: Some("https://data.example.gov/requirements/birth-facts".to_string()),
+            evidence_type: "https://data.example.gov/evidence-types/birth-record-facts".to_string(),
+            evidence_offering: "https://data.example.gov/evidence-offerings/birth-record-facts"
+                .to_string(),
+            issuing_authority: json!({
+                "id": "civil_registry_authority",
+                "name": "Civil Registry Authority",
+                "country": "FR"
+            }),
+            jurisdiction: Some(json!({ "country": "FR" })),
+            level_of_assurance: Some("substantial".to_string()),
             dataset: "civil_registry".to_string(),
             entity: "birth_record".to_string(),
-            decision: "match".to_string(),
-            ruleset: "birth-certificate-request-v1".to_string(),
             purpose_declared: Some("benefits-eligibility".to_string()),
             checked_at: "2026-05-17T10:30:00Z".to_string(),
+            claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
             claim_hash: "hmac-sha256:4a1f9c2b8d7e0f".to_string(),
             evidence_hash: Some("hmac-sha256:9f14a0d2bc331e".to_string()),
         },
@@ -94,17 +105,17 @@ fn receipt_header_payload_shape_and_signature_verify() {
 
     assert_eq!(
         receipt.jti,
-        "urn:registry-relay:claim-verification:01J5K8M0000000000000000ABC"
+        "urn:registry-relay:evidence-verification:01J5K8M0000000000000000ABC"
     );
 
     let (header, payload) = split_and_verify(&receipt.compact_jws, &vk);
 
     assert_eq!(header["alg"], "EdDSA");
-    assert_eq!(header["typ"], "claim-verification-receipt+jwt");
+    assert_eq!(header["typ"], "evidence-verification-receipt+jwt");
     assert_eq!(header["kid"], "did:web:data.example.gov#key-1");
     assert!(
         header.get("cty").is_none(),
-        "claim-verification receipts must not emit VC cty"
+        "evidence-verification receipts must not emit VC cty"
     );
 
     assert_eq!(payload["iss"], "did:web:data.example.gov");
@@ -114,12 +125,29 @@ fn receipt_header_payload_shape_and_signature_verify() {
     assert_eq!(payload["nbf"], issued_at.unix_timestamp() - 5);
     assert_eq!(payload["exp"], valid_until.unix_timestamp());
     assert_eq!(payload["jti"], receipt.jti);
-    assert_eq!(payload["receipt_type"], CLAIM_VERIFICATION_RECEIPT_TYPE);
+    assert_eq!(payload["receipt_type"], EVIDENCE_VERIFICATION_RECEIPT_TYPE);
     assert_eq!(payload["verification_id"], "01J5K8M0000000000000000ABC");
+    assert_eq!(payload["decision"], "match");
+    assert_eq!(
+        payload["requirement"],
+        "https://data.example.gov/requirements/birth-facts"
+    );
+    assert_eq!(
+        payload["evidence_type"],
+        "https://data.example.gov/evidence-types/birth-record-facts"
+    );
+    assert_eq!(
+        payload["evidence_offering"],
+        "https://data.example.gov/evidence-offerings/birth-record-facts"
+    );
+    assert_eq!(payload["issuing_authority"]["country"], "FR");
+    assert_eq!(payload["jurisdiction"]["country"], "FR");
+    assert_eq!(payload["level_of_assurance"], "substantial");
     assert_eq!(payload["dataset"], "civil_registry");
     assert_eq!(payload["entity"], "birth_record");
-    assert_eq!(payload["decision"], "match");
-    assert_eq!(payload["ruleset"], "birth-certificate-request-v1");
+    assert!(payload["disclaimer"]
+        .as_str()
+        .is_some_and(|value| value.contains("not official source credentials")));
     assert_eq!(payload["purpose_declared"], "benefits-eligibility");
     assert_eq!(payload["checked_at"], "2026-05-17T10:30:00Z");
     assert_eq!(payload["claim_hash"], "hmac-sha256:4a1f9c2b8d7e0f");
@@ -149,7 +177,7 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
         mode: IssuerMode::Gateway,
         issuer_did: "did:web:data.example.gov".to_string(),
         verification_method_id: "did:web:data.example.gov#receipt".to_string(),
-        accepted_media_types: vec![CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
+        accepted_media_types: vec![EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
         claim_validity: ResolvedClaimValidity {
             verify_result: Duration::from_secs(300),
             aggregate_result: Duration::from_secs(86_400),
@@ -165,16 +193,23 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
 
     let issued_at = OffsetDateTime::from_unix_timestamp(1_779_013_800).unwrap();
     let receipt = state
-        .issue_claim_verification_receipt(ClaimVerificationReceiptContext {
+        .issue_evidence_verification_receipt(EvidenceVerificationReceiptContext {
             subject: "client:benefits-service".to_string(),
             audience: "client:benefits-service".to_string(),
             verification_id: "01J5K8M0000000000000000ABD".to_string(),
+            decision: "mismatch".to_string(),
+            requirement: None,
+            evidence_type: "https://data.example.gov/evidence-types/birth-record-facts".to_string(),
+            evidence_offering: "https://data.example.gov/evidence-offerings/birth-record-facts"
+                .to_string(),
+            issuing_authority: json!({ "id": "civil_registry_authority" }),
+            jurisdiction: None,
+            level_of_assurance: None,
             dataset: "civil_registry".to_string(),
             entity: "birth_record".to_string(),
-            decision: "mismatch".to_string(),
-            ruleset: "birth-certificate-request-v1".to_string(),
             purpose_declared: None,
             checked_at: "2026-05-17T10:30:00Z".to_string(),
+            claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
             claim_hash: "hmac-sha256:abc".to_string(),
             evidence_hash: None,
             issued_at,
@@ -186,7 +221,7 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
     assert_eq!(receipt.exp, issued_at.unix_timestamp() + 300);
 
     let (header, payload) = split_and_verify(&receipt.compact_jws, &vk);
-    assert_eq!(header["typ"], "claim-verification-receipt+jwt");
+    assert_eq!(header["typ"], "evidence-verification-receipt+jwt");
     assert_eq!(header["kid"], "did:web:data.example.gov#receipt");
     assert_eq!(payload["exp"], issued_at.unix_timestamp() + 300);
     assert!(payload.get("purpose_declared").is_none());

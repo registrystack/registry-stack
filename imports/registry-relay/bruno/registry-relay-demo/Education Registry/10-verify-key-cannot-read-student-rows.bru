@@ -11,7 +11,7 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 headers {
@@ -19,7 +19,7 @@ headers {
 }
 
 docs {
-  Attempts to read student rows using verifyKey.
-  verifyKey holds only education_registry:verify; row reads require :rows.
+  Attempts to read student rows using evidenceVerificationKey.
+  evidenceVerificationKey holds only education_registry:evidence_verification; row reads require :rows.
   expected: 403 auth.scope_denied
 }

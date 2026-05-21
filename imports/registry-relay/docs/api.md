@@ -4,7 +4,7 @@ This guide describes the V1 HTTP contract from a client and operator point of vi
 
 ## Listeners And Surfaces
 
-The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, verify checks, aggregates, OpenAPI, and optional provenance resources.
+The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery and verification, aggregates, OpenAPI, and optional provenance resources.
 
 The admin listener is optional and only exists when `server.admin_bind` is configured. Admin routes must stay on a private network. They are never mounted on the public data-plane listener.
 
@@ -39,16 +39,15 @@ GET /metadata/datasets/{dataset_id}/entities/{entity}/shacl
 GET /metadata/schema/{dataset_id}/{entity}/schema.json
 GET /metadata/ogc/records
 GET /metadata/ogc/records/{record_id}
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/{offering_id}
 GET /datasets
 GET /datasets/{dataset_id}
 GET /datasets/{dataset_id}/{entity}/schema
 GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-GET /datasets/{dataset_id}/{entity}/verify
-POST /datasets/{dataset_id}/{entity}/claim-verifications
-GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets
-GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets/{ruleset}
+POST /evidence-offerings/{offering_id}/verifications
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
@@ -104,8 +103,7 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 | --- | --- |
 | `metadata` | Catalog, dataset summaries, entity schema, and OpenAPI visibility for that dataset |
 | `rows` | Entity collection, single-record, and relationship reads |
-| `verify` | Existence checks through `/verify` only |
-| `claim_verification` | Submitted-claims matching through `/claim-verifications` only |
+| `evidence_verification` | Verification checks through declared evidence offerings |
 | `aggregate` | Aggregate discovery and configured aggregate execution |
 | `admin` | Admin listener operations |
 
@@ -147,13 +145,13 @@ Entity collection and record responses include validators where supported. Clien
 
 ## Purpose Headers
 
-Entities can require a purpose string for row and verify reads:
+Entities can require a purpose string for row reads and evidence verification:
 
 ```http
-Data-Purpose: service-intake-check
+Data-Purpose: https://data.example.gov/purposes/service-intake-check
 ```
 
-When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_required`. Use stable, reviewable purpose names. Do not put secrets, bearer tokens, or personal data in this header because it is recorded in audit logs.
+When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_required`. Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header because it is recorded in audit logs.
 
 ## Metadata, Catalog, And OpenAPI
 
@@ -165,7 +163,7 @@ adapters. Standards routes remain canonical at their protocol roots, such as
 `/datasets/{dataset_id}` acts as the Relay-native discovery surface that
 connects them back to the native dataset model.
 
-`GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, verify, aggregate, claim-verification, or admin access.
+`GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, evidence-offering metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, evidence verification, aggregate, or admin access.
 
 Relay-native discovery remains under `/datasets` and runtime entity routes. Portable metadata consumers should use `/metadata/*` or static publication.
 
@@ -204,25 +202,27 @@ The initial Records surface has one collection, `datasets`, where each item is a
 
 Dataset Records do not currently support `bbox` or `datetime` filtering because the catalog metadata only carries `spatial_coverage` IRIs and no temporal coverage field. The endpoint rejects unsupported spatial/search parameters instead of pretending those fields are filterable.
 
-## Verify And Aggregates
+## Evidence Verification And Aggregates
 
-Verify routes answer existence checks without returning row content:
+Evidence offerings are declared metadata resources that describe what kind of evidence a registry can check and the authority, assurance, purpose, and request shape for that check:
 
 ```text
-GET /datasets/social_registry/individual/verify?id=ind-123
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/individual_name_evidence
 ```
 
-Claim verification is a separate POST resource for comparing submitted claims against registry facts under a configured ruleset. It can return a verification receipt or attestation of that comparison, but it does not issue official source credentials or make policy or eligibility decisions. V1 supports `normalized_exact` matching with configured `candidate_lookup` fields only. JSON is the default response, and signed server-to-server receipts use `application/vnd.registry-relay.claim-verification+jwt`, not `application/vc+jwt`:
+Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data.
+
+Evidence verification is a `POST` to one declared offering. It compares submitted claims against registry facts through the offering's configured verification binding. It can return a verification receipt or attestation of that comparison, but it does not issue official source credentials or make policy or eligibility decisions. V1 supports `normalized_exact` matching with configured candidate lookup fields only. JSON is the default response, and signed server-to-server receipts use `application/vnd.registry-relay.evidence-verification+jwt`, not `application/vc+jwt`:
 
 ```http
-POST /datasets/social_registry/individual/claim-verifications HTTP/1.1
+POST /evidence-offerings/individual_name_evidence/verifications HTTP/1.1
 Authorization: Bearer <api-key>
 Content-Type: application/json
 Accept: application/json
-Data-Purpose: identity-verification
+Data-Purpose: https://data.example.gov/purposes/identity-verification
 
 {
-  "ruleset": "identity-match-v1",
   "claims": {
     "given_name": "Camille",
     "family_name": "Durand",
@@ -231,9 +231,9 @@ Data-Purpose: identity-verification
 }
 ```
 
-Responses include `Cache-Control: no-store` and `Vary: Authorization, Accept`. They return `decision`, `verification_id`, `claim_hash`, and metadata for the comparison, but they do not echo raw submitted claims, issue source documents, or decide downstream eligibility. Unknown claim keys are rejected. `Data-Purpose` header names are case-insensitive; examples use this casing for readability.
+Responses include `Cache-Control: no-store` and `Vary: Authorization, Accept`. They return `decision`, `verification_id`, `claim_salt`, `claim_hash`, the evidence offering IRI, evidence type IRI, requirement IRI, and metadata for the comparison, but they do not echo raw submitted claims, issue source documents, or decide downstream eligibility. Unknown claim keys are rejected. `Data-Purpose` values must be absolute IRIs and, when the offering declares `policy.purpose`, must be in that allowlist. Header names are case-insensitive; examples use this casing for readability.
 
-Ruleset discovery is available through `GET /claim-verification-rulesets`. It is authorization-filtered and returns broad scalar JSON Schemas for the caller-visible rulesets. Discovery responses also include `Cache-Control: no-store` and `Vary: Authorization, Accept`. Unknown, hidden, or unauthorized discovery targets return `403 claim_verification.ruleset_not_allowed` so callers cannot distinguish unavailable rulesets or entities by probing. See [claim-verification.md](claim-verification.md) for full request, response, privacy, and signed-receipt examples.
+Unknown, hidden, or unauthorized offerings return the same not-found style response so callers cannot distinguish unavailable offerings or entities by probing. See [evidence-verification.md](evidence-verification.md) for full request, response, privacy, and signed-receipt examples.
 
 Aggregates are predeclared in config. Clients can list available aggregates and execute one by id:
 

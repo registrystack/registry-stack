@@ -40,7 +40,7 @@ The runtime YAML keeps operational bindings:
 - source paths, table ids, schemas, and physical columns
 - API keys, scopes, and access policy
 - allowed filters, required filters, limits, and expansions
-- aggregates, claim verification, SP DCI, OGC Features, ingest, and refresh
+- aggregates, evidence verification bindings, SP DCI, OGC Features, ingest, and refresh
 
 The metadata manifest keeps standard-facing semantics:
 
@@ -308,7 +308,7 @@ GET /metadata/ogc/records/{record_id}
 ```
 
 These routes use the caller's `metadata` scopes. They do not grant row access,
-verify access, aggregate access, claim-verification access, or admin access.
+evidence-verification access, aggregate access, or admin access.
 
 `/metadata/*` is the canonical standards-facing metadata surface. `/datasets`
 and runtime entity routes remain operational data-plane discovery surfaces for

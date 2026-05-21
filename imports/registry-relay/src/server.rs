@@ -69,6 +69,7 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use ulid::Ulid;
 
+use crate::api::EvidenceVerificationLimiter;
 use crate::api::{self, CursorSigner};
 use crate::audit::{self, AuditSettings, AuditSink};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
@@ -193,6 +194,7 @@ fn build_app_with_provenance_metadata_and_metrics(
     let protected: Router<()> = Router::new()
         .merge(api::datasets_router())
         .merge(api::entity_router())
+        .merge(api::evidence_offerings_router())
         .merge(api::aggregates_router())
         .merge(api::metadata_router())
         .merge(api::openapi_router());
@@ -213,9 +215,13 @@ fn build_app_with_provenance_metadata_and_metrics(
     // survive process restarts.
     let cursor_signer = Arc::new(CursorSigner::new_random());
     let claim_verification_hasher = claim_verification_hasher_from_config(&config).map(Arc::new);
+    let evidence_verification_limiter = Arc::new(EvidenceVerificationLimiter::new(
+        &config.evidence_verification.rate_limit,
+    ));
 
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
         .layer(Extension(cursor_signer))
+        .layer(Extension(evidence_verification_limiter))
         .layer(Extension(config));
     if let Some(hasher) = claim_verification_hasher {
         router = router.layer(Extension(hasher));

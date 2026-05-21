@@ -11,13 +11,13 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 docs {
-  Attempts to read the person entity schema using the verification_service key (verifyKey).
-  verifyKey holds only verify scopes; schema access requires a metadata scope.
+  Attempts to read the person entity schema using the verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey holds only evidence-verification scopes; schema access requires a metadata scope.
   expected: 403 auth.scope_denied
-  Verify scope is intentionally narrow: it confirms existence but grants no
+  Evidence-verification scope is intentionally narrow: it grants no
   schema, row, or aggregate access.
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Phase C: HTTP issuance coverage for `/verify`, aggregate execute,
+//! Phase C: HTTP issuance coverage for entity records, aggregate execute,
 //! and `/{entity}/{id}` routes.
 //!
 //! Each test asserts the dual response contract:
@@ -404,88 +404,40 @@ fn audit_record_for(sink: &InMemorySink, path: &str) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// /verify
+// Removed legacy /verify route
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn verify_plain_json_path_is_byte_equivalent_without_accept_header() {
+async fn legacy_verify_path_is_removed_without_accept_header() {
     let harness = build_entity_harness("PROVENANCE_ISSUANCE_VERIFY_PLAIN_JWK");
     let resp = harness
         .server
         .get("/datasets/social_registry/individual/verify?id=ind-1")
         .await;
-    resp.assert_status_ok();
-    let content_type = resp
-        .header("content-type")
-        .to_str()
-        .unwrap_or("")
-        .to_string();
-    assert!(
-        content_type.starts_with("application/json"),
-        "plain path keeps JSON content-type, got {content_type}"
-    );
+    resp.assert_status(StatusCode::NOT_FOUND);
     let body: Value = resp.json();
-    assert_eq!(body["exists"], true);
+    assert_eq!(body["code"], "entity.route_removed");
 }
 
 #[tokio::test]
-async fn verify_returns_signed_vc_when_accept_opts_in() {
+async fn legacy_verify_path_does_not_issue_signed_vc_when_accept_opts_in() {
     let harness = build_entity_harness("PROVENANCE_ISSUANCE_VERIFY_VC_JWK");
     let resp = harness
         .server
         .get("/datasets/social_registry/individual/verify?id=ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
-    resp.assert_status_ok();
-    let content_type = resp
-        .header("content-type")
-        .to_str()
-        .unwrap_or("")
-        .to_string();
-    assert_eq!(content_type, "application/vc+jwt");
-
-    // Body is a compact JWS; verify signature + claim shape.
-    let body = String::from_utf8(resp.as_bytes().to_vec()).expect("body utf8");
-    let payload = decode_and_verify_payload(&body, &harness.verifying_key);
-    assert_eq!(payload["type"][1], "VerifyResult");
-    assert_eq!(
-        payload["credentialSchema"]["id"],
-        "https://gw.example/schemas/verify-result/v1.json"
+    resp.assert_status(StatusCode::NOT_FOUND);
+    assert_ne!(
+        resp.header("content-type").to_str().unwrap_or(""),
+        "application/vc+jwt"
     );
-    assert_eq!(payload["issuer"], "did:web:gw.example");
-    assert_eq!(
-        payload["sub"],
-        "https://gw.example/datasets/social_registry/individual/ind-1"
-    );
-    assert_eq!(payload["credentialSubject"]["predicate"], "exists");
-    assert_eq!(payload["credentialSubject"]["value"], true);
-    assert_credential_subject_matches_schema(
-        registry_relay::provenance::jwt_vc::ClaimType::VerifyResult,
-        &payload["credentialSubject"],
-    );
-
-    // Audit envelope carries the issuance block.
-    let record = audit_record_for(
-        &harness.audit_sink,
-        "/datasets/social_registry/individual/verify",
-    );
-    let provenance = &record["provenance"];
-    assert_eq!(provenance["event"], "provenance.vc.issued");
-    assert_eq!(provenance["iss"], "did:web:gw.example");
-    assert_eq!(provenance["kid"], "did:web:gw.example#issuance");
-    assert_eq!(provenance["claim_type"], "VerifyResult");
-    assert_eq!(
-        provenance["subject"],
-        "https://gw.example/datasets/social_registry/individual/ind-1"
-    );
-    assert!(provenance["jti"].as_str().unwrap().starts_with("urn:uuid:"));
-    assert!(provenance["validity"]["iat"].is_i64());
-    assert!(provenance["validity"]["nbf"].is_i64());
-    assert!(provenance["validity"]["exp"].is_i64());
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "entity.route_removed");
 }
 
 #[tokio::test]
-async fn verify_plain_path_does_not_emit_provenance_audit_block() {
+async fn legacy_verify_path_does_not_emit_provenance_audit_block() {
     let harness = build_entity_harness("PROVENANCE_ISSUANCE_VERIFY_NO_AUDIT_JWK");
     let _resp = harness
         .server
@@ -839,7 +791,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
     let server = TestServer::new(app);
 
     let resp = server
-        .get("/datasets/social_registry/individual/verify?id=ind-1")
+        .get("/datasets/social_registry/individual/ind-1")
         .add_header("authorization", format!("Bearer {FULL_STACK_RAW_API_KEY}"))
         .add_header("accept", "application/vc+jwt")
         .await;
@@ -851,14 +803,14 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
 
     let body = String::from_utf8(resp.as_bytes().to_vec()).expect("body utf8");
     let payload = decode_and_verify_payload(&body, &verifying_key);
-    assert_eq!(payload["type"][1], "VerifyResult");
-    assert_eq!(payload["credentialSubject"]["value"], true);
+    assert_eq!(payload["type"][1], "EntityRecord");
+    assert_eq!(payload["credentialSubject"]["fields"]["id"], "ind-1");
     assert_credential_subject_matches_schema(
-        registry_relay::provenance::jwt_vc::ClaimType::VerifyResult,
+        registry_relay::provenance::jwt_vc::ClaimType::EntityRecord,
         &payload["credentialSubject"],
     );
 
-    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/verify");
+    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/ind-1");
     assert_eq!(record["principal_id"], "vc-full-stack");
     assert_eq!(record["auth_mode"], "api_key");
     assert_eq!(record["provenance"]["event"], "provenance.vc.issued");
@@ -869,7 +821,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn verify_returns_plain_json_when_provenance_state_is_absent() {
+async fn entity_record_returns_plain_json_when_provenance_state_is_absent() {
     // Same harness as the entity tests, but skip the ProvenanceState
     // extension. The router must still accept the request and return
     // plain JSON even when the caller asks for a signed VC.
@@ -911,7 +863,7 @@ async fn verify_returns_plain_json_when_provenance_state_is_absent() {
     let server = TestServer::new(router);
 
     let resp = server
-        .get("/datasets/social_registry/individual/verify?id=ind-1")
+        .get("/datasets/social_registry/individual/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status(StatusCode::OK);
@@ -925,5 +877,5 @@ async fn verify_returns_plain_json_when_provenance_state_is_absent() {
         "without provenance state, opt-in must still serve plain JSON; got {content_type}"
     );
     let body: Value = resp.json();
-    assert_eq!(body["exists"], true);
+    assert_eq!(body["id"], "ind-1");
 }

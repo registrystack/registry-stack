@@ -41,7 +41,7 @@ auth:
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - clinic_capacity:verify
+        - clinic_capacity:evidence_verification
 
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_HASH
@@ -231,7 +231,6 @@ datasets:
           metadata_scope:    clinic_capacity:metadata
           aggregate_scope:   clinic_capacity:aggregate
           read_scope:        clinic_capacity:rows
-          verify_scope:      clinic_capacity:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -300,7 +299,6 @@ datasets:
           metadata_scope:    clinic_capacity:metadata
           aggregate_scope:   clinic_capacity:aggregate
           read_scope:        clinic_capacity:rows
-          verify_scope:      clinic_capacity:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -360,7 +358,6 @@ datasets:
           metadata_scope:    clinic_capacity:metadata
           aggregate_scope:   clinic_capacity:aggregate
           read_scope:        clinic_capacity:rows
-          verify_scope:      clinic_capacity:verify
         api:
           default_limit: 100
           max_limit: 1000

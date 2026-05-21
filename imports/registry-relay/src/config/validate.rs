@@ -19,9 +19,10 @@ use registry_metadata_core::CompiledMetadata;
 use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AllowedFilter, AuthMode, ClaimVerificationRulesetConfig, Config,
-    DatasetConfig, EntityConfig, EntityRelationshipConfig, EntitySpatialConfig, FieldConfig,
-    FieldType, OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, SourceConfig,
-    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
+    DatasetConfig, EntityConfig, EntityRelationshipConfig, EntitySpatialConfig,
+    EvidenceVerificationRateLimitConfig, FieldConfig, FieldType, OidcConfig, RefreshConfig,
+    RelationshipKind, ResourceConfig, SourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig,
+    CRS84,
 };
 
 /// Prefix for the special `admin` scope.
@@ -45,11 +46,39 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     validate_claim_verification_runtime(config).map_err(Error::from)?;
+    validate_evidence_verification_runtime(config).map_err(Error::from)?;
     if let Some(provenance) = &config.provenance {
         validate_provenance(provenance).map_err(Error::from)?;
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    Ok(())
+}
+
+fn validate_evidence_verification_runtime(config: &Config) -> Result<(), ConfigError> {
+    validate_evidence_rate_limit(&config.evidence_verification.rate_limit)
+}
+
+fn validate_evidence_rate_limit(
+    rate_limit: &EvidenceVerificationRateLimitConfig,
+) -> Result<(), ConfigError> {
+    if !rate_limit.enabled {
+        return Ok(());
+    }
+    if rate_limit.burst == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "evidence_verification.rate_limit.burst must be greater than zero when enabled"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if rate_limit.window_seconds == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "evidence_verification.rate_limit.window_seconds must be greater than zero when enabled"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 
@@ -184,6 +213,77 @@ pub fn validate_runtime_bindings(
                     );
                     return Err(RuntimeBindingError::RelationshipMissing);
                 }
+            }
+        }
+        for offering in metadata_dataset.evidence_offerings.values() {
+            let entity = dataset
+                .entities
+                .iter()
+                .find(|entity| entity.name == offering.entity)
+                .ok_or_else(|| {
+                    tracing::error!(
+                        code = "runtime.binding.entity_missing",
+                        dataset_id = %dataset.id,
+                        offering = %offering.id,
+                        entity = %offering.entity,
+                        "evidence offering references an unknown runtime entity"
+                    );
+                    RuntimeBindingError::EntityMissing
+                })?;
+            let Some(metadata_entity) = metadata_dataset.entities.get(&offering.entity) else {
+                tracing::error!(
+                    code = "runtime.binding.entity_missing",
+                    dataset_id = %dataset.id,
+                    offering = %offering.id,
+                    entity = %offering.entity,
+                    "evidence offering references an entity not declared in metadata"
+                );
+                return Err(RuntimeBindingError::EntityMissing);
+            };
+            for field in &offering.lookup_keys {
+                if !metadata_entity.fields.contains_key(field) {
+                    tracing::error!(
+                        code = "runtime.binding.field_missing",
+                        dataset_id = %dataset.id,
+                        offering = %offering.id,
+                        field = %field,
+                        "evidence offering lookup key is not declared in metadata"
+                    );
+                    return Err(RuntimeBindingError::FieldMissing);
+                }
+            }
+            if entity.access.evidence_verification_scope.trim().is_empty() {
+                tracing::error!(
+                    code = "runtime.binding.scope_missing",
+                    dataset_id = %dataset.id,
+                    offering = %offering.id,
+                    entity = %offering.entity,
+                    "evidence offering runtime entity must declare evidence_verification_scope"
+                );
+                return Err(RuntimeBindingError::ScopeMissing);
+            }
+            let Some(claim_verification) = &entity.claim_verification else {
+                tracing::error!(
+                    code = "runtime.binding.ruleset_missing",
+                    dataset_id = %dataset.id,
+                    offering = %offering.id,
+                    entity = %offering.entity,
+                    "evidence offering references an entity without claim verification rulesets"
+                );
+                return Err(RuntimeBindingError::FieldMissing);
+            };
+            if !claim_verification
+                .rulesets
+                .contains_key(&offering.access.ruleset)
+            {
+                tracing::error!(
+                    code = "runtime.binding.ruleset_missing",
+                    dataset_id = %dataset.id,
+                    offering = %offering.id,
+                    ruleset = %offering.access.ruleset,
+                    "evidence offering references an unknown claim verification ruleset"
+                );
+                return Err(RuntimeBindingError::FieldMissing);
             }
         }
     }
@@ -1215,6 +1315,18 @@ fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
             validate_scope(scope, &dataset_ids, &key.id)?;
         }
     }
+    for dataset in &config.datasets {
+        let dataset_id = dataset.id.as_str();
+        for entity in &dataset.entities {
+            if !entity.access.evidence_verification_scope.trim().is_empty() {
+                validate_scope(
+                    &entity.access.evidence_verification_scope,
+                    &dataset_ids,
+                    dataset_id,
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1231,7 +1343,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|claim_verification>'"
+            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification|claim_verification>'"
         );
         ConfigError::ValidationError
     })?;
@@ -1241,7 +1353,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "unknown scope level (allowed: metadata, aggregate, rows, verify, claim_verification)"
+            "unknown scope level (allowed: metadata, aggregate, rows, verify, evidence_verification, claim_verification)"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -1262,10 +1374,18 @@ fn validate_scope(
 fn is_valid_scope_level(level: &str) -> bool {
     matches!(
         level,
-        "metadata" | "aggregate" | "rows" | "verify" | "claim_verification"
+        "metadata"
+            | "aggregate"
+            | "rows"
+            | "verify"
+            | "evidence_verification"
+            | "claim_verification"
     ) || level
         .strip_prefix("claim_verification:")
         .is_some_and(|ruleset| !ruleset.trim().is_empty())
+        || level
+            .strip_prefix("evidence_verification:")
+            .is_some_and(|suffix| !suffix.trim().is_empty())
 }
 
 fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {

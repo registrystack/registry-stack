@@ -50,8 +50,25 @@ impl ClaimVerificationHasher {
     }
 
     pub fn hmac_hex(&self, value: &Value) -> Result<String, Error> {
-        let canonical = canonical_json(value)?;
+        self.hmac_hex_with_key(self.key.as_ref(), value)
+    }
+
+    pub fn hmac_hex_for_offering(
+        &self,
+        offering_iri: &str,
+        value: &Value,
+    ) -> Result<String, Error> {
         let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(self.key.as_ref())
+            .expect("HMAC-SHA256 accepts any key length");
+        mac.update(b"registry-relay:evidence-offering:v1:");
+        mac.update(offering_iri.as_bytes());
+        let derived = mac.finalize().into_bytes();
+        self.hmac_hex_with_key(&derived, value)
+    }
+
+    fn hmac_hex_with_key(&self, key: &[u8], value: &Value) -> Result<String, Error> {
+        let canonical = canonical_json(value)?;
+        let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(key)
             .expect("HMAC-SHA256 accepts any key length");
         mac.update(canonical.as_bytes());
         let bytes = mac.finalize().into_bytes();

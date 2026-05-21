@@ -31,13 +31,12 @@ auth:
       scopes:
         - education_registry:metadata
         - education_registry:rows
-        - education_registry:verify
         - education_registry:aggregate
 
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - education_registry:verify
+        - education_registry:evidence_verification
 
     # linkage_service has no education_registry scopes: it must not read
     # education rows directly; it resolves aliases via subject_registry only.
@@ -47,6 +46,12 @@ auth:
       scopes:
         - admin
         - education_registry:metadata
+
+claim_verification:
+  binding_key_id: demo-evidence-v1
+  # Env value format: hex:<64+ lowercase hex chars>
+  # demo/scripts/generate_demo_keys.py emits this value for local review.
+  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
 audit:
   sink: stdout
@@ -365,7 +370,7 @@ datasets:
           metadata_scope:    education_registry:metadata
           aggregate_scope:   education_registry:aggregate
           read_scope:        education_registry:rows
-          verify_scope:      education_registry:verify
+          evidence_verification_scope: education_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -388,6 +393,18 @@ datasets:
             - field: scholarship_eligible
               ops: [eq]
           allowed_expansions: [school, guardians, enrollments, support_needs, attendance_summaries]
+        claim_verification:
+          rulesets:
+            education-student-v1:
+              mode: normalized_exact
+              required_claims: [id, enrollment_status, grade_level, home_district]
+              candidate_lookup: [id]
+              match_fields:
+                id: id
+                enrollment_status: enrollment_status
+                grade_level: grade_level
+                home_district: home_district
+              expose_ambiguous: false
         aggregates:
           - id: by_school_grade_status
             description: Count of students by school, grade level, and enrollment status
@@ -439,7 +456,6 @@ datasets:
           metadata_scope:    education_registry:metadata
           aggregate_scope:   education_registry:aggregate
           read_scope:        education_registry:rows
-          verify_scope:      education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -487,7 +503,6 @@ datasets:
           metadata_scope:    education_registry:metadata
           aggregate_scope:   education_registry:aggregate
           read_scope:        education_registry:rows
-          verify_scope:      education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -552,7 +567,6 @@ datasets:
           metadata_scope:    education_registry:metadata
           aggregate_scope:   education_registry:aggregate
           read_scope:        education_registry:rows
-          verify_scope:      education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -600,7 +614,6 @@ datasets:
           metadata_scope:    education_registry:metadata
           aggregate_scope:   education_registry:aggregate
           read_scope:        education_registry:rows
-          verify_scope:      education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -662,7 +675,6 @@ datasets:
           metadata_scope:    education_registry:metadata
           aggregate_scope:   education_registry:aggregate
           read_scope:        education_registry:rows
-          verify_scope:      education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000

@@ -25,7 +25,7 @@ use rand_core::OsRng;
 use registry_relay::claim_verification::{
     normalize_claim_value_for_hash, normalize_claims_for_hash, ClaimVerificationHasher,
 };
-use registry_relay::provenance::jwt_receipt::{self, ClaimVerificationReceiptInputs};
+use registry_relay::provenance::jwt_receipt::{self, EvidenceVerificationReceiptInputs};
 use registry_relay::provenance::signers::software::SoftwareSigner;
 use registry_relay::provenance::{Signer, SigningAlgorithm};
 use serde_json::{json, Value};
@@ -100,24 +100,34 @@ fn make_signer() -> SoftwareSigner {
     .expect("bench signer builds")
 }
 
-fn receipt_inputs(claim_hash: &str) -> ClaimVerificationReceiptInputs {
+fn receipt_inputs(claim_hash: &str) -> EvidenceVerificationReceiptInputs {
     let issued_at = OffsetDateTime::from_unix_timestamp(1_779_013_800).unwrap();
     let valid_until = issued_at + time::Duration::seconds(300);
-    ClaimVerificationReceiptInputs {
+    EvidenceVerificationReceiptInputs {
         issuer: "did:web:data.example.gov".to_string(),
         subject: "client:benefits-service".to_string(),
         audience: "client:benefits-service".to_string(),
-        issued_at,
-        valid_until,
         verification_id: "01J5K8M0000000000000000ABC".to_string(),
+        decision: "match".to_string(),
+        requirement: Some("identity-requirement-v1".to_string()),
+        evidence_type: "identity-evidence-v1".to_string(),
+        evidence_offering: "civil-registry-identity-offering".to_string(),
+        issuing_authority: json!({
+            "id": "civil_registry_authority",
+            "name": "Civil Registry Authority",
+            "country": "ZZ"
+        }),
+        jurisdiction: Some(json!({"country": "ZZ"})),
+        level_of_assurance: Some("substantial".to_string()),
         dataset: "civil_registry".to_string(),
         entity: "birth_record".to_string(),
-        decision: "match".to_string(),
-        ruleset: "identity-match-v1".to_string(),
         purpose_declared: Some("benefits-eligibility".to_string()),
         checked_at: "2026-05-17T10:30:00Z".to_string(),
+        claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
         claim_hash: claim_hash.to_string(),
         evidence_hash: None,
+        issued_at,
+        valid_until,
     }
 }
 

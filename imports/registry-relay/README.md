@@ -11,13 +11,13 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 ## Background
 
-Registry Relay is an experiment toward a redesigned [GovStack](https://govstack.global/) Digital Registries Building Block. The current BB spec defines a single uniform CRUD platform; this project explores the BB instead as a protected consultation gateway with optional capability families (verify, aggregates, standards adapters) over a shared entity model. Provisioning and Write are intentionally out of scope for V1; conformance is by capability, not by a single mandatory interface.
+Registry Relay is an experiment toward a redesigned [GovStack](https://govstack.global/) Digital Registries Building Block. The current BB spec defines a single uniform CRUD platform; this project explores the BB instead as a protected consultation gateway with optional capability families (evidence verification, aggregates, standards adapters) over a shared entity model. Provisioning and Write are intentionally out of scope for V1; conformance is by capability, not by a single mandatory interface.
 
 Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, PublicSchema, provenance VCs, and the optional [Social Protection Digital Convergence Initiative (SP DCI)](https://spdci.org/) sync adapter are layered on top of the core gateway. Use them when a deployment needs those interoperability contracts; the default product model remains protected read-only registry consultation.
 
 ## Current Status
 
-0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, optional audit chaining, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include DSP-facing participant id evidence, dataset-scoped ODRL Offers, standards-shaped media type metadata, and DCAT access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
+0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, optional audit chaining, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include dataset-scoped ODRL Offers, standards-shaped media type metadata, evidence offerings, and DCAT access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
 
 ## Repository Map
 
@@ -27,7 +27,7 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [docs/metadata.md](docs/metadata.md): portable metadata manifests, static publication, and `/metadata/*` routes.
 - [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
   Registry Relay publication choices, and downstream interpretation boundaries.
-- [docs/claim-verification.md](docs/claim-verification.md): submitted-claims verification guide, examples, privacy model, and signed receipts.
+- [docs/evidence-verification.md](docs/evidence-verification.md): evidence verification guide, examples, privacy model, and signed receipts.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
@@ -110,7 +110,7 @@ or:
 X-Api-Key: <api-key>
 ```
 
-Use dataset scopes narrowly. `metadata`, `aggregate`, `rows`, `verify`, `claim_verification`, and `admin` are independent. A verify-only key cannot list metadata, run aggregates, read rows, run claim verification, or reload data.
+Use dataset scopes narrowly. `metadata`, `aggregate`, `rows`, `evidence_verification`, and `admin` are independent. An evidence-verification-only key cannot list metadata, run aggregates, read rows, or reload data.
 
 Alternatively, set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. The relay is a resource server: it validates tokens against the IdP's JWKS but never mints, refreshes, or stores them.
 
@@ -178,6 +178,8 @@ GET /metadata/datasets
 GET /metadata/datasets/{dataset_id}
 GET /metadata/datasets/{dataset_id}/policy
 GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/{offering_id}
 GET /ogc/v1/records                         (feature: ogcapi-records)
 GET /ogc/v1/records/collections             (feature: ogcapi-records)
 GET /ogc/v1/records/collections/datasets/items  (feature: ogcapi-records)
@@ -187,10 +189,7 @@ GET /datasets/{dataset_id}/{entity}/schema
 GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-GET /datasets/{dataset_id}/{entity}/verify
-POST /datasets/{dataset_id}/{entity}/claim-verifications
-GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets
-GET /datasets/{dataset_id}/{entity}/claim-verification-rulesets/{ruleset}
+POST /evidence-offerings/{offering_id}/verifications
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
@@ -288,7 +287,7 @@ For production, mount a deployment-specific config, mount source data read-only,
 
 ## Signed Verifiable Credentials (Opt-In)
 
-The gateway can return W3C Verifiable Credentials (compact JWS) for verify, aggregate, and entity-record responses. The feature is off by default; enable it by adding a `provenance:` block to the config (see [config/example.yaml](config/example.yaml) for the template). Callers opt in per request with:
+The gateway can return W3C Verifiable Credentials (compact JWS) for supported evidence-verification, aggregate, and entity-record responses. The feature is off by default; enable it by adding a `provenance:` block to the config (see [config/example.yaml](config/example.yaml) for the template). Callers opt in per request with:
 
 ```http
 Accept: application/vc+jwt

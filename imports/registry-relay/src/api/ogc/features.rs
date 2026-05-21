@@ -1516,8 +1516,9 @@ mod tests {
                 metadata_scope: "metadata".to_string(),
                 aggregate_scope: "aggregate".to_string(),
                 read_scope: "rows".to_string(),
-                verify_scope: "verify".to_string(),
+                verify_scope: None,
                 claim_verification_scope: None,
+                evidence_verification_scope: String::new(),
             },
             api: EntityApiConfig {
                 default_limit: 100,

@@ -1,28 +1,39 @@
 meta {
-  name: Scholarship eligibility - verify student
+  name: Scholarship eligibility - verify student evidence
   type: http
   seq: 11
 }
 
-get {
-  url: {{baseUrl}}/datasets/education_registry/student/verify?id={{studentAlias}}
-  body: none
+post {
+  url: {{baseUrl}}/evidence-offerings/{{studentEvidenceOfferingId}}/verifications
+  body: json
   auth: bearer
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 headers {
-  Data-Purpose: {{purpose}}
+  Data-Purpose: {{studentPurpose}}
+}
+
+body:json {
+  {
+    "claims": {
+      "id": "{{studentAlias}}",
+      "enrollment_status": "active",
+      "grade_level": "g5",
+      "home_district": "central"
+    }
+  }
 }
 
 docs {
   Step 1 of 4: Scholarship eligibility with subject linkage workflow.
-  Verifies that student stu-2001 exists and is enrolled. Uses verification_service
-  persona (verifyKey). Purpose header required.
-  Expected: 200 with { "exists": true }.
-  A scholarship system first confirms enrollment before initiating linkage.
+  Creates an evidence verification event for submitted student enrollment facts. Uses verification_service
+  persona (evidenceVerificationKey). Purpose header required.
+  Expected: 200 with decision, verification_id, and claim_hash.
+  A scholarship system first checks submitted enrollment evidence before initiating linkage.
   Each step uses a different key persona, demonstrating composed least-privilege access.
 }

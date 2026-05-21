@@ -1,22 +1,32 @@
 meta {
-  name: Missing purpose on person verify (expects 400)
+  name: Missing purpose on person evidence verification (expects 400)
   type: http
   seq: 15
 }
 
-get {
-  url: {{baseUrl}}/datasets/benefits_casework/person/verify?id={{benefitsPersonAlias}}
-  body: none
+post {
+  url: {{baseUrl}}/evidence-offerings/{{benefitsPersonEvidenceOfferingId}}/verifications
+  body: json
   auth: bearer
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
+}
+
+body:json {
+  {
+    "claims": {
+      "id": "{{benefitsPersonAlias}}",
+      "eligibility_status": "eligible",
+      "benefit_role": "member"
+    }
+  }
 }
 
 docs {
-  Calls the person verify endpoint with a valid verifyKey but no Data-Purpose header.
-  person has require_purpose_header=true, which applies to verify as well as rows.
+  Calls the person evidence verification endpoint with a valid evidenceVerificationKey but no Data-Purpose header.
+  person has require_purpose_header=true, which applies to evidence verification as well as rows.
   expected: 400 auth.purpose_required
-  Demonstrates that purpose enforcement covers the verify surface, not just row reads.
+  Demonstrates that purpose enforcement covers the evidence verification surface, not just row reads.
 }

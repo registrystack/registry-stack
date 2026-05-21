@@ -61,7 +61,6 @@ auth:
       scopes:
         - benefits_casework:metadata
         - benefits_casework:rows
-        - benefits_casework:verify
         - benefits_casework:aggregate
         - clinic_capacity:metadata
         - clinic_capacity:rows
@@ -71,35 +70,30 @@ auth:
         - public_works_projects:aggregate
         - education_registry:metadata
         - education_registry:rows
-        - education_registry:verify
         - education_registry:aggregate
         - subject_registry:metadata
         - disability_registry:metadata
         - disability_registry:rows
-        - disability_registry:verify
         - disability_registry:claim_verification
         - civil_registry:metadata
         - civil_registry:rows
-        - civil_registry:verify
         - social_registry:metadata
         - social_registry:rows
-        - social_registry:verify
         - farmer_registry:metadata
         - farmer_registry:rows
-        - farmer_registry:verify
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - benefits_casework:verify
-        - clinic_capacity:verify
-        - public_works_projects:verify
-        - education_registry:verify
-        - subject_registry:verify
-        - disability_registry:verify
+        - benefits_casework:evidence_verification
+        - clinic_capacity:evidence_verification
+        - public_works_projects:evidence_verification
+        - education_registry:evidence_verification
+        - subject_registry:evidence_verification
+        - disability_registry:evidence_verification
         - disability_registry:claim_verification
-        - civil_registry:verify
-        - social_registry:verify
-        - farmer_registry:verify
+        - civil_registry:evidence_verification
+        - social_registry:evidence_verification
+        - farmer_registry:evidence_verification
     # linkage_service: the only persona with subject_registry:rows.
     # No row scopes on benefits or education; resolves aliases via the registry only.
     - id: linkage_service
@@ -433,7 +427,6 @@ datasets:
           metadata_scope: benefits_casework:metadata
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
-          verify_scope: benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -493,7 +486,6 @@ datasets:
           metadata_scope: benefits_casework:metadata
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
-          verify_scope: benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -560,7 +552,6 @@ datasets:
           metadata_scope: benefits_casework:metadata
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
-          verify_scope: benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -621,7 +612,6 @@ datasets:
           metadata_scope: benefits_casework:metadata
           aggregate_scope: benefits_casework:aggregate
           read_scope: benefits_casework:rows
-          verify_scope: benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -828,7 +818,6 @@ datasets:
           metadata_scope: clinic_capacity:metadata
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
-          verify_scope: clinic_capacity:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -896,7 +885,6 @@ datasets:
           metadata_scope: clinic_capacity:metadata
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
-          verify_scope: clinic_capacity:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -955,7 +943,6 @@ datasets:
           metadata_scope: clinic_capacity:metadata
           aggregate_scope: clinic_capacity:aggregate
           read_scope: clinic_capacity:rows
-          verify_scope: clinic_capacity:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1203,7 +1190,6 @@ datasets:
           metadata_scope: public_works_projects:metadata
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
-          verify_scope: public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1269,7 +1255,6 @@ datasets:
           metadata_scope: public_works_projects:metadata
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
-          verify_scope: public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1332,7 +1317,6 @@ datasets:
           metadata_scope: public_works_projects:metadata
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
-          verify_scope: public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1394,7 +1378,6 @@ datasets:
           metadata_scope: public_works_projects:metadata
           aggregate_scope: public_works_projects:aggregate
           read_scope: public_works_projects:rows
-          verify_scope: public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1731,7 +1714,6 @@ datasets:
           metadata_scope: education_registry:metadata
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
-          verify_scope: education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1804,7 +1786,6 @@ datasets:
           metadata_scope: education_registry:metadata
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
-          verify_scope: education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1851,7 +1832,6 @@ datasets:
           metadata_scope: education_registry:metadata
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
-          verify_scope: education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1915,7 +1895,6 @@ datasets:
           metadata_scope: education_registry:metadata
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
-          verify_scope: education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -1962,7 +1941,6 @@ datasets:
           metadata_scope: education_registry:metadata
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
-          verify_scope: education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -2023,7 +2001,6 @@ datasets:
           metadata_scope: education_registry:metadata
           aggregate_scope: education_registry:aggregate
           read_scope: education_registry:rows
-          verify_scope: education_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -2143,7 +2120,6 @@ datasets:
           metadata_scope: subject_registry:metadata
           aggregate_scope: subject_registry:aggregate
           read_scope: subject_registry:rows
-          verify_scope: subject_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -2326,7 +2302,7 @@ datasets:
           metadata_scope:    disability_registry:metadata
           aggregate_scope:   disability_registry:aggregate
           read_scope:        disability_registry:rows
-          verify_scope:      disability_registry:verify
+          evidence_verification_scope: disability_registry:evidence_verification
           claim_verification_scope: disability_registry:claim_verification
         api:
           default_limit: 100
@@ -2460,7 +2436,6 @@ datasets:
           metadata_scope:    civil_registry:metadata
           aggregate_scope:   civil_registry:aggregate
           read_scope:        civil_registry:rows
-          verify_scope:      civil_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -2600,7 +2575,7 @@ datasets:
           metadata_scope:    social_registry:metadata
           aggregate_scope:   social_registry:aggregate
           read_scope:        social_registry:rows
-          verify_scope:      social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -2615,6 +2590,15 @@ datasets:
               ops: [eq, in]
             - field: poverty_score
               ops: [eq, gte, lte]
+        claim_verification:
+          rulesets:
+            social-group-v1:
+              mode: normalized_exact
+              required_claims: [group_id]
+              candidate_lookup: [group_id]
+              match_fields:
+                group_id: group_id
+              subject_id_claim: group_id
 
 
   - id: farmer_registry
@@ -2744,7 +2728,7 @@ datasets:
           metadata_scope:    farmer_registry:metadata
           aggregate_scope:   farmer_registry:aggregate
           read_scope:        farmer_registry:rows
-          verify_scope:      farmer_registry:verify
+          evidence_verification_scope: farmer_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -2761,3 +2745,14 @@ datasets:
               ops: [eq, in]
             - field: district
               ops: [eq, in]
+        claim_verification:
+          rulesets:
+            farmer-status-v1:
+              mode: normalized_exact
+              required_claims: [national_id, farm_type, district]
+              candidate_lookup: [national_id]
+              match_fields:
+                national_id: national_id
+                farm_type: farm_type
+                district: district
+              subject_id_claim: national_id

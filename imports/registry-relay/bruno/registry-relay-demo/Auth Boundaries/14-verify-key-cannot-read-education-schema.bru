@@ -11,13 +11,13 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 docs {
-  Attempts to read education_registry student schema using verification_service key (verifyKey).
-  verifyKey has only verify scopes; education_registry:metadata is required for schema access.
+  Attempts to read education_registry student schema using verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey has only evidence-verification scopes; education_registry:metadata is required for schema access.
   expected: 403 auth.scope_denied
-  Together with requests 04-06, demonstrates that verify-only keys have no schema,
+  Together with requests 04-06, demonstrates that evidence-verification-only keys have no schema,
   row, or aggregate access across any dataset.
 }

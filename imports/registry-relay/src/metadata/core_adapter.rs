@@ -26,6 +26,8 @@ pub fn manifest_from_runtime(config: &Config, registry: &EntityRegistry) -> core
         catalog: catalog_manifest(config),
         vocabularies: config.vocabularies.clone(),
         profiles: Vec::new(),
+        requirements: Vec::new(),
+        evidence_types: Vec::new(),
         datasets,
         codelists: codelist_ids.into_manifests(),
     }
@@ -63,6 +65,8 @@ pub fn scoped_compiled_from_runtime(
         catalog: catalog_manifest(config),
         vocabularies: config.vocabularies.clone(),
         profiles: Vec::new(),
+        requirements: Vec::new(),
+        evidence_types: Vec::new(),
         datasets,
         codelists: codelist_ids.into_manifests(),
     })
@@ -170,6 +174,7 @@ fn dataset_manifest(
             })
             .collect(),
         policy: None,
+        evidence_offerings: Vec::new(),
         entities,
     })
 }

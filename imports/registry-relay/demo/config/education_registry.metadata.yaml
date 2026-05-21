@@ -15,6 +15,18 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
+requirements:
+- id: education_student_requirement
+  iri: https://demo.example.gov/requirements/education-student
+  title: Current student enrollment requirement
+  description: Requirement for verifying that submitted student enrollment facts match the education registry.
+evidence_types:
+- id: education_student_record_evidence
+  iri: https://demo.example.gov/evidence-types/education-student-record
+  title: Student enrollment status evidence
+  description: Evidence that submitted student enrollment status, grade, and district facts match the education registry.
+  proves:
+  - education_student_requirement
 datasets:
 - id: education_registry
   title: Education Student Registry
@@ -26,6 +38,30 @@ datasets:
   sensitivity: personal
   access_rights: restricted
   update_frequency: termly
+  evidence_offerings:
+  - id: education_student_evidence
+    iri: https://demo.example.gov/evidence-offerings/education-student
+    title: Student enrollment status evidence
+    description: Registry Relay verification for submitted current student enrollment facts.
+    evidence_type: education_student_record_evidence
+    issuing_authority:
+      id: ministry_of_education
+      iri: did:web:education.demo.example.gov
+      name: Ministry of Education
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: student
+    lookup_keys:
+    - id
+    access:
+      kind: registry-relay-verification
+      conforms_to: registry_relay:evidence-verification-v1
+      ruleset: education-student-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/student-support-planning
   policy:
     uid: https://demo.example.gov/datasets/education_registry#illustrative-offer
     assigner: did:web:education.demo.example.gov

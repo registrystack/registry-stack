@@ -15,7 +15,7 @@ BRUNO_VAR_MAP = {
     "catalog_viewer": "metadataKey",
     "planning_analyst": "aggregateKey",
     "casework_system": "rowsKey",
-    "verification_service": "verifyKey",
+    "verification_service": "evidenceVerificationKey",
     "linkage_service": "linkageKey",
     "operations_admin": "adminKey",
 }
@@ -33,7 +33,7 @@ PERSONA_HINTS = {
     "catalog_viewer": "Discovery only: catalog and metadata, no rows.",
     "planning_analyst": "Planning reads: metadata and, when granted, disclosure-controlled aggregates.",
     "casework_system": "Operational follow-up: row reads, relationships, and selected verification.",
-    "verification_service": "Verification reads: existence checks and, when granted, submitted-claim checks.",
+    "verification_service": "Verification reads: submitted-fact checks through evidence offerings.",
     "linkage_service": "Subject linkage: resolve cross-dataset aliases without reading source records.",
     "operations_admin": "Operations: admin scope plus metadata discovery.",
 }
@@ -53,12 +53,9 @@ OPENAPI_WORDS = {
     ],
     "aggregate": ["List aggregates", "Run aggregate"],
     "rows": ["List records", "Get record", "Get relationship"],
-    "verify": ["Verify record exists"],
-    "claim_verification": [
-        "List claim-verification rulesets",
-        "Get claim-verification ruleset",
-        "Create claim verification",
-    ],
+    "verify": [],
+    "evidence_verification": ["Create evidence verification"],
+    "claim_verification": [],
     "admin": ["Admin operation"],
 }
 
@@ -182,6 +179,7 @@ def levels_for(key: DemoKey) -> list[str]:
         "aggregate",
         "rows",
         "verify",
+        "evidence_verification",
         "claim_verification",
         "admin",
         "other",
@@ -212,15 +210,13 @@ def concise_operations_for(key: DemoKey) -> list[str]:
         return ["Get metadata landing", "Get dataset metadata"]
     if key.key_id == "casework_system":
         operations = ["Get record", "Get relationship"]
-        if "verify" in levels:
-            operations.append("Verify record exists")
-        if "claim_verification" in levels:
-            operations.append("Create claim verification")
+        if "evidence_verification" in levels:
+            operations.append("Create evidence verification")
         return operations
     if key.key_id == "verification_service":
-        operations = ["Verify record exists"]
-        if "claim_verification" in levels:
-            operations.append("Create claim verification")
+        operations = []
+        if "evidence_verification" in levels:
+            operations.append("Create evidence verification")
         return operations
     if key.key_id == "linkage_service":
         return ["Get record", "Get relationship", "Run aggregate"]

@@ -11,7 +11,7 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 headers {
@@ -19,8 +19,8 @@ headers {
 }
 
 docs {
-  Attempts to read person rows using the verification_service key (verifyKey).
-  verifyKey holds only verify scopes; reading rows requires benefits_casework:rows.
+  Attempts to read person rows using the verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey holds only evidence-verification scopes; reading rows requires benefits_casework:rows.
   expected: 403 auth.scope_denied
   The scope check is enforced before the purpose header check;
   the 403 confirms scope denial, not purpose absence.

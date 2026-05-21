@@ -11,12 +11,12 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 docs {
-  Attempts to run a household aggregate using the verification_service key (verifyKey).
-  verifyKey holds only verify scopes; aggregates require an aggregate scope.
+  Attempts to run a household aggregate using the verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey holds only evidence-verification scopes; aggregates require an aggregate scope.
   expected: 403 auth.scope_denied
-  Verify, row, aggregate, and metadata are all independent scope grants.
+  Evidence verification, row, aggregate, and metadata are all independent scope grants.
 }

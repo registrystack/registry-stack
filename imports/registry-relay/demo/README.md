@@ -65,8 +65,8 @@ static publication workflow.
 | --- | --- |
 | `catalog_viewer` | `<dataset>:metadata` only, for every dataset |
 | `planning_analyst` | `metadata` + `aggregate` on every dataset |
-| `casework_system` | `metadata` + `rows` + selected `verify`/`aggregate` on personal datasets (benefits, education) plus row scopes on operational non-personal datasets (clinic, public works) where cross-demo follow-ups need them. Explicitly **no** `subject_registry:rows`. |
-| `verification_service` | `<dataset>:verify` only, for every dataset |
+| `casework_system` | `metadata` + `rows` + selected `evidence_verification`/`aggregate` on personal datasets (benefits, education) plus row scopes on operational non-personal datasets (clinic, public works) where cross-demo follow-ups need them. Explicitly **no** `subject_registry:rows`. |
+| `verification_service` | `<dataset>:evidence_verification` only, for every dataset |
 | `linkage_service` | `subject_registry:metadata` + `subject_registry:rows` + `subject_registry:aggregate` only. The sole persona authorised to resolve cross-dataset aliases. **No** row access to benefits or education. |
 | `operations_admin` | `admin` plus `metadata` on every dataset |
 
@@ -78,7 +78,7 @@ each request only carries the persona it claims to be:
 | `metadataKey` | `catalog_viewer` |
 | `aggregateKey` | `planning_analyst` |
 | `rowsKey` | `casework_system` |
-| `verifyKey` | `verification_service` |
+| `evidenceVerificationKey` | `verification_service` |
 | `linkageKey` | `linkage_service` |
 | `adminKey` | `operations_admin` |
 
@@ -166,7 +166,7 @@ just demo-keys-list
 
 The compact listing shows the key id, Bruno variable, raw bearer key, and the
 OpenAPI-style operations it unlocks, such as `List datasets`, `Get record`,
-`Run aggregate`, `Verify record exists`, and `Create claim verification`.
+`Run aggregate`, and `Create evidence verification`.
 
 After rotation, Bruno needs to re-read its collection `.env`. The simplest
 way is to close and reopen the collection in the Bruno UI (right-click the
@@ -294,6 +294,51 @@ Operational logs stay on stderr as readable text during local demo runs. Set
 `REGISTRY_RELAY_LOG_FORMAT=json` when you want those logs as JSONL for
 collection or a redirected file.
 
+## Narrated evidence-offerings demo
+
+For an educational walkthrough that prints each step and writes full responses
+to disk, start the combined demo and run:
+
+```bash
+just demo-run demo/config/all_demos.yaml
+```
+
+In another shell:
+
+```bash
+python3 demo/scripts/evidence_offerings_demo.py --scenario benefits
+```
+
+The script demonstrates the complete chain:
+
+```text
+Requirement -> Evidence Type -> Evidence Offering -> Registry Binding -> Verification Decision
+```
+
+It discovers evidence offerings, inspects the benefits person offering, verifies
+submitted status facts for `per-2001`, submits a mismatching predicate, proves
+that the verification persona cannot read the source person row, and shows that
+the old dataset-first verification route has been retired. Full responses are
+written under `demo/output/evidence-offerings-demo/`.
+
+Run the education story instead with:
+
+```bash
+python3 demo/scripts/evidence_offerings_demo.py --scenario education
+```
+
+To request a signed evidence-verification JWT receipt for the matching step:
+
+```bash
+python3 demo/scripts/evidence_offerings_demo.py --scenario benefits --signed-receipt
+```
+
+Keep custom predicate logic outside the relay when possible. The relay's v1
+evidence checks are deterministic `normalized_exact` rulesets over configured
+registry fields. Domain-specific calculations should be materialized by the
+source adapter or represented as explicit registry fields, then verified through
+an evidence offering.
+
 ## Bruno collection
 
 Open `bruno/registry-relay-demo/` in Bruno, then pick the **local** environment.
@@ -308,15 +353,15 @@ The environment file pre-fills the cross-demo defaults the requests reference:
 | `schoolId` | `sch-3001` | School id used by school-construction flow |
 | `facilityId` | `fac-4001` | Facility id used by clinic-rehab flow |
 | `studentAlias` | `stu-2001` | Student id used by scholarship + subject lookups |
-| `benefitsPersonAlias` | `per-2001` | Benefits person id used by verify and subject lookups |
+| `benefitsPersonAlias` | `per-2001` | Benefits person id used by evidence verification and subject lookups |
 | `canonicalId` | `sub-9001` | Canonical subject id used by registry lookups |
-| `metadataKey` / `aggregateKey` / `rowsKey` / `verifyKey` / `linkageKey` / `adminKey` | from the keygen output | Per-persona raw bearer tokens |
+| `metadataKey` / `aggregateKey` / `rowsKey` / `evidenceVerificationKey` / `linkageKey` / `adminKey` | from the keygen output | Per-persona raw bearer tokens |
 
 The collection is grouped by capability and dataset:
 
 - `Metadata` exercises the split-manifest `/metadata/*` surface, including
-  portable catalog JSON, base DCAT, BRegDCAT-AP, SHACL, JSON Schema, and
-  link-free OGC record bodies;
+  portable catalog JSON, base DCAT, BRegDCAT-AP, SHACL, JSON Schema,
+  evidence-offering metadata, and link-free OGC record bodies;
 - `Catalog` exercises the canonical `/metadata/catalog`,
   `/metadata/dcat/bregdcat-ap`, and `/metadata/policies` publication
   endpoints;
@@ -351,9 +396,9 @@ just demo-run
 In Bruno, run the `Cross-Demo Workflows` folder requests 11 through 14
 in order:
 
-1. **`11-scholarship-verify-student.bru`** uses `verifyKey`
-   (`verification_service`) to call `GET /datasets/education_registry/student/verify?id={{studentAlias}}`.
-   Returns 200 (existence confirmed) without giving back any row content.
+1. **`11-scholarship-verify-student.bru`** uses `evidenceVerificationKey`
+   (`verification_service`) to call `POST /evidence-offerings/{{studentEvidenceOfferingId}}/verifications`.
+   Returns 200 with a verification decision and receipt metadata without giving back any row content.
 2. **`12-scholarship-subject-lookup.bru`** uses `linkageKey`
    (`linkage_service`) to call `GET /datasets/subject_registry/subject?education_student_alias={{studentAlias}}`.
    This is the only call in the flow that returns the cross-dataset alias

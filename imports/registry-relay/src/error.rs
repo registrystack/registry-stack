@@ -327,6 +327,8 @@ pub enum RuntimeBindingError {
     FieldMissing,
     #[error("runtime filter missing from metadata")]
     FilterMissing,
+    #[error("runtime scope missing or invalid")]
+    ScopeMissing,
     #[error("runtime relationship missing from metadata")]
     RelationshipMissing,
 }
@@ -1110,6 +1112,7 @@ impl RuntimeBindingError {
             RuntimeBindingError::TableMissing => "runtime.binding.table_missing",
             RuntimeBindingError::FieldMissing => "runtime.binding.field_missing",
             RuntimeBindingError::FilterMissing => "runtime.binding.filter_missing",
+            RuntimeBindingError::ScopeMissing => "runtime.binding.scope_missing",
             RuntimeBindingError::RelationshipMissing => "runtime.binding.relationship_missing",
         }
     }
@@ -1126,6 +1129,7 @@ impl RuntimeBindingError {
             RuntimeBindingError::TableMissing => "Runtime table missing",
             RuntimeBindingError::FieldMissing => "Runtime field missing from metadata",
             RuntimeBindingError::FilterMissing => "Runtime filter missing from metadata",
+            RuntimeBindingError::ScopeMissing => "Runtime scope missing or invalid",
             RuntimeBindingError::RelationshipMissing => {
                 "Runtime relationship missing from metadata"
             }
@@ -1148,6 +1152,9 @@ impl RuntimeBindingError {
             }
             RuntimeBindingError::FilterMissing => {
                 "runtime filter binding is absent from the metadata manifest"
+            }
+            RuntimeBindingError::ScopeMissing => {
+                "runtime scope is missing or does not use a supported scope shape"
             }
             RuntimeBindingError::RelationshipMissing => {
                 "runtime relationship binding is absent from the metadata manifest"

@@ -20,13 +20,12 @@ auth:
     - id: disability_verification_service
       hash_env: DISABILITY_VERIFICATION_API_KEY_HASH
       scopes:
-        - disability_registry:verify
+        - disability_registry:evidence_verification
     - id: disability_casework_system
       hash_env: DISABILITY_CASEWORK_API_KEY_HASH
       scopes:
         - disability_registry:metadata
         - disability_registry:rows
-        - disability_registry:verify
 
 standards:
   spdci:
@@ -144,7 +143,7 @@ datasets:
           metadata_scope:    disability_registry:metadata
           aggregate_scope:   disability_registry:aggregate
           read_scope:        disability_registry:rows
-          verify_scope:      disability_registry:verify
+          evidence_verification_scope: disability_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000

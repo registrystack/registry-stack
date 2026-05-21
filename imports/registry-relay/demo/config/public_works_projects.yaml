@@ -41,7 +41,7 @@ auth:
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - public_works_projects:verify
+        - public_works_projects:evidence_verification
 
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_HASH
@@ -275,7 +275,6 @@ datasets:
           metadata_scope:    public_works_projects:metadata
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
-          verify_scope:      public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -342,7 +341,6 @@ datasets:
           metadata_scope:    public_works_projects:metadata
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
-          verify_scope:      public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -406,7 +404,6 @@ datasets:
           metadata_scope:    public_works_projects:metadata
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
-          verify_scope:      public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -469,7 +466,6 @@ datasets:
           metadata_scope:    public_works_projects:metadata
           aggregate_scope:   public_works_projects:aggregate
           read_scope:        public_works_projects:rows
-          verify_scope:      public_works_projects:verify
         api:
           default_limit: 100
           max_limit: 1000

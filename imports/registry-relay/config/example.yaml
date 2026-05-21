@@ -38,14 +38,20 @@ auth:
     - id: identity_verification_service
       hash_env: VERIFICATION_SERVICE_API_KEY_HASH
       scopes:
-        - social_registry:verify
-        - social_registry:claim_verification
+        - social_registry:metadata
+        - social_registry:evidence_verification
 
 claim_verification:
   binding_key_id: example-v1
   # Env value format: hex:<64+ lowercase hex chars>
   # Generate with: printf 'hex:%s\n' "$(openssl rand -hex 32)"
   binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
+
+evidence_verification:
+  rate_limit:
+    enabled: true
+    burst: 120
+    window_seconds: 60
 
 datasets:
   - id: social_registry
@@ -141,8 +147,7 @@ datasets:
           metadata_scope:    social_registry:metadata
           aggregate_scope:   social_registry:aggregate
           read_scope:        social_registry:rows
-          verify_scope:      social_registry:verify
-          # claim_verification_scope: social_registry:claim_verification
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -180,8 +185,7 @@ datasets:
           metadata_scope:    social_registry:metadata
           aggregate_scope:   social_registry:aggregate
           read_scope:        social_registry:rows
-          verify_scope:      social_registry:verify
-          claim_verification_scope: social_registry:claim_verification
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -245,6 +249,7 @@ datasets:
               match_fields:
                 id: id
               expose_ambiguous: false
+              scope: social_registry:evidence_verification
 
 audit:
   sink: stdout            # stdout | file | syslog
@@ -273,6 +278,7 @@ audit:
 #   accepted_media_types:
 #     - application/vc+jwt
 #     - application/jwt
+#     - application/vnd.registry-relay.evidence-verification+jwt
 #   schema_base_url: https://data.example.gov/schemas
 #   context_base_url: https://data.example.gov/contexts
 #   claim_validity:

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
@@ -33,6 +33,11 @@ where
     Router::new()
         .route("/metadata", get(metadata_landing))
         .route("/metadata/catalog", get(catalog))
+        .route("/metadata/evidence-offerings", get(evidence_offerings))
+        .route(
+            "/metadata/evidence-offerings/{offering_id}",
+            get(evidence_offering),
+        )
         .route("/metadata/dcat", get(dcat))
         .route("/metadata/dcat/{profile}", get(dcat_profile))
         .route("/metadata/shacl", get(shacl))
@@ -80,6 +85,47 @@ struct DatasetPath {
     dataset_id: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct EvidenceOfferingPath {
+    offering_id: String,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct EvidenceOfferingFilters {
+    evidence_type: Option<String>,
+    country: Option<String>,
+    procedure_context: Option<String>,
+}
+
+impl EvidenceOfferingFilters {
+    fn matches(&self, offering: &metadata_core::CompiledEvidenceOffering) -> bool {
+        if self.evidence_type.as_deref().is_some_and(|expected| {
+            expected != offering.evidence_type && expected != offering.evidence_type_iri
+        }) {
+            return false;
+        }
+        if self.country.as_deref().is_some_and(|expected| {
+            offering.issuing_authority.country.as_deref() != Some(expected)
+                && offering
+                    .jurisdiction
+                    .as_ref()
+                    .and_then(|jurisdiction| jurisdiction.country.as_deref())
+                    != Some(expected)
+        }) {
+            return false;
+        }
+        if self.procedure_context.as_deref().is_some_and(|expected| {
+            !offering
+                .procedure_contexts
+                .iter()
+                .any(|iri| iri == expected)
+        }) {
+            return false;
+        }
+        true
+    }
+}
+
 async fn metadata_landing(
     headers: HeaderMap,
     config: Option<Extension<Arc<Config>>>,
@@ -119,6 +165,48 @@ async fn catalog(
         Err(response) => return *response,
     };
     json_response(metadata_core::render_catalog(&compiled), &headers)
+}
+
+async fn evidence_offerings(
+    Query(filters): Query<EvidenceOfferingFilters>,
+    headers: HeaderMap,
+    config: Option<Extension<Arc<Config>>>,
+    registry: Option<Extension<Arc<EntityRegistry>>>,
+    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    principal: Option<Extension<Principal>>,
+) -> Response {
+    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+        Ok(compiled) => compiled,
+        Err(response) => return *response,
+    };
+    let evidence_offerings = compiled
+        .evidence_offerings()
+        .filter(|offering| filters.matches(offering))
+        .collect::<Vec<_>>();
+    private_metadata_response(
+        json!({ "evidence_offerings": evidence_offerings }),
+        &headers,
+    )
+}
+
+async fn evidence_offering(
+    Path(path): Path<EvidenceOfferingPath>,
+    headers: HeaderMap,
+    config: Option<Extension<Arc<Config>>>,
+    registry: Option<Extension<Arc<EntityRegistry>>>,
+    compiled_metadata: Option<Extension<Arc<metadata_core::CompiledMetadata>>>,
+    principal: Option<Extension<Principal>>,
+) -> Response {
+    let compiled = match scoped_metadata(config, registry, compiled_metadata, principal) {
+        Ok(compiled) => compiled,
+        Err(response) if response.status() == StatusCode::FORBIDDEN => return offering_not_found(),
+        Err(response) => return *response,
+    };
+    let Some(document) = metadata_core::render_evidence_offering(&compiled, &path.offering_id)
+    else {
+        return offering_not_found();
+    };
+    private_metadata_response(document, &headers)
 }
 
 async fn dcat(
@@ -475,6 +563,20 @@ where
     typed_json_response(value, headers, HeaderValue::from_static("application/json"))
 }
 
+fn private_metadata_response<T>(value: T, headers: &HeaderMap) -> Response
+where
+    T: Serialize,
+{
+    let mut response = json_response(value, headers);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private"));
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("Authorization"));
+    response
+}
+
 fn json_ld_response<T>(value: T, headers: &HeaderMap) -> Response
 where
     T: Serialize,
@@ -555,6 +657,24 @@ fn metadata_unavailable(detail: &'static str) -> Response {
             "status": StatusCode::NOT_IMPLEMENTED.as_u16(),
             "detail": detail,
             "code": METADATA_UNAVAILABLE_CODE,
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, PROBLEM_JSON);
+    response
+}
+
+fn offering_not_found() -> Response {
+    let mut response = (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "type": "https://data.example.gov/problems/offering/not_found",
+            "title": "Evidence offering not found",
+            "status": StatusCode::NOT_FOUND.as_u16(),
+            "detail": "Evidence offering not found or not visible to the caller.",
+            "code": "offering.not_found",
         })),
     )
         .into_response();

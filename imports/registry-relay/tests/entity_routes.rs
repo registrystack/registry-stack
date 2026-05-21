@@ -14,10 +14,14 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
-use registry_relay::api::{aggregates_router, entity_router, CursorSigner};
+use registry_metadata_core as metadata_core;
+use registry_relay::api::{
+    aggregates_router, entity_router, evidence_offerings_router, metadata_router, CursorSigner,
+    EvidenceVerificationLimiter,
+};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::claim_verification::ClaimVerificationHasher;
-use registry_relay::config::{self, DatasetId, ResourceId};
+use registry_relay::config::{self, DatasetId, EvidenceVerificationRateLimitConfig, ResourceId};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::ingest::{
     register_versioned_table, table_name, ReadinessSnapshot, ReadyResource,
@@ -25,7 +29,7 @@ use registry_relay::ingest::{
 use registry_relay::provenance::signers::software::SoftwareSigner;
 use registry_relay::provenance::{
     IssuerMode, ProvenanceState, ResolvedClaimValidity, ResolvedProvenanceConfig, ResolvedUrls,
-    Signer, SigningAlgorithm, CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE,
+    Signer, SigningAlgorithm, EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE,
 };
 use registry_relay::query::EntityQueryEngine;
 use serde_json::Value;
@@ -37,7 +41,11 @@ use tokio::sync::watch;
 use ulid::Ulid;
 
 fn server() -> TestServer {
-    TestServer::new(entity_router::<()>())
+    TestServer::new(
+        entity_router::<()>()
+            .merge(evidence_offerings_router::<()>())
+            .merge(metadata_router()),
+    )
 }
 
 fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -52,61 +60,88 @@ fn principal(scopes: &[&str]) -> Principal {
     }
 }
 
+fn test_evidence_metadata() -> metadata_core::CompiledMetadata {
+    let manifest: metadata_core::MetadataManifest = serde_yml::from_str(
+        r#"
+schema_version: registry-metadata/v1
+catalog:
+  id: test
+  base_url: https://data.example.test
+  title: Test
+  publisher:
+    name: Test
+requirements:
+  - id: name_requirement
+    iri: https://data.example.test/requirements/name
+    title: Name requirement
+evidence_types:
+  - id: name_evidence
+    iri: https://data.example.test/evidence-types/name
+    title: Name evidence
+    proves: [name_requirement]
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    evidence_offerings:
+      - id: individual_name_evidence
+        iri: https://data.example.test/evidence-offerings/individual-name
+        title: Individual name evidence
+        evidence_type: name_evidence
+        issuing_authority:
+          id: test_authority
+          iri: did:web:data.example.test
+          name: Test Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: individual
+        lookup_keys: [given_name]
+        access:
+          kind: registry-relay-verification
+          conforms_to: registry_relay:evidence-verification-v1
+          ruleset: exact-name
+        policy:
+          purpose:
+            - https://data.example.test/purposes/testing
+      - id: individual_targeted_name_evidence
+        iri: https://data.example.test/evidence-offerings/individual-targeted-name
+        title: Targeted individual name evidence
+        evidence_type: name_evidence
+        issuing_authority:
+          id: test_authority
+          iri: did:web:data.example.test
+          name: Test Authority
+          country: ZZ
+        entity: individual
+        lookup_keys: [given_name]
+        access:
+          kind: registry-relay-verification
+          conforms_to: registry_relay:evidence-verification-v1
+          ruleset: exact-name-targeted
+    entities:
+      - name: individual
+        fields:
+          - name: id
+            type: string
+          - name: household_id
+            type: string
+          - name: given_name
+            type: string
+"#,
+    )
+    .expect("metadata manifest parses");
+    metadata_core::compile_manifest(&manifest).expect("metadata manifest compiles")
+}
+
 const ENTITY_ROUTE_SCOPES: &[&str] = &[
     "social_registry:metadata",
     "social_registry:rows",
     "social_registry:verify",
+    "social_registry:evidence_verification",
     "social_registry:claim_verification",
 ];
-
-fn claim_verification_provenance_state(env_name: &str) -> Arc<ProvenanceState> {
-    claim_verification_provenance_state_with_media_types(
-        env_name,
-        vec![CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
-    )
-}
-
-fn claim_verification_provenance_state_with_media_types(
-    _env_name: &str,
-    accepted_media_types: Vec<String>,
-) -> Arc<ProvenanceState> {
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-    let secret_bytes: [u8; SECRET_KEY_LENGTH] = signing_key.to_bytes();
-    let jwk = serde_json::json!({
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "d": URL_SAFE_NO_PAD.encode(secret_bytes),
-        "x": URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
-        "alg": "EdDSA",
-    });
-    let signer = SoftwareSigner::from_jwk_str(
-        &serde_json::to_string(&jwk).expect("jwk serializes"),
-        SigningAlgorithm::EdDSA,
-        "did:web:data.example.test#key-1".to_string(),
-    )
-    .expect("software signer");
-    let signer: Arc<dyn Signer> = Arc::new(signer);
-    Arc::new(ProvenanceState::new(ResolvedProvenanceConfig {
-        enabled: true,
-        mode: IssuerMode::Gateway,
-        issuer_did: "did:web:data.example.test".to_string(),
-        verification_method_id: "did:web:data.example.test#key-1".to_string(),
-        accepted_media_types,
-        claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(300),
-            aggregate_result: Duration::from_secs(3600),
-            entity_record: Duration::from_secs(3600),
-        },
-        urls: ResolvedUrls {
-            provenance_context_url: "https://data.example.test/contexts/provenance/v1.jsonld"
-                .to_string(),
-            schema_base_url: "https://data.example.test/schemas".to_string(),
-        },
-        signer,
-        retired_keys: vec![],
-    }))
-}
 
 async fn server_with_query() -> TestServer {
     server_with_query_version("01J5K8M0000000000000000000").await
@@ -116,18 +151,6 @@ async fn server_with_query_version(ingest_version: &str) -> TestServer {
     server_with_query_versions_and_signer(
         ingest_version,
         ingest_version,
-        Arc::new(CursorSigner::new_random()),
-    )
-    .await
-}
-
-async fn server_with_query_versions(
-    table_ingest_version: &str,
-    readiness_ingest_version: &str,
-) -> TestServer {
-    server_with_query_versions_and_signer(
-        table_ingest_version,
-        readiness_ingest_version,
         Arc::new(CursorSigner::new_random()),
     )
     .await
@@ -149,18 +172,6 @@ async fn server_with_query_versions_and_signer(
         table_ingest_version,
         readiness_ingest_version,
         signer,
-        None,
-        ENTITY_ROUTE_SCOPES,
-    )
-    .await
-}
-
-async fn server_with_query_and_provenance(provenance: Arc<ProvenanceState>) -> TestServer {
-    server_with_query_versions_signer_and_provenance(
-        "01J5K8M0000000000000000000",
-        "01J5K8M0000000000000000000",
-        Arc::new(CursorSigner::new_random()),
-        Some(provenance),
         ENTITY_ROUTE_SCOPES,
     )
     .await
@@ -171,8 +182,18 @@ async fn server_with_query_and_scopes(scopes: &[&str]) -> TestServer {
         "01J5K8M0000000000000000000",
         "01J5K8M0000000000000000000",
         Arc::new(CursorSigner::new_random()),
-        None,
         scopes,
+    )
+    .await
+}
+
+async fn server_with_query_and_receipt_provenance() -> TestServer {
+    server_with_query_versions_signer_scopes_and_receipt(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        ENTITY_ROUTE_SCOPES,
+        Some(test_receipt_state()),
     )
     .await
 }
@@ -181,8 +202,61 @@ async fn server_with_query_versions_signer_and_provenance(
     table_ingest_version: &str,
     readiness_ingest_version: &str,
     signer: Arc<CursorSigner>,
-    provenance: Option<Arc<ProvenanceState>>,
     principal_scopes: &[&str],
+) -> TestServer {
+    server_with_query_versions_signer_scopes_and_receipt(
+        table_ingest_version,
+        readiness_ingest_version,
+        signer,
+        principal_scopes,
+        None,
+    )
+    .await
+}
+
+async fn server_with_query_versions_signer_scopes_and_receipt(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    principal_scopes: &[&str],
+    receipt_state: Option<Arc<ProvenanceState>>,
+) -> TestServer {
+    server_with_query_versions_signer_scopes_receipt_and_limiter(
+        table_ingest_version,
+        readiness_ingest_version,
+        signer,
+        principal_scopes,
+        receipt_state,
+        None,
+    )
+    .await
+}
+
+async fn server_with_query_and_rate_limit(burst: u32, window_seconds: u64) -> TestServer {
+    server_with_query_versions_signer_scopes_receipt_and_limiter(
+        "01J5K8M0000000000000000000",
+        "01J5K8M0000000000000000000",
+        Arc::new(CursorSigner::new_random()),
+        ENTITY_ROUTE_SCOPES,
+        None,
+        Some(Arc::new(EvidenceVerificationLimiter::new(
+            &EvidenceVerificationRateLimitConfig {
+                enabled: true,
+                burst,
+                window_seconds,
+            },
+        ))),
+    )
+    .await
+}
+
+async fn server_with_query_versions_signer_scopes_receipt_and_limiter(
+    table_ingest_version: &str,
+    readiness_ingest_version: &str,
+    signer: Arc<CursorSigner>,
+    principal_scopes: &[&str],
+    receipt_state: Option<Arc<ProvenanceState>>,
+    limiter: Option<Arc<EvidenceVerificationLimiter>>,
 ) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("entity_routes.yaml");
@@ -282,6 +356,7 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
           claim_verification_scope: social_registry:claim_verification
         api:
           default_limit: 100
@@ -309,6 +384,7 @@ datasets:
           aggregate_scope: social_registry:aggregate
           read_scope: social_registry:rows
           verify_scope: social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
           claim_verification_scope: social_registry:claim_verification
         api:
           default_limit: 100
@@ -359,6 +435,7 @@ audit:
     .expect("write config");
     let cfg = Arc::new(config::load(&config_path).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let metadata = Arc::new(test_evidence_metadata());
     let ctx = Arc::new(SessionContext::new());
     let schema = Arc::new(Schema::new(vec![
         Field::new("household_id", DataType::Utf8, false),
@@ -426,9 +503,12 @@ audit:
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
-    let app = entity_router::<()>()
+    let mut app = entity_router::<()>()
+        .merge(evidence_offerings_router::<()>())
+        .merge(metadata_router())
         .layer(Extension(query))
         .layer(Extension(registry))
+        .layer(Extension(metadata))
         .layer(Extension(cfg))
         .layer(Extension(readiness))
         .layer(Extension(signer))
@@ -440,12 +520,53 @@ audit:
             .expect("claim verification HMAC key decodes"),
         )))
         .layer(Extension(principal(principal_scopes)));
-    let app = if let Some(provenance) = provenance {
-        app.layer(Extension(provenance))
-    } else {
-        app
-    };
+    if let Some(receipt_state) = receipt_state {
+        app = app.layer(Extension(receipt_state));
+    }
+    if let Some(limiter) = limiter {
+        app = app.layer(Extension(limiter));
+    }
     TestServer::new(app)
+}
+
+fn test_receipt_state() -> Arc<ProvenanceState> {
+    let sk = SigningKey::generate(&mut OsRng);
+    let vk = sk.verifying_key();
+    let d_bytes: [u8; SECRET_KEY_LENGTH] = sk.to_bytes();
+    let jwk = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": URL_SAFE_NO_PAD.encode(d_bytes),
+        "x": URL_SAFE_NO_PAD.encode(vk.to_bytes()),
+        "alg": "EdDSA",
+    });
+    let signer: Arc<dyn Signer> = Arc::new(
+        SoftwareSigner::from_jwk_str(
+            &serde_json::to_string(&jwk).expect("jwk serializes"),
+            SigningAlgorithm::EdDSA,
+            "did:web:data.example.test#evidence".to_string(),
+        )
+        .expect("receipt signer builds"),
+    );
+    Arc::new(ProvenanceState::new(ResolvedProvenanceConfig {
+        enabled: true,
+        mode: IssuerMode::Gateway,
+        issuer_did: "did:web:data.example.test".to_string(),
+        verification_method_id: "did:web:data.example.test#evidence".to_string(),
+        accepted_media_types: vec![EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
+        claim_validity: ResolvedClaimValidity {
+            verify_result: Duration::from_secs(300),
+            aggregate_result: Duration::from_secs(3600),
+            entity_record: Duration::from_secs(86_400),
+        },
+        urls: ResolvedUrls {
+            provenance_context_url: "https://data.example.test/contexts/provenance/v1.jsonld"
+                .to_string(),
+            schema_base_url: "https://data.example.test/schemas".to_string(),
+        },
+        signer,
+        retired_keys: Vec::new(),
+    }))
 }
 
 #[tokio::test]
@@ -728,7 +849,7 @@ async fn entity_relationship_route_executes_query_when_state_installed() {
     let resp = server_with_query()
         .await
         .get("/datasets/social_registry/individual/p-1/household")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -747,7 +868,7 @@ async fn entity_relationship_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
         .get("/datasets/social_registry/individual/p-1/household")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -755,7 +876,7 @@ async fn entity_relationship_returns_etag_and_honors_if_none_match() {
 
     let cached = server
         .get("/datasets/social_registry/individual/p-1/household")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -769,7 +890,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
 
     let first = server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -792,7 +913,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
     let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
     let second = server
         .get(&url)
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
     second.assert_status(StatusCode::OK);
     let body: Value = second.json();
@@ -811,7 +932,7 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -819,7 +940,7 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
 
     let cached = server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -838,7 +959,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
             .await;
     let first = old_server
         .get("/datasets/social_registry/household/hh-1/members?limit=1")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -852,7 +973,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
     let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
     let resp = new_server
         .get(&url)
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
     resp.assert_status(StatusCode::CONFLICT);
     let body: Value = resp.json();
@@ -860,78 +981,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
 }
 
 #[tokio::test]
-async fn entity_verify_uses_verify_scope_and_returns_one_bit() {
-    let server = server_with_query().await;
-
-    let present = server
-        .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("data-purpose", "route-test")
-        .await;
-    present.assert_status(StatusCode::OK);
-    let body: Value = present.json();
-    assert_eq!(
-        body,
-        serde_json::json!({
-            "exists": true,
-            "ingest_version": "01J5K8M0000000000000000000"
-        })
-    );
-
-    let absent = server
-        .get("/datasets/social_registry/individual/verify?id=missing")
-        .add_header("data-purpose", "route-test")
-        .await;
-    absent.assert_status(StatusCode::OK);
-    let body: Value = absent.json();
-    assert_eq!(
-        body,
-        serde_json::json!({
-            "exists": false,
-            "ingest_version": "01J5K8M0000000000000000000"
-        })
-    );
-}
-
-#[tokio::test]
-async fn entity_verify_uses_table_snapshot_version_not_stale_readiness() {
-    let server =
-        server_with_query_versions("01J5K8M0000000000000000001", "01J5K8M0000000000000000000")
-            .await;
-
-    let resp = server
-        .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("data-purpose", "route-test")
-        .await;
-    resp.assert_status(StatusCode::OK);
-    let body: Value = resp.json();
-
-    assert_eq!(body["exists"], true);
-    assert_eq!(body["ingest_version"], "01J5K8M0000000000000000001");
-}
-
-#[tokio::test]
-async fn entity_verify_returns_etag_and_honors_if_none_match() {
-    let server = server_with_query().await;
-    let resp = server
-        .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("data-purpose", "route-test")
-        .await;
-
-    resp.assert_status(StatusCode::OK);
-    let etag = resp.header("etag").to_str().expect("etag").to_string();
-
-    let cached = server
-        .get("/datasets/social_registry/individual/verify?id=p-1")
-        .add_header("data-purpose", "route-test")
-        .add_header("if-none-match", &etag)
-        .await;
-
-    cached.assert_status(StatusCode::NOT_MODIFIED);
-    assert_eq!(cached.header("etag").to_str().expect("etag"), etag);
-}
-
-#[tokio::test]
-async fn entity_verify_requires_exposed_primary_key_only() {
+async fn legacy_verify_route_is_removed() {
     let server = server_with_query().await;
 
     for url in [
@@ -942,11 +992,9 @@ async fn entity_verify_requires_exposed_primary_key_only() {
     ] {
         let resp = server
             .get(url)
-            .add_header("data-purpose", "route-test")
+            .add_header("data-purpose", "https://data.example.test/purposes/testing")
             .await;
-        resp.assert_status(StatusCode::BAD_REQUEST);
-        let body: Value = resp.json();
-        assert_eq!(body["code"], "filter.not_allowed");
+        resp.assert_status(StatusCode::NOT_FOUND);
     }
 }
 
@@ -1042,7 +1090,7 @@ async fn entity_collection_route_expands_relationships() {
     let resp = server_with_query()
         .await
         .get("/datasets/social_registry/household?region=north&expand=members")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -1068,10 +1116,15 @@ async fn entity_collection_route_expands_relationships() {
 }
 
 #[tokio::test]
-async fn entity_verify_requires_purpose_header_when_entity_requires_it() {
+async fn evidence_verification_requires_purpose_header_when_entity_requires_it() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/individual/verify?id=p-1")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
         .await;
 
     resp.assert_status(StatusCode::BAD_REQUEST);
@@ -1080,14 +1133,69 @@ async fn entity_verify_requires_purpose_header_when_entity_requires_it() {
 }
 
 #[tokio::test]
-async fn claim_verification_returns_match_mismatch_and_ambiguous_decisions() {
+async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() {
+    let server = server_with_query().await;
+
+    let list = server.get("/metadata/evidence-offerings").await;
+    list.assert_status(StatusCode::OK);
+    assert_eq!(list.header("cache-control"), "private");
+    assert_eq!(list.header("vary"), "Authorization");
+    let body: Value = list.json();
+    assert_eq!(
+        body["evidence_offerings"][0]["id"],
+        "individual_name_evidence"
+    );
+    assert_eq!(
+        body["evidence_offerings"][0]["verification_request_schema_url"],
+        "https://data.example.test/metadata/schema/social_registry/individual/schema.json"
+    );
+
+    let filtered = server
+        .get("/metadata/evidence-offerings?evidence_type=https://data.example.test/evidence-types/name&country=ZZ")
+        .await;
+    filtered.assert_status(StatusCode::OK);
+    let body: Value = filtered.json();
+    assert_eq!(
+        body["evidence_offerings"]
+            .as_array()
+            .expect("offerings")
+            .len(),
+        2
+    );
+
+    let empty = server.get("/metadata/evidence-offerings?country=NO").await;
+    empty.assert_status(StatusCode::OK);
+    let body: Value = empty.json();
+    assert!(body["evidence_offerings"]
+        .as_array()
+        .expect("offerings")
+        .is_empty());
+
+    let detail = server
+        .get("/metadata/evidence-offerings/individual_name_evidence")
+        .await;
+    detail.assert_status(StatusCode::OK);
+    assert_eq!(detail.header("cache-control"), "private");
+    let body: Value = detail.json();
+    assert_eq!(body["id"], "individual_name_evidence");
+
+    let hidden = server_with_query_and_scopes(&["social_registry:evidence_verification"]).await;
+    let hidden_resp = hidden
+        .get("/metadata/evidence-offerings/individual_name_evidence")
+        .await;
+    hidden_resp.assert_status(StatusCode::NOT_FOUND);
+    let body: Value = hidden_resp.json();
+    assert_eq!(body["code"], "offering.not_found");
+}
+
+#[tokio::test]
+async fn evidence_verification_returns_match_mismatch_and_ambiguous_decisions() {
     let server = server_with_query().await;
 
     let matched = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben"
             }
@@ -1100,22 +1208,36 @@ async fn claim_verification_returns_match_mismatch_and_ambiguous_decisions() {
     assert_eq!(body["decision"], "match");
     assert_eq!(body["dataset_id"], "social_registry");
     assert_eq!(body["entity"], "individual");
-    assert_eq!(body["ruleset"], "exact-name");
+    assert_eq!(
+        body["evidence_offering"],
+        "https://data.example.test/evidence-offerings/individual-name"
+    );
+    assert_eq!(
+        body["evidence_type"],
+        "https://data.example.test/evidence-types/name"
+    );
+    assert_eq!(body["issuing_authority"]["id"], "test_authority");
     assert!(
         body.get("claims").is_none(),
         "raw claims must not be echoed"
     );
     assert_eq!(body["ingest_version"], "01J5K8M0000000000000000000");
     assert!(body["verified"].is_null(), "verified must not be emitted");
+    assert_eq!(
+        body["requirement"],
+        "https://data.example.test/requirements/name"
+    );
+    assert!(body["claim_salt"]
+        .as_str()
+        .is_some_and(|salt| salt.len() == 32 && salt.chars().all(|ch| ch.is_ascii_hexdigit())));
     assert!(body["claim_hash"]
         .as_str()
         .is_some_and(|hash| hash.starts_with("hmac-sha256:")));
 
     let missing = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Missing"
             }
@@ -1126,10 +1248,9 @@ async fn claim_verification_returns_match_mismatch_and_ambiguous_decisions() {
     assert_eq!(body["decision"], "mismatch");
 
     let ambiguous = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ada"
             }
@@ -1138,82 +1259,40 @@ async fn claim_verification_returns_match_mismatch_and_ambiguous_decisions() {
     ambiguous.assert_status(StatusCode::OK);
     let body: Value = ambiguous.json();
     assert_eq!(body["decision"], "ambiguous");
+}
 
-    let collapsed = server
+#[tokio::test]
+async fn legacy_claim_verification_routes_are_removed() {
+    let server = server_with_query().await;
+
+    for url in [
+        "/datasets/social_registry/individual/claim-verification-rulesets",
+        "/datasets/social_registry/individual/claim-verification-rulesets/exact-name",
+    ] {
+        let resp = server.get(url).await;
+        resp.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    let post = server
         .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name-private",
             "claims": {
-                "given_name": "Ada"
+                "given_name": "Ben"
             }
         }))
         .await;
-    collapsed.assert_status(StatusCode::OK);
-    let body: Value = collapsed.json();
-    assert_eq!(body["decision"], "mismatch");
+    post.assert_status(StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn claim_verification_ruleset_discovery_is_scope_filtered() {
-    let server = server_with_query().await;
-
-    let list = server
-        .get("/datasets/social_registry/individual/claim-verification-rulesets")
-        .await;
-    list.assert_status(StatusCode::OK);
-    assert_eq!(list.header("cache-control"), "no-store");
-    assert_eq!(list.header("vary"), "Authorization, Accept");
-    let body: Value = list.json();
-    let rulesets = body["data"].as_array().expect("data array");
-    assert_eq!(rulesets.len(), 3);
-    assert!(rulesets
-        .iter()
-        .any(|ruleset| ruleset["ruleset"] == "exact-name"));
-    assert!(!rulesets
-        .iter()
-        .any(|ruleset| ruleset["ruleset"] == "hidden-name"));
-    assert_eq!(rulesets[0]["claims_schema"]["additionalProperties"], false);
-
-    let detail = server
-        .get("/datasets/social_registry/individual/claim-verification-rulesets/exact-name")
-        .await;
-    detail.assert_status(StatusCode::OK);
-    assert_eq!(detail.header("cache-control"), "no-store");
-    assert_eq!(detail.header("vary"), "Authorization, Accept");
-    let body: Value = detail.json();
-    assert_eq!(body["mode"], "normalized_exact");
-    assert_eq!(body["required_claims"], serde_json::json!(["given_name"]));
-    assert_eq!(body["expose_ambiguous"], true);
-
-    let hidden = server
-        .get("/datasets/social_registry/individual/claim-verification-rulesets/hidden-name")
-        .await;
-    hidden.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(hidden.header("cache-control"), "no-store");
-    assert_eq!(hidden.header("vary"), "Authorization, Accept");
-    let body: Value = hidden.json();
-    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
-
-    let unknown_entity = server
-        .get("/datasets/social_registry/missing/claim-verification-rulesets")
-        .await;
-    unknown_entity.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(unknown_entity.header("cache-control"), "no-store");
-    assert_eq!(unknown_entity.header("vary"), "Authorization, Accept");
-    let body: Value = unknown_entity.json();
-    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
-}
-
-#[tokio::test]
-async fn claim_verification_subject_targeting_requires_targeted_scope() {
+async fn evidence_verification_subject_targeting_requires_targeted_scope() {
     let without_targeted = server_with_query().await;
 
     let denied = without_targeted
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_targeted_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name-targeted",
             "subject": { "id": "p-1" },
             "claims": {
                 "given_name": "Ada"
@@ -1222,45 +1301,21 @@ async fn claim_verification_subject_targeting_requires_targeted_scope() {
         .await;
     denied.assert_status(StatusCode::FORBIDDEN);
     let body: Value = denied.json();
-    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
-
-    let targeted_scope_without_ruleset_opt_in = server_with_query_and_scopes(&[
-        "social_registry:metadata",
-        "social_registry:rows",
-        "social_registry:verify",
-        "social_registry:claim_verification",
-        "social_registry:claim_verification:targeted",
-    ])
-    .await;
-    let denied_by_ruleset = targeted_scope_without_ruleset_opt_in
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
-        .json(&serde_json::json!({
-            "ruleset": "exact-name",
-            "subject": { "id": "p-1" },
-            "claims": {
-                "given_name": "Ada"
-            }
-        }))
-        .await;
-    denied_by_ruleset.assert_status(StatusCode::FORBIDDEN);
-    let body: Value = denied_by_ruleset.json();
-    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+    assert_eq!(body["code"], "evidence_verification.ruleset_not_allowed");
 
     let with_targeted = server_with_query_and_scopes(&[
         "social_registry:metadata",
         "social_registry:rows",
         "social_registry:verify",
-        "social_registry:claim_verification",
-        "social_registry:claim_verification:targeted",
+        "social_registry:evidence_verification",
+        "social_registry:evidence_verification:targeted",
     ])
     .await;
 
     let matched = with_targeted
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_targeted_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name-targeted",
             "subject": { "id": "p-1" },
             "claims": {
                 "given_name": "Ada"
@@ -1272,10 +1327,9 @@ async fn claim_verification_subject_targeting_requires_targeted_scope() {
     assert_eq!(body["decision"], "match");
 
     let mismatched_subject = with_targeted
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_targeted_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name-targeted",
             "subject": { "id": "p-2" },
             "claims": {
                 "given_name": "Ada"
@@ -1288,11 +1342,10 @@ async fn claim_verification_subject_targeting_requires_targeted_scope() {
 }
 
 #[tokio::test]
-async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_purpose() {
+async fn evidence_verification_rejects_missing_claims_unknown_offering_and_missing_purpose() {
     let unauthenticated = server()
-        .post("/datasets/missing/ghost/claim-verifications")
+        .post("/evidence-offerings/missing/verifications")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben"
             }
@@ -1303,29 +1356,27 @@ async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_p
     assert_eq!(body["code"], "auth.missing_credential");
 
     let scoped_server = server_with_query().await;
-    let unknown_entity = scoped_server
-        .post("/datasets/social_registry/missing/claim-verifications")
-        .add_header("data-purpose", "route-test")
+    let unknown_offering = scoped_server
+        .post("/evidence-offerings/missing/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben"
             }
         }))
         .await;
-    unknown_entity.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(unknown_entity.header("cache-control"), "no-store");
-    assert_eq!(unknown_entity.header("vary"), "Authorization, Accept");
-    let body: Value = unknown_entity.json();
-    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+    unknown_offering.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(unknown_offering.header("cache-control"), "no-store");
+    assert_eq!(unknown_offering.header("vary"), "Authorization, Accept");
+    let body: Value = unknown_offering.json();
+    assert_eq!(body["code"], "offering.not_found");
 
     let server = server_with_query().await;
 
     let insufficient = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {}
         }))
         .await;
@@ -1333,13 +1384,12 @@ async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_p
     assert_eq!(insufficient.header("cache-control"), "no-store");
     assert_eq!(insufficient.header("vary"), "Authorization, Accept");
     let body: Value = insufficient.json();
-    assert_eq!(body["code"], "claim_verification.insufficient_claims");
+    assert_eq!(body["code"], "evidence_verification.insufficient_claims");
 
     let unknown_claim = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben",
                 "family_name": "Durand"
@@ -1348,13 +1398,12 @@ async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_p
         .await;
     unknown_claim.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = unknown_claim.json();
-    assert_eq!(body["code"], "claim_verification.invalid_request");
+    assert_eq!(body["code"], "evidence_verification.invalid_request");
 
     let non_scalar_claim = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": ["Ben"]
             }
@@ -1362,13 +1411,12 @@ async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_p
         .await;
     non_scalar_claim.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = non_scalar_claim.json();
-    assert_eq!(body["code"], "claim_verification.invalid_request");
+    assert_eq!(body["code"], "evidence_verification.invalid_request");
 
     let malformed_evidence = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben"
             },
@@ -1377,26 +1425,11 @@ async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_p
         .await;
     malformed_evidence.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = malformed_evidence.json();
-    assert_eq!(body["code"], "claim_verification.invalid_request");
-
-    let hidden = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
-        .json(&serde_json::json!({
-            "ruleset": "hidden-name",
-            "claims": {
-                "given_name": "Ben"
-            }
-        }))
-        .await;
-    hidden.assert_status(StatusCode::FORBIDDEN);
-    let body: Value = hidden.json();
-    assert_eq!(body["code"], "claim_verification.ruleset_not_allowed");
+    assert_eq!(body["code"], "evidence_verification.invalid_request");
 
     let missing_purpose = server
-        .post("/datasets/social_registry/individual/claim-verifications")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben"
             }
@@ -1408,18 +1441,100 @@ async fn claim_verification_rejects_missing_claims_hidden_rulesets_and_missing_p
 }
 
 #[tokio::test]
-async fn claim_verification_can_return_signed_jwt_receipt() {
-    let server = server_with_query_and_provenance(claim_verification_provenance_state(
-        "ENTITY_ROUTE_CLAIM_VERIFICATION_RECEIPT_JWK",
-    ))
-    .await;
+async fn evidence_verification_rejects_invalid_or_unlisted_purpose() {
+    let server = server_with_query().await;
+
+    let invalid = server
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "route-test")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    invalid.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = invalid.json();
+    assert_eq!(body["code"], "evidence_verification.purpose_invalid");
+
+    let unlisted = server
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header(
+            "data-purpose",
+            "https://data.example.test/purposes/unlisted",
+        )
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    unlisted.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = unlisted.json();
+    assert_eq!(body["code"], "evidence_verification.purpose_not_allowed");
+}
+
+#[tokio::test]
+async fn evidence_verification_rate_limits_per_principal_and_offering() {
+    let server = server_with_query_and_rate_limit(1, 60).await;
+
+    let first = server
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    first.assert_status(StatusCode::OK);
+
+    let limited = server
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+    limited.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers().contains_key("retry-after"));
+    let body: Value = limited.json();
+    assert_eq!(body["code"], "evidence_verification.rate_limited");
+}
+
+#[tokio::test]
+async fn evidence_verification_strict_jwt_request_is_not_acceptable_without_receipt_profile() {
+    let server = server_with_query().await;
 
     let resp = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
-        .add_header("accept", CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE)
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header(
+            "accept",
+            "application/vnd.registry-relay.evidence-verification+jwt",
+        )
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
+            "claims": {
+                "given_name": "Ben"
+            }
+        }))
+        .await;
+
+    resp.assert_status(StatusCode::NOT_ACCEPTABLE);
+    assert_eq!(resp.header("cache-control"), "no-store");
+}
+
+#[tokio::test]
+async fn evidence_verification_returns_signed_receipt_when_receipt_profile_is_enabled() {
+    let server = server_with_query_and_receipt_provenance().await;
+
+    let resp = server
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("accept", EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE)
+        .json(&serde_json::json!({
             "claims": {
                 "given_name": "Ben"
             }
@@ -1428,55 +1543,64 @@ async fn claim_verification_can_return_signed_jwt_receipt() {
 
     resp.assert_status(StatusCode::OK);
     assert_eq!(
-        resp.header("content-type"),
-        CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE
+        resp.header("content-type").to_str().expect("content-type"),
+        EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE
     );
     assert_eq!(resp.header("cache-control"), "no-store");
-    let compact = resp.text();
+    let compact = std::str::from_utf8(resp.as_bytes()).expect("receipt is utf8");
     let parts = compact.split('.').collect::<Vec<_>>();
-    assert_eq!(parts.len(), 3);
+    assert_eq!(parts.len(), 3, "receipt must be compact JWS");
     let header: Value = serde_json::from_slice(
         &URL_SAFE_NO_PAD
             .decode(parts[0])
-            .expect("header is base64url"),
+            .expect("header base64url decodes"),
     )
     .expect("header is json");
     let payload: Value = serde_json::from_slice(
         &URL_SAFE_NO_PAD
             .decode(parts[1])
-            .expect("payload is base64url"),
+            .expect("payload base64url decodes"),
     )
     .expect("payload is json");
 
-    assert_eq!(header["typ"], "claim-verification-receipt+jwt");
-    assert!(header.get("cty").is_none());
-    assert_eq!(
-        payload["receipt_type"],
-        "registry-relay.claim-verification.v1"
-    );
+    assert_eq!(header["typ"], "evidence-verification-receipt+jwt");
+    assert_eq!(payload["sub"], "did:web:data.example.test");
+    assert_eq!(payload["aud"], "client:test");
+    assert_eq!(payload["receipt_type"], "relay-verification-receipt");
     assert_eq!(payload["decision"], "match");
-    assert_eq!(payload["ruleset"], "exact-name");
-    assert!(payload.get("credentialSubject").is_none());
-    assert!(payload["claim_hash"]
+    assert_eq!(
+        payload["evidence_offering"],
+        "https://data.example.test/evidence-offerings/individual-name"
+    );
+    assert_eq!(
+        payload["evidence_type"],
+        "https://data.example.test/evidence-types/name"
+    );
+    assert_eq!(payload["issuing_authority"]["id"], "test_authority");
+    assert_eq!(
+        payload["purpose_declared"],
+        "https://data.example.test/purposes/testing"
+    );
+    assert!(payload["claim_salt"]
         .as_str()
-        .is_some_and(|hash| hash.starts_with("hmac-sha256:")));
+        .is_some_and(|salt| salt.len() == 32 && salt.chars().all(|ch| ch.is_ascii_hexdigit())));
+    assert!(
+        payload.get("credentialSubject").is_none(),
+        "receipt must not be a VC payload"
+    );
 }
 
 #[tokio::test]
-async fn claim_verification_receipt_respects_accept_q_and_configured_media() {
-    let q_zero = server_with_query_and_provenance(claim_verification_provenance_state(
-        "ENTITY_ROUTE_CLAIM_VERIFICATION_Q_ZERO_JWK",
-    ))
-    .await;
-    let resp = q_zero
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+async fn evidence_verification_accepts_json_when_jwt_q_is_zero() {
+    let server = server_with_query().await;
+    let resp = server
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header(
             "accept",
-            "application/vnd.registry-relay.claim-verification+jwt;q=0, application/json",
+            "application/vnd.registry-relay.evidence-verification+jwt;q=0, application/json",
         )
         .json(&serde_json::json!({
-            "ruleset": "exact-name",
             "claims": {
                 "given_name": "Ben"
             }
@@ -1490,37 +1614,13 @@ async fn claim_verification_receipt_respects_accept_q_and_configured_media() {
         .starts_with("application/json"));
     let body: Value = resp.json();
     assert_eq!(body["decision"], "match");
-
-    let not_configured =
-        server_with_query_and_provenance(claim_verification_provenance_state_with_media_types(
-            "ENTITY_ROUTE_CLAIM_VERIFICATION_MEDIA_NOT_CONFIGURED_JWK",
-            vec!["application/vc+jwt".to_string()],
-        ))
-        .await;
-    let resp = not_configured
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
-        .add_header("accept", CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE)
-        .json(&serde_json::json!({
-            "ruleset": "exact-name",
-            "claims": {
-                "given_name": "Ben"
-            }
-        }))
-        .await;
-    resp.assert_status(StatusCode::OK);
-    assert!(resp
-        .header("content-type")
-        .to_str()
-        .expect("content-type")
-        .starts_with("application/json"));
 }
 
 #[tokio::test]
-async fn claim_verification_rejects_body_over_64_kib_before_json_parse() {
+async fn evidence_verification_rejects_body_over_64_kib_before_json_parse() {
     let unauthenticated = server()
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header("content-type", "application/json")
         .bytes(Bytes::from(vec![b' '; (64 * 1024) + 1]))
         .await;
@@ -1532,8 +1632,8 @@ async fn claim_verification_rejects_body_over_64_kib_before_json_parse() {
     let oversized = Bytes::from(vec![b' '; (64 * 1024) + 1]);
 
     let resp = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "route-test")
+        .post("/evidence-offerings/individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header("content-type", "application/json")
         .bytes(oversized)
         .await;

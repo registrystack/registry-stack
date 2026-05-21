@@ -128,11 +128,11 @@ Production smoke for local software Ed25519 deployments:
 1. Boot or roll the gateway with `REGISTRY_RELAY_PROVENANCE_JWK`
    injected by the runtime secret store.
 2. Fetch `/.well-known/did.json` and
-   `/schemas/verify-result/v1.json` from the public data-plane URL.
-3. Request a verify VC with `Accept: application/vc+jwt` and a key
-   scoped only for verify.
+   `/schemas/entity-record/v1.json` from the public data-plane URL.
+3. Request an entity-record VC with `Accept: application/vc+jwt` and a key
+   scoped only for row reads.
 4. Run `node scripts/verify_vc_jwt.mjs` against the saved VC, DID
-   Document, expected issuer, expected `VerifyResult` claim type, and
+   Document, expected issuer, expected `EntityRecord` claim type, and
    saved schema.
 5. During rotation, save a pre-rotation VC, roll the new private JWK
    and `verification_method_id`, confirm the DID Document publishes
@@ -270,8 +270,8 @@ Protected endpoint returns 401:
 Protected endpoint returns 403:
 
 - Confirm the key has the exact scope named by the entity access block.
-- Remember that verify, metadata, aggregate, rows, claim verification, and admin scopes do not imply one another.
-- For row or verify endpoints on entities with `require_purpose_header: true`, include `Data-Purpose`.
+- Remember that metadata, aggregate, rows, evidence verification, and admin scopes do not imply one another.
+- For row or evidence-verification endpoints on entities with `require_purpose_header: true`, include `Data-Purpose`.
 
 Dataset or entity returns unknown-resource errors:
 

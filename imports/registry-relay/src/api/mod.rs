@@ -18,6 +18,7 @@ pub mod datasets;
 pub mod did;
 pub mod docs;
 pub mod entity;
+pub mod evidence_offerings;
 pub mod health;
 pub mod metadata;
 #[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
@@ -36,6 +37,7 @@ pub use did::router as did_router;
 pub use docs::router as docs_router;
 pub use entity::router as entity_router;
 pub use entity::CursorSigner;
+pub use evidence_offerings::{router as evidence_offerings_router, EvidenceVerificationLimiter};
 pub use health::router as health_router;
 pub use metadata::router as metadata_router;
 #[cfg(feature = "ogcapi-features")]

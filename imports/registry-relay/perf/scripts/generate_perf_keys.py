@@ -20,7 +20,7 @@ Also emits:
 - CLAIM_VERIFICATION_BINDING_KEY: hex: prefixed 32-byte secret for the
   claim_verification HMAC key.
 - REGISTRY_RELAY_PROVENANCE_JWK: JSON-encoded Ed25519 private JWK used by
-  the provenance signer to issue signed claim-verification receipts.
+  the provenance signer to issue signed evidence-verification receipts.
 
 If the env file already exists and is being reused (--force not set), this
 script exits without writing. When --force is set a new file is written with
@@ -51,7 +51,7 @@ KEY_DEFS = [
     ("perf_metadata",           "PERF_METADATA_KEY_HASH",           ["clinic_capacity:metadata"]),
     ("perf_aggregate",          "PERF_AGGREGATE_KEY_HASH",          ["clinic_capacity:aggregate"]),
     ("perf_no_scope",           "PERF_NO_SCOPE_KEY_HASH",           ["other:metadata"]),
-    ("perf_claim_verification", "PERF_CLAIM_VERIFICATION_KEY_HASH", ["clinic_capacity:claim_verification"]),
+    ("perf_claim_verification", "PERF_CLAIM_VERIFICATION_KEY_HASH", ["clinic_capacity:evidence_verification"]),
 ]
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"
@@ -80,7 +80,7 @@ def _b64url(raw: bytes) -> str:
 
 # kid for the perf provenance signer. Must match the fragment in
 # provenance.issuer.verification_method_id in perf/config/*.yaml.
-PROVENANCE_KID = "perf-claim-verification-v1"
+PROVENANCE_KID = "perf-evidence-verification-v1"
 
 
 def generate_provenance_jwk() -> str:
@@ -140,7 +140,7 @@ def build_env_lines(
         lines.append(f"{hash_env}={fingerprint}")
     lines += [
         "#",
-        "# Claim verification HMAC binding key (hex:<64 lowercase hex chars>).",
+        "# Evidence verification HMAC binding key (hex:<64 lowercase hex chars>).",
         "# Must remain stable across server restarts so claim_hash values stay interpretable.",
         f"CLAIM_VERIFICATION_BINDING_KEY={binding_key}",
         "#",

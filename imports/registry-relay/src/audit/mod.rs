@@ -79,6 +79,11 @@ pub struct AuditContextExt {
     pub underlying_kind: Option<String>,
     pub collection_id: Option<String>,
     pub primary_key: Option<String>,
+    pub offering_id: Option<String>,
+    pub verification_id: Option<String>,
+    pub verification_decision: Option<String>,
+    pub claim_hash: Option<String>,
+    pub evidence_hash: Option<String>,
     pub null_geometry_count: Option<u64>,
     pub invalid_geometry_count: Option<u64>,
     pub row_count: Option<u64>,
@@ -114,6 +119,7 @@ pub enum EndpointKind {
     Dataset,
     Schema,
     Verify,
+    EvidenceVerification,
     Rows,
     AggregateList,
     Aggregate,
@@ -188,6 +194,16 @@ pub struct AuditRecord {
     pub collection_id: Option<String>,
     /// Primary key for single-record reads when known.
     pub primary_key: Option<String>,
+    /// Evidence offering checked by an evidence-verification request.
+    pub offering_id: Option<String>,
+    /// Verification correlation id emitted by an evidence-verification request.
+    pub verification_id: Option<String>,
+    /// Evidence-verification decision, when the endpoint produced one.
+    pub verification_decision: Option<String>,
+    /// HMAC binding for submitted claims, never raw claims.
+    pub claim_hash: Option<String>,
+    /// HMAC binding for submitted evidence metadata, never raw evidence.
+    pub evidence_hash: Option<String>,
     /// Scopes actually checked on this request, in declaration order.
     pub scopes_used: Vec<String>,
     /// Redacted parameter inventory (names + ops, never values).
@@ -566,6 +582,11 @@ pub async fn audit_layer(
         underlying_kind: context.underlying_kind,
         collection_id: context.collection_id,
         primary_key: context.primary_key,
+        offering_id: context.offering_id,
+        verification_id: context.verification_id,
+        verification_decision: context.verification_decision,
+        claim_hash: context.claim_hash,
+        evidence_hash: context.evidence_hash,
         scopes_used,
         query_params,
         purpose,
@@ -689,12 +710,22 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Admin
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
+    } else if path.starts_with("/evidence-offerings/") {
+        classify_evidence_offering_endpoint(path)
     } else if path.starts_with("/ogc/v1/") {
         classify_ogc_endpoint(path)
     } else if path.starts_with("/datasets/") {
         classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
+    }
+}
+
+fn classify_evidence_offering_endpoint(path: &str) -> EndpointKind {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["evidence-offerings", _offering, "verifications"] => EndpointKind::EvidenceVerification,
+        _ => EndpointKind::Other,
     }
 }
 
@@ -820,6 +851,10 @@ mod tests {
         assert_eq!(
             classify_endpoint("/datasets/x/individual/verify"),
             EndpointKind::Verify
+        );
+        assert_eq!(
+            classify_endpoint("/evidence-offerings/person-evidence/verifications"),
+            EndpointKind::EvidenceVerification
         );
         assert_eq!(classify_endpoint("/datasets/x/rows"), EndpointKind::Rows);
         assert_eq!(classify_endpoint("/anything-else"), EndpointKind::Other);

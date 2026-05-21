@@ -31,13 +31,12 @@ auth:
       scopes:
         - benefits_casework:metadata
         - benefits_casework:rows
-        - benefits_casework:verify
         - benefits_casework:aggregate
 
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - benefits_casework:verify
+        - benefits_casework:evidence_verification
 
     # linkage_service has no benefits_casework scopes: it must not read
     # benefits rows directly; it resolves aliases via subject_registry only.
@@ -47,6 +46,12 @@ auth:
       scopes:
         - admin
         - benefits_casework:metadata
+
+claim_verification:
+  binding_key_id: demo-evidence-v1
+  # Env value format: hex:<64+ lowercase hex chars>
+  # demo/scripts/generate_demo_keys.py emits this value for local review.
+  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
 audit:
   sink: stdout
@@ -268,7 +273,6 @@ datasets:
           metadata_scope:    benefits_casework:metadata
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
-          verify_scope:      benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -329,7 +333,7 @@ datasets:
           metadata_scope:    benefits_casework:metadata
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
-          verify_scope:      benefits_casework:verify
+          evidence_verification_scope: benefits_casework:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -352,6 +356,17 @@ datasets:
             - field: eligibility_status
               ops: [eq, in]
           allowed_expansions: [household]
+        claim_verification:
+          rulesets:
+            benefits-person-v1:
+              mode: normalized_exact
+              required_claims: [id, eligibility_status, benefit_role]
+              candidate_lookup: [id]
+              match_fields:
+                id: id
+                eligibility_status: eligibility_status
+                benefit_role: benefit_role
+              expose_ambiguous: false
         aggregates:
           - id: by_district_age_band
             description: Count of persons by household district and age band
@@ -397,7 +412,6 @@ datasets:
           metadata_scope:    benefits_casework:metadata
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
-          verify_scope:      benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -459,7 +473,6 @@ datasets:
           metadata_scope:    benefits_casework:metadata
           aggregate_scope:   benefits_casework:aggregate
           read_scope:        benefits_casework:rows
-          verify_scope:      benefits_casework:verify
         api:
           default_limit: 100
           max_limit: 1000

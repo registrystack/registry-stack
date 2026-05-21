@@ -15,6 +15,28 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
+requirements:
+- id: benefits_person_requirement
+  iri: https://demo.example.gov/requirements/benefits-person
+  title: Benefits person eligibility requirement
+  description: Requirement for verifying that a person has the submitted benefits eligibility status and role in the benefits casework registry.
+- id: education_student_requirement
+  iri: https://demo.example.gov/requirements/education-student
+  title: Current student enrollment requirement
+  description: Requirement for verifying that submitted student enrollment facts match the education registry.
+evidence_types:
+- id: benefits_person_record_evidence
+  iri: https://demo.example.gov/evidence-types/benefits-person-record
+  title: Benefits person status evidence
+  description: Evidence that submitted person status facts match the benefits casework registry.
+  proves:
+  - benefits_person_requirement
+- id: education_student_record_evidence
+  iri: https://demo.example.gov/evidence-types/education-student-record
+  title: Student enrollment status evidence
+  description: Evidence that submitted student enrollment status, grade, and district facts match the education registry.
+  proves:
+  - education_student_requirement
 datasets:
 - id: benefits_casework
   title: Benefits Casework
@@ -25,6 +47,30 @@ datasets:
   sensitivity: personal
   access_rights: restricted
   update_frequency: monthly
+  evidence_offerings:
+  - id: benefits_person_evidence
+    iri: https://demo.example.gov/evidence-offerings/benefits-person
+    title: Benefits person status evidence
+    description: Registry Relay verification for submitted benefits person eligibility status and role facts.
+    evidence_type: benefits_person_record_evidence
+    issuing_authority:
+      id: ministry_of_social_affairs
+      iri: did:web:social-affairs.demo.example.gov
+      name: Ministry of Social Affairs
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: person
+    lookup_keys:
+    - id
+    access:
+      kind: registry-relay-verification
+      conforms_to: registry_relay:evidence-verification-v1
+      ruleset: benefits-person-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/social-protection-eligibility
   entities:
   - name: household
     title: Household
@@ -439,6 +485,30 @@ datasets:
   sensitivity: personal
   access_rights: restricted
   update_frequency: termly
+  evidence_offerings:
+  - id: education_student_evidence
+    iri: https://demo.example.gov/evidence-offerings/education-student
+    title: Student enrollment status evidence
+    description: Registry Relay verification for submitted current student enrollment facts.
+    evidence_type: education_student_record_evidence
+    issuing_authority:
+      id: ministry_of_education
+      iri: did:web:education.demo.example.gov
+      name: Ministry of Education
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: student
+    lookup_keys:
+    - id
+    access:
+      kind: registry-relay-verification
+      conforms_to: registry_relay:evidence-verification-v1
+      ruleset: education-student-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/student-support-planning
   policy:
     uid: https://demo.example.gov/datasets/education_registry#illustrative-offer
     assigner: did:web:education.demo.example.gov

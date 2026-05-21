@@ -42,26 +42,22 @@ auth:
       scopes:
         - disability_registry:metadata
         - disability_registry:rows
-        - disability_registry:verify
         - disability_registry:claim_verification
         - civil_registry:metadata
         - civil_registry:rows
-        - civil_registry:verify
         - social_registry:metadata
         - social_registry:rows
-        - social_registry:verify
         - farmer_registry:metadata
         - farmer_registry:rows
-        - farmer_registry:verify
 
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - disability_registry:verify
+        - disability_registry:evidence_verification
         - disability_registry:claim_verification
-        - civil_registry:verify
-        - social_registry:verify
-        - farmer_registry:verify
+        - civil_registry:evidence_verification
+        - social_registry:evidence_verification
+        - farmer_registry:evidence_verification
 
     - id: operations_admin
       hash_env: OPERATIONS_ADMIN_HASH
@@ -311,7 +307,7 @@ datasets:
           metadata_scope:    disability_registry:metadata
           aggregate_scope:   disability_registry:aggregate
           read_scope:        disability_registry:rows
-          verify_scope:      disability_registry:verify
+          evidence_verification_scope: disability_registry:evidence_verification
           claim_verification_scope: disability_registry:claim_verification
         api:
           default_limit: 100
@@ -445,7 +441,6 @@ datasets:
           metadata_scope:    civil_registry:metadata
           aggregate_scope:   civil_registry:aggregate
           read_scope:        civil_registry:rows
-          verify_scope:      civil_registry:verify
         api:
           default_limit: 100
           max_limit: 1000
@@ -585,7 +580,7 @@ datasets:
           metadata_scope:    social_registry:metadata
           aggregate_scope:   social_registry:aggregate
           read_scope:        social_registry:rows
-          verify_scope:      social_registry:verify
+          evidence_verification_scope: social_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -600,6 +595,15 @@ datasets:
               ops: [eq, in]
             - field: poverty_score
               ops: [eq, gte, lte]
+        claim_verification:
+          rulesets:
+            social-group-v1:
+              mode: normalized_exact
+              required_claims: [group_id]
+              candidate_lookup: [group_id]
+              match_fields:
+                group_id: group_id
+              subject_id_claim: group_id
 
 
   - id: farmer_registry
@@ -729,7 +733,7 @@ datasets:
           metadata_scope:    farmer_registry:metadata
           aggregate_scope:   farmer_registry:aggregate
           read_scope:        farmer_registry:rows
-          verify_scope:      farmer_registry:verify
+          evidence_verification_scope: farmer_registry:evidence_verification
         api:
           default_limit: 100
           max_limit: 1000
@@ -746,3 +750,14 @@ datasets:
               ops: [eq, in]
             - field: district
               ops: [eq, in]
+        claim_verification:
+          rulesets:
+            farmer-status-v1:
+              mode: normalized_exact
+              required_claims: [national_id, farm_type, district]
+              candidate_lookup: [national_id]
+              match_fields:
+                national_id: national_id
+                farm_type: farm_type
+                district: district
+              subject_id_claim: national_id

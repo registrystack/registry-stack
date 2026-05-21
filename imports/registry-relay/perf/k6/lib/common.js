@@ -162,10 +162,10 @@ const THRESHOLDS = {
   'mixed_read_large': {
     'http_req_duration{expected_status:false}': ['p(95)<100', 'p(99)<200'],
   },
-  // Claim verification: write+sign path (HMAC + DataFusion candidate scan +
+  // Evidence verification: write+sign path (HMAC + DataFusion candidate scan +
   // Ed25519 receipt sign per request). The aggregate threshold here is a
   // backstop; per-decision-path budgets are set inline in
-  // claim_verification.js via tagged thresholds and are tighter for the
+  // evidence verification scenario via tagged thresholds and are tighter for the
   // unique-lookup paths (match / mismatch).
   'claim_verification': {
     'http_req_duration{expected_status:false}': ['p(95)<200', 'p(99)<500'],

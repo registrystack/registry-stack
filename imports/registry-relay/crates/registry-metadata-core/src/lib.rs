@@ -21,6 +21,10 @@ pub struct MetadataManifest {
     #[serde(default)]
     pub profiles: Vec<ProfileClaim>,
     #[serde(default)]
+    pub requirements: Vec<RequirementManifest>,
+    #[serde(default)]
+    pub evidence_types: Vec<EvidenceTypeManifest>,
+    #[serde(default)]
     pub datasets: Vec<DatasetManifest>,
     #[serde(default)]
     pub codelists: Vec<CodelistManifest>,
@@ -135,6 +139,8 @@ pub struct DatasetManifest {
     #[serde(default)]
     pub policy: Option<DatasetPolicyManifest>,
     #[serde(default)]
+    pub evidence_offerings: Vec<EvidenceOfferingManifest>,
+    #[serde(default)]
     pub entities: Vec<EntityManifest>,
 }
 
@@ -210,6 +216,97 @@ pub struct PublicServiceManifest {
     pub title: LocalizedText,
     #[serde(default)]
     pub description: Option<LocalizedText>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequirementManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    #[serde(default)]
+    pub rdf_type: Option<String>,
+    #[serde(default)]
+    pub procedure_contexts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceTypeManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    #[serde(default)]
+    pub proves: Vec<String>,
+    #[serde(default)]
+    pub information_concepts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceOfferingManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    pub evidence_type: String,
+    pub issuing_authority: IssuingAuthorityManifest,
+    #[serde(default)]
+    pub jurisdiction: Option<JurisdictionManifest>,
+    #[serde(default)]
+    pub level_of_assurance: Option<String>,
+    pub entity: String,
+    #[serde(default)]
+    pub lookup_keys: Vec<String>,
+    #[serde(default)]
+    pub procedure_contexts: Vec<String>,
+    pub access: EvidenceOfferingAccessManifest,
+    #[serde(default)]
+    pub policy: Option<EvidenceOfferingPolicyManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IssuingAuthorityManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub country: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JurisdictionManifest {
+    #[serde(default)]
+    pub country: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceOfferingAccessManifest {
+    pub kind: String,
+    #[serde(default)]
+    pub conforms_to: Option<String>,
+    pub ruleset: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceOfferingPolicyManifest {
+    #[serde(default)]
+    pub purpose: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -379,6 +476,8 @@ pub struct CompiledMetadata {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CompiledMetadataInner {
     pub catalog: CompiledCatalog,
+    pub requirements: BTreeMap<String, CompiledRequirement>,
+    pub evidence_types: BTreeMap<String, CompiledEvidenceType>,
     pub datasets: BTreeMap<String, CompiledDataset>,
     pub codelists: BTreeMap<String, CompiledCodelist>,
     pub profiles: Vec<ProfileClaim>,
@@ -416,7 +515,67 @@ pub struct CompiledDataset {
     pub adms_status: AdmsStatus,
     pub public_services: Vec<CompiledPublicService>,
     pub policy: CompiledDatasetPolicy,
+    pub evidence_offerings: BTreeMap<String, CompiledEvidenceOffering>,
     pub entities: BTreeMap<String, CompiledEntity>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledRequirement {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    pub rdf_type: String,
+    pub procedure_contexts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledEvidenceType {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    pub proves: Vec<String>,
+    pub requirement_iris: Vec<String>,
+    pub information_concepts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledEvidenceOffering {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    pub dataset_id: String,
+    pub verification_request_schema_url: String,
+    pub evidence_type: String,
+    pub evidence_type_iri: String,
+    pub requirement_iris: Vec<String>,
+    pub issuing_authority: CompiledIssuingAuthority,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<JurisdictionManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level_of_assurance: Option<String>,
+    pub entity: String,
+    pub lookup_keys: Vec<String>,
+    pub procedure_contexts: Vec<String>,
+    pub access: EvidenceOfferingAccessManifest,
+    pub policy: CompiledEvidenceOfferingPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledIssuingAuthority {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct CompiledEvidenceOfferingPolicy {
+    pub purpose: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -531,6 +690,36 @@ impl CompiledMetadata {
         self.inner.datasets.values()
     }
 
+    pub fn requirements(&self) -> impl Iterator<Item = &CompiledRequirement> {
+        self.inner.requirements.values()
+    }
+
+    pub fn requirement(&self, requirement_id: &str) -> Option<&CompiledRequirement> {
+        self.inner.requirements.get(requirement_id)
+    }
+
+    pub fn evidence_types(&self) -> impl Iterator<Item = &CompiledEvidenceType> {
+        self.inner.evidence_types.values()
+    }
+
+    pub fn evidence_type(&self, evidence_type_id: &str) -> Option<&CompiledEvidenceType> {
+        self.inner.evidence_types.get(evidence_type_id)
+    }
+
+    pub fn evidence_offerings(&self) -> impl Iterator<Item = &CompiledEvidenceOffering> {
+        self.inner
+            .datasets
+            .values()
+            .flat_map(|dataset| dataset.evidence_offerings.values())
+    }
+
+    pub fn evidence_offering(&self, offering_id: &str) -> Option<&CompiledEvidenceOffering> {
+        self.inner
+            .datasets
+            .values()
+            .find_map(|dataset| dataset.evidence_offerings.get(offering_id))
+    }
+
     pub fn dataset(&self, dataset_id: &str) -> Option<&CompiledDataset> {
         self.inner.datasets.get(dataset_id)
     }
@@ -551,7 +740,7 @@ impl CompiledMetadata {
         &self,
         predicate: impl Fn(&CompiledDataset, &CompiledEntity) -> bool,
     ) -> CompiledMetadata {
-        let datasets = self
+        let datasets: BTreeMap<String, CompiledDataset> = self
             .inner
             .datasets
             .iter()
@@ -562,16 +751,52 @@ impl CompiledMetadata {
                     .filter(|(_, entity)| predicate(dataset, entity))
                     .map(|(entity_name, entity)| (entity_name.clone(), entity.clone()))
                     .collect::<BTreeMap<_, _>>();
+                let evidence_offerings = dataset
+                    .evidence_offerings
+                    .iter()
+                    .filter(|(_, offering)| entities.contains_key(&offering.entity))
+                    .map(|(offering_id, offering)| (offering_id.clone(), offering.clone()))
+                    .collect::<BTreeMap<_, _>>();
                 (!entities.is_empty()).then(|| {
                     let mut dataset = dataset.clone();
                     dataset.entities = entities;
+                    dataset.evidence_offerings = evidence_offerings;
                     (dataset_id.clone(), dataset)
                 })
             })
             .collect();
+        let visible_evidence_types = datasets
+            .values()
+            .flat_map(|dataset| {
+                dataset
+                    .evidence_offerings
+                    .values()
+                    .map(|offering| offering.evidence_type.as_str())
+            })
+            .collect::<BTreeSet<_>>();
+        let evidence_types = self
+            .inner
+            .evidence_types
+            .iter()
+            .filter(|(id, _)| visible_evidence_types.contains(id.as_str()))
+            .map(|(id, evidence_type)| (id.clone(), evidence_type.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let visible_requirements = evidence_types
+            .values()
+            .flat_map(|evidence_type| evidence_type.proves.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
+        let requirements = self
+            .inner
+            .requirements
+            .iter()
+            .filter(|(id, _)| visible_requirements.contains(id.as_str()))
+            .map(|(id, requirement)| (id.clone(), requirement.clone()))
+            .collect::<BTreeMap<_, _>>();
         CompiledMetadata {
             inner: Arc::new(CompiledMetadataInner {
                 catalog: self.inner.catalog.clone(),
+                requirements,
+                evidence_types,
                 datasets,
                 codelists: self.inner.codelists.clone(),
                 profiles: self.inner.profiles.clone(),
@@ -653,6 +878,9 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         }
     }
 
+    let requirement_ids = validate_requirements(manifest, &mut errors);
+    let evidence_type_ids = validate_evidence_types(manifest, &requirement_ids, &mut errors);
+
     let mut codelist_ids = BTreeSet::new();
     for (index, codelist) in manifest.codelists.iter().enumerate() {
         let path = format!("codelists[{index}]");
@@ -678,6 +906,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
     }
 
     let mut dataset_ids = BTreeSet::new();
+    let mut offering_ids = BTreeSet::new();
     for (dataset_index, dataset) in manifest.datasets.iter().enumerate() {
         let path = format!("datasets[{dataset_index}]");
         validate_id(&dataset.id, format!("{path}.id"), &mut errors);
@@ -733,6 +962,14 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &manifest.vocabularies,
             &mut errors,
         );
+        validate_evidence_offerings(
+            dataset,
+            &path,
+            &evidence_type_ids,
+            &mut offering_ids,
+            &manifest.vocabularies,
+            &mut errors,
+        );
     }
 
     if errors.is_empty() {
@@ -764,13 +1001,33 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let requirements = manifest
+        .requirements
+        .iter()
+        .map(|requirement| {
+            (
+                requirement.id.clone(),
+                compile_requirement(manifest, &base_url, requirement),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let evidence_types = manifest
+        .evidence_types
+        .iter()
+        .map(|evidence_type| {
+            (
+                evidence_type.id.clone(),
+                compile_evidence_type(manifest, &base_url, &requirements, evidence_type),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let datasets = manifest
         .datasets
         .iter()
         .map(|dataset| {
             (
                 dataset.id.clone(),
-                compile_dataset(manifest, &base_url, &codelists, dataset),
+                compile_dataset(manifest, &base_url, &codelists, &evidence_types, dataset),
             )
         })
         .collect();
@@ -809,6 +1066,8 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
                     .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
                 application_profiles: manifest.catalog.application_profiles.clone(),
             },
+            requirements,
+            evidence_types,
             datasets,
             codelists,
             profiles: manifest.profiles.clone(),
@@ -817,7 +1076,7 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
 }
 
 pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
-    json!({
+    let mut catalog = json!({
         "id": compiled.catalog().id,
         "title": compiled.catalog().title,
         "description": compiled.catalog().description,
@@ -828,7 +1087,32 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
         "application_profiles": compiled.catalog().application_profiles,
         "datasets": compiled.datasets().map(catalog_dataset_json).collect::<Vec<_>>(),
         "profiles": compiled.profiles(),
+    });
+    let requirements = compiled.requirements().collect::<Vec<_>>();
+    if !requirements.is_empty() {
+        catalog["requirements"] = json!(requirements);
+    }
+    let evidence_types = compiled.evidence_types().collect::<Vec<_>>();
+    if !evidence_types.is_empty() {
+        catalog["evidence_types"] = json!(evidence_types);
+    }
+    let evidence_offerings = compiled.evidence_offerings().collect::<Vec<_>>();
+    if !evidence_offerings.is_empty() {
+        catalog["evidence_offerings"] = json!(evidence_offerings);
+    }
+    catalog
+}
+
+pub fn render_evidence_offerings(compiled: &CompiledMetadata) -> Value {
+    json!({
+        "evidence_offerings": compiled.evidence_offerings().collect::<Vec<_>>(),
     })
+}
+
+pub fn render_evidence_offering(compiled: &CompiledMetadata, offering_id: &str) -> Option<Value> {
+    compiled
+        .evidence_offering(offering_id)
+        .map(|offering| json!(offering))
 }
 
 pub fn render_base_dcat(compiled: &CompiledMetadata) -> Value {
@@ -859,7 +1143,6 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
         "{}/metadata/dcat.bregdcat-ap.jsonld",
         compiled.catalog().base_url
     ));
-    catalog["dspace:participantId"] = json!(compiled.catalog().participant_id);
     catalog["dcat:dataset"] = Value::Array(
         compiled
             .datasets()
@@ -882,14 +1165,11 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
     let mut included = standard_reference_nodes(compiled);
     included.extend(public_services);
     included.extend(dcat_range_reference_nodes(&catalog));
-    if has_public_service_terms {
-        // JSON-LD `@included` keeps related CPSV evidence in the same
-        // document without claiming that BRegDCAT-AP has a proprietary
-        // source-of-truth flag. Consumers may interpret the standard
-        // `cpsv:produces` relation downstream.
-        catalog["@context"] = jsonld_context_with_public_service_terms();
+    if has_public_service_terms || compiled.evidence_offerings().next().is_some() {
+        catalog["@context"] = jsonld_context_with_evidence_terms();
     }
     append_included_nodes(&mut catalog, included);
+    append_graph_nodes(&mut catalog, evidence_jsonld_nodes(compiled));
     catalog["sh:shapesGraph"] = Value::Array(
         compiled
             .datasets()
@@ -1046,6 +1326,27 @@ fn append_included_nodes(document: &mut Value, nodes: Vec<Value>) {
     document["@included"] = Value::Array(existing);
 }
 
+fn append_graph_nodes(document: &mut Value, nodes: Vec<Value>) {
+    if nodes.is_empty() {
+        return;
+    }
+    let mut existing = document
+        .get_mut("@graph")
+        .and_then(Value::as_array_mut)
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let mut seen = existing
+        .iter()
+        .filter_map(included_node_key)
+        .collect::<BTreeSet<_>>();
+    for node in nodes {
+        if included_node_key(&node).is_some_and(|key| seen.insert(key)) {
+            existing.push(node);
+        }
+    }
+    document["@graph"] = Value::Array(existing);
+}
+
 fn included_node_key(node: &Value) -> Option<(String, String)> {
     let object = node.as_object()?;
     Some((
@@ -1123,6 +1424,94 @@ pub fn render_ogc_records_collection(collection_id: &str) -> Option<Value> {
 
 pub fn render_ogc_records_conformance() -> Value {
     json!({ "conformsTo": ogc_records_conformance() })
+}
+
+fn validate_requirements<'a>(
+    manifest: &'a MetadataManifest,
+    errors: &mut Vec<ValidationError>,
+) -> BTreeSet<&'a str> {
+    let mut ids = BTreeSet::new();
+    for (index, requirement) in manifest.requirements.iter().enumerate() {
+        let path = format!("requirements[{index}]");
+        validate_id(&requirement.id, format!("{path}.id"), errors);
+        if !ids.insert(requirement.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "requirement id must be unique",
+            ));
+        }
+        validate_optional_uri(
+            requirement.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_non_empty(&requirement.title.text(), format!("{path}.title"), errors);
+        validate_optional_uri(
+            requirement.rdf_type.as_deref(),
+            format!("{path}.rdf_type"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_uri_or_code_list(
+            &requirement.procedure_contexts,
+            format!("{path}.procedure_contexts"),
+            &manifest.vocabularies,
+            errors,
+        );
+    }
+    ids
+}
+
+fn validate_evidence_types<'a>(
+    manifest: &'a MetadataManifest,
+    requirement_ids: &BTreeSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) -> BTreeSet<&'a str> {
+    let mut ids = BTreeSet::new();
+    for (index, evidence_type) in manifest.evidence_types.iter().enumerate() {
+        let path = format!("evidence_types[{index}]");
+        validate_id(&evidence_type.id, format!("{path}.id"), errors);
+        if !ids.insert(evidence_type.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "evidence type id must be unique",
+            ));
+        }
+        validate_optional_uri(
+            evidence_type.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_non_empty(&evidence_type.title.text(), format!("{path}.title"), errors);
+        if evidence_type.proves.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{path}.proves"),
+                "evidence type must prove at least one requirement",
+            ));
+        }
+        for (proves_index, requirement_id) in evidence_type.proves.iter().enumerate() {
+            validate_id(
+                requirement_id,
+                format!("{path}.proves[{proves_index}]"),
+                errors,
+            );
+            if !requirement_ids.contains(requirement_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("{path}.proves[{proves_index}]"),
+                    "evidence type must prove a known requirement",
+                ));
+            }
+        }
+        validate_uri_list(
+            &evidence_type.information_concepts,
+            format!("{path}.information_concepts"),
+            &manifest.vocabularies,
+            errors,
+        );
+    }
+    ids
 }
 
 fn validate_entities(
@@ -1220,6 +1609,155 @@ fn validate_entities(
                     errors,
                 );
             }
+        }
+    }
+}
+
+fn validate_evidence_offerings(
+    dataset: &DatasetManifest,
+    path: &str,
+    evidence_type_ids: &BTreeSet<&str>,
+    offering_ids: &mut BTreeSet<String>,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let entity_fields = dataset
+        .entities
+        .iter()
+        .map(|entity| {
+            (
+                entity.name.as_str(),
+                entity
+                    .fields
+                    .iter()
+                    .map(|field| field.name.as_str())
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (index, offering) in dataset.evidence_offerings.iter().enumerate() {
+        let offering_path = format!("{path}.evidence_offerings[{index}]");
+        validate_id(&offering.id, format!("{offering_path}.id"), errors);
+        if !offering_ids.insert(offering.id.clone()) {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.id"),
+                "evidence offering id must be unique globally",
+            ));
+        }
+        validate_optional_uri(
+            offering.iri.as_deref(),
+            format!("{offering_path}.iri"),
+            vocabularies,
+            errors,
+        );
+        validate_non_empty(
+            &offering.title.text(),
+            format!("{offering_path}.title"),
+            errors,
+        );
+        validate_id(
+            &offering.evidence_type,
+            format!("{offering_path}.evidence_type"),
+            errors,
+        );
+        if !evidence_type_ids.contains(offering.evidence_type.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.evidence_type"),
+                "evidence offering must reference a known evidence type",
+            ));
+        }
+        validate_id(
+            &offering.issuing_authority.id,
+            format!("{offering_path}.issuing_authority.id"),
+            errors,
+        );
+        validate_optional_uri(
+            offering.issuing_authority.iri.as_deref(),
+            format!("{offering_path}.issuing_authority.iri"),
+            vocabularies,
+            errors,
+        );
+        validate_non_empty(
+            &offering.issuing_authority.name,
+            format!("{offering_path}.issuing_authority.name"),
+            errors,
+        );
+        if offering
+            .issuing_authority
+            .country
+            .as_deref()
+            .is_some_and(|country| country.trim().is_empty())
+        {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.issuing_authority.country"),
+                "issuing authority country must not be empty when present",
+            ));
+        }
+        if offering.jurisdiction.as_ref().is_some_and(|jurisdiction| {
+            jurisdiction.country.is_none() && jurisdiction.region.is_none()
+        }) {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.jurisdiction"),
+                "jurisdiction must declare country or region",
+            ));
+        }
+        validate_id(&offering.entity, format!("{offering_path}.entity"), errors);
+        let Some(fields) = entity_fields.get(offering.entity.as_str()) else {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.entity"),
+                "evidence offering entity must name an entity in the same dataset",
+            ));
+            continue;
+        };
+        if offering.lookup_keys.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.lookup_keys"),
+                "evidence offering must declare at least one lookup key",
+            ));
+        }
+        for (key_index, key) in offering.lookup_keys.iter().enumerate() {
+            validate_id(
+                key,
+                format!("{offering_path}.lookup_keys[{key_index}]"),
+                errors,
+            );
+            if !fields.contains(key.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("{offering_path}.lookup_keys[{key_index}]"),
+                    "lookup key must reference a field on the offering entity",
+                ));
+            }
+        }
+        validate_uri_or_code_list(
+            &offering.procedure_contexts,
+            format!("{offering_path}.procedure_contexts"),
+            vocabularies,
+            errors,
+        );
+        if offering.access.kind != "registry-relay-verification" {
+            errors.push(ValidationError::new(
+                format!("{offering_path}.access.kind"),
+                "only registry-relay-verification access is supported in v1",
+            ));
+        }
+        validate_optional_uri(
+            offering.access.conforms_to.as_deref(),
+            format!("{offering_path}.access.conforms_to"),
+            vocabularies,
+            errors,
+        );
+        validate_non_empty(
+            &offering.access.ruleset,
+            format!("{offering_path}.access.ruleset"),
+            errors,
+        );
+        if let Some(policy) = offering.policy.as_ref() {
+            validate_uri_list(
+                &policy.purpose,
+                format!("{offering_path}.policy.purpose"),
+                vocabularies,
+                errors,
+            );
         }
     }
 }
@@ -1463,6 +2001,7 @@ fn compile_dataset(
     manifest: &MetadataManifest,
     base_url: &str,
     codelists: &BTreeMap<String, CompiledCodelist>,
+    evidence_types: &BTreeMap<String, CompiledEvidenceType>,
     dataset: &DatasetManifest,
 ) -> CompiledDataset {
     let entities = dataset
@@ -1523,7 +2062,154 @@ fn compile_dataset(
             })
             .collect(),
         policy: compile_dataset_policy(manifest, base_url, dataset),
+        evidence_offerings: dataset
+            .evidence_offerings
+            .iter()
+            .map(|offering| {
+                (
+                    offering.id.clone(),
+                    compile_evidence_offering(
+                        manifest,
+                        base_url,
+                        evidence_types,
+                        &dataset.id,
+                        offering,
+                    ),
+                )
+            })
+            .collect(),
         entities,
+    }
+}
+
+fn compile_requirement(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    requirement: &RequirementManifest,
+) -> CompiledRequirement {
+    CompiledRequirement {
+        id: requirement.id.clone(),
+        iri: requirement
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/requirements/{}", requirement.id)),
+        title: requirement.title.text(),
+        description: requirement
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        rdf_type: requirement
+            .rdf_type
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| "http://data.europa.eu/m8g/Requirement".to_string()),
+        procedure_contexts: requirement.procedure_contexts.clone(),
+    }
+}
+
+fn compile_evidence_type(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    requirements: &BTreeMap<String, CompiledRequirement>,
+    evidence_type: &EvidenceTypeManifest,
+) -> CompiledEvidenceType {
+    CompiledEvidenceType {
+        id: evidence_type.id.clone(),
+        iri: evidence_type
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/evidence-types/{}", evidence_type.id)),
+        title: evidence_type.title.text(),
+        description: evidence_type
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        proves: evidence_type.proves.clone(),
+        requirement_iris: evidence_type
+            .proves
+            .iter()
+            .filter_map(|requirement_id| requirements.get(requirement_id))
+            .map(|requirement| requirement.iri.clone())
+            .collect(),
+        information_concepts: evidence_type
+            .information_concepts
+            .iter()
+            .filter_map(|iri| expand_uri(iri, &manifest.vocabularies))
+            .collect(),
+    }
+}
+
+fn compile_evidence_offering(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    evidence_types: &BTreeMap<String, CompiledEvidenceType>,
+    dataset_id: &str,
+    offering: &EvidenceOfferingManifest,
+) -> CompiledEvidenceOffering {
+    let evidence_type = evidence_types.get(&offering.evidence_type);
+    CompiledEvidenceOffering {
+        id: offering.id.clone(),
+        iri: offering
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/evidence-offerings/{}", offering.id)),
+        title: offering.title.text(),
+        description: offering
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        dataset_id: dataset_id.to_string(),
+        verification_request_schema_url: format!(
+            "{base_url}/metadata/schema/{dataset_id}/{}/schema.json",
+            offering.entity
+        ),
+        evidence_type: offering.evidence_type.clone(),
+        evidence_type_iri: evidence_type
+            .map(|evidence_type| evidence_type.iri.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "{base_url}/metadata/evidence-types/{}",
+                    offering.evidence_type
+                )
+            }),
+        requirement_iris: evidence_type
+            .map(|evidence_type| evidence_type.requirement_iris.clone())
+            .unwrap_or_default(),
+        issuing_authority: CompiledIssuingAuthority {
+            id: offering.issuing_authority.id.clone(),
+            iri: offering
+                .issuing_authority
+                .iri
+                .as_deref()
+                .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+            name: offering.issuing_authority.name.clone(),
+            country: offering.issuing_authority.country.clone(),
+        },
+        jurisdiction: offering.jurisdiction.clone(),
+        level_of_assurance: offering.level_of_assurance.clone(),
+        entity: offering.entity.clone(),
+        lookup_keys: offering.lookup_keys.clone(),
+        procedure_contexts: offering.procedure_contexts.clone(),
+        access: offering.access.clone(),
+        policy: CompiledEvidenceOfferingPolicy {
+            purpose: offering
+                .policy
+                .as_ref()
+                .map(|policy| {
+                    policy
+                        .purpose
+                        .iter()
+                        .filter_map(|iri| expand_uri(iri, &manifest.vocabularies))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
     }
 }
 
@@ -1766,6 +2452,10 @@ fn catalog_dataset_json(dataset: &CompiledDataset) -> Value {
         "conforms_to": dataset.conforms_to,
         "entities": dataset.entities.values().map(catalog_entity_json).collect::<Vec<_>>(),
     });
+    if !dataset.evidence_offerings.is_empty() {
+        dataset_json["evidence_offerings"] =
+            json!(dataset.evidence_offerings.values().collect::<Vec<_>>());
+    }
     if !dataset.applicable_legislation.is_empty() {
         dataset_json["applicable_legislation"] = json!(dataset.applicable_legislation);
     }
@@ -2047,13 +2737,88 @@ fn publisher_agent(catalog: &CompiledCatalog) -> Value {
 }
 
 fn public_service_node(dataset: &CompiledDataset, service: &CompiledPublicService) -> Value {
-    json!({
+    let mut node = json!({
         "@id": service.id,
         "@type": "cpsv:PublicService",
         "dcterms:title": service.title,
         "dcterms:description": service.description,
         "cpsv:produces": dataset_url(dataset),
-    })
+    });
+    let requirements = dataset
+        .evidence_offerings
+        .values()
+        .flat_map(|offering| offering.requirement_iris.iter())
+        .map(|iri| iri_object(iri))
+        .collect::<Vec<_>>();
+    if !requirements.is_empty() {
+        node["cpsv:holdsRequirement"] = Value::Array(requirements);
+    }
+    node
+}
+
+fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
+    let mut nodes = Vec::new();
+    for requirement in compiled.requirements() {
+        nodes.push(json!({
+            "@id": requirement.iri,
+            "@type": requirement.rdf_type,
+            "dcterms:identifier": requirement.id,
+            "dcterms:title": requirement.title,
+            "dcterms:description": requirement.description,
+            "cccev:hasEvidenceTypeList": {
+                "@id": format!("{}#evidence-type-list", requirement.iri),
+            },
+        }));
+        nodes.push(json!({
+            "@id": format!("{}#evidence-type-list", requirement.iri),
+            "@type": "cccev:EvidenceTypeList",
+            "cccev:specifiesEvidenceType": compiled
+                .evidence_types()
+                .filter(|evidence_type| evidence_type.proves.contains(&requirement.id))
+                .map(|evidence_type| iri_object(&evidence_type.iri))
+                .collect::<Vec<_>>(),
+        }));
+    }
+    for evidence_type in compiled.evidence_types() {
+        nodes.push(json!({
+            "@id": evidence_type.iri,
+            "@type": "cccev:EvidenceType",
+            "dcterms:identifier": evidence_type.id,
+            "dcterms:title": evidence_type.title,
+            "dcterms:description": evidence_type.description,
+            "registry_relay:provesRequirement": evidence_type.requirement_iris.iter().map(|iri| iri_object(iri)).collect::<Vec<_>>(),
+            "registry_relay:informationConcept": evidence_type.information_concepts.iter().map(|iri| iri_object(iri)).collect::<Vec<_>>(),
+        }));
+    }
+    for offering in compiled.evidence_offerings() {
+        nodes.push(json!({
+            "@id": offering.iri,
+            "@type": "registry_relay:EvidenceOffering",
+            "dcterms:identifier": offering.id,
+            "dcterms:title": offering.title,
+            "dcterms:description": offering.description,
+            "registry_relay:evidenceType": iri_object(&offering.evidence_type_iri),
+            "registry_relay:issuingAuthority": issuing_authority_node(&offering.issuing_authority),
+            "registry_relay:accessKind": offering.access.kind,
+            "registry_relay:servesEntity": format!("{}#entity-{}", dataset_url_from_id(&offering.dataset_id), offering.entity),
+        }));
+    }
+    nodes
+}
+
+fn issuing_authority_node(authority: &CompiledIssuingAuthority) -> Value {
+    let mut node = json!({
+        "@type": "foaf:Agent",
+        "dcterms:identifier": authority.id,
+        "foaf:name": authority.name,
+    });
+    if let Some(iri) = authority.iri.as_deref() {
+        node["@id"] = json!(iri);
+    }
+    if let Some(country) = authority.country.as_deref() {
+        node["registry_relay:country"] = json!(country);
+    }
+    node
 }
 
 fn entity_shape(
@@ -2365,6 +3130,23 @@ fn validate_uri_list(
     }
 }
 
+fn validate_uri_or_code_list(
+    values: &[String],
+    path: impl Into<String>,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let path = path.into();
+    for (index, value) in values.iter().enumerate() {
+        if expand_uri(value, vocabularies).is_none() && value.trim().is_empty() {
+            errors.push(ValidationError::new(
+                format!("{path}[{index}]"),
+                "value must be an IRI, compact IRI, or non-empty procedure code",
+            ));
+        }
+    }
+}
+
 fn validate_optional_uri(
     value: Option<&str>,
     path: impl Into<String>,
@@ -2391,7 +3173,18 @@ fn expand_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<Stri
         return Some(uri.to_string());
     }
     let (prefix, suffix) = uri.split_once(':')?;
-    let base = vocabularies.get(prefix)?;
+    let base = vocabularies
+        .get(prefix)
+        .map(String::as_str)
+        .or(match prefix {
+            "cccev" => Some("http://data.europa.eu/m8g/"),
+            "cpsv" => Some("http://purl.org/vocab/cpsv#"),
+            "dcat" => Some("http://www.w3.org/ns/dcat#"),
+            "dcterms" => Some("http://purl.org/dc/terms/"),
+            "odrl" => Some("http://www.w3.org/ns/odrl/2/"),
+            "registry_relay" => Some("https://registry-relay.dev/ns#"),
+            _ => None,
+        })?;
     Some(format!("{base}{suffix}"))
 }
 
@@ -2590,7 +3383,6 @@ fn jsonld_context() -> Value {
         "adms": "http://www.w3.org/ns/adms#",
         "dcat": "http://www.w3.org/ns/dcat#",
         "dcterms": "http://purl.org/dc/terms/",
-        "dspace": "https://w3id.org/dspace/2025/1/",
         "foaf": "http://xmlns.com/foaf/0.1/",
         "odrl": "http://www.w3.org/ns/odrl/2/",
         "sh": "http://www.w3.org/ns/shacl#",
@@ -2655,6 +3447,29 @@ fn jsonld_context_with_public_service_terms() -> Value {
             json!({ "@type": "@id" }),
         );
         object.insert("cpsv:produces".to_string(), json!({ "@type": "@id" }));
+        object.insert(
+            "cpsv:holdsRequirement".to_string(),
+            json!({ "@type": "@id" }),
+        );
+    }
+    context
+}
+
+fn jsonld_context_with_evidence_terms() -> Value {
+    let mut context = jsonld_context_with_public_service_terms();
+    if let Some(object) = context.as_object_mut() {
+        object.insert("cccev".to_string(), json!("http://data.europa.eu/m8g/"));
+        for term in [
+            "cccev:hasEvidenceTypeList",
+            "cccev:specifiesEvidenceType",
+            "registry_relay:evidenceType",
+            "registry_relay:informationConcept",
+            "registry_relay:issuingAuthority",
+            "registry_relay:provesRequirement",
+            "registry_relay:servesEntity",
+        ] {
+            object.insert(term.to_string(), json!({ "@type": "@id" }));
+        }
     }
     context
 }

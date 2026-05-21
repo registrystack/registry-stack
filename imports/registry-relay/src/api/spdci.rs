@@ -140,7 +140,12 @@ async fn run_disabled_status(
     principal: Option<Extension<Principal>>,
     body: Value,
 ) -> Result<(Response, u64), Error> {
-    require_scope_for(principal, &route.entity.access.verify_scope)?;
+    let required_scope = if route.entity.access.evidence_verification_scope.is_empty() {
+        route.entity.access.verify_scope.as_deref().unwrap_or("")
+    } else {
+        &route.entity.access.evidence_verification_scope
+    };
+    require_scope_for(principal, required_scope)?;
     let request = SpdciRequest::from_body(body, &route.config)?;
     let rows = read_rows(route, &request, Some(projected_status_fields(route))).await?;
     let row_count = rows.len() as u64;

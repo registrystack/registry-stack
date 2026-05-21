@@ -1,26 +1,37 @@
 meta {
-  name: Verify student exists
+  name: Verify student evidence
   type: http
   seq: 5
 }
 
-get {
-  url: {{baseUrl}}/datasets/education_registry/student/verify?id={{studentAlias}}
-  body: none
+post {
+  url: {{baseUrl}}/evidence-offerings/{{studentEvidenceOfferingId}}/verifications
+  body: json
   auth: bearer
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 headers {
-  Data-Purpose: {{purpose}}
+  Data-Purpose: {{studentPurpose}}
+}
+
+body:json {
+  {
+    "claims": {
+      "id": "{{studentAlias}}",
+      "enrollment_status": "active",
+      "grade_level": "g5",
+      "home_district": "central"
+    }
+  }
 }
 
 docs {
-  Verifies that student stu-2001 exists in education_registry without reading row data.
-  Uses verification_service persona (verifyKey). Purpose header required.
-  Expected: 200 with { "exists": true, "ingest_version": "..." }.
-  Scholarship systems use this to check current enrollment status without PII exposure.
+  Creates an evidence verification event for submitted student enrollment facts without reading row data.
+  Uses verification_service persona (evidenceVerificationKey). Purpose header required.
+  Expected: 200 with decision, verification_id, claim_hash, and offering metadata.
+  Scholarship systems use this to check submitted enrollment evidence without PII exposure.
 }

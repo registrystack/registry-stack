@@ -1,11 +1,14 @@
 # Data Provenance
 
 `registry-relay` can return W3C Verifiable Credentials (VCs), signed as
-compact JWS, for three response families:
+compact JWS, for two response families:
 
-- `GET /datasets/{dataset_id}/{entity}/verify` -> `VerifyResult`
 - `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}` -> `AggregateResult`
 - `GET /datasets/{dataset_id}/{entity}/{id}` -> `EntityRecord`
+
+Evidence verification uses a separate server-to-server JWT receipt media type,
+documented in [evidence-verification.md](evidence-verification.md), because it is not
+a holder-presentable VC.
 
 The feature is opt-in twice over: by the operator (config flag) and by
 the caller (Accept header). When either says no, responses remain plain
@@ -128,7 +131,7 @@ config change and a process restart.
 The handler returns a signed VC only when the caller asks for one:
 
 ```http
-GET /datasets/social_registry/individual/verify?id=ind-123 HTTP/1.1
+GET /datasets/social_registry/individual/ind-123 HTTP/1.1
 Accept: application/vc+jwt
 ```
 
@@ -167,16 +170,21 @@ Payload (top-level VCDM 2.0; no nested `vc` claim):
 {
   "@context": ["https://www.w3.org/ns/credentials/v2",
                "https://data.example.gov/contexts/provenance/v1.jsonld"],
-  "type": ["VerifiableCredential", "VerifyResult"],
+  "type": ["VerifiableCredential", "EntityRecord"],
   "id": "urn:uuid:01J5K8M0...",
   "issuer": "did:web:data.example.gov",
   "validFrom": "2026-05-16T09:30:00Z",
   "validUntil": "2026-05-16T09:35:00Z",
   "credentialSchema": {
-    "id": "https://data.example.gov/schemas/verify-result/v1.json",
+    "id": "https://data.example.gov/schemas/entity-record/v1.json",
     "type": "JsonSchema"
   },
-  "credentialSubject": { "id": "<subject-uri>", "predicate": "exists", "value": true },
+  "credentialSubject": {
+    "id": "<subject-uri>",
+    "dataset": "social_registry",
+    "entity": "individual",
+    "fields": { "id": "ind-123" }
+  },
   "iss": "did:web:data.example.gov",
   "sub": "<subject-uri>",
   "iat": 1747387800,
@@ -186,9 +194,9 @@ Payload (top-level VCDM 2.0; no nested `vc` claim):
 }
 ```
 
-`type[1]` is one of `VerifyResult`, `AggregateResult`, `EntityRecord`.
+`type[1]` is one of `AggregateResult` or `EntityRecord`.
 Subject URIs follow `<catalog.base_url>/datasets/<dataset>/<entity>/<id>`
-for entity / verify claims and
+for entity claims and
 `<catalog.base_url>/datasets/<dataset>/<entity>/aggregates/<aggregate_id>`
 for aggregates.
 
@@ -274,8 +282,8 @@ three additional endpoints, all unauthenticated and content-cacheable:
   signed under a rotated-out key still verify.
 - `GET /schemas/{claim_type}/{version}` returns the JSON Schema (draft
   2020-12) describing the `credentialSubject` shape for that claim
-  type. Paths: `verify-result/v1.json`, `aggregate-result/v1.json`,
-  `entity-record/v1.json`.
+  type. Paths: `aggregate-result/v1.json`, `entity-record/v1.json`, and the
+  legacy `verify-result/v1.json` schema kept for old verifier fixtures.
 - `GET /contexts/{vocab}/{version}` returns the JSON-LD context
   referenced from VC `@context`.
 
@@ -290,7 +298,7 @@ When a VC is issued, the audit envelope for the request grows a
 `provenance` block alongside the regular fields:
 
 ```jsonl
-{"ts":"2026-05-16T09:30:00.123Z","request_id":"01J5K8...","path":"/datasets/social_registry/individual/verify","status_code":200,"provenance":{"event":"provenance.vc.issued","iss":"did:web:data.example.gov","kid":"did:web:data.example.gov#issuance","jti":"urn:uuid:01J5K8M0...","claim_type":"VerifyResult","subject":"https://data.example.gov/datasets/social_registry/individual/ind-123","validity":{"iat":1747387800,"nbf":1747387800,"exp":1747388100}}}
+{"ts":"2026-05-16T09:30:00.123Z","request_id":"01J5K8...","path":"/datasets/social_registry/individual/ind-123","status_code":200,"provenance":{"event":"provenance.vc.issued","iss":"did:web:data.example.gov","kid":"did:web:data.example.gov#issuance","jti":"urn:uuid:01J5K8M0...","claim_type":"EntityRecord","subject":"https://data.example.gov/datasets/social_registry/individual/ind-123","validity":{"iat":1747387800,"nbf":1747387800,"exp":1747388100}}}
 ```
 
 The `claim_type` field tracks `type[1]` of the VC. `kid` matches the
@@ -456,9 +464,9 @@ node scripts/verify_vc_jwt.mjs \
   --jwt-file target/provenance/vc.jwt \
   --did-document target/provenance/did.json \
   --issuer did:web:data.example.gov \
-  --claim-type VerifyResult \
-  --schema-id https://data.example.gov/schemas/verify-result/v1.json \
-  --schema target/provenance/verify-result.schema.json
+  --claim-type EntityRecord \
+  --schema-id https://data.example.gov/schemas/entity-record/v1.json \
+  --schema target/provenance/entity-record.schema.json
 ```
 
 The verifier accepts local paths, `file://` URLs, and `http(s)` URLs
@@ -489,17 +497,17 @@ curl -fsS \
   -o target/provenance/did.json
 
 curl -fsS \
-  "https://data.example.gov/schemas/verify-result/v1.json" \
-  -o target/provenance/verify-result.schema.json
+  "https://data.example.gov/schemas/entity-record/v1.json" \
+  -o target/provenance/entity-record.schema.json
 ```
 
-3. Issue one verify VC with the lowest-privilege verification API key:
+3. Issue one entity-record VC with the lowest-privilege row-read API key:
 
 ```sh
 curl -fsS \
-  -H "Authorization: Bearer ${VERIFICATION_SERVICE_API_KEY}" \
+  -H "Authorization: Bearer ${ROW_READ_API_KEY}" \
   -H "Accept: application/vc+jwt" \
-  "https://data.example.gov/datasets/social_registry/individual/verify?id=ind-123" \
+  "https://data.example.gov/datasets/social_registry/individual/ind-123" \
   -o target/provenance/vc.jwt
 ```
 
@@ -511,9 +519,9 @@ node scripts/verify_vc_jwt.mjs \
   --jwt-file target/provenance/vc.jwt \
   --did-document target/provenance/did.json \
   --issuer did:web:data.example.gov \
-  --claim-type VerifyResult \
-  --schema-id https://data.example.gov/schemas/verify-result/v1.json \
-  --schema target/provenance/verify-result.schema.json
+  --claim-type EntityRecord \
+  --schema-id https://data.example.gov/schemas/entity-record/v1.json \
+  --schema target/provenance/entity-record.schema.json
 ```
 
 For delegated mode, replace `--did-document` with the ministry-hosted
@@ -528,9 +536,9 @@ node scripts/verify_vc_jwt.mjs \
   --jwt-file target/provenance/vc.jwt \
   --did-document target/provenance/ministry.did.json \
   --issuer did:web:ministry.example.gov \
-  --claim-type VerifyResult \
-  --schema-id https://relay.example.gov/schemas/verify-result/v1.json \
-  --schema target/provenance/verify-result.schema.json
+  --claim-type EntityRecord \
+  --schema-id https://relay.example.gov/schemas/entity-record/v1.json \
+  --schema target/provenance/entity-record.schema.json
 ```
 
 5. For rotation smoke, run the same issuance and verifier steps once

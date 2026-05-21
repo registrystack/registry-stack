@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Scenario: claim verification decision path load test.
+// Scenario: evidence verification decision path load test.
 //
-// Exercises POST /datasets/{dataset_id}/{entity}/claim-verifications across
+// Exercises POST /evidence-offerings/{offering_id}/verifications across
 // all three decision paths. Weighted distribution:
 //
 //   30% - expected match    (success path; baseline for signing latency)
@@ -31,7 +31,7 @@
 // Ambiguous claim:{region_code: "R002", category: "hospital"} -> many rows in R002 with category=hospital -> ambiguous
 //
 // Signed receipt path: the scenario requests
-// `application/vnd.registry-relay.claim-verification+jwt`, so the handler
+// `application/vnd.registry-relay.evidence-verification+jwt`, so the handler
 // returns a compact-serialized Ed25519-signed JWS. The decision is checked
 // by base64url-decoding the JWS payload segment and reading its `decision`
 // claim. The signature is NOT verified by k6: we trust the in-process
@@ -41,12 +41,12 @@
 //   REGISTRY_RELAY_BASE_URL          (default: http://127.0.0.1:18080)
 //   REGISTRY_RELAY_DATASET_ID        (default: clinic_capacity)
 //   REGISTRY_RELAY_ENTITY            (default: facility)
-//   REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION  -- required; must carry clinic_capacity:claim_verification scope
+//   REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION  -- required; must carry clinic_capacity:evidence_verification scope
 //
 // Setup prerequisite: run generate_perf_keys.py to emit
 // REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION and REGISTRY_RELAY_PROVENANCE_JWK,
 // then start the server with a perf config that includes both the
-// claim_verification and provenance blocks (all three perf/config/*.yaml
+// metadata, claim_verification, and provenance blocks (all three perf/config/*.yaml
 // files have them).
 
 import http from 'k6/http';
@@ -62,7 +62,9 @@ import {
   thresholdsFor,
 } from './lib/common.js';
 
-const RECEIPT_MEDIA_TYPE = 'application/vnd.registry-relay.claim-verification+jwt';
+const RECEIPT_MEDIA_TYPE = 'application/vnd.registry-relay.evidence-verification+jwt';
+const IDENTITY_OFFERING_ID = __ENV.REGISTRY_RELAY_IDENTITY_EVIDENCE_OFFERING_ID || 'facility_identity_evidence_offering';
+const REGION_OFFERING_ID = __ENV.REGISTRY_RELAY_REGION_EVIDENCE_OFFERING_ID || 'facility_region_evidence_offering';
 
 // ---------------------------------------------------------------------------
 // Token helper
@@ -127,7 +129,7 @@ export function setup() {
   const token = claimVerificationToken();
   logScenarioStart({
     scenario: 'claim_verification',
-    expectedResponse: '200 application/vnd.registry-relay.claim-verification+jwt',
+    expectedResponse: '200 application/vnd.registry-relay.evidence-verification+jwt',
     vus: 20,
     duration: '3m',
   });
@@ -138,13 +140,13 @@ export function setup() {
 // Per-decision sender
 // ---------------------------------------------------------------------------
 
-function runCase(ctx, label, expectedDecision, body) {
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}/claim-verifications`;
+function runCase(ctx, label, expectedDecision, offeringId, body) {
+  const url = `${baseUrl()}/evidence-offerings/${offeringId}/verifications`;
   const headers = {
     'Authorization': `Bearer ${ctx.token}`,
     'Content-Type': 'application/json',
     'Accept': RECEIPT_MEDIA_TYPE,
-    'Data-Purpose': 'perf-testing',
+    'Data-Purpose': 'https://perf.example.test/purpose/load-test',
   };
   group(label, () => {
     const res = http.post(url, JSON.stringify(body), {
@@ -179,16 +181,14 @@ export default function (ctx) {
     // 30%: expected match
     // fac-000000 has category=hospital in the seed-42 fixture.
     // candidate_lookup on id finds exactly one candidate; all match_fields agree.
-    runCase(ctx, 'match', 'match', {
-      ruleset: 'facility-identity-v1',
+    runCase(ctx, 'match', 'match', IDENTITY_OFFERING_ID, {
       claims: { id: 'fac-000000', category: 'hospital' },
     });
   } else if (roll < 0.80) {
     // 50%: expected mismatch
     // fac-000000 exists with category=hospital; submitting category=clinic
     // fails match_fields -> 0 matches -> mismatch.
-    runCase(ctx, 'mismatch', 'mismatch', {
-      ruleset: 'facility-identity-v1',
+    runCase(ctx, 'mismatch', 'mismatch', IDENTITY_OFFERING_ID, {
       claims: { id: 'fac-000000', category: 'clinic' },
     });
   } else {
@@ -198,8 +198,7 @@ export default function (ctx) {
     // submitted category -> ambiguous. expose_ambiguous: true on
     // facility-region-v1 means the response reports "ambiguous" instead of
     // collapsing to "mismatch".
-    runCase(ctx, 'ambiguous', 'ambiguous', {
-      ruleset: 'facility-region-v1',
+    runCase(ctx, 'ambiguous', 'ambiguous', REGION_OFFERING_ID, {
       claims: { region_code: 'R002', category: 'hospital' },
     });
   }

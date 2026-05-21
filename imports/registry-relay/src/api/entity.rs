@@ -10,8 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use axum::body::Bytes;
-use axum::extract::{Path, Query, RawQuery};
+use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -21,36 +20,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
 use tokio::sync::watch;
-use ulid::Ulid;
 use zeroize::Zeroizing;
 
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::claim_verification::{normalize_claims_for_hash, ClaimVerificationHasher};
-use crate::config::{ClaimVerificationRulesetConfig, Config, DatasetId, ResourceId};
+use crate::config::{Config, DatasetId, ResourceId};
 use crate::entity::{EntityModel, EntityRegistry};
-use crate::error::{
-    AuthError, ClaimVerificationError, EntityError, Error, InternalError, ProvenanceError,
-    SchemaError,
-};
+use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
 use crate::query::{
-    ClaimVerificationQuery, EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine,
-    RelationshipPageQuery,
+    EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityQueryEngine, RelationshipPageQuery,
 };
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
-const CLAIM_VERIFICATION_JWT: HeaderValue =
-    HeaderValue::from_static(crate::provenance::jwt_receipt::CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE);
 const QUERY_UNAVAILABLE_CODE: &str = "entity.query_unavailable";
 const CURSOR_INVALIDATED_CODE: &str = "pagination.cursor_invalidated";
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
-const MAX_CLAIM_VERIFICATION_BODY_BYTES: u64 = 64 * 1024;
 
 /// Defensive cap on the number of filter parameters accepted on a
 /// single entity-collection request. Pairs with the URI length cap in
@@ -138,18 +126,21 @@ where
 {
     Router::new()
         .route("/datasets/{dataset_id}/{entity}/schema", get(entity_schema))
-        .route("/datasets/{dataset_id}/{entity}/verify", get(entity_verify))
+        .route(
+            "/datasets/{dataset_id}/{entity}/verify",
+            get(legacy_removed),
+        )
         .route(
             "/datasets/{dataset_id}/{entity}/claim-verifications",
-            post(entity_claim_verification),
+            post(legacy_removed),
         )
         .route(
             "/datasets/{dataset_id}/{entity}/claim-verification-rulesets",
-            get(entity_claim_verification_rulesets),
+            get(legacy_removed),
         )
         .route(
             "/datasets/{dataset_id}/{entity}/claim-verification-rulesets/{ruleset}",
-            get(entity_claim_verification_ruleset),
+            get(legacy_removed),
         )
         .route("/datasets/{dataset_id}/{entity}", get(entity_collection))
         .route(
@@ -159,17 +150,29 @@ where
         .route("/datasets/{dataset_id}/{entity}/{id}", get(entity_record))
 }
 
+async fn legacy_removed() -> Response {
+    let mut response = (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "type": "https://data.example.gov/problems/entity/route_removed",
+            "title": "Route removed",
+            "status": StatusCode::NOT_FOUND.as_u16(),
+            "detail": "This verification route has been removed. Use evidence-offering discovery and verification instead.",
+            "code": "entity.route_removed",
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
+}
+
 #[derive(Debug, Deserialize)]
 struct EntityPath {
     dataset_id: String,
     entity: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct EntityClaimVerificationRulesetPath {
-    dataset_id: String,
-    entity: String,
-    ruleset: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -417,424 +420,6 @@ async fn entity_collection(
         }
         Err(error) => error.into_response(),
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn entity_verify(
-    Path(path): Path<EntityPath>,
-    RawQuery(raw_query): RawQuery,
-    headers: HeaderMap,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
-    config: Option<Extension<Arc<Config>>>,
-    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
-) -> Response {
-    let audit_context = registry
-        .as_ref()
-        .and_then(|Extension(registry)| audit_context_for_entity(registry, &path));
-    let mut primary_key_name = None;
-    if let Some(Extension(registry)) = registry.as_ref() {
-        match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-            Ok(entity) => {
-                primary_key_name = Some(entity.primary_key.name.clone());
-                if let Err(error) = require_principal_scope(principal, &entity.access.verify_scope)
-                {
-                    return error.into_response();
-                }
-                if entity.api.require_purpose_header && !has_purpose_header(&headers) {
-                    return Error::from(AuthError::PurposeRequired).into_response();
-                }
-            }
-            Err(error) => return error.into_response(),
-        }
-    }
-
-    let Some(Extension(query)) = query else {
-        return query_unavailable(
-            "entity verify route matched, but entity query state is not installed",
-        );
-    };
-
-    let Some(primary_key_name) = primary_key_name else {
-        return Error::from(SchemaError::UnknownResource).into_response();
-    };
-    let primary_key = match verify_primary_key_param(raw_query.as_deref(), &primary_key_name) {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
-
-    match query
-        .verify_exists(&path.dataset_id, &path.entity, json!(primary_key))
-        .await
-    {
-        Ok(result) => {
-            let body = VerifyResponse {
-                exists: result.exists,
-                ingest_version: result.ingest_version.clone(),
-            };
-            let etag = entity_etag(
-                "verify",
-                &path.dataset_id,
-                &path.entity,
-                result.ingest_version.as_deref(),
-                &primary_key,
-            );
-            let plain_response = if let Some(etag) = etag.as_deref() {
-                if if_none_match_matches(&headers, etag) {
-                    not_modified_response(etag)
-                } else {
-                    with_etag(Json(&body).into_response(), etag)
-                }
-            } else {
-                Json(&body).into_response()
-            };
-            // Opt-in signed VC. When the caller asked for one and
-            // provenance is enabled, the helper replaces the plain JSON
-            // response with a compact JWS body and attaches the audit
-            // extension. Otherwise the plain response flows through
-            // unchanged.
-            let provenance_state = provenance.as_ref().map(|Extension(state)| state);
-            let config_ref = config.as_ref().map(|Extension(cfg)| cfg);
-            let response = crate::api::provenance_issuance::maybe_issue_verify_result(
-                provenance_state,
-                config_ref,
-                &headers,
-                plain_response,
-                &path.dataset_id,
-                &path.entity,
-                &primary_key,
-                "exists",
-                json!(body.exists),
-                crate::api::provenance_issuance::now_rfc3339(),
-            );
-            with_optional_audit_context(response, audit_context)
-        }
-        Err(error) => error.into_response(),
-    }
-}
-
-async fn entity_claim_verification_rulesets(
-    Path(path): Path<EntityPath>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some(Extension(principal)) = principal else {
-        return with_claim_verification_headers(
-            Error::from(AuthError::MissingCredential).into_response(),
-        );
-    };
-    let Some(Extension(registry)) = registry.as_ref() else {
-        return with_claim_verification_headers(query_unavailable(
-            "claim verification ruleset route matched, but entity registry is not installed",
-        ));
-    };
-    let entity = match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-        Ok(entity) => entity,
-        Err(_) => {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-    };
-    if let Some(entity_scope) = entity.access.claim_verification_scope.as_deref() {
-        if !principal.scopes.contains(entity_scope) {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-    }
-    let rulesets = entity
-        .claim_verification
-        .as_ref()
-        .map(|claim_verification| {
-            claim_verification
-                .rulesets
-                .iter()
-                .filter_map(|(ruleset_id, ruleset)| {
-                    let required_scope = ruleset.required_scope(&entity.access)?;
-                    principal
-                        .scopes
-                        .contains(required_scope)
-                        .then(|| ruleset_discovery(ruleset_id, ruleset))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    with_claim_verification_headers(Json(json!({ "data": rulesets })).into_response())
-}
-
-async fn entity_claim_verification_ruleset(
-    Path(path): Path<EntityClaimVerificationRulesetPath>,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    principal: Option<Extension<Principal>>,
-) -> Response {
-    let Some(Extension(principal)) = principal else {
-        return with_claim_verification_headers(
-            Error::from(AuthError::MissingCredential).into_response(),
-        );
-    };
-    let Some(Extension(registry)) = registry.as_ref() else {
-        return with_claim_verification_headers(query_unavailable(
-            "claim verification ruleset route matched, but entity registry is not installed",
-        ));
-    };
-    let entity = match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-        Ok(entity) => entity,
-        Err(_) => {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-    };
-    if let Some(entity_scope) = entity.access.claim_verification_scope.as_deref() {
-        if !principal.scopes.contains(entity_scope) {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-    }
-    let Some((ruleset_id, ruleset)) = claim_verification_ruleset(entity, &path.ruleset) else {
-        return with_claim_verification_headers(
-            Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-        );
-    };
-    let Some(required_scope) = ruleset.required_scope(&entity.access) else {
-        return with_claim_verification_headers(
-            Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-        );
-    };
-    if !principal.scopes.contains(required_scope) {
-        return with_claim_verification_headers(
-            Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-        );
-    }
-    with_claim_verification_headers(Json(ruleset_discovery(ruleset_id, ruleset)).into_response())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn entity_claim_verification(
-    Path(path): Path<EntityPath>,
-    headers: HeaderMap,
-    registry: Option<Extension<Arc<EntityRegistry>>>,
-    principal: Option<Extension<Principal>>,
-    query: Option<Extension<Arc<EntityQueryEngine>>>,
-    hasher: Option<Extension<Arc<ClaimVerificationHasher>>>,
-    provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
-    body: Bytes,
-) -> Response {
-    let Some(Extension(principal)) = principal else {
-        return with_claim_verification_headers(
-            Error::from(AuthError::MissingCredential).into_response(),
-        );
-    };
-    if body.len() as u64 > MAX_CLAIM_VERIFICATION_BODY_BYTES {
-        return with_claim_verification_headers(
-            Error::from(InternalError::PayloadTooLarge).into_response(),
-        );
-    }
-    let request: ClaimVerificationRequest = match serde_json::from_slice(&body) {
-        Ok(request) => request,
-        Err(_) => {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::InvalidRequest).into_response(),
-            );
-        }
-    };
-    let audit_context = registry
-        .as_ref()
-        .and_then(|Extension(registry)| audit_context_for_entity(registry, &path));
-    let Some(Extension(registry)) = registry.as_ref() else {
-        return with_claim_verification_headers(query_unavailable(
-            "claim verification route matched, but entity registry is not installed",
-        ));
-    };
-    let entity = match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-        Ok(entity) => entity,
-        Err(_) => {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-    };
-    if entity.api.require_purpose_header && !has_purpose_header(&headers) {
-        return with_claim_verification_headers(
-            Error::from(AuthError::PurposeRequired).into_response(),
-        );
-    }
-    if let Some(entity_scope) = entity.access.claim_verification_scope.as_deref() {
-        if !principal.scopes.contains(entity_scope) {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-    }
-    let Some((ruleset_id, ruleset)) = claim_verification_ruleset(entity, &request.ruleset) else {
-        return with_claim_verification_headers(
-            Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-        );
-    };
-    let Some(required_scope) = ruleset.required_scope(&entity.access) else {
-        return with_claim_verification_headers(
-            Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-        );
-    };
-    if !principal.scopes.contains(required_scope) {
-        return with_claim_verification_headers(
-            Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-        );
-    }
-    if let Err(error) = validate_claim_request(&request, ruleset) {
-        return with_claim_verification_headers(error.into_response());
-    }
-    let subject_id = match request
-        .subject
-        .as_ref()
-        .and_then(|subject| subject.id.clone())
-    {
-        Some(id)
-            if ruleset.allow_subject_id_targeting
-                && principal
-                    .scopes
-                    .contains(&format!("{required_scope}:targeted")) =>
-        {
-            Some(json!(id))
-        }
-        Some(_) => {
-            return with_claim_verification_headers(
-                Error::from(ClaimVerificationError::RulesetNotAllowed).into_response(),
-            );
-        }
-        None => None,
-    };
-    let Some(Extension(query)) = query else {
-        return with_claim_verification_headers(query_unavailable(
-            "claim verification route matched, but entity query state is not installed",
-        ));
-    };
-    let Some(Extension(hasher)) = hasher else {
-        return with_claim_verification_headers(query_unavailable(
-            "claim verification route matched, but claim verification hasher is not installed",
-        ));
-    };
-
-    let match_values = ruleset
-        .match_fields
-        .iter()
-        .filter_map(|(claim, field)| {
-            request
-                .claims
-                .get(claim)
-                .cloned()
-                .map(|value| (field.clone(), value))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let candidate_values = ruleset
-        .candidate_lookup
-        .iter()
-        .filter_map(|claim| {
-            let field = ruleset.match_fields.get(claim)?;
-            request
-                .claims
-                .get(claim)
-                .cloned()
-                .map(|value| (field.clone(), value))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let result = match query
-        .verify_claims_normalized_exact(
-            &path.dataset_id,
-            &path.entity,
-            ClaimVerificationQuery {
-                match_values,
-                candidate_values,
-                subject_id,
-                limit: 2,
-                scan_limit: 1024,
-            },
-        )
-        .await
-    {
-        Ok(result) => result,
-        Err(error) => return with_claim_verification_headers(error.into_response()),
-    };
-
-    let decision = claim_verification_decision(result.count, ruleset.expose_ambiguous);
-    let verification_id = Ulid::new().to_string();
-    let checked_at = match OffsetDateTime::now_utc().format(&Rfc3339) {
-        Ok(value) => value,
-        Err(_) => {
-            return with_claim_verification_headers(
-                Error::from(InternalError::Unhandled).into_response(),
-            );
-        }
-    };
-    let purpose = purpose_header_value(&headers, DATA_PURPOSE_HEADER).map(str::to_string);
-    let normalized_claims = normalize_claims_for_hash(&request.claims);
-    let claim_hash_material = json!({
-        "version": 1,
-        "binding_key_id": hasher.binding_key_id(),
-        "verification_id": verification_id,
-        "dataset_id": path.dataset_id,
-        "entity": path.entity,
-        "ruleset": ruleset_id,
-        "purpose": purpose,
-        "subject": request.subject,
-        "claims": normalized_claims,
-        "evidence": request.evidence,
-    });
-    let claim_hash = match hasher.hmac_hex(&claim_hash_material) {
-        Ok(value) => value,
-        Err(error) => return with_claim_verification_headers(error.into_response()),
-    };
-    let evidence_hash = if request.evidence.is_empty() {
-        None
-    } else {
-        match hasher.hmac_hex(&json!({
-            "version": 1,
-            "binding_key_id": hasher.binding_key_id(),
-            "verification_id": verification_id,
-            "dataset_id": path.dataset_id,
-            "entity": path.entity,
-            "ruleset": ruleset_id,
-            "purpose": purpose,
-            "evidence": request.evidence,
-        })) {
-            Ok(value) => Some(value),
-            Err(error) => return with_claim_verification_headers(error.into_response()),
-        }
-    };
-    let body = ClaimVerificationResponse {
-        verification_id: verification_id.clone(),
-        decision: decision.to_string(),
-        dataset_id: path.dataset_id.clone(),
-        entity: path.entity.clone(),
-        ruleset: ruleset_id.to_string(),
-        checked_at: checked_at.clone(),
-        ingest_version: result.ingest_version,
-        claim_hash: claim_hash.clone(),
-        evidence_hash: evidence_hash.clone(),
-    };
-    let plain_response = Json(&body).into_response();
-    let response = maybe_issue_claim_verification_receipt(
-        provenance.as_ref().map(|Extension(state)| state),
-        &principal,
-        &headers,
-        plain_response,
-        ClaimVerificationReceiptArgs {
-            verification_id,
-            dataset_id: body.dataset_id.clone(),
-            entity: body.entity.clone(),
-            decision: body.decision.clone(),
-            ruleset: body.ruleset.clone(),
-            purpose,
-            checked_at,
-            claim_hash,
-            evidence_hash,
-        },
-    );
-    with_claim_verification_headers(with_optional_audit_context(response, audit_context))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1255,248 +840,6 @@ fn with_optional_audit_context(response: Response, context: Option<AuditContextE
 fn with_audit_context(mut response: Response, context: AuditContextExt) -> Response {
     response.extensions_mut().insert(context);
     response
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ClaimVerificationRequest {
-    ruleset: String,
-    #[serde(default)]
-    claims: BTreeMap<String, Value>,
-    #[serde(default)]
-    subject: Option<ClaimVerificationSubject>,
-    #[serde(default)]
-    evidence: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ClaimVerificationSubject {
-    #[serde(default)]
-    id: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ClaimVerificationResponse {
-    verification_id: String,
-    decision: String,
-    dataset_id: String,
-    entity: String,
-    ruleset: String,
-    checked_at: String,
-    ingest_version: Option<String>,
-    claim_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    evidence_hash: Option<String>,
-}
-
-/// Wire values are append-only: add new values without repurposing or
-/// removing these v1 decisions.
-#[derive(Debug, Clone, Copy)]
-enum ClaimVerificationDecision {
-    Match,
-    Mismatch,
-    Ambiguous,
-}
-
-impl std::fmt::Display for ClaimVerificationDecision {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            ClaimVerificationDecision::Match => "match",
-            ClaimVerificationDecision::Mismatch => "mismatch",
-            ClaimVerificationDecision::Ambiguous => "ambiguous",
-        })
-    }
-}
-
-fn claim_verification_ruleset<'a>(
-    entity: &'a EntityModel,
-    requested: &str,
-) -> Option<(&'a str, &'a ClaimVerificationRulesetConfig)> {
-    entity
-        .claim_verification
-        .as_ref()?
-        .rulesets
-        .get_key_value(requested)
-        .map(|(id, ruleset)| (id.as_str(), ruleset))
-}
-
-fn ruleset_discovery(ruleset_id: &str, ruleset: &ClaimVerificationRulesetConfig) -> Value {
-    let optional_claims = ruleset
-        .match_fields
-        .keys()
-        .filter(|claim| !ruleset.required_claims.contains(claim))
-        .cloned()
-        .collect::<Vec<_>>();
-    let properties = ruleset
-        .match_fields
-        .keys()
-        .map(|claim| {
-            (
-                claim.clone(),
-                json!({
-                    "type": ["string", "number", "boolean", "null"]
-                }),
-            )
-        })
-        .collect::<serde_json::Map<_, _>>();
-    json!({
-        "ruleset": ruleset_id,
-        "mode": ruleset.mode.clone(),
-        "required_claims": ruleset.required_claims.clone(),
-        "optional_claims": optional_claims,
-        "candidate_lookup": ruleset.candidate_lookup.clone(),
-        "claims_schema": {
-            "type": "object",
-            "required": ruleset.required_claims.clone(),
-            "properties": properties,
-            "additionalProperties": false
-        },
-        "subject_id_targeting": ruleset.allow_subject_id_targeting,
-        "expose_ambiguous": ruleset.expose_ambiguous,
-        "diagnostics": ruleset.diagnostics
-    })
-}
-
-fn validate_claim_request(
-    request: &ClaimVerificationRequest,
-    ruleset: &ClaimVerificationRulesetConfig,
-) -> Result<(), Error> {
-    if request.ruleset.trim().is_empty() {
-        return Err(ClaimVerificationError::InvalidRequest.into());
-    }
-    for claim in request.claims.keys() {
-        if !ruleset.match_fields.contains_key(claim) {
-            return Err(ClaimVerificationError::InvalidRequest.into());
-        }
-    }
-    for value in request.claims.values() {
-        if !is_claim_scalar(value) {
-            return Err(ClaimVerificationError::InvalidRequest.into());
-        }
-    }
-    if request.evidence.iter().any(|item| !item.is_object()) {
-        return Err(ClaimVerificationError::InvalidRequest.into());
-    }
-    for claim in &ruleset.required_claims {
-        if !request.claims.contains_key(claim) {
-            return Err(ClaimVerificationError::InsufficientClaims.into());
-        }
-    }
-    Ok(())
-}
-
-fn is_claim_scalar(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null
-    )
-}
-
-fn claim_verification_decision(count: usize, expose_ambiguous: bool) -> ClaimVerificationDecision {
-    match count {
-        0 => ClaimVerificationDecision::Mismatch,
-        1 => ClaimVerificationDecision::Match,
-        _ if expose_ambiguous => ClaimVerificationDecision::Ambiguous,
-        _ => ClaimVerificationDecision::Mismatch,
-    }
-}
-
-fn with_claim_verification_headers(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert(
-        header::VARY,
-        HeaderValue::from_static("Authorization, Accept"),
-    );
-    response
-}
-
-struct ClaimVerificationReceiptArgs {
-    verification_id: String,
-    dataset_id: String,
-    entity: String,
-    decision: String,
-    ruleset: String,
-    purpose: Option<String>,
-    checked_at: String,
-    claim_hash: String,
-    evidence_hash: Option<String>,
-}
-
-fn maybe_issue_claim_verification_receipt(
-    state: Option<&Arc<crate::provenance::ProvenanceState>>,
-    principal: &Principal,
-    headers: &HeaderMap,
-    plain_response: Response,
-    args: ClaimVerificationReceiptArgs,
-) -> Response {
-    let Some(state) = state.filter(|state| state.is_enabled()) else {
-        return plain_response;
-    };
-    if !claim_verification_receipt_requested(state, headers) {
-        return plain_response;
-    }
-    let issued_at = OffsetDateTime::now_utc();
-    let subject = principal.principal_id.clone();
-    let receipt = state.issue_claim_verification_receipt(
-        crate::provenance::ClaimVerificationReceiptContext {
-            subject: subject.clone(),
-            audience: principal.principal_id.clone(),
-            verification_id: args.verification_id,
-            dataset: args.dataset_id,
-            entity: args.entity,
-            decision: args.decision,
-            ruleset: args.ruleset,
-            purpose_declared: args.purpose,
-            checked_at: args.checked_at,
-            claim_hash: args.claim_hash,
-            evidence_hash: args.evidence_hash,
-            issued_at,
-        },
-    );
-    let signed = match receipt {
-        Ok(signed) => signed,
-        Err(crate::provenance::IssueError::SignerUnavailable) => {
-            return Error::from(ProvenanceError::SignerUnavailable).into_response();
-        }
-        Err(_) => return Error::from(ProvenanceError::IssuanceFailed).into_response(),
-    };
-    let mut response = signed.compact_jws.clone().into_response();
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, CLAIM_VERIFICATION_JWT);
-    response
-        .extensions_mut()
-        .insert(crate::audit::ProvenanceIssuanceExt {
-            iss: signed.issuer,
-            kid: signed.verification_method_id,
-            jti: signed.jti,
-            claim_type: "ClaimVerificationReceipt".to_string(),
-            subject,
-            iat: signed.iat,
-            nbf: signed.nbf,
-            exp: signed.exp,
-        });
-    response
-}
-
-fn claim_verification_receipt_requested(
-    state: &crate::provenance::ProvenanceState,
-    headers: &HeaderMap,
-) -> bool {
-    let media_type = crate::provenance::jwt_receipt::CLAIM_VERIFICATION_RECEIPT_MEDIA_TYPE;
-    if !state
-        .config()
-        .accepted_media_types
-        .iter()
-        .any(|accepted| accepted.eq_ignore_ascii_case(media_type))
-    {
-        return false;
-    }
-    crate::provenance::negotiate(headers, &[media_type.to_string()])
-        == crate::provenance::NegotiationOutcome::SignedVc
 }
 
 #[doc(hidden)]
@@ -1931,33 +1274,6 @@ fn hex_decode(value: &str) -> Option<Vec<u8>> {
     Some(decoded)
 }
 
-#[derive(Serialize)]
-struct VerifyResponse {
-    exists: bool,
-    ingest_version: Option<String>,
-}
-
-fn verify_primary_key_param(
-    raw_query: Option<&str>,
-    primary_key_name: &str,
-) -> Result<String, Error> {
-    let Some(raw_query) = raw_query else {
-        return Err(crate::error::FilterError::NotAllowed.into());
-    };
-    let mut params = raw_query.split('&').filter(|pair| !pair.is_empty());
-    let Some(pair) = params.next() else {
-        return Err(crate::error::FilterError::NotAllowed.into());
-    };
-    if params.next().is_some() {
-        return Err(crate::error::FilterError::NotAllowed.into());
-    }
-    let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-    if name != primary_key_name || name.contains('.') {
-        return Err(crate::error::FilterError::NotAllowed.into());
-    }
-    percent_decode_query_value(value).ok_or_else(|| crate::error::FilterError::InvalidValue.into())
-}
-
 fn ingest_version_for_entity(
     readiness: Option<&watch::Receiver<ReadinessSnapshot>>,
     dataset_id: &str,
@@ -2026,32 +1342,6 @@ fn split_csv_values(value: &str) -> Result<Vec<String>, Error> {
         return Err(crate::error::FilterError::InvalidValue.into());
     }
     Ok(values)
-}
-
-fn percent_decode_query_value(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                decoded.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let high = hex_value(bytes[i + 1])?;
-                let low = hex_value(bytes[i + 2])?;
-                decoded.push(high << 4 | low);
-                i += 3;
-            }
-            b'%' => return None,
-            byte => {
-                decoded.push(byte);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8(decoded).ok()
 }
 
 fn hex_value(byte: u8) -> Option<u8> {

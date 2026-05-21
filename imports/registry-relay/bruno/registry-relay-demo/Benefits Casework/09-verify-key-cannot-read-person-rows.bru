@@ -11,7 +11,7 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 headers {
@@ -19,8 +19,8 @@ headers {
 }
 
 docs {
-  Attempts to read person rows using verifyKey.
-  verifyKey holds only benefits_casework:verify; row reads require benefits_casework:rows.
+  Attempts to read person rows using evidenceVerificationKey.
+  evidenceVerificationKey holds only benefits_casework:evidence_verification; row reads require benefits_casework:rows.
   expected: 403 auth.scope_denied
-  Confirms verify scope cannot be widened into a row read even with purpose header set.
+  Confirms evidence-verification scope cannot be widened into a row read even with purpose header set.
 }

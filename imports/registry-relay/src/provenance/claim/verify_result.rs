@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `VerifyResult` v1 credentialSubject builder.
 //!
-//! Mirrors the `/verify` semantic: a predicate-only attestation
-//! that the gateway answers questions like "is this individual a
-//! household head" without exposing the underlying row.
+//! Legacy predicate-only attestation without exposing the underlying row.
+//! The public `/verify` route has been removed; the schema remains published
+//! for old verifier fixtures and compatibility tests.
 
 use serde_json::{json, Value};
 
-/// Inputs gathered by the `/verify` handler at request time.
+/// Inputs gathered by legacy verify-result issuance paths.
 #[derive(Debug, Clone)]
 pub struct VerifyResultInput {
     pub subject_uri: String,

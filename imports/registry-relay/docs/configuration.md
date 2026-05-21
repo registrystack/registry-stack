@@ -88,7 +88,7 @@ the `metadata.manifest.*` / `runtime.binding.*` startup error codes.
 ODRL policy belongs in the portable metadata manifest, not in runtime dataset
 bindings. A dataset `policy` block is published as an `odrl:Offer` for discovery
 and review evidence only. It does not change API-key scopes, OIDC authorization,
-row filtering, claim verification, SP DCI behavior, or any other runtime access
+row filtering, evidence verification, SP DCI behavior, or any other runtime access
 decision.
 
 ```yaml
@@ -163,7 +163,7 @@ For generic sync search, `identifiers` maps DCI `idtype-value` query types to en
 
 `query_key` is read from `message.disabled_criteria.query` in the SP DCI request envelope. It may be represented as a literal dotted JSON key (`"member.member_identifier"`) or as nested objects (`{"member": {"member_identifier": ...}}`). `query_field` must be an allowed entity filter because the adapter delegates reads to the normal entity query engine.
 
-For `/dci/{registry}/registry/sync/disabled`, the caller needs the configured entity `verify_scope`; generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer.
+For `/dci/{registry}/registry/sync/disabled`, the caller needs the configured entity DCI status-check scope; generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer.
 
 ## API Keys
 
@@ -552,8 +552,7 @@ entities:
       metadata_scope: social_registry:metadata
       aggregate_scope: social_registry:aggregate
       read_scope: social_registry:rows
-      verify_scope: social_registry:verify
-      claim_verification_scope: social_registry:claim_verification
+      evidence_verification_scope: social_registry:evidence_verification
     api:
       default_limit: 100
       max_limit: 1000
@@ -575,23 +574,31 @@ When `fields` is present, only listed fields are exposed. When it is omitted, ev
 
 Relationships are dataset-local in V1. Cross-dataset workflows should compose client-side with separate scoped calls and separate audit records.
 
-### Claim Verification
+### Evidence Verification
 
-Claim verification rulesets are entity-scoped policies for:
+Evidence verification exposes declared metadata offerings and an offering-bound verification endpoint:
 
 ```http
-POST /datasets/{dataset_id}/{entity}/claim-verifications
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/{offering_id}
+POST /evidence-offerings/{offering_id}/verifications
 ```
 
-The expected config shape is:
+The portable metadata manifest declares the public offering, while runtime entity access declares the scope required to execute the offering's verification binding. The expected runtime shape is:
 
 ```yaml
 claim_verification:
   binding_key_id: social-registry-v1
   binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
+evidence_verification:
+  rate_limit:
+    enabled: true
+    burst: 120
+    window_seconds: 60
+
 access:
-  claim_verification_scope: social_registry:claim_verification
+  evidence_verification_scope: social_registry:evidence_verification
 
 claim_verification:
   rulesets:
@@ -606,10 +613,10 @@ claim_verification:
       allow_subject_id_targeting: false
       diagnostics: false
       expose_ambiguous: false
-      scope: social_registry:claim_verification
+      scope: social_registry:evidence_verification
 ```
 
-V1 supports `normalized_exact` only. `binding_key_env` must point at a stable high-entropy secret encoded as `hex:<64-or-more-lowercase-hex-chars>`, where the decoded key is at least 32 bytes. For example, generate it with `printf 'hex:%s\n' "$(openssl rand -hex 32)"`. The same decoded key must remain available after process restarts so `claim_hash` and `evidence_hash` remain interpretable. The endpoint defaults to JSON and uses `application/vnd.registry-relay.claim-verification+jwt` for signed JWT receipts. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent. See [claim-verification.md](claim-verification.md) for request and response examples.
+V1 supports `normalized_exact` only. `binding_key_env` must point at a stable high-entropy secret encoded as `hex:<64-or-more-lowercase-hex-chars>`, where the decoded key is at least 32 bytes. For example, generate it with `printf 'hex:%s\n' "$(openssl rand -hex 32)"`. Registry Relay derives offering-scoped HMAC keys from that secret, and the same decoded key must remain available after process restarts so `claim_hash` and `evidence_hash` remain interpretable. The endpoint defaults to JSON. Signed JWT receipts use `application/vnd.registry-relay.evidence-verification+jwt` when provenance is enabled and that media type is listed in `provenance.accepted_media_types`; otherwise strict receipt requests return `406`. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent; values must be absolute IRIs and must match `policy.purpose` when an offering declares one. The built-in rate limiter is per principal and offering. See [evidence-verification.md](evidence-verification.md) for request and response examples.
 
 `example-person-schema` is optional and requires a binary built with
 `--features publicschema-cel`. When present, entity-record VC issuance
@@ -647,7 +654,7 @@ Supported measure functions include the configured V1 set used by tests and exam
 
 ## Provenance
 
-The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`.
+The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`. Evidence-verification receipts use the same signer but are not VC-JWTs; add `application/vnd.registry-relay.evidence-verification+jwt` to `provenance.accepted_media_types` only for deployments that want that receipt profile.
 
 See [provenance.md](provenance.md) for the full signer, DID, schema, context, and rotation contract.
 
@@ -660,7 +667,7 @@ See [provenance.md](provenance.md) for the full signer, DID, schema, context, an
 - Admin listener, if enabled, is private.
 - CORS origins are explicit.
 - Personal-data entities use explicit field projections.
-- Row and verify routes that need purpose tracking set `require_purpose_header: true`.
+- Row and evidence-verification routes that need purpose tracking set `require_purpose_header: true`.
 - Sensitive identifier fields are marked `sensitive: true` where audit redaction is required.
 - Audit sink and retention match the deployment's governance requirements.
 - For Postgres live tables, scrape `/metrics` from the admin listener and alert on live scan timeout/error growth, exported bytes, and concurrency wait time.

@@ -59,6 +59,9 @@ pub struct Config {
     /// when any entity declares `claim_verification`.
     #[serde(default)]
     pub claim_verification: Option<ClaimVerificationConfig>,
+    /// Runtime controls for evidence-offering verification.
+    #[serde(default)]
+    pub evidence_verification: EvidenceVerificationConfig,
     /// Optional external standards adapters. The config model is parsed
     /// in every build so feature-disabled binaries can reject it with a
     /// stable taxonomy code.
@@ -83,6 +86,54 @@ pub struct ClaimVerificationConfig {
 
 fn default_claim_verification_binding_key_id() -> String {
     "v1".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceVerificationConfig {
+    #[serde(default)]
+    pub rate_limit: EvidenceVerificationRateLimitConfig,
+}
+
+impl Default for EvidenceVerificationConfig {
+    fn default() -> Self {
+        Self {
+            rate_limit: EvidenceVerificationRateLimitConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceVerificationRateLimitConfig {
+    #[serde(default = "default_evidence_rate_limit_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_evidence_rate_limit_burst")]
+    pub burst: u32,
+    #[serde(default = "default_evidence_rate_limit_window_seconds")]
+    pub window_seconds: u64,
+}
+
+impl Default for EvidenceVerificationRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_evidence_rate_limit_enabled(),
+            burst: default_evidence_rate_limit_burst(),
+            window_seconds: default_evidence_rate_limit_window_seconds(),
+        }
+    }
+}
+
+const fn default_evidence_rate_limit_enabled() -> bool {
+    true
+}
+
+const fn default_evidence_rate_limit_burst() -> u32 {
+    120
+}
+
+const fn default_evidence_rate_limit_window_seconds() -> u64 {
+    60
 }
 
 /// External standards adapters layered over configured entities.
@@ -976,15 +1027,18 @@ pub struct EntityAccessConfig {
     pub metadata_scope: String,
     pub aggregate_scope: String,
     pub read_scope: String,
-    pub verify_scope: String,
+    #[serde(default)]
+    pub verify_scope: Option<String>,
+    #[serde(default)]
+    pub evidence_verification_scope: String,
     #[serde(default)]
     pub claim_verification_scope: Option<String>,
 }
 
 impl EntityAccessConfig {
-    /// Entity-level scope for submitted-claim verification. Older
-    /// configs omit this field; absence intentionally means the
-    /// feature is denied unless a ruleset declares its own scope.
+    /// Entity-level scope for the internal submitted-claim engine. Older
+    /// configs may omit this field; absence intentionally means the engine is
+    /// denied unless a ruleset declares its own scope.
     pub fn claim_verification_required_scope(&self) -> Option<&str> {
         self.claim_verification_scope.as_deref()
     }

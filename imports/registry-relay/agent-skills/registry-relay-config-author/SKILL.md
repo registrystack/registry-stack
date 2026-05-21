@@ -43,7 +43,7 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Dataset title, owner, publisher/base URL, and update cadence if unknown.
    - Which columns are identifiers, foreign keys, sensitive fields, and fields safe to expose.
    - Which domain entities the file represents. Infer obvious candidates, but do not pretend a sheet name is automatically the public entity model.
-   - Which consumers need metadata, aggregate, row, verify, claim-verification, or admin scopes.
+   - Which consumers need metadata, aggregate, row, evidence-verification, or admin scopes.
    - Which filters, expansions, and aggregates are safe and useful.
 
 4. Declare catalog and dataset metadata.
@@ -72,9 +72,9 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Only list relationships in `api.allowed_expansions` when clients may use `?expand=`.
 
 8. Assign scopes independently.
-   - Declare `metadata_scope`, `aggregate_scope`, `read_scope`, and `verify_scope` on each entity.
-   - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, `<dataset>:verify`, and `<dataset>:claim_verification`.
-   - Do not assume aggregate or verify access implies row access.
+   - Declare `metadata_scope`, `aggregate_scope`, and `read_scope` on each entity. Add `evidence_verification_scope` only when the entity backs an evidence offering.
+   - Common default strings are `<dataset>:metadata`, `<dataset>:aggregate`, `<dataset>:rows`, and `<dataset>:evidence_verification`.
+   - Do not assume aggregate or evidence-verification access implies row access.
    - Use an `admin` scope only for `/admin/reload`.
    - `auth.api_keys[].hash_env` names an environment variable containing an Argon2id PHC hash. Never put raw keys or hashes directly in comments, examples, logs, or final answers.
 
@@ -82,7 +82,7 @@ The script emits JSON describing CSV columns, XLSX sheets, or Parquet schema whe
    - Add `allowed_filters` only for fields consumers genuinely need.
    - Supported ops are `eq`, `in`, `gte`, `lte`, and `between`.
    - Use `default_limit` and `max_limit` to cap row responses.
-   - Set `require_purpose_header: true` for row or verify access to personal data unless the deployment explicitly does not require purpose logging.
+   - Set `require_purpose_header: true` for row or evidence-verification access to personal data unless the deployment explicitly does not require purpose logging.
 
 10. Add aggregates with disclosure control.
    - Aggregates live on entities, not storage tables, for V1 public APIs.
@@ -104,7 +104,7 @@ When the user wants a first draft and has not answered every modeling question:
 - For a single CSV or Parquet, create one private table and one public entity unless the user describes multiple domain objects.
 - For XLSX, create one private table per relevant sheet. Create public entities only for sheets that represent domain objects, not lookup/helper sheets unless the user wants them exposed.
 - Prefer exposing identifier, status, geography, date, and operational reference fields. Hide direct personal identifiers, free-text notes, raw addresses, phone numbers, email, national IDs, and other high-sensitivity columns unless the user explicitly needs row-level access to them.
-- Add metadata and aggregate keys before row keys. Add verify-only keys only when there is a clear existence-check use case.
+- Add metadata and aggregate keys before row keys. Add evidence-verification-only keys only when there is a clear existence-check use case.
 - Start with `allowed_filters` on primary key and stable geography/status/date fields. Do not add filters for every column.
 - Start with no row-level aggregates unless the aggregate is useful and disclosure-safe.
 - Use placeholder `hash_env` names such as `<CONSUMER>_API_KEY_HASH`, not secret values.
@@ -115,16 +115,16 @@ After drafting a config:
 
 1. Check the YAML against the skeleton and field tables in `references/v1-config-contract.md`.
 2. Confirm every storage table, entity, relationship, scope, filter, and aggregate reference resolves.
-3. Confirm verify-only, claim-verification-only, aggregate-only, row, metadata, and admin scopes remain independent.
-4. Confirm hidden storage columns are not used as public filters, aggregate columns, verify parameters, or documentation fields.
+3. Confirm evidence-verification-only, aggregate-only, row, metadata, and admin scopes remain independent.
+4. Confirm hidden storage columns are not used as public filters, aggregate columns, evidence verification parameters, or documentation fields.
 5. If the user supplies loader errors or validation logs from a `registry-relay` deployment, map them back to the bundled contract and revise the YAML. Do not require repository access to complete the config draft.
 6. If env-backed API keys appear in examples, use placeholder environment variable names only. Do not print real secrets.
 
 ## Gotchas
 
 - `tables` are private storage. Public URLs are built from `entities[].name`.
-- If `fields` is present, every filter, aggregate group, aggregate measure, and verify primary-key parameter must use exposed entity field names.
-- Verify-only keys must not be able to call catalog, schema, rows, aggregate, or claim-verification endpoints.
+- If `fields` is present, every filter, aggregate group, aggregate measure, and evidence verification lookup key must use exposed entity field names.
+- Evidence-verification-only keys must not be able to call catalog, schema, rows, aggregate, or evidence verification endpoints.
 - Collection and expansion responses must not include total counts.
 - `?expand=` requires read scope, and required purpose headers, for both the host entity and every expanded target.
 - `resources` is an older alias still accepted by the code. Prefer `tables` for V1 configs.

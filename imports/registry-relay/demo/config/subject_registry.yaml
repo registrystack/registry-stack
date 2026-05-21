@@ -37,7 +37,7 @@ auth:
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
-        - subject_registry:verify
+        - subject_registry:evidence_verification
 
     # linkage_service is the ONLY persona with subject_registry:rows.
     - id: linkage_service
@@ -148,7 +148,6 @@ datasets:
           metadata_scope:    subject_registry:metadata
           aggregate_scope:   subject_registry:aggregate
           read_scope:        subject_registry:rows
-          verify_scope:      subject_registry:verify
         api:
           default_limit: 100
           max_limit: 1000

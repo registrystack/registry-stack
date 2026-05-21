@@ -11,11 +11,11 @@ get {
 }
 
 auth:bearer {
-  token: {{verifyKey}}
+  token: {{evidenceVerificationKey}}
 }
 
 docs {
-  Attempts to read the student schema using the verification_service key (verifyKey).
-  verifyKey holds only education_registry:verify; schema access requires :metadata.
+  Attempts to read the student schema using the verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey holds only education_registry:evidence_verification; schema access requires :metadata.
   expected: 403 auth.scope_denied
 }

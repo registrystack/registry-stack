@@ -492,9 +492,9 @@ fn assert_structural_dcat_shacl(body: &Value) {
         body["@context"]["dct"].is_null(),
         "redundant dct alias must not be present: use dcterms exclusively"
     );
-    assert_eq!(
-        body["@context"]["dspace"],
-        "https://w3id.org/dspace/2025/1/"
+    assert!(
+        body["@context"]["dspace"].is_null(),
+        "Registry Relay does not publish Dataspace Protocol participant claims"
     );
     assert_eq!(body["@context"]["odrl"], "http://www.w3.org/ns/odrl/2/");
     assert_eq!(body["@context"]["sh"], "http://www.w3.org/ns/shacl#");
@@ -937,7 +937,6 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(resp.header("content-type"), "application/ld+json");
     let body: Value = resp.json();
     assert_eq!(body["@type"], "dcat:Catalog");
-    assert_eq!(body["dspace:participantId"], "did:web:data.example.test");
     assert_structural_dcat_shacl(&body);
     assert_eq!(body["dcterms:description"], "");
     assert_eq!(body["@context"]["foaf"], "http://xmlns.com/foaf/0.1/");
@@ -1237,16 +1236,17 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         .iter()
         .any(|parameter| parameter["name"] == "id" && parameter["in"] == "path"));
 
-    let verify_get = &body["paths"]["/datasets/social_registry/household/verify"]["get"];
+    assert!(body["paths"]["/datasets/social_registry/household/verify"].is_null());
+    let evidence_post = &body["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"];
     assert_eq!(
-        verify_get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
-        "#/components/schemas/VerifyResponse"
+        evidence_post["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/EvidenceVerificationResponse"
     );
-    assert!(verify_get["parameters"]
+    assert!(evidence_post["parameters"]
         .as_array()
-        .expect("verify parameters")
+        .expect("evidence parameters")
         .iter()
-        .any(|parameter| parameter["name"] == "id" && parameter["in"] == "query"));
+        .any(|parameter| parameter["name"] == "offering_id" && parameter["in"] == "path"));
 
     let relationship_get =
         &body["paths"]["/datasets/social_registry/household/{id}/members"]["get"];
@@ -1417,7 +1417,6 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
         "/datasets/social_registry/household",
         "/datasets/social_registry/household/{id}",
         "/datasets/social_registry/household/schema",
-        "/datasets/social_registry/household/verify",
         "/datasets/social_registry/household/aggregates",
         "/datasets/social_registry/household/aggregates/{aggregate_id}",
         "/datasets/social_registry/household/{id}/members",
@@ -1443,6 +1442,10 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
     );
     assert_eq!(
         body["paths"]["/metadata/dcat/bregdcat-ap"]["get"]["tags"],
+        serde_json::json!(["Catalog"])
+    );
+    assert_eq!(
+        body["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"]["tags"],
         serde_json::json!(["Catalog"])
     );
     assert_eq!(
@@ -1538,10 +1541,6 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
             "get_social_registry_household_record",
         ),
         (
-            "/datasets/social_registry/household/verify",
-            "verify_social_registry_household_record",
-        ),
-        (
             "/datasets/social_registry/household/aggregates",
             "list_social_registry_household_aggregates",
         ),
@@ -1563,6 +1562,10 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
             "{path} must declare a stable operationId"
         );
     }
+    assert_eq!(
+        body["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"]["operationId"],
+        "create_evidence_offering_verification"
+    );
 
     // ---- 3.1 nullability for the nullable `region` field ----
     let region =
@@ -1683,7 +1686,6 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
     for gated in [
         "/datasets/social_registry/household",
         "/datasets/social_registry/household/{id}",
-        "/datasets/social_registry/household/verify",
         "/datasets/social_registry/household/{id}/members",
     ] {
         let param = purpose_param(gated)

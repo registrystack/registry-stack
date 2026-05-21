@@ -99,7 +99,7 @@ base URL:
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/cached_304.js
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/hot_200.js
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/mixed_read.js
-op run --env-file=target/perf/perf.env -- k6 run perf/k6/claim_verification.js
+op run --env-file=target/perf/perf.env -- k6 run perf/k6/evidence verification scenario
 ```
 
 Or source the env file and run k6 directly:
@@ -122,9 +122,9 @@ k6 run perf/k6/cached_304.js
 Config files in `perf/config/` mirror these profiles. Each config uses
 `auth.mode: api_key` with the five key ids from `generate_perf_keys.py`
 (`perf_rows`, `perf_metadata`, `perf_aggregate`, `perf_no_scope`,
-`perf_claim_verification`). The claim-verification key carries the
-`clinic_capacity:claim_verification` scope and is the only key that can
-exercise `perf/k6/claim_verification.js`.
+`perf_claim_verification`). The evidence-verification key carries the
+`clinic_capacity:evidence_verification` scope and is the only key that can
+exercise `perf/k6/evidence verification scenario`.
 
 The `large` profile requires roughly 2 GB of memory for the server process.
 The optional 5M tier (`--include-5m`) requires ~8 GB and should only be used on
@@ -134,8 +134,8 @@ capable hardware; skips must be noted in the report with machine specs and reaso
 
 ## Claim Verification Scenario
 
-`perf/k6/claim_verification.js` exercises
-`POST /datasets/{dataset_id}/{entity}/claim-verifications` with a weighted mix:
+`perf/k6/evidence verification scenario` exercises
+`POST /datasets/{dataset_id}/{entity}/evidence-verifications` with a weighted mix:
 
 | Mix | Decision   | Ruleset                | Why                                                                |
 |-----|------------|------------------------|--------------------------------------------------------------------|
@@ -150,7 +150,7 @@ p95<150ms for ambiguous; tighten after a baseline run). The aggregate
 `claim_verification` threshold key in `perf/k6/lib/common.js` is a backstop.
 
 **The scenario requests
-`application/vnd.registry-relay.claim-verification+jwt`**, so the handler
+`application/vnd.registry-relay.evidence-verification+jwt`**, so the handler
 returns a compact-serialized Ed25519-signed JWS. The decision is verified by
 base64url-decoding the JWS payload segment and reading its `decision` claim.
 The signature is NOT validated by k6: we trust the in-process signer and use k6
@@ -257,7 +257,7 @@ correct choice only when freshness is worth the upstream database round trip.
 | `REGISTRY_RELAY_TOKEN_METADATA`           | (generated)              | Token with `clinic_capacity:metadata` scope            |
 | `REGISTRY_RELAY_TOKEN_AGGREGATE`          | (generated)              | Token with `clinic_capacity:aggregate` scope           |
 | `REGISTRY_RELAY_TOKEN_NO_SCOPE`           | (generated)              | Valid token with no `clinic_capacity:*` scope          |
-| `REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION` | (generated)              | Token with `clinic_capacity:claim_verification` scope  |
+| `REGISTRY_RELAY_TOKEN_CLAIM_VERIFICATION` | (generated)              | Token with `clinic_capacity:evidence_verification` scope  |
 | `REGISTRY_RELAY_TOKEN_INVALID`            | `not-a-real-token-xxxx`  | Deliberately invalid token for 401 tests               |
 | `REGISTRY_RELAY_DATASET_ID`               | `clinic_capacity`        | Dataset id used in k6 URL construction                 |
 | `REGISTRY_RELAY_ENTITY`                   | `facility`               | Entity name used in k6 URL construction                |
@@ -267,8 +267,8 @@ correct choice only when freshness is worth the upstream database round trip.
 | `PERF_NO_SCOPE_KEY_HASH`                  | (generated sha256 hash)  | Fingerprint for `perf_no_scope`                        |
 | `PERF_CLAIM_VERIFICATION_KEY_HASH`        | (generated sha256 hash)  | Fingerprint for `perf_claim_verification`              |
 | `CLAIM_VERIFICATION_BINDING_KEY`          | (generated `hex:`)       | HMAC key for `claim_hash`; must stay stable across restarts |
-| `REGISTRY_RELAY_PROVENANCE_JWK`           | (generated Ed25519 JWK)  | Private signing key for the claim-verification receipt issuer |
+| `REGISTRY_RELAY_PROVENANCE_JWK`           | (generated Ed25519 JWK)  | Private signing key for the evidence-verification receipt issuer |
 
 All hash env vars follow registry-relay's convention: `sha256:<64 lowercase hex chars>`.
 `CLAIM_VERIFICATION_BINDING_KEY` follows the format `hex:<64 lowercase hex chars>`
-(see `docs/configuration.md` claim-verification section).
+(see `docs/configuration.md` evidence-verification section).
