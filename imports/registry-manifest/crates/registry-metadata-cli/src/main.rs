@@ -6,9 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use registry_metadata_core::{
-    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_dcat_profile,
-    render_entity_schema_draft_2020_12, render_ogc_records_items, render_shacl, MetadataError,
-    MetadataManifest,
+    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
+    render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
+    render_evidence_offering, render_evidence_offerings, render_ogc_records_items,
+    render_policy_collection, render_shacl, MetadataError, MetadataManifest,
 };
 use serde::Deserialize;
 use serde_yml::Value;
@@ -45,6 +46,20 @@ fn render_command(args: &[String]) -> Result<(), String> {
     let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
     let value = match format.as_str() {
         "catalog" => render_catalog(&compiled),
+        "evidence-offerings" => render_evidence_offerings(&compiled),
+        "evidence-offering" => {
+            let offering = option_value(args, "--offering")
+                .ok_or_else(|| "evidence-offering render requires --offering <id>".to_string())?;
+            render_evidence_offering(&compiled, &offering)
+                .ok_or_else(|| format!("evidence offering not found: {offering}"))?
+        }
+        "policies" => render_policy_collection(&compiled),
+        "policy" => {
+            let dataset = option_value(args, "--dataset")
+                .ok_or_else(|| "policy render requires --dataset <id>".to_string())?;
+            render_dataset_policy_document(&compiled, &dataset)
+                .ok_or_else(|| format!("dataset not found: {dataset}"))?
+        }
         "dcat" => {
             if let Some(profile) = profile.as_deref() {
                 ensure_dcat_profile_available(&compiled, profile)?;
@@ -83,9 +98,19 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     let out = PathBuf::from(out);
     fs::create_dir_all(out.join("schema")).map_err(|error| error.to_string())?;
     fs::create_dir_all(out.join("profiles")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(out.join("evidence-offerings")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(out.join("policies")).map_err(|error| error.to_string())?;
 
     fs::copy(manifest_path, out.join("metadata.yaml")).map_err(|error| error.to_string())?;
     write_json(out.join("catalog.json"), &render_catalog(&compiled))?;
+    write_json(
+        out.join("evidence-offerings.json"),
+        &render_evidence_offerings(&compiled),
+    )?;
+    write_json(
+        out.join("policies.jsonld"),
+        &render_policy_collection(&compiled),
+    )?;
     write_json(out.join("dcat.jsonld"), &render_base_dcat(&compiled))?;
     let mut dcat_profiles = Vec::new();
     for profile in &compiled.catalog().application_profiles {
@@ -102,7 +127,17 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     write_json(out.join("shacl.jsonld"), &render_shacl(&compiled))?;
 
     let mut schemas = Vec::new();
+    let mut policy_documents = Vec::new();
     for dataset in compiled.datasets() {
+        let policy_filename = format!("{}.jsonld", dataset.dataset_id);
+        let policy = render_dataset_policy_document(&compiled, &dataset.dataset_id)
+            .expect("compiled dataset policy renders");
+        write_json(out.join("policies").join(&policy_filename), &policy)?;
+        policy_documents.push(serde_json::json!({
+            "dataset": dataset.dataset_id,
+            "url": format!("/metadata/policies/{policy_filename}"),
+        }));
+
         let schema_dir = out.join("schema").join(&dataset.dataset_id);
         fs::create_dir_all(&schema_dir).map_err(|error| error.to_string())?;
         for entity in dataset.entities.values() {
@@ -122,6 +157,19 @@ fn publish_command(args: &[String]) -> Result<(), String> {
                 "url": relative,
             }));
         }
+    }
+
+    let mut evidence_offerings = Vec::new();
+    for offering in compiled.evidence_offerings() {
+        let filename = format!("{}.json", offering.id);
+        let document = render_evidence_offering(&compiled, &offering.id)
+            .expect("compiled evidence offering renders");
+        write_json(out.join("evidence-offerings").join(&filename), &document)?;
+        evidence_offerings.push(serde_json::json!({
+            "id": offering.id,
+            "dataset": offering.dataset_id,
+            "url": format!("/metadata/evidence-offerings/{filename}"),
+        }));
     }
 
     let mut profiles = Vec::new();
@@ -152,6 +200,10 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         "schema_version": "registry-metadata-index/v1",
         "manifest": "/metadata/metadata.yaml",
         "catalog": "/metadata/catalog.json",
+        "evidence_offerings": "/metadata/evidence-offerings.json",
+        "evidence_offering_documents": evidence_offerings,
+        "policies": "/metadata/policies.jsonld",
+        "policy_documents": policy_documents,
         "dcat": "/metadata/dcat.jsonld",
         "dcat_profiles": dcat_profiles,
         "shacl": "/metadata/shacl.jsonld",
@@ -265,12 +317,6 @@ fn validate_profile_descriptor(
     if descriptor.supported_input_artifacts.is_empty() {
         errors.push(format!(
             "{}: metadata.profile.supported_input_artifacts_missing",
-            path.display()
-        ));
-    }
-    if descriptor.unsupported_mappings.is_empty() {
-        errors.push(format!(
-            "{}: metadata.profile.unsupported_mappings_missing",
             path.display()
         ));
     }
@@ -622,5 +668,5 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: registry-metadata validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|dcat|bregdcat-ap|shacl|json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] | publish <metadata.yaml> --out <dir>".to_string()
+    "usage: registry-metadata validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|shacl|json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--offering <id>] | publish <metadata.yaml> --out <dir>".to_string()
 }

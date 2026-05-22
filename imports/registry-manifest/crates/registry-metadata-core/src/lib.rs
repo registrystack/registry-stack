@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Portable metadata model and pure renderers for Registry Relay catalogs.
+//! Portable metadata model and pure renderers for registry catalogs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -12,8 +12,6 @@ const DATASETS_COLLECTION_ID: &str = "datasets";
 const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/authority/data-theme";
 const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
-const EU_FILE_TYPE_JSON: &str = "http://publications.europa.eu/resource/authority/file-type/JSON";
-const IANA_JSON_MEDIA_TYPE: &str = "https://www.iana.org/assignments/media-types/application/json";
 const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1904,19 +1902,10 @@ fn validate_evidence_offerings(
             vocabularies,
             errors,
         );
-        if !matches!(
-            offering.access.kind.as_str(),
-            "registry-relay-verification" | "evidence-server"
-        ) {
+        if offering.access.kind.trim().is_empty() {
             errors.push(ValidationError::new(
                 format!("{offering_path}.access.kind"),
-                "only registry-relay-verification and evidence-server access are supported in v1",
-            ));
-        }
-        if offering.access.kind == "evidence-server" && offering.access.endpoint_url.is_none() {
-            errors.push(ValidationError::new(
-                format!("{offering_path}.access.endpoint_url"),
-                "evidence-server offerings must declare an endpoint URL",
+                "access kind must not be empty",
             ));
         }
         validate_optional_uri(
@@ -2424,8 +2413,8 @@ fn compile_dataset_policy(
     base_url: &str,
     dataset: &DatasetManifest,
 ) -> CompiledDatasetPolicy {
-    let dataset_target = format!("{base_url}/datasets/{}", dataset.id);
-    let default_uid = format!("{dataset_target}#offer");
+    let dataset_target = dataset_url_from_id(&dataset.id);
+    let default_uid = format!("#policy-{}-offer", dataset.id);
     let default_assigner = manifest
         .catalog
         .participant_id
@@ -2698,7 +2687,7 @@ fn catalog_field_json(field: &CompiledField) -> Value {
     })
 }
 
-fn base_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
+fn base_dcat_dataset(_compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
     let mut obj = json!({
         "@id": dataset_url(dataset),
         "@type": "dcat:Dataset",
@@ -2707,11 +2696,6 @@ fn base_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> 
         "dcterms:description": dataset.description,
         "dcterms:conformsTo": dataset.conforms_to,
         "dcat:landingPage": dataset_url(dataset),
-        "dcat:distribution": dataset
-            .entities
-            .values()
-            .map(|entity| entity_api_distribution(compiled, dataset, entity))
-            .collect::<Vec<_>>(),
     });
     obj["odrl:hasPolicy"] = render_dataset_policy(dataset);
     obj
@@ -2740,48 +2724,6 @@ fn breg_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> 
         obj["dcterms:spatial"] = json!(spatial);
     }
     obj
-}
-
-fn entity_api_distribution(
-    compiled: &CompiledMetadata,
-    dataset: &CompiledDataset,
-    entity: &CompiledEntity,
-) -> Value {
-    let access_url = format!(
-        "{}/datasets/{}/{}",
-        compiled.catalog().base_url,
-        dataset.dataset_id,
-        entity.name
-    );
-    json!({
-        "@id": format!("{}#distribution-{}", dataset_url(dataset), entity.name),
-        "@type": "dcat:Distribution",
-        "dcterms:title": format!("{} API", entity.title),
-        "dcterms:conformsTo": distribution_conforms_to(dataset),
-        "dcterms:format": {
-            "@id": EU_FILE_TYPE_JSON,
-            "@type": ["dcterms:MediaType", "dcterms:MediaTypeOrExtent"],
-        },
-        "dcat:mediaType": IANA_JSON_MEDIA_TYPE,
-        "dcat:accessURL": access_url,
-        "dcat:accessService": {
-            "@id": format!("{access_url}#service"),
-            "@type": "dcat:DataService",
-            "dcterms:identifier": format!("{}:{}:entity-api", dataset.dataset_id, entity.name),
-            "dcterms:title": format!("{} REST access service", entity.title),
-            "dcat:endpointURL": access_url,
-            "dcat:endpointDescription": format!("{}/openapi.json", compiled.catalog().base_url),
-            "dcat:servesDataset": dataset_url(dataset),
-        },
-    })
-}
-
-fn distribution_conforms_to(dataset: &CompiledDataset) -> Vec<String> {
-    let mut conforms_to = dataset.conforms_to.clone();
-    conforms_to.push("https://spec.openapis.org/oas/v3.1.0".to_string());
-    conforms_to.sort();
-    conforms_to.dedup();
-    conforms_to
 }
 
 fn dataset_codelist_references(
@@ -3099,14 +3041,14 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
     for offering in compiled.evidence_offerings() {
         let mut node = json!({
             "@id": offering.iri,
-            "@type": "registry_relay:EvidenceOffering",
+            "@type": "registry_metadata:EvidenceOffering",
             "dcterms:identifier": offering.id,
             "dcterms:title": offering.title,
             "dcterms:description": offering.description,
-            "registry_relay:evidenceType": iri_object(&offering.evidence_type_iri),
-            "registry_relay:issuingAuthority": issuing_authority_node(&offering.issuing_authority),
-            "registry_relay:accessKind": offering.access.kind,
-            "registry_relay:servesEntity": serves_entity_iri(&dataset_url_from_id(&offering.dataset_id), &offering.entity),
+            "registry_metadata:evidenceType": iri_object(&offering.evidence_type_iri),
+            "registry_metadata:issuingAuthority": issuing_authority_node(&offering.issuing_authority),
+            "registry_metadata:accessKind": offering.access.kind,
+            "registry_metadata:servesEntity": serves_entity_iri(&dataset_url_from_id(&offering.dataset_id), &offering.entity),
         });
         if let Some(endpoint_url) = offering.access.endpoint_url.as_deref() {
             let mut service = json!({
@@ -3119,7 +3061,7 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             if let Some(conforms_to) = offering.access.conforms_to.as_deref() {
                 service["dcterms:conformsTo"] = json!(conforms_to);
             }
-            node["registry_relay:evidenceService"] = service;
+            node["registry_metadata:evidenceService"] = service;
         }
         nodes.push(node);
     }
@@ -3195,7 +3137,7 @@ fn issuing_authority_node(authority: &CompiledIssuingAuthority) -> Value {
         node["@id"] = json!(iri);
     }
     if let Some(country) = authority.country.as_deref() {
-        node["registry_relay:country"] = json!(country);
+        node["registry_metadata:country"] = json!(country);
     }
     node
 }
@@ -3224,7 +3166,7 @@ fn entity_shape(
         "dcterms:identifier": format!("{}:{}", dataset.dataset_id, entity.name),
         "sh:name": entity.name,
         "sh:nodeKind": "sh:IRI",
-        "registry_relay:primaryKey": entity.primary_key,
+        "registry_metadata:primaryKey": entity.primary_key,
         "sh:property": properties,
     })
 }
@@ -3274,7 +3216,7 @@ fn relationship_shape(
         .map(|target| entity_class_uri(compiled, dataset, target))
         .unwrap_or_else(|| {
             format!(
-                "{}/datasets/{}/{}/schema",
+                "{}/metadata/datasets/{}/entities/{}",
                 compiled.catalog().base_url,
                 dataset.dataset_id,
                 relationship.target
@@ -3284,7 +3226,7 @@ fn relationship_shape(
         "@type": "sh:PropertyShape",
         "sh:path": relationship.concept_uri.clone().unwrap_or_else(|| {
             format!(
-                "{}/datasets/{}/{}/relationships/{}",
+                "{}/metadata/datasets/{}/entities/{}/relationships/{}",
                 compiled.catalog().base_url,
                 dataset.dataset_id,
                 entity.name,
@@ -3293,8 +3235,8 @@ fn relationship_shape(
         }),
         "sh:name": relationship.name,
         "sh:nodeKind": "sh:IRI",
-        "registry_relay:relationshipKind": relationship.cardinality,
-        "registry_relay:targetEntity": relationship.target,
+        "registry_metadata:relationshipKind": relationship.cardinality,
+        "registry_metadata:targetEntity": relationship.target,
         "sh:class": target_class,
     });
     if relationship.cardinality == "zero_or_one" || relationship.cardinality == "one" {
@@ -3561,6 +3503,7 @@ fn expand_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<Stri
             "dcat" => Some("http://www.w3.org/ns/dcat#"),
             "dcterms" => Some("http://purl.org/dc/terms/"),
             "odrl" => Some("http://www.w3.org/ns/odrl/2/"),
+            "registry_metadata" => Some("https://registry-metadata.dev/ns#"),
             "registry_relay" => Some("https://registry-relay.dev/ns#"),
             _ => None,
         })?;
@@ -3614,7 +3557,7 @@ fn field_property_uri(
 ) -> String {
     field.concepts.first().cloned().unwrap_or_else(|| {
         format!(
-            "{}/datasets/{}/{}/fields/{}",
+            "{}/metadata/datasets/{}/entities/{}/fields/{}",
             compiled.catalog().base_url,
             dataset.dataset_id,
             entity.name,
@@ -3630,7 +3573,7 @@ fn entity_class_uri(
 ) -> String {
     entity.concept_uri.clone().unwrap_or_else(|| {
         format!(
-            "{}/datasets/{}/{}/schema",
+            "{}/metadata/datasets/{}/entities/{}",
             compiled.catalog().base_url,
             dataset.dataset_id,
             entity.name
@@ -3766,7 +3709,7 @@ fn jsonld_context() -> Value {
         "odrl": "http://www.w3.org/ns/odrl/2/",
         "sh": "http://www.w3.org/ns/shacl#",
         "skos": "http://www.w3.org/2004/02/skos/core#",
-        "registry_relay": "https://registry-relay.dev/ns#",
+        "registry_metadata": "https://registry-metadata.dev/ns#",
         "xsd": "http://www.w3.org/2001/XMLSchema#",
         "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },
@@ -3861,10 +3804,10 @@ fn jsonld_context_with_evidence_terms() -> Value {
             "cccev:isDerivedFrom",
             "cccev:isSpecifiedIn",
             "cccev:specifiesEvidenceType",
-            "registry_relay:evidenceType",
-            "registry_relay:evidenceService",
-            "registry_relay:issuingAuthority",
-            "registry_relay:servesEntity",
+            "registry_metadata:evidenceType",
+            "registry_metadata:evidenceService",
+            "registry_metadata:issuingAuthority",
+            "registry_metadata:servesEntity",
         ] {
             object.insert(term.to_string(), json!({ "@type": "@id" }));
         }

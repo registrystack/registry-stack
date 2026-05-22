@@ -226,6 +226,53 @@ datasets:
 }
 
 #[test]
+fn validation_allows_portable_evidence_access_kinds() {
+    let manifest: MetadataManifest = serde_yml::from_str(
+        r#"
+schema_version: registry-metadata/v1
+catalog:
+  id: portable-access-kind
+  base_url: https://data.example.test
+  title: Portable Access Kind
+  publisher:
+    name: Example Authority
+requirements:
+  - id: requirement
+    iri: https://data.example.test/requirements/example
+    title: Example requirement
+evidence_types:
+  - id: evidence
+    iri: https://data.example.test/evidence-types/example
+    title: Example evidence
+    proves: [requirement]
+datasets:
+  - id: first
+    title: First
+    entities:
+      - name: person
+        fields:
+          - name: id
+            type: string
+    evidence_offerings:
+      - id: person_evidence
+        title: Person evidence
+        evidence_type: evidence
+        issuing_authority:
+          id: authority
+          name: Authority
+        entity: person
+        lookup_keys: [id]
+        access:
+          kind: partner-api
+          ruleset: exact
+"#,
+    )
+    .expect("manifest parses");
+
+    validate_manifest(&manifest).expect("portable access kind validates");
+}
+
+#[test]
 fn evidence_server_offerings_publish_endpoint_metadata() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
@@ -288,25 +335,25 @@ datasets:
         .find(|node| node["dcterms:identifier"] == "smallholder_evidence_service")
         .expect("offering node exists");
     assert_eq!(
-        offering["registry_relay:evidenceService"]["dcat:endpointURL"],
+        offering["registry_metadata:evidenceService"]["dcat:endpointURL"],
         json!("https://evidence.example.test")
     );
 
     // Blocker 3: servesEntity IRI must not contain more than one '#' (RFC 3986 §3.5).
     // The base IRI is "#dataset-farmers" which already has '#'; appending "#entity-farmer"
     // creates an invalid double-fragment IRI. The separator must switch to '-' instead.
-    let serves_entity = offering["registry_relay:servesEntity"]
+    let serves_entity = offering["registry_metadata:servesEntity"]
         .as_str()
-        .expect("registry_relay:servesEntity is a string");
+        .expect("registry_metadata:servesEntity is a string");
     let fragment_count = serves_entity.chars().filter(|&c| c == '#').count();
     assert_eq!(
         fragment_count,
         1,
-        "registry_relay:servesEntity must contain exactly one '#' per RFC 3986 §3.5; got: {serves_entity}"
+        "registry_metadata:servesEntity must contain exactly one '#' per RFC 3986 §3.5; got: {serves_entity}"
     );
     assert!(
         serves_entity.contains("entity-farmer"),
-        "registry_relay:servesEntity must still reference the entity name; got: {serves_entity}"
+        "registry_metadata:servesEntity must still reference the entity name; got: {serves_entity}"
     );
 }
 
@@ -383,7 +430,7 @@ fn policy_manifest_validates_and_renders_odrl_offer() {
     assert!(policy["odrl:profile"].is_array());
     assert_eq!(
         policy["odrl:permission"][0]["odrl:target"]["@id"],
-        json!("https://civil-registration.example.gov/datasets/vital-events")
+        json!("#dataset-vital-events")
     );
     assert_eq!(
         policy["odrl:permission"][0]["odrl:action"]["@id"],
@@ -418,16 +465,13 @@ fn default_policy_is_minimal_and_deterministic() {
     let dcat = render_base_dcat(&compiled);
     let policy = &dcat["dcat:dataset"][0]["odrl:hasPolicy"];
 
-    assert_eq!(
-        policy["@id"],
-        json!("https://civil-registration.example.gov/datasets/vital-events#offer")
-    );
+    assert_eq!(policy["@id"], json!("#policy-vital-events-offer"));
     assert_eq!(policy["odrl:permission"].as_array().unwrap().len(), 1);
     let permission = &policy["odrl:permission"][0];
     assert_eq!(permission["odrl:action"]["@id"], json!("odrl:use"));
     assert_eq!(
         permission["odrl:target"]["@id"],
-        json!("https://civil-registration.example.gov/datasets/vital-events")
+        json!("#dataset-vital-events")
     );
     assert!(permission.get("odrl:assignee").is_none());
     assert!(permission.get("odrl:constraint").is_none());
@@ -451,15 +495,12 @@ fn policy_documents_are_dataset_scoped_json_ld() {
     assert_eq!(collection["@graph"].as_array().expect("graph").len(), 1);
     assert_eq!(
         collection["@graph"][0]["odrl:permission"][0]["odrl:target"]["@id"],
-        json!("https://civil-registration.example.gov/datasets/vital-events")
+        json!("#dataset-vital-events")
     );
 
     let policy =
         render_dataset_policy_document(&compiled, "vital-events").expect("dataset policy renders");
-    assert_eq!(
-        policy["@id"],
-        json!("https://civil-registration.example.gov/datasets/vital-events#offer")
-    );
+    assert_eq!(policy["@id"], json!("#policy-vital-events-offer"));
     assert_eq!(policy["@type"], json!("odrl:Offer"));
     assert!(render_dataset_policy_document(&compiled, "missing").is_none());
 }
@@ -607,8 +648,12 @@ fn dcat_profiles_render_separate_artifacts() {
             && node["@type"] == "dcterms:Standard"
     }));
     assert!(
-        standard_ids.contains("https://spec.openapis.org/oas/v3.1.0"),
-        "distribution-level OpenAPI standard reference must be typed"
+        !standard_ids.contains("https://spec.openapis.org/oas/v3.1.0"),
+        "OpenAPI conformance must only appear when an API artifact is explicitly modeled"
+    );
+    assert!(
+        base["dcat:dataset"][0].get("dcat:distribution").is_none(),
+        "base DCAT must not synthesize entity REST distributions"
     );
     assert_eq!(
         render_dcat_profile(&compiled, "bregdcat-ap").unwrap()["@id"],
@@ -649,7 +694,7 @@ fn breg_dcat_emits_standard_public_service_evidence_without_source_truth_claims(
     assert_eq!(service["dcterms:title"], json!("Civil registration"));
     assert_eq!(service["cpsv:produces"], json!("#dataset-vital-events"));
     assert!(
-        service["registry_relay:sourceOfTruth"].is_null(),
+        service["registry_metadata:sourceOfTruth"].is_null(),
         "Registry Relay publishes standard CPSV evidence, not an authority verdict"
     );
 }

@@ -75,6 +75,10 @@ cargo build --workspace --all-targets
 `registry-metadata render` supports:
 
 - `catalog`
+- `evidence-offerings`
+- `evidence-offering` with `--offering <id>`
+- `policies`
+- `policy` with `--dataset <id>`
 - `dcat`
 - `bregdcat-ap`
 - `shacl`

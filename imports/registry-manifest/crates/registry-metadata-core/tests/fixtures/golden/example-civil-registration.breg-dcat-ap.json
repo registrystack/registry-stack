@@ -96,7 +96,7 @@
     "rdfs:seeAlso": {
       "@type": "@id"
     },
-    "registry_relay": "https://registry-relay.dev/ns#",
+    "registry_metadata": "https://registry-metadata.dev/ns#",
     "sh": "http://www.w3.org/ns/shacl#",
     "sh:class": {
       "@type": "@id"
@@ -149,20 +149,6 @@
       "@type": "foaf:Document"
     },
     {
-      "@id": "https://spec.openapis.org/oas/v3.1.0",
-      "@type": "dcterms:Standard"
-    },
-    {
-      "@id": "https://www.iana.org/assignments/media-types/application/json",
-      "@type": "dcterms:MediaType"
-    },
-    {
-      "@id": "http://publications.europa.eu/resource/authority/file-type",
-      "@type": "skos:ConceptScheme",
-      "dcterms:title": "file type",
-      "skos:prefLabel": "file type"
-    },
-    {
       "@id": "http://purl.org/adms/publishertype/1.0",
       "@type": "skos:ConceptScheme",
       "dcterms:title": "1.0",
@@ -173,12 +159,6 @@
       "@type": "skos:Concept",
       "skos:inScheme": "http://purl.org/adms/publishertype/1.0",
       "skos:prefLabel": "PublicAuthority"
-    },
-    {
-      "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
-      "@type": "skos:Concept",
-      "skos:inScheme": "http://publications.europa.eu/resource/authority/file-type",
-      "skos:prefLabel": "JSON"
     },
     {
       "@id": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
@@ -231,62 +211,6 @@
       "@id": "#dataset-vital-events",
       "@type": "dcat:Dataset",
       "adms:status": "http://purl.org/adms/status/UnderDevelopment",
-      "dcat:distribution": [
-        {
-          "@id": "#dataset-vital-events#distribution-person",
-          "@type": "dcat:Distribution",
-          "dcat:accessService": {
-            "@id": "https://civil-registration.example.gov/datasets/vital-events/person#service",
-            "@type": "dcat:DataService",
-            "dcat:endpointDescription": "https://civil-registration.example.gov/openapi.json",
-            "dcat:endpointURL": "https://civil-registration.example.gov/datasets/vital-events/person",
-            "dcat:servesDataset": "#dataset-vital-events",
-            "dcterms:identifier": "vital-events:person:entity-api",
-            "dcterms:title": "Person REST access service"
-          },
-          "dcat:accessURL": "https://civil-registration.example.gov/datasets/vital-events/person",
-          "dcat:mediaType": "https://www.iana.org/assignments/media-types/application/json",
-          "dcterms:conformsTo": [
-            "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
-            "https://spec.openapis.org/oas/v3.1.0"
-          ],
-          "dcterms:format": {
-            "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
-            "@type": [
-              "dcterms:MediaType",
-              "dcterms:MediaTypeOrExtent"
-            ]
-          },
-          "dcterms:title": "Person API"
-        },
-        {
-          "@id": "#dataset-vital-events#distribution-vital_event",
-          "@type": "dcat:Distribution",
-          "dcat:accessService": {
-            "@id": "https://civil-registration.example.gov/datasets/vital-events/vital_event#service",
-            "@type": "dcat:DataService",
-            "dcat:endpointDescription": "https://civil-registration.example.gov/openapi.json",
-            "dcat:endpointURL": "https://civil-registration.example.gov/datasets/vital-events/vital_event",
-            "dcat:servesDataset": "#dataset-vital-events",
-            "dcterms:identifier": "vital-events:vital_event:entity-api",
-            "dcterms:title": "Vital Event REST access service"
-          },
-          "dcat:accessURL": "https://civil-registration.example.gov/datasets/vital-events/vital_event",
-          "dcat:mediaType": "https://www.iana.org/assignments/media-types/application/json",
-          "dcterms:conformsTo": [
-            "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
-            "https://spec.openapis.org/oas/v3.1.0"
-          ],
-          "dcterms:format": {
-            "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
-            "@type": [
-              "dcterms:MediaType",
-              "dcterms:MediaTypeOrExtent"
-            ]
-          },
-          "dcterms:title": "Vital Event API"
-        }
-      ],
       "dcat:landingPage": "#dataset-vital-events",
       "dcterms:accessRights": "http://publications.europa.eu/resource/authority/access-right/RESTRICTED",
       "dcterms:accrualPeriodicity": "http://publications.europa.eu/resource/authority/frequency/UNKNOWN",
@@ -354,7 +278,7 @@
       "dcterms:rightsHolder": "Civil Registration Authority",
       "dcterms:title": "Vital Events",
       "odrl:hasPolicy": {
-        "@id": "https://civil-registration.example.gov/datasets/vital-events#offer",
+        "@id": "#policy-vital-events-offer",
         "@type": "odrl:Offer",
         "odrl:assigner": {
           "@id": "https://civil-registration.example.gov/authority"
@@ -368,11 +292,11 @@
               "@id": "https://civil-registration.example.gov/authority"
             },
             "odrl:target": {
-              "@id": "https://civil-registration.example.gov/datasets/vital-events"
+              "@id": "#dataset-vital-events"
             }
           }
         ],
-        "odrl:uid": "https://civil-registration.example.gov/datasets/vital-events#offer"
+        "odrl:uid": "#policy-vital-events-offer"
       }
     }
   ],
@@ -399,7 +323,7 @@
       "@type": "sh:NodeShape",
       "dcterms:identifier": "vital-events:person",
       "dcterms:isPartOf": "#dataset-vital-events",
-      "registry_relay:primaryKey": "person_id",
+      "registry_metadata:primaryKey": "person_id",
       "sh:name": "person",
       "sh:nodeKind": "sh:IRI",
       "sh:property": [
@@ -435,14 +359,14 @@
           "skos:inScheme": "https://civil-registration.example.gov/codelists/sex"
         }
       ],
-      "sh:targetClass": "https://civil-registration.example.gov/datasets/vital-events/person/schema"
+      "sh:targetClass": "https://civil-registration.example.gov/metadata/datasets/vital-events/entities/person"
     },
     {
       "@id": "https://civil-registration.example.gov/metadata/schema/vital-events/vital_event/schema.json",
       "@type": "sh:NodeShape",
       "dcterms:identifier": "vital-events:vital_event",
       "dcterms:isPartOf": "#dataset-vital-events",
-      "registry_relay:primaryKey": "event_id",
+      "registry_metadata:primaryKey": "event_id",
       "sh:name": "vital_event",
       "sh:nodeKind": "sh:IRI",
       "sh:property": [
@@ -479,7 +403,7 @@
           "sh:path": "https://civil-registration.example.gov/vocab/VitalEvent.registrationDate"
         }
       ],
-      "sh:targetClass": "https://civil-registration.example.gov/datasets/vital-events/vital_event/schema"
+      "sh:targetClass": "https://civil-registration.example.gov/metadata/datasets/vital-events/entities/vital_event"
     }
   ]
 }
