@@ -61,7 +61,7 @@ Coverage metrics use `cargo-llvm-cov`; see [docs/development.md#coverage-metrics
 
 ## Metadata Manifests
 
-Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or backend URLs.
+Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or Relay runtime backend URLs. Evidence offerings may declare standards-facing service `endpoint_url` and `discovery_url` values when the offering is fulfilled by an external Evidence Server.
 
 Use this split when you want standards-facing metadata that can outlive Registry Relay itself. A civil registration application, a social benefits application, or another registry system can validate and publish the same manifest through static files without adopting Relay's runtime API. The checked-in app profiles are hypothetical examples; real OpenCRVS, OpenSPP, PublicSchema, or SP DCI profiles should be added only after review with the relevant project artifacts or maintainers.
 
@@ -200,6 +200,12 @@ POST /evidence-offerings/{offering_id}/verifications
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
+
+`POST /evidence-offerings/{offering_id}/verifications` is Relay-native and
+only executes offerings whose metadata declares
+`access.kind: registry-relay-verification`. Offerings with
+`access.kind: evidence-server` are discovery records; clients call the
+advertised Evidence Server endpoint directly.
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
 

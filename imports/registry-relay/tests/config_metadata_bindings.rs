@@ -420,7 +420,7 @@ async fn metadata_dcat_profile_uses_split_manifest_policy_when_available() {
     );
     assert_eq!(
         policy["odrl:permission"][0]["odrl:target"]["@id"],
-        "https://metadata.example.test/datasets/social_registry"
+        "#dataset-social_registry"
     );
     assert_eq!(
         policy["odrl:permission"][0]["odrl:constraint"][0]["odrl:rightOperand"]["@id"],

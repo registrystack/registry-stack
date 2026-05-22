@@ -815,8 +815,8 @@ dependencies = [
 
 [[package]]
 name = "cel-mapper-core"
-version = "0.1.0"
-source = "git+https://github.com/PublicSchema/cel-mapping?tag=cel-mapper-core-v0.1.0#a58b8c0de806c1a0f9ac0622f66c0b130ff1b86c"
+version = "0.1.1"
+source = "git+https://github.com/PublicSchema/cel-mapping?tag=cel-mapper-core-v0.1.1#32679bb78c969b8f33129113e31465dbe54b0ea0"
 dependencies = [
  "base64",
  "cel",
@@ -4451,8 +4451,8 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "registry-metadata-core"
-version = "0.1.0"
-source = "git+https://github.com/jeremi/registry-metadata?tag=v0.1.0#38d215ad162f460f9c43cc6a1494238daf8d7ca6"
+version = "0.1.1"
+source = "git+https://github.com/jeremi/registry-metadata?tag=v0.1.1#480dcfbcf2fded7edf70c6bd9e0f86074bd23309"
 dependencies = [
  "serde",
  "serde_json",

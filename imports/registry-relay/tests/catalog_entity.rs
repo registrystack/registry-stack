@@ -323,14 +323,11 @@ async fn metadata_policy_surfaces_are_dataset_scoped_and_json_ld() {
     assert_eq!(body["@id"], "https://data.example.test/metadata/policies");
     let policies = body["@graph"].as_array().expect("policy graph");
     assert_eq!(policies.len(), 1);
-    assert_eq!(
-        policies[0]["@id"],
-        "https://data.example.test/datasets/social_registry#offer"
-    );
+    assert_eq!(policies[0]["@id"], "#policy-social_registry-offer");
     assert_eq!(policies[0]["@type"], "odrl:Offer");
     assert_eq!(
         policies[0]["odrl:permission"][0]["odrl:target"]["@id"],
-        "https://data.example.test/datasets/social_registry"
+        "#dataset-social_registry"
     );
     assert!(!serde_json::to_string(&body)
         .expect("policies serialize")
@@ -347,14 +344,8 @@ async fn metadata_dataset_policy_returns_one_visible_dataset_policy() {
     assert_eq!(resp.header("content-type"), "application/ld+json");
     let body: Value = resp.json();
     assert_eq!(body["@context"]["odrl"], "http://www.w3.org/ns/odrl/2/");
-    assert_eq!(
-        body["@id"],
-        "https://data.example.test/datasets/social_registry#offer"
-    );
-    assert_eq!(
-        body["odrl:uid"],
-        "https://data.example.test/datasets/social_registry#offer"
-    );
+    assert_eq!(body["@id"], "#policy-social_registry-offer");
+    assert_eq!(body["odrl:uid"], "#policy-social_registry-offer");
     assert_eq!(
         body["odrl:permission"]
             .as_array()
@@ -551,9 +542,9 @@ fn assert_structural_dcat_shacl(body: &Value) {
 }
 
 fn assert_distributions_do_not_contain(body: &Value, needle: &str) {
-    let distributions = body["dcat:dataset"][0]["dcat:distribution"]
-        .as_array()
-        .expect("distributions");
+    let Some(distributions) = body["dcat:dataset"][0]["dcat:distribution"].as_array() else {
+        return;
+    };
     assert!(!distributions
         .iter()
         .any(|distribution| serde_json::to_string(distribution)
@@ -968,11 +959,11 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     assert_eq!(body["dcat:dataset"].as_array().expect("datasets").len(), 1);
     assert_eq!(
         body["dcat:dataset"][0]["odrl:hasPolicy"]["@id"],
-        "https://data.example.test/datasets/social_registry#offer"
+        "#policy-social_registry-offer"
     );
     assert_eq!(
         body["dcat:dataset"][0]["odrl:hasPolicy"]["odrl:uid"],
-        "https://data.example.test/datasets/social_registry#offer"
+        "#policy-social_registry-offer"
     );
     assert_eq!(
         body["dcat:dataset"][0]["odrl:hasPolicy"]["odrl:assigner"]["@id"],
@@ -984,7 +975,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
     );
     assert_eq!(
         body["dcat:dataset"][0]["odrl:hasPolicy"]["odrl:permission"][0]["odrl:target"]["@id"],
-        "https://data.example.test/datasets/social_registry"
+        "#dataset-social_registry"
     );
     assert_eq!(
         body["dcat:dataset"][0]["dcterms:publisher"]["@type"],
@@ -998,39 +989,12 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         body["dcat:dataset"][0]["dcterms:accrualPeriodicity"],
         "http://publications.europa.eu/resource/authority/frequency/MONTHLY"
     );
-    let distribution = body["dcat:dataset"][0]["dcat:distribution"]
-        .as_array()
-        .expect("distributions")
-        .iter()
-        .find(|distribution| {
-            distribution["dcat:accessURL"]
-                == "https://data.example.test/datasets/social_registry/household"
-        })
-        .expect("entity REST distribution");
-    assert_eq!(
-        distribution["dcterms:format"]["@id"],
-        "http://publications.europa.eu/resource/authority/file-type/JSON"
-    );
-    assert_eq!(
-        distribution["dcat:mediaType"],
-        "https://www.iana.org/assignments/media-types/application/json"
-    );
-    assert_eq!(
-        distribution["dcat:accessService"]["dcat:endpointDescription"],
-        "https://data.example.test/openapi.json"
-    );
-    assert_eq!(
-        distribution["dcat:accessService"]["dcat:servesDataset"],
-        "#dataset-social_registry"
-    );
+    assert!(body["dcat:dataset"][0].get("dcat:distribution").is_none());
 
     let included = body["@included"].as_array().expect("included nodes");
-    assert!(included.iter().any(|node| {
+    assert!(!included.iter().any(|node| {
         node["@id"] == "http://publications.europa.eu/resource/authority/file-type/JSON"
-            && node["skos:inScheme"] == "http://publications.europa.eu/resource/authority/file-type"
-    }));
-    assert!(included.iter().any(|node| {
-        node["@id"] == "https://spec.openapis.org/oas/v3.1.0" && node["@type"] == "dcterms:Standard"
+            || node["@id"] == "https://spec.openapis.org/oas/v3.1.0"
     }));
 
     let shapes = body["sh:shapesGraph"].as_array().expect("shapes graph");
@@ -1043,7 +1007,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         household["sh:targetClass"],
         "https://publicschema.org/concepts/Household"
     );
-    assert_eq!(household["registry_relay:primaryKey"], "id");
+    assert_eq!(household["registry_metadata:primaryKey"], "id");
     assert!(household["sh:property"]
         .as_array()
         .expect("properties")
@@ -1059,7 +1023,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         .as_array()
         .expect("properties")
         .iter()
-        .any(|property| { property["registry_relay:targetEntity"] == "individual" }));
+        .any(|property| { property["registry_metadata:targetEntity"] == "individual" }));
 }
 
 #[tokio::test]
@@ -1071,17 +1035,7 @@ async fn dcat_ap_filters_same_dataset_sibling_entities_by_metadata_scope() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_structural_dcat_shacl(&body);
-    let distributions = body["dcat:dataset"][0]["dcat:distribution"]
-        .as_array()
-        .expect("distributions");
-    assert!(distributions.iter().any(|distribution| {
-        distribution["dcat:accessURL"]
-            == "https://data.example.test/datasets/social_registry/individual"
-    }));
-    assert!(distributions
-        .iter()
-        .all(|distribution| distribution["dcat:accessURL"]
-            != "https://data.example.test/datasets/social_registry/household"));
+    assert!(body["dcat:dataset"][0].get("dcat:distribution").is_none());
     let shapes = body["sh:shapesGraph"].as_array().expect("shapes graph");
     assert_eq!(shapes.len(), 1);
     assert_eq!(shapes[0]["sh:name"], "individual");

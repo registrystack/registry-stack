@@ -10,7 +10,7 @@ GET /metadata/evidence-offerings/{offering_id}
 POST /evidence-offerings/{offering_id}/verifications
 ```
 
-The metadata routes describe what evidence can be checked, which authority offers it, the evidence type, assurance metadata, permitted purpose metadata, and the request schema. The `POST` route creates a verification event for one offering. Do not put claim data in URLs, query strings, cache keys, or proxy-visible paths.
+The metadata routes describe what evidence can be checked, which authority offers it, the evidence type, assurance metadata, permitted purpose metadata, and the request schema. The `POST` route creates a verification event for one Relay-native offering whose metadata declares `access.kind: registry-relay-verification`. Offerings with `access.kind: evidence-server` are published for discovery; clients evaluate those claims by calling the advertised Evidence Server endpoint directly. Do not put claim data in URLs, query strings, cache keys, or proxy-visible paths.
 
 Common uses:
 
