@@ -43,8 +43,10 @@ DEFAULT_BASE_URL = "http://127.0.0.1:4255"
 DEFAULT_REGISTRY_BASE_URL = "http://127.0.0.1:4256"
 RELAY_ROOT = Path(__file__).resolve().parents[2]
 APPS_ROOT = RELAY_ROOT.parent
-EVIDENCE_SERVER_ROOT = APPS_ROOT / "evidence-server"
-DEFAULT_CONFIG = EVIDENCE_SERVER_ROOT / "demo/config/evidence-server.yaml"
+SIBLING_EVIDENCE_SERVER_ROOT = APPS_ROOT / "evidence-server"
+CLONED_EVIDENCE_SERVER_ROOT = RELAY_ROOT / "target/evidence-server-demo/evidence-server"
+EVIDENCE_SERVER_GIT_URL = "https://github.com/jeremi/evidence-server"
+EVIDENCE_SERVER_GIT_TAG = "v0.1.0"
 DEFAULT_REGISTRY_CONFIG = RELAY_ROOT / "demo/config/evidence_registries.yaml"
 DEFAULT_OUTPUT_DIR = RELAY_ROOT / "demo/output/evidence-server-demo"
 DEFAULT_FEATURES = "spdci-api-standards"
@@ -202,6 +204,47 @@ def require_status(result: HttpResult, expected: int, label: str) -> Any:
 def preflight() -> None:
     if shutil.which("openssl") is None:
         raise DemoError("openssl is required to sign the demo holder proof")
+
+
+def default_evidence_server_root() -> Path:
+    configured = os.environ.get("EVIDENCE_SERVER_ROOT")
+    if configured:
+        return Path(configured)
+    if (SIBLING_EVIDENCE_SERVER_ROOT / "Cargo.toml").exists():
+        return SIBLING_EVIDENCE_SERVER_ROOT
+    return CLONED_EVIDENCE_SERVER_ROOT
+
+
+def ensure_evidence_server_root(root: Path, explicit: bool) -> Path:
+    if (root / "Cargo.toml").exists():
+        return root
+    if explicit:
+        raise DemoError(f"Evidence Server checkout is missing Cargo.toml: {root}")
+    if shutil.which("git") is None:
+        raise DemoError("git is required to clone the Evidence Server demo dependency")
+    root.parent.mkdir(parents=True, exist_ok=True)
+    print(
+        f"Cloning Evidence Server {EVIDENCE_SERVER_GIT_TAG} into {root}",
+        flush=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            EVIDENCE_SERVER_GIT_TAG,
+            EVIDENCE_SERVER_GIT_URL,
+            str(root),
+        ],
+        check=True,
+    )
+    return root
+
+
+def prepare_evidence_server_runtime_dirs(root: Path) -> None:
+    (root / "demo/var").mkdir(parents=True, exist_ok=True)
 
 
 def prepare_output_dir(output_dir: Path) -> None:
@@ -1023,7 +1066,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--registry-base-url", default=DEFAULT_REGISTRY_BASE_URL)
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument(
+        "--evidence-server-root",
+        default=None,
+        help=(
+            "Evidence Server checkout used with --start-server; defaults to "
+            "EVIDENCE_SERVER_ROOT, ../evidence-server, or a tagged clone under target/"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Evidence Server config path; defaults to "
+            "<evidence-server-root>/demo/config/evidence-server.yaml"
+        ),
+    )
     parser.add_argument("--registry-config", default=str(DEFAULT_REGISTRY_CONFIG))
     parser.add_argument("--env-file", default="demo/.env.local")
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
@@ -1051,6 +1109,22 @@ def main() -> int:
     evidence_process: subprocess.Popen[str] | None = None
     registry_process: subprocess.Popen[str] | None = None
     try:
+        explicit_evidence_root = args.evidence_server_root is not None
+        evidence_server_root = (
+            Path(args.evidence_server_root)
+            if explicit_evidence_root
+            else default_evidence_server_root()
+        )
+        if args.start_server:
+            evidence_server_root = ensure_evidence_server_root(
+                evidence_server_root, explicit_evidence_root
+            )
+            prepare_evidence_server_runtime_dirs(evidence_server_root)
+        evidence_config = (
+            Path(args.config)
+            if args.config is not None
+            else evidence_server_root / "demo/config/evidence-server.yaml"
+        )
         if args.start_server:
             registry_process = start_server(
                 Path(args.registry_config),
@@ -1061,10 +1135,10 @@ def main() -> int:
             )
             wait_for_registry_server(args.registry_base_url, registry_token, registry_process)
             evidence_process = start_server(
-                Path(args.config),
+                evidence_config,
                 env,
                 "evidence-server",
-                cwd=EVIDENCE_SERVER_ROOT,
+                cwd=evidence_server_root,
                 features=args.evidence_features,
                 package="evidence-server-bin",
             )

@@ -70,11 +70,11 @@ validate-catalog-semic-local catalog profile="bregdcatap.2_1_0":
 # Usage: just metadata-validate
 #        just metadata-validate profiles/example-benefits-sync/fixtures/metadata.yaml
 metadata-validate manifest="profiles/example-civil-registration/fixtures/metadata.yaml":
-    manifest_path="$(pwd)/{{manifest}}"; cd ../registry-metadata && cargo run --quiet -p registry-metadata-cli -- validate "$manifest_path"
+    manifest_path="$(pwd)/{{manifest}}"; scripts/run_registry_metadata_cli.sh validate "$manifest_path"
 
 # Validate all ecosystem profile descriptors and fixture manifests.
 metadata-validate-profiles:
-    profiles_path="$(pwd)/profiles"; cd ../registry-metadata && cargo run --quiet -p registry-metadata-cli -- validate-profiles "$profiles_path"
+    profiles_path="$(pwd)/profiles"; scripts/run_registry_metadata_cli.sh validate-profiles "$profiles_path"
 
 # Render one static metadata artifact from a manifest.
 # Usage: just metadata-render
@@ -82,13 +82,13 @@ metadata-validate-profiles:
 #        just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
 metadata-render manifest="profiles/example-civil-registration/fixtures/metadata.yaml" format="catalog" out="target/metadata/catalog.json" extra="":
     mkdir -p $(dirname {{out}})
-    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; cd ../registry-metadata && cargo run --quiet -p registry-metadata-cli -- render "$manifest_path" --format {{format}} {{extra}} > "$out_path"
+    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_metadata_cli.sh render "$manifest_path" --format {{format}} {{extra}} > "$out_path"
 
 # Publish a static metadata bundle with index, catalog, DCAT, SHACL, and schemas.
 # Usage: just metadata-publish
 #        just metadata-publish profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
 metadata-publish manifest="profiles/example-civil-registration/fixtures/metadata.yaml" out="target/metadata/public":
-    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; cd ../registry-metadata && cargo run --quiet -p registry-metadata-cli -- publish "$manifest_path" --out "$out_path"
+    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_metadata_cli.sh publish "$manifest_path" --out "$out_path"
 
 # Check advisories only (alias for a quick security scan).
 audit:

@@ -1,4 +1,4 @@
-schema_version: registry-relay-profile/v1
+schema_version: registry-metadata-profile/v1
 profile:
   id: example-social-benefits
   version: "1"
