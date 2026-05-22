@@ -1,6 +1,11 @@
 # Evidence Server Specification
 
-Status: draft
+Status: historical pre-split draft
+
+Current implementation note: Evidence Server now lives in the sibling
+`../evidence-server` repository. This document is retained as historical design
+context for the extraction and should not be read as current Registry Relay
+workspace layout guidance.
 
 This document specifies a standalone Evidence Server that computes configured
 claims from registry data and renders them as evidence artifacts. It is written
@@ -2208,22 +2213,21 @@ Version 0 is not done if any of these are true:
 
 ## Code Location
 
-The Evidence Server should start inside the existing Rust workspace as separate
-crates, not inside the `registry-relay` binary's `src/api` tree. This keeps the
-implementation close enough to reuse current metadata, auth, and demo assets
-while keeping extraction to a separate repository possible later.
+Historical note: this section originally described an in-workspace prototype.
+After the repository split, the implementation lives in the sibling
+`../evidence-server` repository and Registry Relay must not host or link the
+Evidence Server runtime.
 
-Recommended workspace layout:
+Current workspace layout:
 
 ```text
-crates/evidence-core/
-crates/evidence-server/
+../evidence-server/
+  crates/evidence-core/
+  crates/evidence-server/
+  crates/evidence-server-bin/
 ```
 
-Wave 0 must add these crates to the workspace `members` list before feature
-work starts.
-
-`crates/evidence-core` owns:
+`../evidence-server/crates/evidence-core` owns:
 
 - `ClaimDefinition`;
 - `ClaimResult`;
@@ -2237,12 +2241,14 @@ work starts.
 - metadata validation;
 - shared error codes.
 
-`crates/evidence-server` is both a library and a binary crate. The library owns
-the service assembly and protocol client implementations so tests and demos can
-reuse them without depending on a running process. The binary owns process
+`../evidence-server/crates/evidence-server` is the library crate. It owns the
+service assembly and protocol client implementations so tests and demos can
+reuse them without depending on a running process.
+
+`../evidence-server/crates/evidence-server-bin` is the process crate. It owns
 startup, configuration file loading, server binding, and shutdown.
 
-`crates/evidence-server` owns:
+The Evidence Server repository owns:
 
 - Axum routes;
 - configuration loading;
@@ -2254,131 +2260,29 @@ startup, configuration file loading, server binding, and shutdown.
 - credential issuance wiring;
 - OpenAPI and API examples.
 
-Registry Relay should get only thin compatibility or demo adapters, such as a
-Registry Data API source implementation and an evidence-offering-to-claim
-mapping adapter. Claim computation code should not be added to
-`src/api/evidence_offerings.rs`; doing so would keep the evidence-generation
-responsibility inside Registry Relay instead of extracting it.
+Registry Relay now owns only catalogue and source-registry surfaces. It may
+publish evidence-offering metadata with `access.kind: evidence-server`, and it
+may serve source Registry Data API or DCI-compatible HTTP endpoints consumed by
+Evidence Server. Claim computation code must stay out of Registry Relay.
 
 Pure connector traits and shared value types belong in `evidence-core`.
 Connector implementations that require HTTP clients, auth wiring, retries, or
 Axum-adjacent configuration belong in the `evidence-server` library unless they
 prove reusable enough to move into a separate connector crate later.
 
-If Registry Relay needs to implement a source adapter during migration, it
-should depend on `evidence-core` for connector traits and shared types. It
-should not depend on the `evidence-server` binary or service assembly.
+Registry Relay should not depend on `evidence-core`, `evidence-server`, the
+Evidence Server binary, or service assembly after the clean split. Any shared
+auth or audit contract extraction belongs in a later reviewed shared-library
+wave after at least two consumers exist.
 
 ## Implementation Plan
 
-Implementation should proceed in waves with parallel workers on disjoint
-surfaces. Each wave closes only after code review, focused tests, docs or
-examples, and the relevant definition-of-done items are satisfied. A feature is
-not complete when its route exists; it is complete when the configured behavior
-works end to end, denies unsafe requests, emits audit records, and has focused
-tests.
+Historical note: this plan described the original implementation sequence. The
+post-split execution plan and definition of done now live in
+`docs/metadata-and-evidence-repo-split-spec.md`. That split plan is the
+authoritative implementation reference for repository ownership, worker
+decomposition, and release gates.
 
-### Wave 0: Contracts And Skeleton
-
-- Worker A owns workspace setup, `crates/evidence-core`,
-  `crates/evidence-server`, service startup, config loading, and route
-  skeletons.
-- Worker B owns domain types: `ClaimDefinition`, `ClaimResult`,
-  `ClaimResultView`, `EvidenceArtifact`, disclosure profiles, error codes, and
-  audit event shapes.
-- Worker C owns fixture config and sample data for `date-of-birth`,
-  `farmed-land-size`, and `farmer-under-4ha`.
-- Worker D owns API examples and initial OpenAPI or route documentation.
-- Review gate: reviewers check naming, crate boundaries, route shape, and that
-  CCCEV, SD-JWT VC, OOTS, plugins, search, and federation are not internal
-  computation models.
-- Done gate: workspace members exist, draft routes compile, discovery returns
-  config-backed claims and formats, Problem Details errors are stable, examples
-  match schemas, and route smoke tests pass.
-
-### Wave 1: Evaluation And Connectors
-
-- Worker A owns `extract` and `exists` evaluation.
-- Worker B owns CEL validation and execution using the `cel-mapping` expression
-  runtime boundary. If `cel-mapper-core` does not expose arbitrary root
-  bindings, Worker B owns adding that reusable API there. Worker B splits a
-  lower-level expression crate only if the clean `cel-mapper-core` extension
-  would force Evidence Server to depend on PublicSchema-specific mapping
-  behavior.
-- Worker C owns the Registry Data API connector and `farmed-land-size` fixture.
-- Worker D owns the DCI connector and `date-of-birth` or CRVS existence fixture.
-- Review gate: reviewers trace each fixture from request input, through source
-  binding, connector lookup, rule execution, `ClaimResult`, and audit event.
-- Done gate: the three fixture claims evaluate successfully, connector errors
-  map to stable Evidence Server errors, CEL rejects undeclared fields and
-  disallowed functions, metadata validates the land-size type and unit, and
-  metadata drift disables or rejects the affected claim with an operator-visible
-  signal.
-
-### Wave 2: Disclosure, Rendering, And Auth
-
-- Worker A owns authentication, purpose validation, and claim/format/disclosure
-  authorization.
-- Worker B owns `ClaimResultView` construction and disclosure downgrade or
-  denial behavior.
-- Worker C owns canonical JSON rendering from `ClaimResultView`.
-- Worker D owns CCCEV JSON-LD rendering from `ClaimResultView`.
-- Review gate: reviewers attempt disclosure widening through evaluate and
-  render, including broader claim sets, broader disclosure, different purpose,
-  different requester, and unsupported format.
-- Done gate: renderers never receive raw `ClaimResult`, render-by-evaluation id
-  succeeds for authorized requests, render-by-evaluation id fails for widened
-  requests, canonical JSON and CCCEV render from the same view, and audit
-  records avoid secrets, raw source records, and forbidden claim values.
-
-### Wave 3: Inline Batch And Credential Issuance
-
-- Worker A owns inline batch evaluation, input ordering, partial failure, batch
-  size limits, and idempotency.
-- Worker B owns SD-JWT VC issuer key infrastructure: `issuer_key_ref`, `kid`,
-  JWKS or DID-document publication path, and key rotation metadata.
-- Worker C owns SD-JWT VC credential assembly: `typ: "dc+sd-jwt"`, `_sd_alg`,
-  `_sd`, salted disclosures, `vct`, validity, and omission of `evaluation_id`
-  from the signed artifact.
-- Worker D owns credential authorization, holder binding, proof-of-possession,
-  issuer-missing errors, and audit coverage for batch, render, and issuance
-  attempts.
-- Review gate: reviewers test abuse cases for batch partial failure, repeated
-  idempotent requests, credential issuance without issuer configuration,
-  credential issuance with widened claims or disclosure, and downstream
-  credential overreach.
-- Done gate: inline batch returns per-subject results and errors without hiding
-  successful items, `batch.too_large` works, idempotency works, issuance signs
-  only an authorized `ClaimResultView` from an existing evaluation, issuance
-  never recomputes claims, holder proof-of-possession is enforced when
-  configured, SD-JWT VC structures are present, and all required batch and
-  issuance tests pass.
-
-### Wave 4: Extension Boundaries And Release Candidate
-
-- Worker A owns ID Mapper demo boundary and result metadata.
-- Worker B owns OOTS profile metadata in configuration and discovery, without
-  OOTS wire exchange.
-- Worker C owns explicit disabled or not-exposed behavior for deferred features:
-  search, background jobs, plugin execution, federation execution, production
-  record matching, and credential revocation/status.
-- Worker D owns final docs, OpenAPI or API reference, release checklist, and CI
-  hardening.
-- Review gate: reviewers perform architecture, security/privacy, and code
-  reviews focused on regressions, missing tests, incomplete DoD items, and
-  accidental exposure of deferred features.
-- Done gate: every required v0 capability and test is checked off, deferred
-  features are hidden from discovery or clearly marked unsupported, no "Not Done
-  If" condition is true, and the repository's focused tests plus relevant lint,
-  typecheck, build, and documentation checks pass.
-
-### Review Cadence
-
-- Each worker opens small, focused changes that touch only its owned surface.
-- No wave closes until another worker or reviewer has reviewed the code and
-  the implementation has passing focused tests for that wave.
-- Cross-surface integration happens at the end of each wave, not only at the
-  end of the project.
-- Reviewers explicitly check the definition of done, not just code style.
-- Any partially implemented behavior must be disabled, hidden from discovery,
-  or listed as a deferred blocker with the exact reason.
+The historical in-workspace wave plan has been removed from this document to
+avoid conflicting instructions. Use the split spec for active implementation
+and review cadence.

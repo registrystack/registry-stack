@@ -14,10 +14,7 @@ use std::time::Duration;
 
 use crate::claim_verification::{decode_binding_key, ClaimVerificationKeyError};
 use crate::error::{ConfigError, Error, RuntimeBindingError};
-use evidence_core::config::SourceConnectorKind;
-use evidence_core::model::FORMAT_SD_JWT_VC;
-use evidence_core::sd_jwt::EvidenceIssuer;
-use registry_metadata_core::{CompiledField, CompiledMetadata};
+use registry_metadata_core::CompiledMetadata;
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -49,14 +46,25 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     validate_claim_verification_runtime(config).map_err(Error::from)?;
+    validate_removed_evidence_server_config(config).map_err(Error::from)?;
     validate_evidence_verification_runtime(config).map_err(Error::from)?;
-    validate_evidence_server_config(config).map_err(Error::from)?;
     if let Some(provenance) = &config.provenance {
         validate_provenance(provenance).map_err(Error::from)?;
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
     Ok(())
+}
+
+fn validate_removed_evidence_server_config(config: &Config) -> Result<(), ConfigError> {
+    if matches!(config.evidence, serde_yml::Value::Null) {
+        return Ok(());
+    }
+    tracing::error!(
+        code = "config.validation_error",
+        "top-level evidence config belongs to the standalone Evidence Server and is no longer accepted by Registry Relay"
+    );
+    Err(ConfigError::ValidationError)
 }
 
 fn validate_evidence_verification_runtime(config: &Config) -> Result<(), ConfigError> {
@@ -91,336 +99,6 @@ fn validate_evidence_rate_limit(
         return Err(ConfigError::ValidationError);
     }
     Ok(())
-}
-
-fn validate_evidence_server_config(config: &Config) -> Result<(), ConfigError> {
-    let evidence = &config.evidence;
-    let claim_ids = evidence
-        .claims
-        .iter()
-        .map(|claim| claim.id.as_str())
-        .collect::<HashSet<_>>();
-    let profile_ids = evidence
-        .credential_profiles
-        .keys()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
-
-    for (connection_id, connection) in &evidence.source_connections {
-        if !is_http_url(&connection.base_url) {
-            tracing::error!(
-                code = "config.validation_error",
-                source_connection = %connection_id,
-                base_url = %connection.base_url,
-                "evidence source connection base_url must be an http(s) URL"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if connection.token_env.trim().is_empty() || env::var(&connection.token_env).is_err() {
-            tracing::error!(
-                code = "config.validation_error",
-                source_connection = %connection_id,
-                token_env = %connection.token_env,
-                "evidence source connection token_env must name a configured environment variable"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-    }
-
-    for claim in &evidence.claims {
-        validate_evidence_claim_disclosure(&claim.id, &claim.disclosure)?;
-        for (binding_id, binding) in &claim.source_bindings {
-            if let Some(connection) = binding.connection.as_deref() {
-                if binding.connector == SourceConnectorKind::RegistryDataApi
-                    && !evidence.source_connections.contains_key(connection)
-                {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        claim_id = %claim.id,
-                        source_binding = %binding_id,
-                        connection = %connection,
-                        "evidence registry_data_api source binding references an unknown source connection"
-                    );
-                    return Err(ConfigError::ValidationError);
-                }
-            }
-            if binding.connector == SourceConnectorKind::Dci {
-                validate_evidence_dci_binding(config, &claim.id, binding_id, binding)?;
-                if let Some(connection) = binding.connection.as_deref() {
-                    let uses_named_source_connection =
-                        evidence.source_connections.contains_key(connection);
-                    let uses_spdci_registry = config
-                        .standards
-                        .spdci
-                        .as_ref()
-                        .is_some_and(|spdci| spdci.registries.contains_key(connection));
-                    if !uses_named_source_connection && !uses_spdci_registry {
-                        tracing::error!(
-                            code = "config.validation_error",
-                            claim_id = %claim.id,
-                            source_binding = %binding_id,
-                            connection = %connection,
-                            "evidence DCI source binding references neither a source connection nor an SP DCI registry"
-                        );
-                        return Err(ConfigError::ValidationError);
-                    }
-                }
-            }
-        }
-        for profile_id in &claim.credential_profiles {
-            if !profile_ids.contains(profile_id.as_str()) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    claim_id = %claim.id,
-                    credential_profile = %profile_id,
-                    "evidence claim references an unknown credential profile"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-    }
-
-    for (profile_id, profile) in &evidence.credential_profiles {
-        if profile.format != FORMAT_SD_JWT_VC {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                format = %profile.format,
-                "evidence credential profile format must be application/dc+sd-jwt"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if !is_http_url_or_did(&profile.issuer) {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                issuer = %profile.issuer,
-                "evidence credential profile issuer must be a non-empty http(s) URL or DID"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if profile.issuer_key_env.trim().is_empty() {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                "evidence credential profile issuer_key_env must not be empty"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if EvidenceIssuer::from_profile(profile).is_err() {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                issuer_key_env = %profile.issuer_key_env,
-                "evidence credential profile issuer_key_env must point to a valid Ed25519 private JWK"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if !is_http_url_or_did(&profile.vct) {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                vct = %profile.vct,
-                "evidence credential profile vct must be a non-empty http(s) URL or DID"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if profile.validity_seconds <= 0 {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                "evidence credential profile validity_seconds must be greater than zero"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        validate_evidence_holder_binding(profile_id, &profile.holder_binding)?;
-        for claim_id in &profile.allowed_claims {
-            if !claim_ids.contains(claim_id.as_str()) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    credential_profile = %profile_id,
-                    claim_id = %claim_id,
-                    "evidence credential profile allowed_claims references an unknown evidence claim"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-        for disclosure in &profile.disclosure.allowed {
-            if !is_valid_evidence_disclosure(disclosure) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    credential_profile = %profile_id,
-                    disclosure = %disclosure,
-                    "evidence credential profile disclosure.allowed must contain only value, predicate, or redacted"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_evidence_claim_disclosure(
-    claim_id: &str,
-    disclosure: &evidence_core::config::DisclosureConfig,
-) -> Result<(), ConfigError> {
-    if !is_valid_evidence_disclosure(&disclosure.default) {
-        tracing::error!(
-            code = "config.validation_error",
-            claim_id = %claim_id,
-            disclosure = %disclosure.default,
-            "evidence claim disclosure.default must be value, predicate, or redacted"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    for allowed in &disclosure.allowed {
-        if !is_valid_evidence_disclosure(allowed) {
-            tracing::error!(
-                code = "config.validation_error",
-                claim_id = %claim_id,
-                disclosure = %allowed,
-                "evidence claim disclosure.allowed must contain only value, predicate, or redacted"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-    }
-    if !matches!(
-        disclosure.downgrade.as_str(),
-        "deny" | "none" | "default" | "redacted"
-    ) {
-        tracing::error!(
-            code = "config.validation_error",
-            claim_id = %claim_id,
-            downgrade = %disclosure.downgrade,
-            "evidence claim disclosure.downgrade must be deny, none, default, or redacted"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    Ok(())
-}
-
-fn validate_evidence_holder_binding(
-    profile_id: &str,
-    holder_binding: &evidence_core::config::HolderBindingConfig,
-) -> Result<(), ConfigError> {
-    match holder_binding.mode.as_str() {
-        "none" => {
-            if holder_binding.proof_of_possession.is_some() {
-                tracing::error!(
-                    code = "config.validation_error",
-                    credential_profile = %profile_id,
-                    "evidence holder_binding.proof_of_possession must be absent when mode is none"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-        "did" => {
-            if holder_binding.proof_of_possession.as_deref() != Some("required") {
-                tracing::error!(
-                    code = "config.validation_error",
-                    credential_profile = %profile_id,
-                    "evidence holder_binding.proof_of_possession must be required when mode is did"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-            if holder_binding.allowed_did_methods.is_empty() {
-                tracing::error!(
-                    code = "config.validation_error",
-                    credential_profile = %profile_id,
-                    "evidence holder_binding.allowed_did_methods must contain did:jwk when mode is did"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-            for method in &holder_binding.allowed_did_methods {
-                if method != "did:jwk" {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        credential_profile = %profile_id,
-                        did_method = %method,
-                        "evidence holder_binding.allowed_did_methods supports only did:jwk in v0"
-                    );
-                    return Err(ConfigError::ValidationError);
-                }
-            }
-        }
-        _ => {
-            tracing::error!(
-                code = "config.validation_error",
-                credential_profile = %profile_id,
-                mode = %holder_binding.mode,
-                "evidence holder_binding.mode must be none or did"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-    }
-    Ok(())
-}
-
-fn validate_evidence_dci_binding(
-    config: &Config,
-    claim_id: &str,
-    binding_id: &str,
-    binding: &evidence_core::config::SourceBindingConfig,
-) -> Result<(), ConfigError> {
-    let connection = binding.connection.as_deref().ok_or_else(|| {
-        tracing::error!(
-            code = "config.validation_error",
-            claim_id = %claim_id,
-            source_binding = %binding_id,
-            "evidence DCI source binding requires connection with the named SP DCI registry id"
-        );
-        ConfigError::ValidationError
-    })?;
-    let registry = config
-        .standards
-        .spdci
-        .as_ref()
-        .and_then(|spdci| spdci.registries.get(connection))
-        .ok_or_else(|| {
-            tracing::error!(
-                code = "config.validation_error",
-                claim_id = %claim_id,
-                source_binding = %binding_id,
-                connection = %connection,
-                "evidence DCI source binding references an unknown SP DCI registry"
-            );
-            ConfigError::ValidationError
-        })?;
-    if registry.dataset.as_str() != binding.dataset || registry.entity != binding.entity {
-        tracing::error!(
-            code = "config.validation_error",
-            claim_id = %claim_id,
-            source_binding = %binding_id,
-            connection = %connection,
-            binding_dataset = %binding.dataset,
-            binding_entity = %binding.entity,
-            registry_dataset = %registry.dataset,
-            registry_entity = %registry.entity,
-            "evidence DCI source binding must match the named SP DCI registry dataset and entity"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    if !registry.identifiers.contains_key(&binding.lookup.field)
-        && !registry
-            .expression_fields
-            .contains_key(&binding.lookup.field)
-    {
-        tracing::error!(
-            code = "config.validation_error",
-            claim_id = %claim_id,
-            source_binding = %binding_id,
-            connection = %connection,
-            lookup_field = %binding.lookup.field,
-            "evidence DCI source binding lookup.field must be declared in identifiers or expression_fields"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    Ok(())
-}
-
-fn is_valid_evidence_disclosure(value: &str) -> bool {
-    matches!(value, "value" | "predicate" | "redacted")
 }
 
 /// Validate runtime bindings against a compiled split metadata manifest.
@@ -593,6 +271,9 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FieldMissing);
                 }
             }
+            if offering.access.kind == "evidence-server" {
+                continue;
+            }
             if entity.access.evidence_verification_scope.trim().is_empty() {
                 tracing::error!(
                     code = "runtime.binding.scope_missing",
@@ -628,246 +309,7 @@ pub fn validate_runtime_bindings(
             }
         }
     }
-    validate_evidence_metadata_bindings(config, metadata)?;
     Ok(())
-}
-
-fn validate_evidence_metadata_bindings(
-    config: &Config,
-    metadata: &CompiledMetadata,
-) -> Result<(), RuntimeBindingError> {
-    for claim in &config.evidence.claims {
-        for (binding_id, binding) in &claim.source_bindings {
-            let dataset = config
-                .datasets
-                .iter()
-                .find(|dataset| dataset.id.as_str() == binding.dataset)
-                .ok_or_else(|| {
-                    tracing::error!(
-                        code = "runtime.binding.dataset_missing",
-                        claim_id = %claim.id,
-                        source_binding = %binding_id,
-                        dataset_id = %binding.dataset,
-                        "evidence source binding dataset is not configured at runtime"
-                    );
-                    RuntimeBindingError::DatasetMissing
-                })?;
-            let metadata_dataset = metadata.dataset(&binding.dataset).ok_or_else(|| {
-                tracing::error!(
-                    code = "runtime.binding.dataset_missing",
-                    claim_id = %claim.id,
-                    source_binding = %binding_id,
-                    dataset_id = %binding.dataset,
-                    "evidence source binding dataset is not declared in the metadata manifest"
-                );
-                RuntimeBindingError::DatasetMissing
-            })?;
-            let entity = dataset
-                .entities
-                .iter()
-                .find(|entity| entity.name == binding.entity)
-                .ok_or_else(|| {
-                    tracing::error!(
-                        code = "runtime.binding.entity_missing",
-                        claim_id = %claim.id,
-                        source_binding = %binding_id,
-                        dataset_id = %binding.dataset,
-                        entity = %binding.entity,
-                        "evidence source binding entity is not configured at runtime"
-                    );
-                    RuntimeBindingError::EntityMissing
-                })?;
-            let metadata_entity = metadata_dataset.entities.get(&binding.entity).ok_or_else(
-                || {
-                    tracing::error!(
-                        code = "runtime.binding.entity_missing",
-                        claim_id = %claim.id,
-                        source_binding = %binding_id,
-                        dataset_id = %binding.dataset,
-                        entity = %binding.entity,
-                        "evidence source binding entity is not declared in the metadata manifest"
-                    );
-                    RuntimeBindingError::EntityMissing
-                },
-            )?;
-            let table = dataset
-                .table_configs()
-                .find(|table| table.id == entity.table)
-                .ok_or_else(|| {
-                    tracing::error!(
-                        code = "runtime.binding.table_missing",
-                        claim_id = %claim.id,
-                        source_binding = %binding_id,
-                        dataset_id = %binding.dataset,
-                        entity = %binding.entity,
-                        table_id = %entity.table,
-                        "evidence source binding entity references an unknown backing table"
-                    );
-                    RuntimeBindingError::TableMissing
-                })?;
-            let exposed_fields = exposed_entity_fields(entity, table)
-                .map_err(|_| RuntimeBindingError::FieldMissing)?;
-            let lookup_field = evidence_runtime_lookup_field(config, binding)
-                .ok_or(RuntimeBindingError::FieldMissing)?;
-            validate_evidence_bound_field(
-                &claim.id,
-                binding_id,
-                "lookup",
-                &lookup_field,
-                None,
-                false,
-                metadata_entity,
-                &exposed_fields,
-            )?;
-            for (alias, field) in &binding.fields {
-                validate_evidence_bound_field(
-                    &claim.id,
-                    binding_id,
-                    alias,
-                    &field.field,
-                    Some(field),
-                    field.required,
-                    metadata_entity,
-                    &exposed_fields,
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn evidence_runtime_lookup_field(
-    config: &Config,
-    binding: &evidence_core::config::SourceBindingConfig,
-) -> Option<String> {
-    match binding.connector {
-        SourceConnectorKind::RegistryDataApi => Some(binding.lookup.field.clone()),
-        SourceConnectorKind::Dci => {
-            let connection = binding.connection.as_deref()?;
-            let registry = config
-                .standards
-                .spdci
-                .as_ref()?
-                .registries
-                .get(connection)?;
-            registry
-                .identifiers
-                .get(&binding.lookup.field)
-                .or_else(|| registry.expression_fields.get(&binding.lookup.field))
-                .cloned()
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_evidence_bound_field(
-    claim_id: &str,
-    binding_id: &str,
-    alias: &str,
-    field_name: &str,
-    source_field: Option<&evidence_core::config::SourceFieldConfig>,
-    required_by_binding: bool,
-    metadata_entity: &registry_metadata_core::CompiledEntity,
-    exposed_fields: &BTreeMap<String, String>,
-) -> Result<(), RuntimeBindingError> {
-    if !exposed_fields.contains_key(field_name) {
-        tracing::error!(
-            code = "runtime.binding.field_missing",
-            claim_id = %claim_id,
-            source_binding = %binding_id,
-            field_alias = %alias,
-            field = %field_name,
-            "evidence source binding field is not exposed by the runtime entity"
-        );
-        return Err(RuntimeBindingError::FieldMissing);
-    }
-    let metadata_field = metadata_entity.fields.get(field_name).ok_or_else(|| {
-        tracing::error!(
-            code = "runtime.binding.field_missing",
-            claim_id = %claim_id,
-            source_binding = %binding_id,
-            field_alias = %alias,
-            field = %field_name,
-            "evidence source binding field is not declared in the metadata manifest"
-        );
-        RuntimeBindingError::FieldMissing
-    })?;
-    if let Some(source_field) = source_field {
-        validate_evidence_field_metadata(
-            claim_id,
-            binding_id,
-            alias,
-            field_name,
-            source_field,
-            metadata_field,
-        )?;
-    }
-    if required_by_binding && !metadata_field.required {
-        tracing::error!(
-            code = "runtime.binding.field_missing",
-            claim_id = %claim_id,
-            source_binding = %binding_id,
-            field_alias = %alias,
-            field = %field_name,
-            "evidence source binding requires a field the metadata manifest does not mark required"
-        );
-        return Err(RuntimeBindingError::FieldMissing);
-    }
-    Ok(())
-}
-
-fn validate_evidence_field_metadata(
-    claim_id: &str,
-    binding_id: &str,
-    alias: &str,
-    field_name: &str,
-    source_field: &evidence_core::config::SourceFieldConfig,
-    metadata_field: &CompiledField,
-) -> Result<(), RuntimeBindingError> {
-    if let Some(expected_type) = source_field.field_type.as_deref() {
-        let actual_type = metadata_field_type_name(metadata_field.field_type);
-        if expected_type != actual_type {
-            tracing::error!(
-                code = "runtime.binding.field_missing",
-                claim_id = %claim_id,
-                source_binding = %binding_id,
-                field_alias = %alias,
-                field = %field_name,
-                expected_type = %expected_type,
-                metadata_type = %actual_type,
-                "evidence source binding field type conflicts with the metadata manifest"
-            );
-            return Err(RuntimeBindingError::FieldMissing);
-        }
-    }
-    if let Some(expected_unit) = source_field.unit.as_deref() {
-        if metadata_field.unit.as_deref() != Some(expected_unit) {
-            tracing::error!(
-                code = "runtime.binding.field_missing",
-                claim_id = %claim_id,
-                source_binding = %binding_id,
-                field_alias = %alias,
-                field = %field_name,
-                expected_unit = %expected_unit,
-                metadata_unit = ?metadata_field.unit,
-                "evidence source binding field unit conflicts with the metadata manifest"
-            );
-            return Err(RuntimeBindingError::FieldMissing);
-        }
-    }
-    Ok(())
-}
-
-fn metadata_field_type_name(field_type: registry_metadata_core::FieldType) -> &'static str {
-    match field_type {
-        registry_metadata_core::FieldType::String => "string",
-        registry_metadata_core::FieldType::Number => "number",
-        registry_metadata_core::FieldType::Integer => "integer",
-        registry_metadata_core::FieldType::Boolean => "boolean",
-        registry_metadata_core::FieldType::Date => "date",
-        registry_metadata_core::FieldType::Timestamp => "timestamp",
-        registry_metadata_core::FieldType::Code => "code",
-    }
 }
 
 /// BRegDCAT-AP catalog-level IRI fields must resolve via the configured
@@ -924,18 +366,7 @@ fn validate_spdci_config(
     config: &Config,
     spdci: &super::SpdciStandardsConfig,
 ) -> Result<(), ConfigError> {
-    if spdci.disability_registry.is_none()
-        && spdci.registries.keys().all(|registry| {
-            config.evidence.claims.iter().any(|claim| {
-                claim.source_bindings.values().any(|binding| {
-                    binding.connector == SourceConnectorKind::Dci
-                        && binding.connection.as_deref() == Some(registry.as_str())
-                })
-            })
-        })
-    {
-        return Ok(());
-    }
+    let _ = (config, spdci);
     tracing::error!(
         code = "spdci.config.feature_disabled",
         "standards.spdci is configured but binary was built without the spdci-api-standards feature",
@@ -1059,15 +490,6 @@ fn validate_spdci_registry(
         return Err(ConfigError::ValidationError);
     }
 
-    if !config
-        .datasets
-        .iter()
-        .any(|dataset| dataset.id.as_str() == registry.dataset.as_str())
-        && evidence_uses_spdci_registry(config, name)
-    {
-        return Ok(());
-    }
-
     let (entity, fields) = spdci_entity_fields(
         config,
         registry.dataset.as_str(),
@@ -1131,16 +553,6 @@ fn validate_spdci_registry(
     validate_spdci_response_mapping(name, registry)?;
     validate_spdci_response_schema(name, registry)?;
     Ok(())
-}
-
-#[cfg(feature = "spdci-api-standards")]
-fn evidence_uses_spdci_registry(config: &Config, registry_name: &str) -> bool {
-    config.evidence.claims.iter().any(|claim| {
-        claim.source_bindings.values().any(|binding| {
-            binding.connector == SourceConnectorKind::Dci
-                && binding.connection.as_deref() == Some(registry_name)
-        })
-    })
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -1589,33 +1001,6 @@ fn is_http_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-fn is_http_url_or_did(s: &str) -> bool {
-    let value = s.trim();
-    is_non_empty_http_url(value) || is_did_like(value)
-}
-
-fn is_non_empty_http_url(s: &str) -> bool {
-    let rest = s
-        .strip_prefix("https://")
-        .or_else(|| s.strip_prefix("http://"));
-    rest.is_some_and(|value| !value.is_empty() && !value.chars().any(char::is_whitespace))
-}
-
-fn is_did_like(s: &str) -> bool {
-    let Some(rest) = s.strip_prefix("did:") else {
-        return false;
-    };
-    let Some((method, id)) = rest.split_once(':') else {
-        return false;
-    };
-    !method.is_empty()
-        && method
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-        && !id.is_empty()
-        && !id.chars().any(char::is_whitespace)
-}
-
 /// Match `^[a-z][a-z0-9_]*$` without pulling in a regex crate.
 fn is_valid_id(s: &str) -> bool {
     let mut chars = s.chars();
@@ -1969,16 +1354,7 @@ fn is_https_or_localhost(url: &str) -> bool {
 }
 
 fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
-    let mut dataset_ids: HashSet<&str> = config.datasets.iter().map(|d| d.id.as_str()).collect();
-    for claim in &config.evidence.claims {
-        for binding in claim.source_bindings.values() {
-            if let Some(scope) = binding.required_scope.as_deref() {
-                if let Some((dataset, _)) = scope.split_once(':') {
-                    dataset_ids.insert(dataset);
-                }
-            }
-        }
-    }
+    let dataset_ids: HashSet<&str> = config.datasets.iter().map(|d| d.id.as_str()).collect();
 
     for key in &config.auth.api_keys {
         if !is_valid_id(&key.id) {

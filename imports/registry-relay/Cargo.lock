@@ -816,6 +816,7 @@ dependencies = [
 [[package]]
 name = "cel-mapper-core"
 version = "0.1.0"
+source = "git+https://github.com/PublicSchema/cel-mapping?tag=cel-mapper-core-v0.1.0#a58b8c0de806c1a0f9ac0622f66c0b130ff1b86c"
 dependencies = [
  "base64",
  "cel",
@@ -2215,37 +2216,6 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
-]
-
-[[package]]
-name = "evidence-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "getrandom 0.4.2",
- "jsonwebtoken",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "time",
- "ulid",
- "zeroize",
-]
-
-[[package]]
-name = "evidence-server"
-version = "0.1.0"
-dependencies = [
- "base64",
- "cel",
- "cel-mapper-core",
- "evidence-core",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "time",
- "ulid",
 ]
 
 [[package]]
@@ -4480,22 +4450,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "registry-metadata-cli"
-version = "0.1.0"
-dependencies = [
- "registry-metadata-core",
- "serde",
- "serde_json",
- "serde_yml",
-]
-
-[[package]]
 name = "registry-metadata-core"
 version = "0.1.0"
+source = "git+https://github.com/jeremi/registry-metadata?tag=v0.1.0#38d215ad162f460f9c43cc6a1494238daf8d7ca6"
 dependencies = [
  "serde",
  "serde_json",
- "serde_yml",
  "thiserror 2.0.18",
 ]
 
@@ -4516,8 +4476,6 @@ dependencies = [
  "csv",
  "datafusion",
  "ed25519-dalek",
- "evidence-core",
- "evidence-server",
  "futures",
  "geojson",
  "getrandom 0.4.2",

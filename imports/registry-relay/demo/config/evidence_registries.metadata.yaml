@@ -20,6 +20,9 @@ requirements:
     iri: https://demo.example.gov/requirements/smallholder-under-4ha
     title: Smallholder land-size requirement
     description: Requirement that a farmer cultivates less than four hectares.
+    reference_frameworks:
+      - iri: https://demo.example.gov/legislation/farmer-registry-act
+        identifier: farmer-registry-act
 evidence_types:
   - id: smallholder_farmer_evidence
     iri: https://demo.example.gov/evidence-types/smallholder-farmer
@@ -75,6 +78,32 @@ datasets:
       - spdci:extensions/fr/v1/FRPerson
     applicable_legislation:
       - https://demo.example.gov/legislation/farmer-registry-act
+    evidence_offerings:
+      - id: smallholder_farmer_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/smallholder-farmer
+        title: Smallholder farmer evidence service
+        description: Evidence Server endpoint that computes the smallholder farmer criterion from farmer registry data.
+        evidence_type: smallholder_farmer_evidence
+        issuing_authority:
+          id: ministry_of_agriculture
+          iri: did:web:agriculture.demo.example.gov
+          name: Ministry of Agriculture
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: farmer
+        lookup_keys:
+          - national_id
+        access:
+          kind: evidence-server
+          conforms_to: registry_relay:evidence-server-v1
+          endpoint_url: http://127.0.0.1:4255
+          discovery_url: http://127.0.0.1:4255/.well-known/evidence-service
+          ruleset: farmer-under-4ha-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/agricultural-subsidy-eligibility
     entities:
       - name: farmer
         title: Farmer

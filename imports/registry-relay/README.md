@@ -28,14 +28,14 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
   Registry Relay publication choices, and downstream interpretation boundaries.
 - [docs/evidence-verification.md](docs/evidence-verification.md): evidence verification guide, examples, privacy model, and signed receipts.
-- [docs/evidence-server-spec.md](docs/evidence-server-spec.md): draft target
-  architecture for a standalone evidence server that computes registry-backed
-  claims.
+- [../evidence-server](../evidence-server): standalone Evidence Server
+  workspace for registry-backed claim evaluation, rendering, and credential
+  issuance.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
-- [crates/registry-metadata-core](crates/registry-metadata-core): portable metadata manifest model, validation, and renderers.
-- [crates/registry-metadata-cli](crates/registry-metadata-cli): local metadata validation, rendering, and static publish CLI.
+- [../registry-metadata/crates/registry-metadata-core](../registry-metadata/crates/registry-metadata-core): portable metadata manifest model, validation, and renderers.
+- [../registry-metadata/crates/registry-metadata-cli](../registry-metadata/crates/registry-metadata-cli): local metadata validation, rendering, and static publish CLI.
 - [profiles/](profiles/): non-normative example profile descriptors and fixture metadata manifests.
 - [docs/performance-load-testing-spec.md](docs/performance-load-testing-spec.md): performance and load testing plan.
 - [perf/](perf/): k6 scenarios, synthetic fixture configs, and performance run helpers.

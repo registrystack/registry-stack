@@ -78,6 +78,10 @@ requirements:
     reference_frameworks:
       - iri: https://data.example.test/reference-frameworks/name-law
         identifier: name-law
+  - id: bare_requirement
+    iri: https://data.example.test/requirements/bare
+    title: Bare requirement with no concepts or frameworks
+    description: Used to test that empty CCCEV predicate arrays are omitted.
 evidence_types:
   - id: name_evidence
     iri: https://data.example.test/evidence-types/name
@@ -162,6 +166,23 @@ datasets:
           kind: registry-relay-verification
           conforms_to: registry_relay:evidence-verification-v1
           ruleset: hidden-name
+      - id: external_individual_name_evidence
+        iri: https://data.example.test/evidence-offerings/external-individual-name
+        title: External individual name evidence
+        evidence_type: name_evidence
+        issuing_authority:
+          id: test_authority
+          iri: did:web:data.example.test
+          name: Test Authority
+          country: ZZ
+        entity: individual
+        lookup_keys: [given_name]
+        access:
+          kind: evidence-server
+          conforms_to: registry_relay:evidence-server-v1
+          endpoint_url: https://evidence.example.test
+          discovery_url: https://evidence.example.test/.well-known/evidence-service
+          ruleset: exact-name
     entities:
       - name: individual
         fields:
@@ -1175,6 +1196,24 @@ async fn evidence_verification_requires_purpose_header_when_entity_requires_it()
 }
 
 #[tokio::test]
+async fn evidence_verification_does_not_execute_external_evidence_server_offerings() {
+    let resp = server_with_query()
+        .await
+        .post("/evidence-offerings/external_individual_name_evidence/verifications")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .json(&serde_json::json!({
+            "claims": {
+                "given_name": "Ada"
+            }
+        }))
+        .await;
+
+    resp.assert_status(StatusCode::NOT_FOUND);
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "offering.not_found");
+}
+
+#[tokio::test]
 async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() {
     let server = server_with_query().await;
 
@@ -1204,8 +1243,16 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
             .as_array()
             .expect("offerings")
             .len(),
-        3
+        4
     );
+    assert!(body["evidence_offerings"]
+        .as_array()
+        .expect("offerings")
+        .iter()
+        .any(
+            |offering| offering["id"] == "external_individual_name_evidence"
+                && offering["access"]["kind"] == "evidence-server"
+        ));
 
     let empty = server.get("/metadata/evidence-offerings?country=NO").await;
     empty.assert_status(StatusCode::OK);
@@ -1312,6 +1359,34 @@ async fn bregdcat_evidence_terms_use_cccev_relationships() {
     let framework = by_id("https://data.example.test/reference-frameworks/name-law");
     assert_eq!(framework["@type"], "cccev:ReferenceFramework");
     assert_eq!(framework["dcterms:identifier"], "name-law");
+
+    // Item 4: when a requirement has information concepts, cccev:hasConcept must be
+    // non-empty (the name_requirement above already asserts this). When it has no
+    // reference frameworks, cccev:isDerivedFrom must not be emitted as an empty array.
+    // Check that the name_requirement (which HAS reference frameworks) emits
+    // cccev:isDerivedFrom, and that no node in the graph emits an empty array for
+    // either predicate.
+    let all_nodes = graph;
+    for node in all_nodes {
+        let has_empty_concepts = node
+            .get("cccev:hasConcept")
+            .and_then(Value::as_array)
+            .is_some_and(|arr| arr.is_empty());
+        assert!(
+            !has_empty_concepts,
+            "cccev:hasConcept must not be an empty array in node {:?}",
+            node["@id"]
+        );
+        let has_empty_derived = node
+            .get("cccev:isDerivedFrom")
+            .and_then(Value::as_array)
+            .is_some_and(|arr| arr.is_empty());
+        assert!(
+            !has_empty_derived,
+            "cccev:isDerivedFrom must not be an empty array in node {:?}",
+            node["@id"]
+        );
+    }
 }
 
 #[tokio::test]
@@ -1399,6 +1474,10 @@ async fn evidence_verification_returns_match_mismatch_and_ambiguous_decisions() 
             "@id": "did:web:data.example.test"
         })
     );
+    assert_eq!(
+        body["cccev_evidence"]["cccev:isConformantTo"], true,
+        "match decision must serialise cccev:isConformantTo=true"
+    );
     assert!(body["claim_salt"]
         .as_str()
         .is_some_and(|salt| salt.len() == 32 && salt.chars().all(|ch| ch.is_ascii_hexdigit())));
@@ -1418,6 +1497,10 @@ async fn evidence_verification_returns_match_mismatch_and_ambiguous_decisions() 
     missing.assert_status(StatusCode::OK);
     let body: Value = missing.json();
     assert_eq!(body["decision"], "mismatch");
+    assert_eq!(
+        body["cccev_evidence"]["cccev:isConformantTo"], false,
+        "mismatch decision must serialise cccev:isConformantTo=false"
+    );
 
     let ambiguous = server
         .post("/evidence-offerings/individual_name_evidence/verifications")
@@ -1431,6 +1514,10 @@ async fn evidence_verification_returns_match_mismatch_and_ambiguous_decisions() 
     ambiguous.assert_status(StatusCode::OK);
     let body: Value = ambiguous.json();
     assert_eq!(body["decision"], "ambiguous");
+    assert!(
+        body["cccev_evidence"].get("cccev:isConformantTo").is_none(),
+        "ambiguous decision must omit cccev:isConformantTo"
+    );
 }
 
 #[tokio::test]

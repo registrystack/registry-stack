@@ -299,34 +299,61 @@ collection or a redirected file.
 The focused Evidence Server demo is the clearest end-to-end story for the new
 computed-evidence product. It runs two local processes: source registries on
 port `4256`, and a standalone Evidence Server on port `4255`. The Evidence
-Server calls the source registry API to compute evidence, while the evidence
-client itself cannot read raw registry rows.
+Server calls the source registry DCI API to compute evidence, while the
+evidence client itself cannot read raw registry rows.
 
 ```bash
 just evidence-demo
 ```
 
-The runner starts both demo processes with the `spdci-api-standards` feature,
-because the CRVS source binding uses the demo SP DCI registry profile.
+The runner starts the source registry with the `spdci-api-standards` feature for
+metadata and standards demos. The standalone Evidence Server reads source rows
+through DCI HTTP source connections pointed at the source relay's
+`/dci/{registry}/registry/sync/search` routes.
+
+For an OpenSPP-style deployment, use the same Evidence Server shape with the
+OpenSPP DCI base URL, a `token_env`, `dci.search_path` such as
+`/api/v1/registry/sync/search`, and `dci.field_paths` that project the DCI
+response into the claim source fields. Then point a claim source binding at
+that connection with `connector: dci` and a deployment-specific
+`required_scope`. That keeps OpenSPP as the Social Registry or Disability
+Registry source, while the Evidence Server still owns claim computation,
+disclosure, rendering, and credential issuance.
 
 The script exercises:
 
-- discovery through `/.well-known/evidence-service`, `/claims`, and `/formats`;
+- discovery from the source registry metadata catalog, including its
+  BRegDCAT-AP publication, to find the standalone Evidence Server endpoint;
+- Evidence Server discovery through `/.well-known/evidence-service`, `/claims`,
+  and `/formats`;
 - value evidence from CRVS (`date-of-birth`) and the farmer registry
   (`farmed-land-size`);
 - a derived CEL predicate, `farmer-under-4ha`;
 - batch evaluation with a missing subject as a per-item error;
 - CCCEV JSON-LD rendering from an evaluation id;
-- SD-JWT VC issuance with a holder proof and issuer JWKS publication.
+- SD-JWT VC issuance with a holder proof, decoded sanity summary, and issuer
+  JWKS publication;
+- an explicit production-readiness gaps artifact so the demo does not imply
+  production credential infrastructure.
 
-Full responses are written under `demo/output/evidence-server-demo/`. The demo
-Evidence Server config is `demo/config/evidence_server.yaml`, the source
-registry config is `demo/config/evidence_registries.yaml`, the registry metadata
-manifest is `demo/config/evidence_registries.metadata.yaml`, and the synthetic
-source rows live under `demo/data/evidence_server/`. The source registry config
-does not declare evidence claims; it only exposes normal registry APIs. The
-standalone Evidence Server owns claim definitions, rules, rendering, and
-credential issuance.
+Full responses are written under `demo/output/evidence-server-demo/`; the
+script clears that directory at startup so each run has a clean numbered
+artifact set. The demo Evidence Server config lives in the sibling
+`../evidence-server/demo/config/evidence-server.yaml` repository, the source
+registry config is `demo/config/evidence_registries.yaml`, the registry
+metadata manifest is `demo/config/evidence_registries.metadata.yaml`, and the
+synthetic source rows live under `demo/data/evidence_server/`. The source
+registry config does not declare evidence claims; it exposes source records
+through DCI registry routes. Its metadata manifest advertises an evidence
+offering that points to the Evidence Server endpoint. The standalone Evidence
+Server owns claim definitions, rules, rendering, and credential issuance.
+
+The SD-JWT VC step is intentionally demo-grade: it uses a static demo issuer key
+from the environment, supports `did:jwk` holder binding only, and does not
+include credential status, revocation, key rotation, verifier metadata, or
+production identity mapping. The generated `*-sd-jwt-summary.json`,
+`*-issuer-jwks-summary.json`, and `*-production-readiness-gaps.json` artifacts
+make those boundaries visible for reviewers.
 
 ## Narrated evidence-offerings demo
 

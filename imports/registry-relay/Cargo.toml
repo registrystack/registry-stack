@@ -9,18 +9,13 @@ publish = false
 [workspace]
 members = [
     ".",
-    "crates/evidence-core",
-    "crates/evidence-server",
-    "crates/registry-metadata-core",
-    "crates/registry-metadata-cli",
 ]
 
 [features]
-default = ["evidence-server-cel"]
+default = []
 cel-mapping-runtime = ["dep:cel-mapper-core"]
 standards-cel-mapping = ["cel-mapping-runtime"]
 publicschema-cel = ["cel-mapping-runtime", "dep:jsonschema"]
-evidence-server-cel = ["cel-mapping-runtime", "evidence-server/evidence-server-cel"]
 spdci-api-standards = ["dep:jsonschema"]
 ogcapi-features = ["dep:ogcapi-types", "dep:geojson"]
 ogcapi-records = []
@@ -74,16 +69,14 @@ serde_json = { version = "1" }
 ryu = { version = "1" }
 # Optional PublicSchema.org entity-VC mapping support. Disabled by default so
 # the core VC path does not pull in the CEL mapper dependency graph.
-cel-mapper-core = { version = "0.1", path = "../cel-mapping/crates/cel-mapper-core", optional = true }
+cel-mapper-core = { version = "0.1", git = "https://github.com/PublicSchema/cel-mapping", tag = "cel-mapper-core-v0.1.0", optional = true }
 jsonschema = { version = "0.18", optional = true }
 # serde_yml: maintained community fork of the archived serde_yaml.
 # Version is pinned to the exact minor as it is a young fork; re-evaluate
 # deliberately before changing it.
 serde_yml = { version = "0.0.12" }
 humantime-serde = { version = "1" }
-registry-metadata-core = { version = "0.1.0", path = "crates/registry-metadata-core" }
-evidence-core = { version = "0.1.0", path = "crates/evidence-core" }
-evidence-server = { version = "0.1.0", path = "crates/evidence-server" }
+registry-metadata-core = { version = "0.1.0", git = "https://github.com/jeremi/registry-metadata", tag = "v0.1.0" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 getrandom = { version = "0.4" }

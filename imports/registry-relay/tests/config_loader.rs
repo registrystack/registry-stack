@@ -189,138 +189,6 @@ fn claim_verification_dataset(access_scope_line: &str, claim_verification_body: 
     )
 }
 
-fn evidence_config(evidence_body: &str) -> String {
-    env::set_var("TEST_EVIDENCE_ISSUER_KEY", valid_evidence_issuer_jwk());
-    format!(
-        r#"
-server:
-  bind: 127.0.0.1:0
-catalog:
-  title: Test
-  base_url: https://data.example.test
-  publisher: Test
-vocabularies: {{}}
-auth:
-  mode: api_key
-  api_keys: []
-evidence:
-{evidence_body}
-datasets: []
-audit:
-  sink: stdout
-  format: jsonl
-"#
-    )
-}
-
-fn evidence_config_with_standards(evidence_body: &str, standards_body: &str) -> String {
-    env::set_var("TEST_EVIDENCE_ISSUER_KEY", valid_evidence_issuer_jwk());
-    format!(
-        r#"
-server:
-  bind: 127.0.0.1:0
-catalog:
-  title: Test
-  base_url: https://data.example.test
-  publisher: Test
-vocabularies: {{}}
-auth:
-  mode: api_key
-  api_keys: []
-evidence:
-{evidence_body}
-standards:
-{standards_body}
-datasets: []
-audit:
-  sink: stdout
-  format: jsonl
-"#
-    )
-}
-
-fn valid_evidence_issuer_jwk() -> &'static str {
-    r#"{"kty":"OKP","crv":"Ed25519","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","alg":"EdDSA"}"#
-}
-
-fn valid_evidence_body() -> String {
-    r#"
-  enabled: true
-  claims:
-    - id: eligibility
-      title: Eligibility
-      version: v1
-      subject_type: person
-      rule:
-        type: exists
-        source: registry
-      disclosure:
-        default: redacted
-        allowed: [value, predicate, redacted]
-        downgrade: deny
-      credential_profiles: [person_sd_jwt]
-  credential_profiles:
-    person_sd_jwt:
-      format: application/dc+sd-jwt
-      issuer: did:web:issuer.example
-      issuer_key_env: TEST_EVIDENCE_ISSUER_KEY
-      vct: https://schemas.example.test/credentials/person
-      validity_seconds: 3600
-      holder_binding:
-        mode: did
-        proof_of_possession: required
-        allowed_did_methods: [did:jwk]
-      allowed_claims: [eligibility]
-      disclosure:
-        allowed: [redacted]
-"#
-    .to_string()
-}
-
-fn dci_evidence_body() -> String {
-    r#"
-  enabled: true
-  claims:
-    - id: date-of-birth
-      title: Date of birth
-      version: v1
-      subject_type: person
-      source_bindings:
-        crvs:
-          connector: dci
-          connection: crvs
-          dataset: civil_registry
-          entity: person
-          lookup:
-            input: subject_id
-            field: PERSON_ID
-          fields:
-            date_of_birth:
-              field: date_of_birth
-              type: string
-      rule:
-        type: extract
-        source: crvs
-        field: date_of_birth
-"#
-    .to_string()
-}
-
-fn dci_standards_body() -> String {
-    r#"
-  spdci:
-    registries:
-      crvs:
-        dataset: civil_registry
-        entity: person
-        identifiers:
-          PERSON_ID: id
-        expression_fields:
-          birth_date: date_of_birth
-"#
-    .to_string()
-}
-
 /// Assert that `result` is a `ConfigError` carrying the requested
 /// stable code. Returns the message for further inspection.
 #[track_caller]
@@ -490,6 +358,34 @@ fn example_config_loads_and_validates() {
 fn unknown_field_rejected() {
     let result = config::load(&fixture_path("unknown_field.yaml"));
     assert_config_code(result, "config.parse_error");
+}
+
+#[test]
+fn removed_embedded_evidence_server_config_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(
+        &tmp,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+evidence:
+  service_id: old-embedded-evidence-server
+"#,
+    );
+    let msg = assert_config_code(config::load(&path), "config.validation_error");
+    assert!(msg.contains("validation"), "got: {msg}");
 }
 
 #[test]
@@ -916,224 +812,6 @@ fn claim_verification_rejects_diagnostics_true_in_v1() {
     );
 
     assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn evidence_credential_profile_validates_supported_sd_jwt_shape() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(&tmp, &evidence_config(&valid_evidence_body()));
-
-    let config = config::load(&config_path).expect("evidence config loads");
-    assert!(config.evidence.enabled);
-    assert!(config
-        .evidence
-        .credential_profiles
-        .contains_key("person_sd_jwt"));
-}
-
-#[test]
-fn evidence_credential_profile_rejects_unsupported_format_and_empty_issuer_key_env() {
-    let tmp = TempDir::new().expect("tempdir");
-    let invalid_format = evidence_config(&valid_evidence_body().replace(
-        "format: application/dc+sd-jwt",
-        "format: application/vc+ld+json",
-    ));
-    let invalid_format_path = write_config(&tmp, &invalid_format);
-    assert_config_code(
-        config::load(&invalid_format_path),
-        "config.validation_error",
-    );
-
-    let empty_key_env = evidence_config(&valid_evidence_body().replace(
-        "issuer_key_env: TEST_EVIDENCE_ISSUER_KEY",
-        "issuer_key_env: \"\"",
-    ));
-    let empty_key_env_path = write_config(&tmp, &empty_key_env);
-    assert_config_code(config::load(&empty_key_env_path), "config.validation_error");
-
-    env::remove_var("MISSING_EVIDENCE_ISSUER_KEY");
-    let missing_key_env = evidence_config(&valid_evidence_body().replace(
-        "issuer_key_env: TEST_EVIDENCE_ISSUER_KEY",
-        "issuer_key_env: MISSING_EVIDENCE_ISSUER_KEY",
-    ));
-    let missing_key_env_path = write_config(&tmp, &missing_key_env);
-    assert_config_code(
-        config::load(&missing_key_env_path),
-        "config.validation_error",
-    );
-
-    env::set_var("BAD_EVIDENCE_ISSUER_KEY", r#"{"kty":"OKP"}"#);
-    let bad_key_env = evidence_config(&valid_evidence_body().replace(
-        "issuer_key_env: TEST_EVIDENCE_ISSUER_KEY",
-        "issuer_key_env: BAD_EVIDENCE_ISSUER_KEY",
-    ));
-    let bad_key_env_path = write_config(&tmp, &bad_key_env);
-    assert_config_code(config::load(&bad_key_env_path), "config.validation_error");
-}
-
-#[test]
-fn evidence_credential_profile_rejects_bad_issuer_vct_and_validity() {
-    let tmp = TempDir::new().expect("tempdir");
-    let bad_issuer = evidence_config(
-        &valid_evidence_body().replace("issuer: did:web:issuer.example", "issuer: issuer"),
-    );
-    let bad_issuer_path = write_config(&tmp, &bad_issuer);
-    assert_config_code(config::load(&bad_issuer_path), "config.validation_error");
-
-    let bad_vct = evidence_config(&valid_evidence_body().replace(
-        "vct: https://schemas.example.test/credentials/person",
-        "vct: not-a-url",
-    ));
-    let bad_vct_path = write_config(&tmp, &bad_vct);
-    assert_config_code(config::load(&bad_vct_path), "config.validation_error");
-
-    let zero_validity = evidence_config(
-        &valid_evidence_body().replace("validity_seconds: 3600", "validity_seconds: 0"),
-    );
-    let zero_validity_path = write_config(&tmp, &zero_validity);
-    assert_config_code(config::load(&zero_validity_path), "config.validation_error");
-}
-
-#[test]
-fn evidence_holder_binding_enforces_v0_modes_and_did_jwk_method() {
-    let tmp = TempDir::new().expect("tempdir");
-    let unsupported_mode =
-        evidence_config(&valid_evidence_body().replace("mode: did", "mode: key"));
-    let unsupported_mode_path = write_config(&tmp, &unsupported_mode);
-    assert_config_code(
-        config::load(&unsupported_mode_path),
-        "config.validation_error",
-    );
-
-    let missing_pop = evidence_config(
-        &valid_evidence_body().replace("        proof_of_possession: required\n", ""),
-    );
-    let missing_pop_path = write_config(&tmp, &missing_pop);
-    assert_config_code(config::load(&missing_pop_path), "config.validation_error");
-
-    let unsupported_method =
-        evidence_config(&valid_evidence_body().replace("[did:jwk]", "[did:web]"));
-    let unsupported_method_path = write_config(&tmp, &unsupported_method);
-    assert_config_code(
-        config::load(&unsupported_method_path),
-        "config.validation_error",
-    );
-
-    let empty_methods = evidence_config(
-        &valid_evidence_body().replace("        allowed_did_methods: [did:jwk]\n", ""),
-    );
-    let empty_methods_path = write_config(&tmp, &empty_methods);
-    assert_config_code(config::load(&empty_methods_path), "config.validation_error");
-}
-
-#[test]
-fn evidence_holder_binding_none_requires_absent_proof_of_possession() {
-    let tmp = TempDir::new().expect("tempdir");
-    let valid_none = evidence_config(
-        &valid_evidence_body()
-            .replace("mode: did", "mode: none")
-            .replace("        proof_of_possession: required\n", "")
-            .replace("        allowed_did_methods: [did:jwk]\n", ""),
-    );
-    let valid_none_path = write_config(&tmp, &valid_none);
-    config::load(&valid_none_path).expect("none holder binding without proof loads");
-
-    let invalid_none = evidence_config(
-        &valid_evidence_body()
-            .replace("mode: did", "mode: none")
-            .replace("        allowed_did_methods: [did:jwk]\n", ""),
-    );
-    let invalid_none_path = write_config(&tmp, &invalid_none);
-    assert_config_code(config::load(&invalid_none_path), "config.validation_error");
-}
-
-#[test]
-fn evidence_claim_and_profile_references_must_resolve() {
-    let tmp = TempDir::new().expect("tempdir");
-    let unknown_claim = evidence_config(
-        &valid_evidence_body().replace("allowed_claims: [eligibility]", "allowed_claims: [age]"),
-    );
-    let unknown_claim_path = write_config(&tmp, &unknown_claim);
-    assert_config_code(config::load(&unknown_claim_path), "config.validation_error");
-
-    let unknown_profile = evidence_config(&valid_evidence_body().replace(
-        "credential_profiles: [person_sd_jwt]",
-        "credential_profiles: [missing]",
-    ));
-    let unknown_profile_path = write_config(&tmp, &unknown_profile);
-    assert_config_code(
-        config::load(&unknown_profile_path),
-        "config.validation_error",
-    );
-}
-
-#[test]
-fn evidence_dci_source_bindings_must_reference_named_spdci_registry() {
-    let tmp = TempDir::new().expect("tempdir");
-    let valid = evidence_config_with_standards(&dci_evidence_body(), &dci_standards_body());
-    let valid_path = write_config(&tmp, &valid);
-    config::load(&valid_path).expect("DCI evidence binding with named SP DCI registry loads");
-
-    let missing_connection = evidence_config_with_standards(
-        &dci_evidence_body().replace("          connection: crvs\n", ""),
-        &dci_standards_body(),
-    );
-    let missing_connection_path = write_config(&tmp, &missing_connection);
-    assert_config_code(
-        config::load(&missing_connection_path),
-        "config.validation_error",
-    );
-
-    let unknown_connection = evidence_config_with_standards(
-        &dci_evidence_body().replace("connection: crvs", "connection: missing"),
-        &dci_standards_body(),
-    );
-    let unknown_connection_path = write_config(&tmp, &unknown_connection);
-    assert_config_code(
-        config::load(&unknown_connection_path),
-        "config.validation_error",
-    );
-
-    let unmapped_lookup = evidence_config_with_standards(
-        &dci_evidence_body().replace("field: PERSON_ID", "field: UNKNOWN_ID"),
-        &dci_standards_body(),
-    );
-    let unmapped_lookup_path = write_config(&tmp, &unmapped_lookup);
-    assert_config_code(
-        config::load(&unmapped_lookup_path),
-        "config.validation_error",
-    );
-}
-
-#[test]
-fn evidence_disclosure_values_and_downgrade_are_constrained() {
-    let tmp = TempDir::new().expect("tempdir");
-    let unsupported_claim_disclosure = evidence_config(&valid_evidence_body().replace(
-        "allowed: [value, predicate, redacted]",
-        "allowed: [value, minimal, redacted]",
-    ));
-    let unsupported_claim_disclosure_path = write_config(&tmp, &unsupported_claim_disclosure);
-    assert_config_code(
-        config::load(&unsupported_claim_disclosure_path),
-        "config.validation_error",
-    );
-
-    let unsupported_downgrade =
-        evidence_config(&valid_evidence_body().replace("downgrade: deny", "downgrade: mask"));
-    let unsupported_downgrade_path = write_config(&tmp, &unsupported_downgrade);
-    assert_config_code(
-        config::load(&unsupported_downgrade_path),
-        "config.validation_error",
-    );
-
-    let unsupported_profile_disclosure = evidence_config(
-        &valid_evidence_body().replace("allowed: [redacted]\n", "allowed: [summary]\n"),
-    );
-    let unsupported_profile_disclosure_path = write_config(&tmp, &unsupported_profile_disclosure);
-    assert_config_code(
-        config::load(&unsupported_profile_disclosure_path),
-        "config.validation_error",
-    );
 }
 
 #[test]

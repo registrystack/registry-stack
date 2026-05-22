@@ -181,6 +181,9 @@ async fn verify_evidence_offering(
     let Some(offering) = compiled.evidence_offering(&path.offering_id).cloned() else {
         return evidence_verification_headers(offering_not_found());
     };
+    if offering.access.kind != "registry-relay-verification" {
+        return evidence_verification_headers(offering_not_found());
+    }
     if let Some(Extension(limiter)) = limiter.as_ref() {
         if let Err(retry_after) = limiter.check(&principal.principal_id, &offering.id) {
             return evidence_verification_headers(rate_limited(retry_after));
@@ -733,7 +736,7 @@ fn build_cccev_evidence(
         .collect::<Vec<_>>();
     supports_concept.push(iri_object(decision_concept));
 
-    json!({
+    let mut evidence = json!({
         "@context": {
             "cccev": "http://data.europa.eu/m8g/",
             "dcterms": "http://purl.org/dc/terms/",
@@ -781,7 +784,17 @@ fn build_cccev_evidence(
         "registry_relay:evidenceHash": body.evidence_hash,
         "registry_relay:dataset": body.dataset_id,
         "registry_relay:entity": body.entity,
-    })
+    });
+    // CCCEV 2.1.0 isConformantTo is xsd:boolean. Omit when the decision does
+    // not assert conformance one way or the other (e.g. "ambiguous").
+    if let Some(conformant) = match body.decision.as_str() {
+        "match" => Some(true),
+        "mismatch" => Some(false),
+        _ => None,
+    } {
+        evidence["cccev:isConformantTo"] = json!(conformant);
+    }
+    evidence
 }
 
 fn typed_datetime(value: &str) -> Value {

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 FROM rust:1-bookworm AS builder
-WORKDIR /workspace
+WORKDIR /workspace/registry_relay
 
 COPY Cargo.toml Cargo.lock ./
 COPY benches ./benches
@@ -10,9 +10,9 @@ COPY resources ./resources
 COPY src ./src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/workspace/target \
+    --mount=type=cache,target=/workspace/registry_relay/target \
     cargo build --release --locked && \
-    cp /workspace/target/release/registry-relay /usr/local/bin/registry-relay
+    cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay
 
 FROM debian:bookworm-slim AS runtime
 

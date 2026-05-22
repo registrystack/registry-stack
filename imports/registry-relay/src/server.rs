@@ -195,7 +195,6 @@ fn build_app_with_provenance_metadata_and_metrics(
         .merge(api::datasets_router())
         .merge(api::entity_router())
         .merge(api::evidence_offerings_router())
-        .merge(api::evidence_router())
         .merge(api::aggregates_router())
         .merge(api::metadata_router())
         .merge(api::openapi_router());
@@ -219,11 +218,8 @@ fn build_app_with_provenance_metadata_and_metrics(
     let evidence_verification_limiter = Arc::new(EvidenceVerificationLimiter::new(
         &config.evidence_verification.rate_limit,
     ));
-    let evidence_store = Arc::new(crate::evidence::EvidenceStore::default());
-
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
         .layer(Extension(cursor_signer))
-        .layer(Extension(evidence_store))
         .layer(Extension(evidence_verification_limiter))
         .layer(Extension(config));
     if let Some(hasher) = claim_verification_hasher {

@@ -142,6 +142,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: Dockerfile
           tags: registry-relay:ci
           load: false
           push: false

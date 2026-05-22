@@ -49,8 +49,6 @@ const PERSONA_HASH_ENVS: &[&str] = &[
     "OPERATIONS_ADMIN_HASH",
 ];
 
-const EVIDENCE_SERVER_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
-
 fn seed_demo_secret_env() {
     for name in PERSONA_HASH_ENVS {
         env::set_var(name, make_fingerprint(name.as_bytes()));
@@ -58,11 +56,6 @@ fn seed_demo_secret_env() {
     env::set_var(
         "CLAIM_VERIFICATION_BINDING_KEY",
         "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    );
-    env::set_var("EVIDENCE_SERVER_ISSUER_JWK", EVIDENCE_SERVER_ISSUER_JWK);
-    env::set_var(
-        "EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN",
-        "demo-evidence-casework-system",
     );
 }
 
@@ -136,45 +129,13 @@ fn core_demo_configs_load_and_validate() {
     );
 }
 
+#[cfg(feature = "spdci-api-standards")]
 #[test]
-fn evidence_server_demo_config_loads_and_validates_metadata() {
+fn evidence_registry_demo_config_loads_and_validates_metadata() {
     seed_demo_secret_env();
-
-    let evidence_path = demo_config("evidence_server.yaml");
-    let evidence = config::load(&evidence_path).expect("evidence_server.yaml failed to load");
-    assert!(evidence.evidence.enabled);
-    assert_eq!(
-        evidence.datasets.len(),
-        0,
-        "evidence_server.yaml should not embed source registry datasets"
-    );
-    assert!(
-        evidence
-            .auth
-            .api_keys
-            .iter()
-            .find(|key| key.id == "verification_service")
-            .expect("verification_service key")
-            .scopes
-            .iter()
-            .any(|scope| scope == "farmer_registry:evidence_verification"),
-        "evidence demo client should not need raw row scope"
-    );
-    assert!(
-        evidence
-            .evidence
-            .source_connections
-            .contains_key("registry_relay"),
-        "standalone evidence server should call a remote registry data API"
-    );
 
     let registry_path = demo_config("evidence_registries.yaml");
     let registry = config::load(&registry_path).expect("evidence_registries.yaml failed to load");
-    assert!(!registry.evidence.enabled);
-    assert!(
-        registry.evidence.claims.is_empty(),
-        "source registry process should not carry Evidence Server claim definitions"
-    );
     assert_eq!(registry.datasets.len(), 2);
     assert_split_metadata_matches_runtime(
         "evidence_registries.yaml",
@@ -255,7 +216,8 @@ fn spdci_demo_configs_load_and_validate() {
             continue;
         }
         let contents = std::fs::read_to_string(&path).expect("demo config should be readable");
-        if contents.contains("  spdci:") {
+        if contents.contains("standards:\n  spdci:") || contents.contains("standards:\r\n  spdci:")
+        {
             spdci_configs.push(path);
         }
     }
@@ -277,11 +239,7 @@ fn spdci_demo_configs_load_and_validate() {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("demo");
-        if name == "evidence_server.yaml" {
-            assert_eq!(config.datasets.len(), 0);
-        } else {
-            assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
-        }
+        assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
         let spdci = config
             .standards
             .spdci

@@ -23,7 +23,9 @@ auth:
     - id: verification_service
       hash_env: VERIFICATION_SERVICE_HASH
       scopes:
+        - civil_registry:metadata
         - civil_registry:evidence_verification
+        - farmer_registry:metadata
         - farmer_registry:evidence_verification
     - id: casework_system
       hash_env: CASEWORK_SYSTEM_HASH
@@ -48,6 +50,19 @@ standards:
         expression_fields:
           birth_date: birth_date
           address.locality: district
+      fr:
+        dataset: farmer_registry
+        entity: farmer
+        registry_type: ns:org:RegistryType:FR
+        record_type: spdci-extensions-fr:FRPerson
+        identifiers:
+          NATIONAL_ID: national_id
+          UIN: national_id
+          NIN: national_id
+          FARMER_ID: id
+        expression_fields:
+          national_id: national_id
+          farmed_land_size_hectares: farmed_land_size_hectares
 
 audit:
   sink: file
