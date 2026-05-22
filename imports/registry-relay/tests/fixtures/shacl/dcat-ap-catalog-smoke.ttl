@@ -63,7 +63,6 @@
     ] ;
     sh:property [
         sh:path dcat:distribution ;
-        sh:minCount 1 ;
         sh:class dcat:Distribution ;
     ] ;
     sh:property [
