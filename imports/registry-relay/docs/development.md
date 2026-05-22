@@ -59,8 +59,12 @@ Portable metadata checks are separate from the Relay runtime:
 just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
 just metadata-validate-profiles
 cargo test --test demo_configs_load
-cd ../registry-metadata && cargo test -p registry-metadata-core
 ```
+
+`just metadata-*` recipes use an installed `registry-metadata` binary when one
+is present, a sibling checkout during local development, or the published
+`https://github.com/jeremi/registry-metadata` tag configured by
+`scripts/run_registry_metadata_cli.sh`.
 
 The demo runtime configs are split-backed: every `demo/config/*.yaml` points
 at a sibling `*.metadata.yaml` manifest, and `demo_configs_load` validates the
@@ -146,10 +150,14 @@ src/metadata/     Relay adapters for scoped metadata publication
 src/provenance/   VC-JWT issuance, DID Web, schemas, contexts, signers
 src/query/        entity and aggregate query planning
 src/server.rs     router composition and cross-cutting middleware
-../registry-metadata/crates/registry-metadata-core/  portable metadata manifest model and renderers
-../registry-metadata/crates/registry-metadata-cli/   metadata validation, rendering, and static publish CLI
 profiles/        ecosystem profile descriptors and fixture metadata manifests
 ```
+
+Portable metadata crates live in the public
+`https://github.com/jeremi/registry-metadata` repository. Relay consumes
+`registry-metadata-core` as a tagged Git dependency and shells out to
+`registry-metadata-cli` only for local validation, rendering, and static
+publication helper recipes.
 
 Storage tables are private. Public routes must go through entity config, scope checks, audit, and query planning.
 
@@ -157,7 +165,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 - Keep the public URL space entity-shaped. Do not expose table ids in data-plane paths.
 - Add config fields through `src/config/mod.rs` and validation in `src/config/validate.rs`.
-- Keep portable metadata in `../registry-metadata/crates/registry-metadata-core`; it must not depend on Relay runtime, Axum, DataFusion, auth, scopes, OpenAPI, or connector code.
+- Keep portable metadata in the split `registry-metadata-core` crate; it must not depend on Relay runtime, Axum, DataFusion, auth, scopes, OpenAPI, or connector code.
 - Keep auth scopes independent. Metadata, rows, evidence verification, aggregate, and admin must not imply one another.
 - Treat audit as a product surface. New routes should populate endpoint kind, dataset/entity/table ids, purpose, row count, suppression count, and stable error code when applicable.
 - Prefer structured parsers and DataFusion expressions over string-built query logic.

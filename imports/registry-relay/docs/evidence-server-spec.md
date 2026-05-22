@@ -2,10 +2,11 @@
 
 Status: historical pre-split draft
 
-Current implementation note: Evidence Server now lives in the sibling
-`../evidence-server` repository. This document is retained as historical design
-context for the extraction and should not be read as current Registry Relay
-workspace layout guidance.
+Current implementation note: Evidence Server now lives in the public
+`https://github.com/jeremi/evidence-server` repository. A sibling checkout may
+exist during local development, but this document is retained as historical
+design context for the extraction and should not be read as current Registry
+Relay workspace layout guidance.
 
 This document specifies a standalone Evidence Server that computes configured
 claims from registry data and renders them as evidence artifacts. It is written
@@ -2214,20 +2215,20 @@ Version 0 is not done if any of these are true:
 ## Code Location
 
 Historical note: this section originally described an in-workspace prototype.
-After the repository split, the implementation lives in the sibling
-`../evidence-server` repository and Registry Relay must not host or link the
-Evidence Server runtime.
+After the repository split, the implementation lives in
+`https://github.com/jeremi/evidence-server` and Registry Relay must not host or
+link the Evidence Server runtime.
 
 Current workspace layout:
 
 ```text
-../evidence-server/
+evidence-server/
   crates/evidence-core/
   crates/evidence-server/
   crates/evidence-server-bin/
 ```
 
-`../evidence-server/crates/evidence-core` owns:
+`crates/evidence-core` owns:
 
 - `ClaimDefinition`;
 - `ClaimResult`;
@@ -2241,11 +2242,11 @@ Current workspace layout:
 - metadata validation;
 - shared error codes.
 
-`../evidence-server/crates/evidence-server` is the library crate. It owns the
+`crates/evidence-server` is the library crate. It owns the
 service assembly and protocol client implementations so tests and demos can
 reuse them without depending on a running process.
 
-`../evidence-server/crates/evidence-server-bin` is the process crate. It owns
+`crates/evidence-server-bin` is the process crate. It owns
 startup, configuration file loading, server binding, and shutdown.
 
 The Evidence Server repository owns:

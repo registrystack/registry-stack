@@ -338,15 +338,17 @@ The script exercises:
 
 Full responses are written under `demo/output/evidence-server-demo/`; the
 script clears that directory at startup so each run has a clean numbered
-artifact set. The demo Evidence Server config lives in the sibling
-`../evidence-server/demo/config/evidence-server.yaml` repository, the source
-registry config is `demo/config/evidence_registries.yaml`, the registry
-metadata manifest is `demo/config/evidence_registries.metadata.yaml`, and the
-synthetic source rows live under `demo/data/evidence_server/`. The source
-registry config does not declare evidence claims; it exposes source records
-through DCI registry routes. Its metadata manifest advertises an evidence
-offering that points to the Evidence Server endpoint. The standalone Evidence
-Server owns claim definitions, rules, rendering, and credential issuance.
+artifact set. When `--start-server` is used, the demo uses
+`EVIDENCE_SERVER_ROOT` when set, a sibling `../evidence-server` checkout when
+available, or a tagged clone of `https://github.com/jeremi/evidence-server`
+under `target/evidence-server-demo/`. The source registry config is
+`demo/config/evidence_registries.yaml`, the registry metadata manifest is
+`demo/config/evidence_registries.metadata.yaml`, and the synthetic source rows
+live under `demo/data/evidence_server/`. The source registry config does not
+declare evidence claims; it exposes source records through DCI registry routes.
+Its metadata manifest advertises an evidence offering that points to the
+Evidence Server endpoint. The standalone Evidence Server owns claim
+definitions, rules, rendering, and credential issuance.
 
 The SD-JWT VC step is intentionally demo-grade: it uses a static demo issuer key
 from the environment, supports `did:jwk` holder binding only, and does not
