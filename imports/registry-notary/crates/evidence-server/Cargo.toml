@@ -1,0 +1,37 @@
+[package]
+name = "evidence-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone Evidence Server routes, runtime, auth, audit, and HTTP source connectors."
+readme.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["evidence-server-cel"]
+evidence-server-cel = ["dep:cel-mapper-core"]
+
+[dependencies]
+evidence-core.workspace = true
+axum.workspace = true
+base64.workspace = true
+cel-mapper-core = { workspace = true, optional = true }
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+axum-test = { version = "20" }
+serde_yml.workspace = true
+tempfile = { version = "3" }

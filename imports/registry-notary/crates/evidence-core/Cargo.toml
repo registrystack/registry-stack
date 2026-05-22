@@ -1,0 +1,21 @@
+[package]
+name = "evidence-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core Evidence Server domain, configuration, and credential primitives."
+readme.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+getrandom.workspace = true
+jsonwebtoken.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+ulid.workspace = true
+zeroize.workspace = true
