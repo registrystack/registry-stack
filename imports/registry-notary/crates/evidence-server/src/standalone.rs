@@ -4,8 +4,10 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::future::Future;
+use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
@@ -28,6 +30,8 @@ use crate::{
     router, EvidenceApiState, EvidenceAuditContext, EvidenceErrorCodeContext,
     EvidenceIssuerResolver, EvidenceStore, SourceReader,
 };
+
+const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn standalone_router(
     config: StandaloneEvidenceServerConfig,
@@ -57,8 +61,12 @@ pub enum StandaloneServerError {
     InvalidIssuerEnv(String),
     #[error("audit sink path is required when sink=file")]
     MissingAuditPath,
+    #[error("audit sink file could not be opened")]
+    AuditOpen(#[source] std::io::Error),
     #[error("unsupported audit sink: {0}")]
     InvalidAuditSink(String),
+    #[error("failed to build HTTP source client")]
+    HttpClient(#[source] reqwest::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +79,7 @@ struct ResolvedEvidenceSourceConnection {
 #[derive(Debug, Clone)]
 pub struct HttpEvidenceSources {
     client: reqwest::Client,
+    request_timeout: Duration,
     source_connections: BTreeMap<String, ResolvedEvidenceSourceConnection>,
 }
 
@@ -93,8 +102,13 @@ impl HttpEvidenceSources {
                 },
             );
         }
+        let client = reqwest::Client::builder()
+            .timeout(SOURCE_REQUEST_TIMEOUT)
+            .build()
+            .map_err(StandaloneServerError::HttpClient)?;
         Ok(Self {
-            client: reqwest::Client::new(),
+            client,
+            request_timeout: SOURCE_REQUEST_TIMEOUT,
             source_connections,
         })
     }
@@ -222,10 +236,18 @@ impl AuthAuditState {
     }
 }
 
-#[derive(Debug)]
 enum AuditSink {
-    Stdout,
-    File(Mutex<std::fs::File>),
+    Stdout(Mutex<Box<dyn Write + Send>>),
+    File(Mutex<Box<dyn Write + Send>>),
+}
+
+impl std::fmt::Debug for AuditSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stdout(_) => f.debug_tuple("Stdout").finish(),
+            Self::File(_) => f.debug_tuple("File").finish(),
+        }
+    }
 }
 
 impl AuditSink {
@@ -233,7 +255,7 @@ impl AuditSink {
         config: &evidence_core::EvidenceAuditConfig,
     ) -> Result<Self, StandaloneServerError> {
         match config.sink.as_str() {
-            "stdout" => Ok(Self::Stdout),
+            "stdout" => Ok(Self::Stdout(Mutex::new(Box::new(std::io::stdout())))),
             "file" | "jsonl" => {
                 let path = config
                     .path
@@ -243,29 +265,33 @@ impl AuditSink {
                     .create(true)
                     .append(true)
                     .open(path)
-                    .map_err(|_| StandaloneServerError::MissingAuditPath)?;
-                Ok(Self::File(Mutex::new(file)))
+                    .map_err(StandaloneServerError::AuditOpen)?;
+                Ok(Self::File(Mutex::new(Box::new(file))))
             }
             sink => Err(StandaloneServerError::InvalidAuditSink(sink.to_string())),
         }
     }
 
-    fn emit(&self, event: &EvidenceAuditEvent) {
-        let Ok(line) = serde_json::to_string(event) else {
-            return;
-        };
+    fn emit(&self, event: &EvidenceAuditEvent) -> io::Result<()> {
         match self {
-            Self::Stdout => {
-                tracing::info!(target: "evidence_server::audit", audit = %line);
-            }
-            Self::File(file) => {
-                use std::io::Write;
-                if let Ok(mut file) = file.lock() {
-                    let _ = writeln!(file, "{line}");
-                }
+            Self::Stdout(writer) | Self::File(writer) => {
+                let mut writer = writer
+                    .lock()
+                    .map_err(|_| io::Error::other("audit sink mutex is poisoned"))?;
+                write_audit_jsonl(&mut **writer, event)
             }
         }
     }
+}
+
+fn write_audit_jsonl<W: Write + ?Sized>(
+    writer: &mut W,
+    event: &EvidenceAuditEvent,
+) -> io::Result<()> {
+    let line = serde_json::to_vec(event).map_err(io::Error::other)?;
+    writer.write_all(&line)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 async fn auth_audit_middleware(
@@ -279,14 +305,18 @@ async fn auth_audit_middleware(
         Ok(principal) => principal,
         Err(error) => {
             let response = auth_error_response(error);
-            emit_audit(&state, None, &method, &path, &response);
-            return response;
+            return match emit_audit(&state, None, &method, &path, &response) {
+                Ok(()) => response,
+                Err(error) => audit_error_response(error),
+            };
         }
     };
     request.extensions_mut().insert(principal.clone());
     let response = next.run(request).await;
-    emit_audit(&state, Some(&principal), &method, &path, &response);
-    response
+    match emit_audit(&state, Some(&principal), &method, &path, &response) {
+        Ok(()) => response,
+        Err(error) => audit_error_response(error),
+    }
 }
 
 fn emit_audit(
@@ -295,7 +325,7 @@ fn emit_audit(
     method: &str,
     path: &str,
     response: &Response,
-) {
+) -> io::Result<()> {
     let audit = response.extensions().get::<EvidenceAuditContext>();
     let error = response.extensions().get::<EvidenceErrorCodeContext>();
     let decision = audit
@@ -322,7 +352,7 @@ fn emit_audit(
         claim_hash: audit.and_then(|context| context.claim_hash.clone()),
         row_count: audit.and_then(|context| context.row_count),
         error_code: error.map(|context| context.0.clone()),
-    });
+    })
 }
 
 fn resolve_credentials(
@@ -390,6 +420,30 @@ fn auth_error_response(error: EvidenceError) -> Response {
     response
 }
 
+fn audit_error_response(error: io::Error) -> Response {
+    tracing::error!(target: "evidence_server::audit", error = %error, "audit event write failed");
+    let status = StatusCode::INTERNAL_SERVER_ERROR;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": "https://data.example.gov/problems/audit/write_failed",
+            "title": "Audit write failed",
+            "status": status.as_u16(),
+            "detail": "audit event could not be written",
+            "code": "audit.write_failed",
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json".parse().unwrap(),
+    );
+    response
+        .extensions_mut()
+        .insert(EvidenceErrorCodeContext("audit.write_failed".to_string()));
+    response
+}
+
 async fn read_remote_registry_data_api_one(
     sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
@@ -405,6 +459,7 @@ async fn read_remote_registry_data_api_one(
     let response = sources
         .client
         .get(url)
+        .timeout(sources.request_timeout)
         .bearer_auth(&connection.bearer_token)
         .header("accept", "application/json")
         .header("data-purpose", purpose)
@@ -450,6 +505,7 @@ async fn read_external_dci_http_one(
     let response = sources
         .client
         .post(url)
+        .timeout(sources.request_timeout)
         .bearer_auth(&connection.bearer_token)
         .header("accept", "application/json")
         .header("content-type", "application/json")
@@ -675,4 +731,148 @@ fn projected_source_fields_with_lookup(
     fields.sort();
     fields.dedup();
     fields
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum_test::TestServer;
+    use std::io::{Error, ErrorKind};
+
+    #[derive(Clone)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("shared buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(Error::new(ErrorKind::BrokenPipe, "audit sink unavailable"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn audit_event() -> EvidenceAuditEvent {
+        EvidenceAuditEvent {
+            event_id: "01HX0000000000000000000000".to_string(),
+            occurred_at: "2026-05-22T00:00:00Z".to_string(),
+            principal_id: Some("caseworker".to_string()),
+            decision: "allowed".to_string(),
+            method: "GET".to_string(),
+            path: "/claims".to_string(),
+            status: 200,
+            verification_id: None,
+            claim_hash: None,
+            row_count: None,
+            error_code: None,
+        }
+    }
+
+    fn auth_state(audit: AuditSink) -> Arc<AuthAuditState> {
+        Arc::new(AuthAuditState {
+            api_keys: vec![ResolvedCredential {
+                id: "caseworker".to_string(),
+                token: "api-token".to_string(),
+                scopes: Vec::new(),
+            }],
+            bearer_tokens: Vec::new(),
+            audit,
+        })
+    }
+
+    #[test]
+    fn stdout_audit_sink_emits_raw_jsonl() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let sink = AuditSink::Stdout(Mutex::new(Box::new(SharedBuffer(Arc::clone(&buffer)))));
+
+        sink.emit(&audit_event()).expect("audit write succeeds");
+
+        let output = String::from_utf8(buffer.lock().expect("buffer lock").clone())
+            .expect("audit output is UTF-8");
+        assert!(output.ends_with('\n'));
+        assert_eq!(output.lines().count(), 1);
+
+        let line: Value = serde_json::from_str(output.trim_end()).expect("audit line is JSON");
+        assert_eq!(line["event_id"], json!("01HX0000000000000000000000"));
+        assert_eq!(line["principal_id"], json!("caseworker"));
+        assert!(line.get("fields").is_none());
+        assert!(line.get("audit").is_none());
+    }
+
+    #[test]
+    fn audit_sink_emit_surfaces_stdout_write_errors() {
+        let sink = AuditSink::Stdout(Mutex::new(Box::new(FailingWriter)));
+
+        let error = sink
+            .emit(&audit_event())
+            .expect_err("stdout write error is returned");
+
+        assert_eq!(error.kind(), ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn audit_sink_emit_surfaces_file_write_errors() {
+        let sink = AuditSink::File(Mutex::new(Box::new(FailingWriter)));
+
+        let error = sink
+            .emit(&audit_event())
+            .expect_err("file write error is returned");
+
+        assert_eq!(error.kind(), ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn audit_write_failure_replaces_authorized_response_with_request_error() {
+        let app = Router::new()
+            .route("/ok", get(|| async { StatusCode::OK }))
+            .layer(from_fn_with_state(
+                auth_state(AuditSink::File(Mutex::new(Box::new(FailingWriter)))),
+                auth_audit_middleware,
+            ));
+        let server = TestServer::builder().http_transport().build(app);
+
+        let response = server.get("/ok").add_header("x-api-key", "api-token").await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        let body: Value = response.json();
+        assert_eq!(body["code"], json!("audit.write_failed"));
+    }
+
+    #[test]
+    fn http_sources_from_config_sets_finite_request_timeout() {
+        std::env::set_var("TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN", "source-token");
+        let config = EvidenceConfig {
+            source_connections: BTreeMap::from([(
+                "registry".to_string(),
+                evidence_core::SourceConnectionConfig {
+                    base_url: "https://registry.example.test".to_string(),
+                    token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
+                    dci: DciSourceConnectionConfig::default(),
+                },
+            )]),
+            ..EvidenceConfig::default()
+        };
+
+        let sources = HttpEvidenceSources::from_config(&config).expect("source config resolves");
+
+        assert_eq!(sources.request_timeout, SOURCE_REQUEST_TIMEOUT);
+        assert!(sources.request_timeout > Duration::ZERO);
+    }
 }

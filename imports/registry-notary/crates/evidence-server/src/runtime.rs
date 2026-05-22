@@ -223,7 +223,15 @@ impl EvidenceRuntime {
                 "name": evidence.service_id,
             },
             "auth": {
-                "methods": ["oauth2_bearer"],
+                "methods": ["api_key", "bearer"],
+                "api_key": {
+                    "header": "x-api-key",
+                },
+                "bearer": {
+                    "header": "Authorization",
+                    "scheme": "bearer",
+                    "format": "Bearer <token>",
+                },
                 "audience": evidence.service_id,
             },
             "operations": {
@@ -1114,4 +1122,30 @@ fn sha256_hex(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_document_advertises_api_key_and_bearer_auth() {
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "evidence.test".to_string(),
+            ..EvidenceConfig::default()
+        };
+
+        let document = EvidenceRuntime::service_document(&evidence);
+
+        assert_eq!(document["auth"]["methods"], json!(["api_key", "bearer"]));
+        assert_eq!(document["auth"]["api_key"]["header"], json!("x-api-key"));
+        assert_eq!(document["auth"]["bearer"]["header"], json!("Authorization"));
+        assert_eq!(document["auth"]["bearer"]["scheme"], json!("bearer"));
+        assert_eq!(
+            document["auth"]["bearer"]["format"],
+            json!("Bearer <token>")
+        );
+        assert_eq!(document["auth"]["audience"], json!("evidence.test"));
+    }
 }

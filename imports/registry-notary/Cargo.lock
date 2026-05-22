@@ -302,8 +302,8 @@ dependencies = [
 
 [[package]]
 name = "cel-mapper-core"
-version = "0.1.0"
-source = "git+https://github.com/PublicSchema/cel-mapping?tag=cel-mapper-core-v0.1.0#a58b8c0de806c1a0f9ac0622f66c0b130ff1b86c"
+version = "0.1.1"
+source = "git+https://github.com/PublicSchema/cel-mapping?tag=cel-mapper-core-v0.1.1#32679bb78c969b8f33129113e31465dbe54b0ea0"
 dependencies = [
  "base64",
  "cel",
@@ -2519,7 +2519,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys",
