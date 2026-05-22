@@ -710,6 +710,19 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Admin
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
+    } else if matches!(
+        path,
+        "/claims"
+            | "/claims/evaluate"
+            | "/claims/batch-evaluate"
+            | "/formats"
+            | "/evidence/render"
+            | "/credentials/issue"
+            | "/.well-known/evidence-service"
+            | "/.well-known/evidence/jwks.json"
+    ) || path.starts_with("/claims/")
+    {
+        EndpointKind::EvidenceVerification
     } else if path.starts_with("/evidence-offerings/") {
         classify_evidence_offering_endpoint(path)
     } else if path.starts_with("/ogc/v1/") {
@@ -854,6 +867,14 @@ mod tests {
         );
         assert_eq!(
             classify_endpoint("/evidence-offerings/person-evidence/verifications"),
+            EndpointKind::EvidenceVerification
+        );
+        assert_eq!(
+            classify_endpoint("/claims/evaluate"),
+            EndpointKind::EvidenceVerification
+        );
+        assert_eq!(
+            classify_endpoint("/credentials/issue"),
             EndpointKind::EvidenceVerification
         );
         assert_eq!(classify_endpoint("/datasets/x/rows"), EndpointKind::Rows);

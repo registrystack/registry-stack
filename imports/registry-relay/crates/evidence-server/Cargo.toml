@@ -1,0 +1,21 @@
+[package]
+name = "evidence-server"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[features]
+default = ["evidence-server-cel"]
+evidence-server-cel = ["dep:cel", "dep:cel-mapper-core"]
+
+[dependencies]
+evidence-core = { version = "0.1.0", path = "../evidence-core" }
+base64 = { version = "0.22" }
+cel = { version = "0.13", features = ["json", "chrono", "regex"], optional = true }
+cel-mapper-core = { version = "0.1", path = "../../../cel-mapping/crates/cel-mapper-core", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+sha2 = { version = "0.10" }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+ulid = { version = "1" }

@@ -1,0 +1,18 @@
+[package]
+name = "evidence-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+base64 = { version = "0.22" }
+getrandom = { version = "0.4" }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+sha2 = { version = "0.10" }
+thiserror = { version = "2" }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+ulid = { version = "1" }
+zeroize = { version = "1" }

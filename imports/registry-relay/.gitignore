@@ -16,6 +16,7 @@ bruno/registry-relay-demo/environments/local.bru
 
 # Demo audit log sink (populated by demo/config/all_demos.yaml)
 demo/var/
+demo/output/
 
 # macOS
 .DS_Store

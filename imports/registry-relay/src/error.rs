@@ -29,6 +29,7 @@
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use evidence_core::EvidenceError;
 use http_api_problem::HttpApiProblem;
 use serde_json::json;
 use thiserror::Error;
@@ -91,6 +92,9 @@ pub enum Error {
     /// Query cursor and context errors.
     #[error("{0}")]
     Query(#[from] QueryError),
+    /// Standalone Evidence Server errors.
+    #[error("{0}")]
+    Evidence(#[from] EvidenceError),
 }
 
 /// `entity.*` codes.
@@ -465,6 +469,7 @@ impl Error {
             Error::Ogc(e) => e.code(),
             Error::Spatial(e) => e.code(),
             Error::Query(e) => e.code(),
+            Error::Evidence(e) => e.code(),
         }
     }
 
@@ -494,6 +499,7 @@ impl Error {
             Error::Ogc(e) => e.http_status(),
             Error::Spatial(e) => e.http_status(),
             Error::Query(e) => e.http_status(),
+            Error::Evidence(e) => e.http_status(),
         }
     }
 
@@ -519,6 +525,7 @@ impl Error {
             Error::Ogc(e) => e.title(),
             Error::Spatial(e) => e.title(),
             Error::Query(e) => e.title(),
+            Error::Evidence(e) => e.title(),
         }
     }
 
@@ -546,6 +553,7 @@ impl Error {
             Error::Ogc(e) => e.detail().to_string(),
             Error::Spatial(e) => e.detail(),
             Error::Query(e) => e.detail().to_string(),
+            Error::Evidence(e) => e.detail().to_string(),
         }
     }
 
@@ -1414,6 +1422,121 @@ impl QueryError {
             QueryError::CursorInvalid => {
                 "cursor is malformed, expired, or bound to a different query context"
             }
+        }
+    }
+}
+
+trait EvidenceErrorHttp {
+    fn http_status(&self) -> StatusCode;
+    fn title(&self) -> &'static str;
+    fn detail(&self) -> String;
+}
+
+impl EvidenceErrorHttp for EvidenceError {
+    fn http_status(&self) -> StatusCode {
+        match self {
+            EvidenceError::ServerDisabled
+            | EvidenceError::OperationUnsupported
+            | EvidenceError::FormatUnsupported
+            | EvidenceError::CredentialIssuerNotConfigured => StatusCode::NOT_IMPLEMENTED,
+            EvidenceError::ClaimNotFound
+            | EvidenceError::SourceNotFound
+            | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
+            EvidenceError::InvalidRequest
+            | EvidenceError::HolderProofRequired
+            | EvidenceError::PurposeRequired => StatusCode::BAD_REQUEST,
+            EvidenceError::DisclosureNotAllowed
+            | EvidenceError::EvaluationBindingMismatch
+            | EvidenceError::ScopeDenied { .. } => StatusCode::FORBIDDEN,
+            EvidenceError::SourceAmbiguous | EvidenceError::IdempotencyConflict => {
+                StatusCode::CONFLICT
+            }
+            EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
+            EvidenceError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            EvidenceError::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            EvidenceError::CredentialIssuanceFailed | EvidenceError::RuleEvaluationFailed => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            EvidenceError::ServerDisabled => "Evidence server disabled",
+            EvidenceError::ClaimNotFound => "Claim not found",
+            EvidenceError::OperationUnsupported => "Claim operation unsupported",
+            EvidenceError::InvalidRequest => "Invalid evidence request",
+            EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
+            EvidenceError::SourceNotFound => "Source record not found",
+            EvidenceError::SourceAmbiguous => "Source lookup ambiguous",
+            EvidenceError::SourceUnavailable => "Source unavailable",
+            EvidenceError::BatchTooLarge => "Batch too large",
+            EvidenceError::EvaluationNotFound => "Evaluation not found",
+            EvidenceError::EvaluationBindingMismatch => "Evaluation binding mismatch",
+            EvidenceError::FormatUnsupported => "Format unsupported",
+            EvidenceError::CredentialIssuerNotConfigured => "Credential issuer not configured",
+            EvidenceError::HolderProofRequired => "Holder proof required",
+            EvidenceError::HolderProofReplay => "Holder proof replay",
+            EvidenceError::CredentialIssuanceFailed => "Credential issuance failed",
+            EvidenceError::RuleEvaluationFailed => "Claim rule evaluation failed",
+            EvidenceError::IdempotencyConflict => "Idempotency conflict",
+            EvidenceError::PurposeRequired => "Purpose required",
+            EvidenceError::ScopeDenied { .. } => "Scope denied",
+            _ => "Evidence error",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self {
+            EvidenceError::ServerDisabled => "the evidence server is not enabled".to_string(),
+            EvidenceError::ClaimNotFound => "the requested claim is not available".to_string(),
+            EvidenceError::OperationUnsupported => {
+                "the requested operation is not enabled".to_string()
+            }
+            EvidenceError::InvalidRequest => "the evidence request is invalid".to_string(),
+            EvidenceError::DisclosureNotAllowed => {
+                "the requested disclosure profile is not allowed".to_string()
+            }
+            EvidenceError::SourceNotFound => "the required source record was not found".to_string(),
+            EvidenceError::SourceAmbiguous => {
+                "the source lookup returned multiple records".to_string()
+            }
+            EvidenceError::SourceUnavailable => "the source registry is unavailable".to_string(),
+            EvidenceError::BatchTooLarge => {
+                "the batch exceeds the configured inline limit".to_string()
+            }
+            EvidenceError::EvaluationNotFound => {
+                "the evaluation id is unknown or expired".to_string()
+            }
+            EvidenceError::EvaluationBindingMismatch => {
+                "the request exceeds the original evaluation binding".to_string()
+            }
+            EvidenceError::FormatUnsupported => {
+                "the requested evidence format is not supported".to_string()
+            }
+            EvidenceError::CredentialIssuerNotConfigured => {
+                "no credential issuer is configured for this claim and format".to_string()
+            }
+            EvidenceError::HolderProofRequired => {
+                "holder proof of possession is required".to_string()
+            }
+            EvidenceError::HolderProofReplay => {
+                "holder proof of possession has already been used".to_string()
+            }
+            EvidenceError::CredentialIssuanceFailed => "credential issuance failed".to_string(),
+            EvidenceError::RuleEvaluationFailed => "claim rule evaluation failed".to_string(),
+            EvidenceError::IdempotencyConflict => {
+                "the idempotency key was reused with a different request".to_string()
+            }
+            EvidenceError::PurposeRequired => "a data purpose is required".to_string(),
+            EvidenceError::ScopeDenied { required } => {
+                format!(
+                    "missing required scope `{}`",
+                    sanitise_operator_string(required, MAX_SCOPE_NAME_LEN)
+                )
+            }
+            _ => "the evidence request failed".to_string(),
         }
     }
 }

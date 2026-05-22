@@ -125,6 +125,10 @@ demo-run config="demo/config/all_standards.yaml" features="":
     @if [ ! -f demo/.env.local ]; then uv run demo/scripts/generate_demo_keys.py --env-file; fi
     set -a; . demo/.env.local; set +a; demo_features="{{features}}"; if [ -z "$demo_features" ] && [ "{{config}}" = "demo/config/all_standards.yaml" ]; then demo_features="ogcapi-records,ogcapi-features,spdci-api-standards,standards-cel-mapping"; fi; if [ -n "$demo_features" ]; then cargo run --features "$demo_features" -- --config {{config}}; else cargo run -- --config {{config}}; fi
 
+# Start split source-registry and Evidence Server processes, run the narrated demo, then stop them.
+evidence-demo:
+    uv run demo/scripts/evidence_server_demo.py --start-server
+
 # Generate synthetic perf fixtures under perf/fixtures/generated/.
 # Usage: just perf-gen                       (default: all profiles)
 #        just perf-gen profile=medium

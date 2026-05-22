@@ -62,6 +62,9 @@ pub struct Config {
     /// Runtime controls for evidence-offering verification.
     #[serde(default)]
     pub evidence_verification: EvidenceVerificationConfig,
+    /// Optional standalone Evidence Server. Disabled by default.
+    #[serde(default)]
+    pub evidence: evidence_core::EvidenceConfig,
     /// Optional external standards adapters. The config model is parsed
     /// in every build so feature-disabled binaries can reject it with a
     /// stable taxonomy code.
@@ -88,19 +91,11 @@ fn default_claim_verification_binding_key_id() -> String {
     "v1".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceVerificationConfig {
     #[serde(default)]
     pub rate_limit: EvidenceVerificationRateLimitConfig,
-}
-
-impl Default for EvidenceVerificationConfig {
-    fn default() -> Self {
-        Self {
-            rate_limit: EvidenceVerificationRateLimitConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

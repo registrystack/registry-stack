@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest for the focused Evidence Server demo.
+
+schema_version: registry-metadata/v1
+catalog:
+  id: evidence-server-demo
+  base_url: http://127.0.0.1:4255
+  title: Evidence Server Demo
+  publisher:
+    name: Government Data Reuse Cell (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+requirements:
+  - id: smallholder_land_requirement
+    iri: https://demo.example.gov/requirements/smallholder-under-4ha
+    title: Smallholder land-size requirement
+    description: Requirement that a farmer cultivates less than four hectares.
+evidence_types:
+  - id: smallholder_farmer_evidence
+    iri: https://demo.example.gov/evidence-types/smallholder-farmer
+    title: Smallholder farmer evidence
+    description: Evidence that a farmer satisfies the configured land-size criterion.
+    proves:
+      - smallholder_land_requirement
+datasets:
+  - id: civil_registry
+    title: Civil Registry
+    description: Synthetic CRVS records for the Evidence Server demo.
+    owner: Civil Registration Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/crvs/v1/Person
+    entities:
+      - name: civil_person
+        title: Civil Person
+        description: Minimal CRVS person projection for evidence computation.
+        concept_uri: spdci:extensions/crvs/v1/Person
+        identifiers:
+          - name: national_id
+            kind: primary
+        fields:
+          - name: national_id
+            type: string
+            required: true
+          - name: given_name
+            type: string
+            required: true
+          - name: surname
+            type: string
+            required: true
+          - name: birth_date
+            type: date
+            required: true
+          - name: birth_place
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+  - id: farmer_registry
+    title: Farmer Registry
+    description: Synthetic farmer records for land-size evidence computation.
+    owner: Ministry of Agriculture
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/fr/v1/FRPerson
+    applicable_legislation:
+      - https://demo.example.gov/legislation/farmer-registry-act
+    entities:
+      - name: farmer
+        title: Farmer
+        description: Minimal farmer projection for evidence computation.
+        concept_uri: spdci:extensions/fr/v1/FRPerson
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: given_name
+            type: string
+            required: true
+          - name: surname
+            type: string
+            required: true
+          - name: farm_type
+            type: string
+            required: true
+          - name: farm_place_name
+            type: string
+            required: true
+          - name: farmed_land_size_hectares
+            type: number
+            unit: hectare
+            required: true
+          - name: registration_date
+            type: date
+            required: true
+          - name: district
+            type: string
+            required: true
+vocabularies:
+  spdci: https://schema.spdci.org/
+  evidence-server: https://registry-relay.dev/evidence-server/

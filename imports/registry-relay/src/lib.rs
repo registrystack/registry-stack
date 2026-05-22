@@ -23,6 +23,7 @@ pub mod config;
 pub mod connector;
 pub mod entity;
 pub mod error;
+pub mod evidence;
 pub mod format;
 pub mod ingest;
 pub mod metadata;

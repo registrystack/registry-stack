@@ -28,6 +28,9 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
   Registry Relay publication choices, and downstream interpretation boundaries.
 - [docs/evidence-verification.md](docs/evidence-verification.md): evidence verification guide, examples, privacy model, and signed receipts.
+- [docs/evidence-server-spec.md](docs/evidence-server-spec.md): draft target
+  architecture for a standalone evidence server that computes registry-backed
+  claims.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.

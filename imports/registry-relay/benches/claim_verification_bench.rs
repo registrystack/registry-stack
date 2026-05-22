@@ -126,6 +126,13 @@ fn receipt_inputs(claim_hash: &str) -> EvidenceVerificationReceiptInputs {
         claim_salt: "0123456789abcdef0123456789abcdef".to_string(),
         claim_hash: claim_hash.to_string(),
         evidence_hash: None,
+        cccev_evidence: json!({
+            "@type": "cccev:Evidence",
+            "cccev:supportsValue": {
+                "@type": "cccev:SupportedValue",
+                "cccev:value": "match",
+            }
+        }),
         issued_at,
         valid_until,
     }

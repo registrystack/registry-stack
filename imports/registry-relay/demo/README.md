@@ -294,6 +294,40 @@ Operational logs stay on stderr as readable text during local demo runs. Set
 `REGISTRY_RELAY_LOG_FORMAT=json` when you want those logs as JSONL for
 collection or a redirected file.
 
+## Narrated Evidence Server demo
+
+The focused Evidence Server demo is the clearest end-to-end story for the new
+computed-evidence product. It runs two local processes: source registries on
+port `4256`, and a standalone Evidence Server on port `4255`. The Evidence
+Server calls the source registry API to compute evidence, while the evidence
+client itself cannot read raw registry rows.
+
+```bash
+just evidence-demo
+```
+
+The runner starts both demo processes with the `spdci-api-standards` feature,
+because the CRVS source binding uses the demo SP DCI registry profile.
+
+The script exercises:
+
+- discovery through `/.well-known/evidence-service`, `/claims`, and `/formats`;
+- value evidence from CRVS (`date-of-birth`) and the farmer registry
+  (`farmed-land-size`);
+- a derived CEL predicate, `farmer-under-4ha`;
+- batch evaluation with a missing subject as a per-item error;
+- CCCEV JSON-LD rendering from an evaluation id;
+- SD-JWT VC issuance with a holder proof and issuer JWKS publication.
+
+Full responses are written under `demo/output/evidence-server-demo/`. The demo
+Evidence Server config is `demo/config/evidence_server.yaml`, the source
+registry config is `demo/config/evidence_registries.yaml`, the registry metadata
+manifest is `demo/config/evidence_registries.metadata.yaml`, and the synthetic
+source rows live under `demo/data/evidence_server/`. The source registry config
+does not declare evidence claims; it only exposes normal registry APIs. The
+standalone Evidence Server owns claim definitions, rules, rendering, and
+credential issuance.
+
 ## Narrated evidence-offerings demo
 
 For an educational walkthrough that prints each step and writes full responses

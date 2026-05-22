@@ -816,7 +816,6 @@ dependencies = [
 [[package]]
 name = "cel-mapper-core"
 version = "0.1.0"
-source = "git+https://github.com/PublicSchema/cel-mapping?rev=fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b#fc67388b0b4cba6b4fe6f684c449d9484e5d0b5b"
 dependencies = [
  "base64",
  "cel",
@@ -2216,6 +2215,37 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "evidence-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "getrandom 0.4.2",
+ "jsonwebtoken",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "time",
+ "ulid",
+ "zeroize",
+]
+
+[[package]]
+name = "evidence-server"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "cel",
+ "cel-mapper-core",
+ "evidence-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "ulid",
 ]
 
 [[package]]
@@ -4486,6 +4516,8 @@ dependencies = [
  "csv",
  "datafusion",
  "ed25519-dalek",
+ "evidence-core",
+ "evidence-server",
  "futures",
  "geojson",
  "getrandom 0.4.2",

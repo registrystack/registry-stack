@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import shlex
 import sys
 from dataclasses import dataclass
@@ -24,6 +26,49 @@ from urllib.request import Request, urlopen
 
 
 EVIDENCE_RECEIPT_MEDIA_TYPE = "application/vnd.registry-relay.evidence-verification+jwt"
+
+
+class Palette:
+    """Tiny ANSI helper. Keeps the demo dependency-free and log-friendly."""
+
+    CODES = {
+        "reset": "\033[0m",
+        "bold": "\033[1m",
+        "dim": "\033[2m",
+        "red": "\033[31m",
+        "green": "\033[32m",
+        "yellow": "\033[33m",
+        "blue": "\033[34m",
+        "magenta": "\033[35m",
+        "cyan": "\033[36m",
+        "white": "\033[37m",
+    }
+
+    THEMES = {
+        "title": ("bold", "cyan"),
+        "heading": ("bold", "blue"),
+        "label": ("bold", "white"),
+        "muted": ("dim",),
+        "path": ("cyan",),
+        "method": ("bold", "magenta"),
+        "ok": ("bold", "green"),
+        "warn": ("bold", "yellow"),
+        "error": ("bold", "red"),
+        "json": ("dim",),
+    }
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+
+    def apply(self, style: str, value: object) -> str:
+        text = str(value)
+        if not self.enabled:
+            return text
+        codes = "".join(self.CODES[name] for name in self.THEMES.get(style, ()))
+        return f"{codes}{text}{self.CODES['reset']}" if codes else text
+
+
+PALETTE = Palette(enabled=False)
 
 
 @dataclass(frozen=True)
@@ -187,6 +232,28 @@ def url_join(base_url: str, path: str) -> str:
     return base_url.rstrip("/") + "/" + path.lstrip("/")
 
 
+def should_use_color(mode: str) -> bool:
+    if mode == "always":
+        return True
+    if mode == "never" or os.environ.get("NO_COLOR") is not None:
+        return False
+    return sys.stdout.isatty()
+
+
+def rule(char: str = "-") -> str:
+    width = min(shutil.get_terminal_size((88, 20)).columns, 100)
+    return char * width
+
+
+def styled(style: str, value: object) -> str:
+    return PALETTE.apply(style, value)
+
+
+def key_value(label: str, value: object, *, value_style: str | None = None) -> str:
+    rendered = styled(value_style, value) if value_style else str(value)
+    return f"{styled('label', label + ':')} {rendered}"
+
+
 def request(
     *,
     base_url: str,
@@ -239,15 +306,21 @@ def request(
 
 
 def chapter(index: int, total: int, title: str, why: str) -> None:
-    print(f"\n[{index}/{total}] {title}")
-    print(f"Why this matters: {why}")
+    print()
+    print(styled("muted", rule("=")))
+    print(styled("heading", f"Step {index}/{total}: {title}"))
+    print(f"{styled('label', 'Why:')} {why}")
+    print(styled("muted", rule("-")))
 
 
 def print_request(method: str, path: str, body: Any | None = None) -> None:
-    print(f"Request: {method} {path}")
+    print(
+        f"{styled('label', 'Request:')} "
+        f"{styled('method', method)} {styled('path', path)}"
+    )
     if body is not None:
-        print("Submitted body:")
-        print(indent(json.dumps(body, indent=2, sort_keys=True)))
+        print(styled("label", "Submitted body:"))
+        print(styled("json", indent(json.dumps(body, indent=2, sort_keys=True))))
 
 
 def indent(value: str, spaces: int = 2) -> str:
@@ -256,10 +329,19 @@ def indent(value: str, spaces: int = 2) -> str:
 
 
 def print_result(result: HttpResult, summary: str | None = None) -> None:
-    print(f"HTTP {result.status}")
+    if 200 <= result.status <= 299:
+        status_style = "ok"
+    elif 400 <= result.status <= 499:
+        status_style = "warn"
+    elif result.status >= 500:
+        status_style = "error"
+    else:
+        status_style = "label"
+    print(key_value("Status", f"HTTP {result.status}", value_style=status_style))
     if summary:
-        print(summary)
-    print(f"Full response written to: {result.path}")
+        print(styled("label", "Summary:"))
+        print(indent(summary))
+    print(key_value("Saved", result.path, value_style="path"))
 
 
 def summarize_offerings(payload: Any) -> str:
@@ -294,8 +376,14 @@ def summarize_offering(payload: Any) -> str:
 def summarize_verification(payload: Any) -> str:
     if not isinstance(payload, dict):
         return "Verification response was not JSON."
+    decision = payload.get("decision")
+    decision_style = {
+        "match": "ok",
+        "mismatch": "warn",
+        "ambiguous": "warn",
+    }.get(str(decision), "label")
     lines = [
-        f"Decision: {payload.get('decision')}",
+        f"Decision: {styled(decision_style, decision)}",
         f"Verification id: {payload.get('verification_id')}",
         f"Requirement: {payload.get('requirement')}",
         f"Evidence type: {payload.get('evidence_type')}",
@@ -309,7 +397,11 @@ def summarize_verification(payload: Any) -> str:
 
 def ensure_expected(result: HttpResult, expected: set[int], label: str) -> None:
     if result.status not in expected:
-        print(f"\nUnexpected status for {label}: HTTP {result.status}", file=sys.stderr)
+        print(
+            f"\n{styled('error', 'Unexpected status')} for {label}: "
+            f"HTTP {result.status}",
+            file=sys.stderr,
+        )
         print(f"Full response: {result.path}", file=sys.stderr)
         raise SystemExit(1)
 
@@ -318,6 +410,15 @@ def old_route_for(scenario: Scenario) -> str:
     parsed = scenario.row_path.strip("/").split("/")
     dataset_id, entity, record_id = parsed[1], parsed[2], parsed[3]
     return f"/datasets/{dataset_id}/{entity}/verify?id={record_id}"
+
+
+def print_header(args: argparse.Namespace, scenario: Scenario) -> None:
+    print(styled("title", "Registry Relay evidence-offerings demo"))
+    print(styled("muted", rule("=")))
+    print(key_value("Base URL", args.base_url, value_style="path"))
+    print(key_value("Scenario", scenario.name, value_style="heading"))
+    print(key_value("Output directory", args.output, value_style="path"))
+    print(key_value("Demo claim", scenario.explanation))
 
 
 def main() -> int:
@@ -358,7 +459,15 @@ def main() -> int:
         action="store_true",
         help="request an evidence-verification JWT receipt for the match step",
     )
+    parser.add_argument(
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="colorize terminal output; defaults to auto",
+    )
     args = parser.parse_args()
+    global PALETTE
+    PALETTE = Palette(enabled=should_use_color(args.color))
 
     parsed_base = urlparse(args.base_url)
     if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
@@ -371,11 +480,7 @@ def main() -> int:
     verification_token = bearer(env, args.verification_token_env)
     args.output.mkdir(parents=True, exist_ok=True)
 
-    print("Registry Relay evidence-offerings demo")
-    print(f"Base URL: {args.base_url}")
-    print(f"Scenario: {scenario.name}")
-    print(f"Output directory: {args.output}")
-    print(f"Demo claim: {scenario.explanation}")
+    print_header(args, scenario)
 
     total_steps = 8
 
@@ -595,7 +700,9 @@ def main() -> int:
     code = payload.get("code") if isinstance(payload, dict) else "(unknown)"
     print_result(result, f"Expected legacy route response code: {code}")
 
-    print("\nDemo complete")
+    print()
+    print(styled("muted", rule("=")))
+    print(styled("ok", "Demo complete"))
     print(
         "Story: Requirement -> Evidence Type -> Evidence Offering -> "
         "Registry Binding -> Verification Decision."

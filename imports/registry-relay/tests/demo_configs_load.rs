@@ -49,8 +49,9 @@ const PERSONA_HASH_ENVS: &[&str] = &[
     "OPERATIONS_ADMIN_HASH",
 ];
 
-#[test]
-fn core_demo_configs_load_and_validate() {
+const EVIDENCE_SERVER_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+fn seed_demo_secret_env() {
     for name in PERSONA_HASH_ENVS {
         env::set_var(name, make_fingerprint(name.as_bytes()));
     }
@@ -58,6 +59,16 @@ fn core_demo_configs_load_and_validate() {
         "CLAIM_VERIFICATION_BINDING_KEY",
         "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     );
+    env::set_var("EVIDENCE_SERVER_ISSUER_JWK", EVIDENCE_SERVER_ISSUER_JWK);
+    env::set_var(
+        "EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN",
+        "demo-evidence-casework-system",
+    );
+}
+
+#[test]
+fn core_demo_configs_load_and_validate() {
+    seed_demo_secret_env();
 
     let single_dataset_configs = [
         "benefits_casework.yaml",
@@ -125,6 +136,53 @@ fn core_demo_configs_load_and_validate() {
     );
 }
 
+#[test]
+fn evidence_server_demo_config_loads_and_validates_metadata() {
+    seed_demo_secret_env();
+
+    let evidence_path = demo_config("evidence_server.yaml");
+    let evidence = config::load(&evidence_path).expect("evidence_server.yaml failed to load");
+    assert!(evidence.evidence.enabled);
+    assert_eq!(
+        evidence.datasets.len(),
+        0,
+        "evidence_server.yaml should not embed source registry datasets"
+    );
+    assert!(
+        evidence
+            .auth
+            .api_keys
+            .iter()
+            .find(|key| key.id == "verification_service")
+            .expect("verification_service key")
+            .scopes
+            .iter()
+            .any(|scope| scope == "farmer_registry:evidence_verification"),
+        "evidence demo client should not need raw row scope"
+    );
+    assert!(
+        evidence
+            .evidence
+            .source_connections
+            .contains_key("registry_relay"),
+        "standalone evidence server should call a remote registry data API"
+    );
+
+    let registry_path = demo_config("evidence_registries.yaml");
+    let registry = config::load(&registry_path).expect("evidence_registries.yaml failed to load");
+    assert!(!registry.evidence.enabled);
+    assert!(
+        registry.evidence.claims.is_empty(),
+        "source registry process should not carry Evidence Server claim definitions"
+    );
+    assert_eq!(registry.datasets.len(), 2);
+    assert_split_metadata_matches_runtime(
+        "evidence_registries.yaml",
+        &registry_path,
+        registry.datasets.len(),
+    );
+}
+
 fn assert_split_metadata_matches_runtime(name: &str, path: &Path, dataset_count: usize) {
     let loaded = config::load_with_metadata(path)
         .unwrap_or_else(|err| panic!("{name} split metadata failed to load: {err}"));
@@ -180,13 +238,7 @@ fn assert_clinic_facility_spatial_demo(config: &config::Config) {
 #[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
 #[test]
 fn spdci_demo_configs_load_and_validate() {
-    for name in PERSONA_HASH_ENVS {
-        env::set_var(name, make_fingerprint(name.as_bytes()));
-    }
-    env::set_var(
-        "CLAIM_VERIFICATION_BINDING_KEY",
-        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    );
+    seed_demo_secret_env();
 
     let demo_dir = demo_config("");
     let mut spdci_configs = Vec::new();
@@ -225,7 +277,11 @@ fn spdci_demo_configs_load_and_validate() {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("demo");
-        assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
+        if name == "evidence_server.yaml" {
+            assert_eq!(config.datasets.len(), 0);
+        } else {
+            assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
+        }
         let spdci = config
             .standards
             .spdci
@@ -338,13 +394,7 @@ fn assert_demo_policy(dcat: &Value, dataset_id: &str, assigner: &str, purpose: &
 ))]
 #[test]
 fn mapped_spdci_demo_configs_require_mapping_feature() {
-    for name in PERSONA_HASH_ENVS {
-        env::set_var(name, make_fingerprint(name.as_bytes()));
-    }
-    env::set_var(
-        "CLAIM_VERIFICATION_BINDING_KEY",
-        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    );
+    seed_demo_secret_env();
 
     for name in ["disability_registry.yaml", "all_standards.yaml"] {
         let path = demo_config(name);
