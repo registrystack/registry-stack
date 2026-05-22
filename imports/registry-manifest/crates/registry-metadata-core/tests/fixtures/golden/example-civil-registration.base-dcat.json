@@ -1,0 +1,292 @@
+{
+  "@context": {
+    "adms": "http://www.w3.org/ns/adms#",
+    "adms:status": {
+      "@type": "@id"
+    },
+    "dcat": "http://www.w3.org/ns/dcat#",
+    "dcat:accessService": {
+      "@type": "@id"
+    },
+    "dcat:accessURL": {
+      "@type": "@id"
+    },
+    "dcat:dataset": {
+      "@type": "@id"
+    },
+    "dcat:distribution": {
+      "@type": "@id"
+    },
+    "dcat:endpointDescription": {
+      "@type": "@id"
+    },
+    "dcat:endpointURL": {
+      "@type": "@id"
+    },
+    "dcat:landingPage": {
+      "@type": "@id"
+    },
+    "dcat:mediaType": {
+      "@type": "@id"
+    },
+    "dcat:servesDataset": {
+      "@type": "@id"
+    },
+    "dcat:theme": {
+      "@type": "@id"
+    },
+    "dcat:themeTaxonomy": {
+      "@type": "@id"
+    },
+    "dcterms": "http://purl.org/dc/terms/",
+    "dcterms:accessRights": {
+      "@type": "@id"
+    },
+    "dcterms:accrualPeriodicity": {
+      "@type": "@id"
+    },
+    "dcterms:conformsTo": {
+      "@type": "@id"
+    },
+    "dcterms:format": {
+      "@type": "@id"
+    },
+    "dcterms:isPartOf": {
+      "@type": "@id"
+    },
+    "dcterms:spatial": {
+      "@type": "@id"
+    },
+    "dcterms:type": {
+      "@type": "@id"
+    },
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "odrl": "http://www.w3.org/ns/odrl/2/",
+    "odrl:action": {
+      "@type": "@id"
+    },
+    "odrl:assignee": {
+      "@type": "@id"
+    },
+    "odrl:assigner": {
+      "@type": "@id"
+    },
+    "odrl:hasPolicy": {
+      "@type": "@id"
+    },
+    "odrl:leftOperand": {
+      "@type": "@id"
+    },
+    "odrl:operator": {
+      "@type": "@id"
+    },
+    "odrl:profile": {
+      "@type": "@id"
+    },
+    "odrl:target": {
+      "@type": "@id"
+    },
+    "odrl:uid": {
+      "@type": "@id"
+    },
+    "odrl:unit": {
+      "@type": "@id"
+    },
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "rdfs:seeAlso": {
+      "@type": "@id"
+    },
+    "registry_relay": "https://registry-relay.dev/ns#",
+    "sh": "http://www.w3.org/ns/shacl#",
+    "sh:class": {
+      "@type": "@id"
+    },
+    "sh:datatype": {
+      "@type": "@id"
+    },
+    "sh:nodeKind": {
+      "@type": "@id"
+    },
+    "sh:path": {
+      "@type": "@id"
+    },
+    "sh:targetClass": {
+      "@type": "@id"
+    },
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "skos:hasTopConcept": {
+      "@type": "@id"
+    },
+    "skos:inScheme": {
+      "@type": "@id"
+    },
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@id": "https://civil-registration.example.gov/metadata/dcat.jsonld",
+  "@included": [
+    {
+      "@id": "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
+      "@type": "dcterms:Standard"
+    },
+    {
+      "@id": "#dataset-vital-events",
+      "@type": "foaf:Document"
+    },
+    {
+      "@id": "http://eurovoc.europa.eu/100141",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "100141",
+      "skos:prefLabel": "100141"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/data-theme",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "data theme",
+      "skos:prefLabel": "data theme"
+    },
+    {
+      "@id": "https://civil-registration.example.gov",
+      "@type": "foaf:Document"
+    },
+    {
+      "@id": "https://spec.openapis.org/oas/v3.1.0",
+      "@type": "dcterms:Standard"
+    },
+    {
+      "@id": "https://www.iana.org/assignments/media-types/application/json",
+      "@type": "dcterms:MediaType"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/file-type",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "file type",
+      "skos:prefLabel": "file type"
+    },
+    {
+      "@id": "http://purl.org/adms/publishertype/1.0",
+      "@type": "skos:ConceptScheme",
+      "dcterms:title": "1.0",
+      "skos:prefLabel": "1.0"
+    },
+    {
+      "@id": "http://data.europa.eu/eli/ontology#PublicAuthority",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://purl.org/adms/publishertype/1.0",
+      "skos:prefLabel": "PublicAuthority"
+    },
+    {
+      "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
+      "@type": "skos:Concept",
+      "skos:inScheme": "http://publications.europa.eu/resource/authority/file-type",
+      "skos:prefLabel": "JSON"
+    }
+  ],
+  "@type": "dcat:Catalog",
+  "dcat:dataset": [
+    {
+      "@id": "#dataset-vital-events",
+      "@type": "dcat:Dataset",
+      "dcat:distribution": [
+        {
+          "@id": "#dataset-vital-events#distribution-person",
+          "@type": "dcat:Distribution",
+          "dcat:accessService": {
+            "@id": "https://civil-registration.example.gov/datasets/vital-events/person#service",
+            "@type": "dcat:DataService",
+            "dcat:endpointDescription": "https://civil-registration.example.gov/openapi.json",
+            "dcat:endpointURL": "https://civil-registration.example.gov/datasets/vital-events/person",
+            "dcat:servesDataset": "#dataset-vital-events",
+            "dcterms:identifier": "vital-events:person:entity-api",
+            "dcterms:title": "Person REST access service"
+          },
+          "dcat:accessURL": "https://civil-registration.example.gov/datasets/vital-events/person",
+          "dcat:mediaType": "https://www.iana.org/assignments/media-types/application/json",
+          "dcterms:conformsTo": [
+            "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
+            "https://spec.openapis.org/oas/v3.1.0"
+          ],
+          "dcterms:format": {
+            "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
+            "@type": [
+              "dcterms:MediaType",
+              "dcterms:MediaTypeOrExtent"
+            ]
+          },
+          "dcterms:title": "Person API"
+        },
+        {
+          "@id": "#dataset-vital-events#distribution-vital_event",
+          "@type": "dcat:Distribution",
+          "dcat:accessService": {
+            "@id": "https://civil-registration.example.gov/datasets/vital-events/vital_event#service",
+            "@type": "dcat:DataService",
+            "dcat:endpointDescription": "https://civil-registration.example.gov/openapi.json",
+            "dcat:endpointURL": "https://civil-registration.example.gov/datasets/vital-events/vital_event",
+            "dcat:servesDataset": "#dataset-vital-events",
+            "dcterms:identifier": "vital-events:vital_event:entity-api",
+            "dcterms:title": "Vital Event REST access service"
+          },
+          "dcat:accessURL": "https://civil-registration.example.gov/datasets/vital-events/vital_event",
+          "dcat:mediaType": "https://www.iana.org/assignments/media-types/application/json",
+          "dcterms:conformsTo": [
+            "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/",
+            "https://spec.openapis.org/oas/v3.1.0"
+          ],
+          "dcterms:format": {
+            "@id": "http://publications.europa.eu/resource/authority/file-type/JSON",
+            "@type": [
+              "dcterms:MediaType",
+              "dcterms:MediaTypeOrExtent"
+            ]
+          },
+          "dcterms:title": "Vital Event API"
+        }
+      ],
+      "dcat:landingPage": "#dataset-vital-events",
+      "dcterms:conformsTo": [
+        "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"
+      ],
+      "dcterms:description": "",
+      "dcterms:identifier": "vital-events",
+      "dcterms:title": "Vital Events",
+      "odrl:hasPolicy": {
+        "@id": "https://civil-registration.example.gov/datasets/vital-events#offer",
+        "@type": "odrl:Offer",
+        "odrl:assigner": {
+          "@id": "https://civil-registration.example.gov/authority"
+        },
+        "odrl:permission": [
+          {
+            "odrl:action": {
+              "@id": "odrl:use"
+            },
+            "odrl:assigner": {
+              "@id": "https://civil-registration.example.gov/authority"
+            },
+            "odrl:target": {
+              "@id": "https://civil-registration.example.gov/datasets/vital-events"
+            }
+          }
+        ],
+        "odrl:uid": "https://civil-registration.example.gov/datasets/vital-events#offer"
+      }
+    }
+  ],
+  "dcat:landingPage": "https://civil-registration.example.gov",
+  "dcat:themeTaxonomy": [
+    "http://publications.europa.eu/resource/authority/data-theme",
+    "http://eurovoc.europa.eu/100141"
+  ],
+  "dcterms:conformsTo": [
+    "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"
+  ],
+  "dcterms:description": "Portable metadata for a hypothetical civil registration application.",
+  "dcterms:identifier": "example-civil-registration",
+  "dcterms:publisher": {
+    "@id": "https://civil-registration.example.gov/authority",
+    "@type": "foaf:Agent",
+    "dcterms:type": "http://data.europa.eu/eli/ontology#PublicAuthority",
+    "foaf:name": "Civil Registration Authority"
+  },
+  "dcterms:title": "Civil Registration Metadata"
+}

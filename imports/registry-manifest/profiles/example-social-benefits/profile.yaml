@@ -1,0 +1,78 @@
+schema_version: registry-metadata-profile/v1
+profile:
+  id: example-social-benefits
+  version: "1"
+  name: Hypothetical Social Benefits Profile
+  upstream_system: Hypothetical social benefits app
+  upstream_url: https://social-protection.example.gov/
+  description: Non-normative example metadata expectations for a fictional social benefits application.
+supported_input_artifacts:
+  - kind: metadata_manifest
+    media_type: application/yaml
+    description: Registry Metadata portable metadata manifest with fictional benefits and person schema concept references.
+required_concepts:
+  - name: household identifier
+    iri: benefits:Group.identifier
+  - name: member identifier
+    iri: person:Person.identifier
+  - name: enrollment status
+    iri: benefits:ProgramEnrollment.status
+  - name: vulnerability category
+    iri: benefits:SocialRegistry.vulnerabilityCategory
+optional_concepts:
+  - name: household head relationship
+    iri: benefits:GroupMembership.householdHead
+  - name: benefit amount
+    iri: benefits:Entitlement.amount
+required_identifiers:
+  - entity: household
+    name: household_id
+    kind: local
+  - entity: individual
+    name: individual_id
+    kind: local
+cardinality_expectations:
+  - entity: household
+    field: household_id
+    min: 1
+    max: 1
+  - entity: individual
+    field: individual_id
+    min: 1
+    max: 1
+  - entity: enrollment
+    field: enrollment_status
+    min: 1
+    max: 1
+codelist_expectations:
+  - id: enrollment_status
+    required_codes:
+      - active
+      - suspended
+      - closed
+  - id: vulnerability_category
+    required_codes:
+      - disability
+      - elderly
+      - low_income
+unsupported_mappings:
+  - source: payment provider transaction status
+    reason: Payment execution and reconciliation are runtime integrations outside portable metadata.
+  - source: eligibility scoring formula
+    reason: Scoring formulas are policy logic and should be documented separately from generic metadata.
+conformance_checks:
+  - id: example-social-benefits.required_concepts
+    severity: error
+    description: Manifest must include required fictional benefits and person schema concepts.
+  - id: example-social-benefits.identifiers
+    severity: error
+    description: Household and individual entities must expose stable local identifiers.
+  - id: example-social-benefits.codelists
+    severity: error
+    description: Enrollment status and vulnerability category codelists must include required codes.
+fixtures:
+  - path: fixtures/metadata.yaml
+    manifest: true
+    expect: valid
+    description: Minimal social protection fixture with household, individual, and enrollment metadata.
+generator_command: null

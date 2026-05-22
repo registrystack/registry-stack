@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/registry-metadata-core",
+    "crates/registry-metadata-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Portable metadata contracts, validators, and renderers for registry catalogs."
+repository = "https://github.com/jeremi/registry-metadata"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
