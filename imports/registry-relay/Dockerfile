@@ -5,7 +5,6 @@ WORKDIR /workspace/registry_relay
 
 COPY Cargo.toml Cargo.lock ./
 COPY benches ./benches
-COPY crates ./crates
 COPY resources ./resources
 COPY src ./src
 
