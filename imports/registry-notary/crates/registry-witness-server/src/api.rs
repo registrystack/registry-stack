@@ -706,7 +706,7 @@ fn attach_evidence_audit(
     });
 }
 
-fn evidence_error_response(error: EvidenceError) -> Response {
+pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
     let code = error.code().to_string();
     let status = evidence_status(&error);
     let body = json!({
@@ -727,7 +727,7 @@ fn evidence_error_response(error: EvidenceError) -> Response {
     response
 }
 
-fn evidence_status(error: &EvidenceError) -> StatusCode {
+pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
     match error {
         EvidenceError::ServerDisabled
         | EvidenceError::OperationUnsupported
@@ -755,7 +755,7 @@ fn evidence_status(error: &EvidenceError) -> StatusCode {
     }
 }
 
-fn evidence_title(error: &EvidenceError) -> &'static str {
+pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
     match error {
         EvidenceError::ServerDisabled => "Evidence server disabled",
         EvidenceError::ClaimNotFound => "Claim not found",
@@ -782,7 +782,7 @@ fn evidence_title(error: &EvidenceError) -> &'static str {
     }
 }
 
-fn evidence_detail(error: &EvidenceError) -> &'static str {
+pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
     match error {
         EvidenceError::ServerDisabled => "the evidence server is not enabled",
         EvidenceError::ClaimNotFound => "the requested claim is not available",
@@ -821,12 +821,11 @@ fn evidence_claim_hash(claim_ids: &[String]) -> String {
         hasher.update(claim_id.as_bytes());
         hasher.update([0]);
     }
-    format!("sha256:{}", hex_digest(hasher.finalize()))
+    format!("sha256:{}", hex_encode(&hasher.finalize()))
 }
 
-fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let bytes = bytes.as_ref();
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(HEX[(byte >> 4) as usize] as char);
@@ -970,20 +969,6 @@ mod tests {
     const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
     const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
 
-    // PKCS#8-wrap a 32-byte Ed25519 seed so jsonwebtoken's
-    // `EncodingKey::from_ed_der` accepts it. Mirrors the helper in
-    // registry-witness-core::sd_jwt (kept local to avoid expanding the
-    // crate's public surface just for tests).
-    fn ed25519_pkcs8_seed(seed: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(48);
-        out.extend_from_slice(&[
-            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
-            0x04, 0x20,
-        ]);
-        out.extend_from_slice(seed);
-        out
-    }
-
     fn holder_did_jwk() -> String {
         let public_jwk = json!({
             "kty": "OKP",
@@ -996,7 +981,7 @@ mod tests {
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
         let seed = URL_SAFE_NO_PAD.decode(HOLDER_PRIV_D_B64).unwrap();
-        let pkcs8 = ed25519_pkcs8_seed(&seed);
+        let pkcs8 = registry_witness_core::sd_jwt::ed25519_pkcs8_seed(&seed);
         let key = EncodingKey::from_ed_der(&pkcs8);
         let mut header = Header::new(Algorithm::EdDSA);
         header.kid = Some(holder_id.to_string());

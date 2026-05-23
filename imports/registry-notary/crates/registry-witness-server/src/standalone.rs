@@ -330,7 +330,7 @@ async fn auth_audit_middleware(
     let principal = match state.authenticate(&request) {
         Ok(principal) => principal,
         Err(error) => {
-            let response = auth_error_response(error);
+            let response = crate::api::evidence_error_response(error);
             return match emit_audit(&state, None, &method, &path, &response) {
                 Ok(()) => response,
                 Err(error) => audit_error_response(error),
@@ -430,30 +430,6 @@ fn bearer_auth_token(raw: &str) -> Option<&str> {
         return None;
     }
     Some(token)
-}
-
-fn auth_error_response(error: EvidenceError) -> Response {
-    let code = error.code().to_string();
-    let status = StatusCode::UNAUTHORIZED;
-    let mut response = (
-        status,
-        Json(json!({
-            "type": "https://data.example.gov/problems/auth/missing_credential",
-            "title": "Missing credential",
-            "status": status.as_u16(),
-            "detail": "missing or invalid Registry Witness credential",
-            "code": code,
-        })),
-    )
-        .into_response();
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        "application/problem+json".parse().unwrap(),
-    );
-    response
-        .extensions_mut()
-        .insert(EvidenceErrorCodeContext(error.code().to_string()));
-    response
 }
 
 fn audit_error_response(error: io::Error) -> Response {
@@ -702,7 +678,7 @@ fn project_dci_record(
     Ok(Value::Object(row))
 }
 
-fn get_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+pub(crate) fn get_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.starts_with('/') {
         return value.pointer(path);
     }

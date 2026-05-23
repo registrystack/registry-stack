@@ -508,7 +508,7 @@ impl RegistryWitnessRuntime {
                     let record = sources
                         .get(source)
                         .ok_or(EvidenceError::SourceUnavailable)?;
-                    get_path(record, field)
+                    crate::standalone::get_json_path(record, field)
                         .cloned()
                         .ok_or(EvidenceError::SourceNotFound)?
                 }
@@ -720,7 +720,7 @@ async fn load_sources<R: SourceReader + ?Sized>(
         let mapped_subject = source.map_subject(binding, subject).await?;
         let row = source.read_one(binding, &mapped_subject, purpose).await?;
         for field in binding.fields.values().filter(|field| field.required) {
-            match get_path(&row, &field.field) {
+            match crate::standalone::get_json_path(&row, &field.field) {
                 Some(value) if !value.is_null() => {}
                 _ => return Err(EvidenceError::SourceNotFound),
             }
@@ -728,14 +728,6 @@ async fn load_sources<R: SourceReader + ?Sized>(
         out.insert(id.clone(), row);
     }
     Ok(out)
-}
-
-fn get_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    let mut current = value;
-    for part in path.split('.') {
-        current = current.get(part)?;
-    }
-    Some(current)
 }
 
 async fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
@@ -1127,35 +1119,8 @@ fn batch_value_type(claim: &ClaimDefinition, result: &ClaimResultView) -> String
 fn batch_item_error(error: &EvidenceError) -> BatchItemError {
     BatchItemError {
         code: error.code().to_string(),
-        title: batch_error_title(error).to_string(),
+        title: crate::api::evidence_title(error).to_string(),
         retryable: matches!(error, EvidenceError::SourceUnavailable),
-    }
-}
-
-fn batch_error_title(error: &EvidenceError) -> &'static str {
-    match error {
-        EvidenceError::ServerDisabled => "Evidence server disabled",
-        EvidenceError::ClaimNotFound => "Claim not found",
-        EvidenceError::OperationUnsupported => "Claim operation unsupported",
-        EvidenceError::InvalidRequest => "Invalid evidence request",
-        EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
-        EvidenceError::SourceNotFound => "Source record not found",
-        EvidenceError::SourceAmbiguous => "Source lookup ambiguous",
-        EvidenceError::SourceUnavailable => "Source unavailable",
-        EvidenceError::BatchTooLarge => "Batch too large",
-        EvidenceError::EvaluationNotFound => "Evaluation not found",
-        EvidenceError::EvaluationBindingMismatch => "Evaluation binding mismatch",
-        EvidenceError::FormatUnsupported => "Format unsupported",
-        EvidenceError::CredentialIssuerNotConfigured => "Credential issuer not configured",
-        EvidenceError::HolderProofRequired => "Holder proof required",
-        EvidenceError::HolderProofReplay => "Holder proof replay",
-        EvidenceError::CredentialIssuanceFailed => "Credential issuance failed",
-        EvidenceError::RuleEvaluationFailed => "Claim rule evaluation failed",
-        EvidenceError::IdempotencyConflict => "Idempotency conflict",
-        EvidenceError::PurposeRequired => "Purpose required",
-        EvidenceError::MissingCredential => "Missing credential",
-        EvidenceError::ScopeDenied { .. } => "Scope denied",
-        _ => "Evidence error",
     }
 }
 
@@ -1180,14 +1145,7 @@ fn hash_json<T: serde::Serialize>(value: &T) -> Result<String, EvidenceError> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
+    crate::api::hex_encode(&Sha256::digest(bytes))
 }
 
 #[cfg(test)]
