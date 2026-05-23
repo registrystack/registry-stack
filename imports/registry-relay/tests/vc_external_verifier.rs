@@ -154,7 +154,7 @@ fn node_verifier_rejects_unexpected_claim_type() {
 
 #[test]
 fn node_verifier_rejects_unexpected_schema_id() {
-    let mut args = fixture_args(&FIXTURES[1]);
+    let mut args = fixture_args(&FIXTURES[0]);
     replace_arg(
         &mut args,
         "--schema-id",
