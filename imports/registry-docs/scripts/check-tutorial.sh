@@ -3,8 +3,9 @@
 # check-tutorial.sh
 #
 # Verify that src/content/docs/tutorials/first-run-with-registry-lab.mdx still
-# matches reality by extracting its shell commands from the "## Steps" section
-# and executing them, in order, against a sibling registry-lab checkout.
+# matches reality by extracting its shell commands from the "## Steps" and
+# "## Verify" sections and executing them, in order, against a sibling
+# registry-lab checkout.
 #
 # Usage:
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
@@ -20,8 +21,12 @@
 #   2   bad CLI argument
 #
 # Drift detection:
-#   - the script asserts EXPECTED_STEP_COUNT commands were extracted; bump this
-#     constant when you intentionally add or remove a tutorial step
+#   - the script asserts EXPECTED_STEP_COUNT / EXPECTED_VERIFY_COUNT commands
+#     were extracted from the matching sections; bump these constants when you
+#     intentionally add or remove a documented command
+#   - after compose comes up, the script asserts every entry in
+#     EXPECTED_SERVICES is in `running` state; bump the array when you
+#     intentionally add or remove a long-running service
 #   - the script runs whatever commands appear in the tutorial verbatim, so a
 #     command change in the docs causes the runner to exercise the new command
 #
@@ -30,13 +35,24 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-registry-lab.mdx"
 EXPECTED_STEP_COUNT=7
+EXPECTED_VERIFY_COUNT=1
+EXPECTED_DEMO_ARTIFACTS=3
+EXPECTED_SERVICES=(
+	civil-registry-relay
+	social-protection-registry-relay
+	health-registry-relay
+	civil-witness
+	social-protection-witness
+	shared-eligibility-witness
+	static-metadata-publisher
+)
 
 DRY_RUN=0
 for arg in "$@"; do
 	case "$arg" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '3,21p' "$0"
+		sed -n '3,31p' "$0"
 		exit 0
 		;;
 	*)
@@ -51,20 +67,18 @@ if [[ ! -f "$TUTORIAL" ]]; then
 	exit 1
 fi
 
-# Extract shell commands from the "## Steps" section. The fences are indented
-# under list items (4 spaces), so we strip leading whitespace from each content
-# line. Empty lines inside a fence are skipped.
-COMMANDS=()
-while IFS= read -r line; do
-	COMMANDS+=("$line")
-done < <(
-	awk '
+# Extract shell commands from a named "## <Section>" section of the tutorial.
+# Fences may be indented under list items; strip leading whitespace and skip
+# empty lines within a fence.
+extract_section_commands() {
+	local section="$1"
+	awk -v target="$section" '
         /^## / {
-            in_steps = ($0 ~ /^## Steps[[:space:]]*$/)
+            in_section = ($0 ~ ("^## " target "[[:space:]]*$"))
             in_fence = 0
             next
         }
-        !in_steps { next }
+        !in_section { next }
         /^[[:space:]]*```sh[[:space:]]*$/ {
             in_fence = 1
             next
@@ -78,12 +92,22 @@ done < <(
             if ($0 != "") print
         }
     ' "$TUTORIAL"
-)
+}
 
-if ((${#COMMANDS[@]} != EXPECTED_STEP_COUNT)); then
+STEPS=()
+while IFS= read -r line; do
+	STEPS+=("$line")
+done < <(extract_section_commands "Steps")
+
+VERIFY=()
+while IFS= read -r line; do
+	VERIFY+=("$line")
+done < <(extract_section_commands "Verify")
+
+if ((${#STEPS[@]} != EXPECTED_STEP_COUNT)); then
 	printf 'tutorial drift: expected %d shell commands in Steps section, extracted %d:\n' \
-		"$EXPECTED_STEP_COUNT" "${#COMMANDS[@]}" >&2
-	for cmd in "${COMMANDS[@]}"; do
+		"$EXPECTED_STEP_COUNT" "${#STEPS[@]}" >&2
+	for cmd in "${STEPS[@]}"; do
 		printf '  %s\n' "$cmd" >&2
 	done
 	printf 'if this change was intentional, update EXPECTED_STEP_COUNT in %s\n' \
@@ -91,9 +115,24 @@ if ((${#COMMANDS[@]} != EXPECTED_STEP_COUNT)); then
 	exit 1
 fi
 
-printf 'extracted %d commands from tutorial:\n' "${#COMMANDS[@]}"
-for i in "${!COMMANDS[@]}"; do
-	printf '  step %d: %s\n' "$((i + 1))" "${COMMANDS[$i]}"
+if ((${#VERIFY[@]} != EXPECTED_VERIFY_COUNT)); then
+	printf 'tutorial drift: expected %d shell commands in Verify section, extracted %d:\n' \
+		"$EXPECTED_VERIFY_COUNT" "${#VERIFY[@]}" >&2
+	for cmd in "${VERIFY[@]}"; do
+		printf '  %s\n' "$cmd" >&2
+	done
+	printf 'if this change was intentional, update EXPECTED_VERIFY_COUNT in %s\n' \
+		"${BASH_SOURCE[0]}" >&2
+	exit 1
+fi
+
+printf 'extracted %d Steps commands from tutorial:\n' "${#STEPS[@]}"
+for i in "${!STEPS[@]}"; do
+	printf '  step %d: %s\n' "$((i + 1))" "${STEPS[$i]}"
+done
+printf 'extracted %d Verify commands from tutorial:\n' "${#VERIFY[@]}"
+for i in "${!VERIFY[@]}"; do
+	printf '  verify %d: %s\n' "$((i + 1))" "${VERIFY[$i]}"
 done
 
 if ((DRY_RUN)); then
@@ -137,22 +176,58 @@ trap cleanup EXIT
 
 cd "$LAB_DIR"
 
-for i in "${!COMMANDS[@]}"; do
-	cmd="${COMMANDS[$i]}"
-	step=$((i + 1))
-	printf '\n=== step %d: %s ===\n' "$step" "$cmd" | tee -a "$LOG_FILE"
+run_command() {
+	local label="$1"
+	local cmd="$2"
+	printf '\n=== %s: %s ===\n' "$label" "$cmd" | tee -a "$LOG_FILE"
 	if ! bash -c "$cmd" >>"$LOG_FILE" 2>&1; then
-		printf 'step %d failed: %s\n' "$step" "$cmd" >&2
+		printf '%s failed: %s\n' "$label" "$cmd" >&2
 		printf 'last 50 lines of log:\n' >&2
 		tail -n 50 "$LOG_FILE" >&2
 		exit 1
 	fi
+}
+
+for i in "${!STEPS[@]}"; do
+	run_command "step $((i + 1))" "${STEPS[$i]}"
 done
 
-# Step 7 (demo-client) writes artifacts under output/. Assert at least one file.
-if [[ ! -d "$LAB_DIR/output" ]] ||
-	! find "$LAB_DIR/output" -mindepth 1 -type f -print -quit | grep -q .; then
-	printf 'expected demo-client to write artifacts under %s/output/\n' "$LAB_DIR" >&2
+# After all Steps, the topology should be up. Assert every long-running service
+# (everything except the profile-gated demo-client) is in `running` state.
+printf '\n--- assert services running ---\n' | tee -a "$LOG_FILE"
+running_services="$(docker compose -f compose.yaml ps --services --filter status=running)"
+printf 'running services:\n%s\n' "$running_services" >>"$LOG_FILE"
+missing=()
+for svc in "${EXPECTED_SERVICES[@]}"; do
+	if ! grep -qx "$svc" <<<"$running_services"; then
+		missing+=("$svc")
+	fi
+done
+if ((${#missing[@]} > 0)); then
+	printf 'expected services not running:\n' >&2
+	for svc in "${missing[@]}"; do
+		printf '  %s\n' "$svc" >&2
+	done
+	printf 'docker compose ps:\n' >&2
+	docker compose -f compose.yaml ps >&2 || true
 	exit 1
 fi
-printf '\ndemo-client artifacts present under %s/output/\n' "$LAB_DIR"
+printf 'all %d expected services running\n' "${#EXPECTED_SERVICES[@]}"
+
+for i in "${!VERIFY[@]}"; do
+	run_command "verify $((i + 1))" "${VERIFY[$i]}"
+done
+
+# Step 7 (demo-client) writes artifacts under output/. Assert at least
+# EXPECTED_DEMO_ARTIFACTS files are present.
+artifact_count=0
+if [[ -d "$LAB_DIR/output" ]]; then
+	artifact_count="$(find "$LAB_DIR/output" -mindepth 1 -type f | wc -l | tr -d ' ')"
+fi
+if ((artifact_count < EXPECTED_DEMO_ARTIFACTS)); then
+	printf 'expected at least %d artifacts under %s/output/, found %d\n' \
+		"$EXPECTED_DEMO_ARTIFACTS" "$LAB_DIR" "$artifact_count" >&2
+	exit 1
+fi
+printf '\ndemo-client artifacts present under %s/output/ (%d files)\n' \
+	"$LAB_DIR" "$artifact_count"
