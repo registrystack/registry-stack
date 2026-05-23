@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn adapter_projects_runtime_metadata_without_table_bindings() {
-        let config: Config = serde_yml::from_str(
+        let config: Config = serde_saphyr::from_str(
             r#"
 server:
   bind: 127.0.0.1:0

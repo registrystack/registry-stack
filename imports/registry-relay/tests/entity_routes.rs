@@ -61,7 +61,7 @@ fn principal(scopes: &[&str]) -> Principal {
 }
 
 fn test_evidence_metadata() -> metadata_core::CompiledMetadata {
-    let manifest: metadata_core::MetadataManifest = serde_yml::from_str(
+    let manifest: metadata_core::MetadataManifest = serde_saphyr::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:

@@ -49,7 +49,7 @@ pub fn load(path: &Path) -> Result<Config, Error> {
         }
     };
 
-    let config: Config = match serde_yml::from_str(&raw) {
+    let config: Config = match serde_saphyr::from_str(&raw) {
         Ok(c) => c,
         Err(err) => {
             tracing::error!(
@@ -97,7 +97,7 @@ pub fn load_metadata_manifest(path: &Path) -> Result<CompiledMetadata, Error> {
             return Err(MetadataError::ManifestFileNotFound.into());
         }
     };
-    let manifest: MetadataManifest = match serde_yml::from_str(&raw) {
+    let manifest: MetadataManifest = match serde_saphyr::from_str(&raw) {
         Ok(manifest) => manifest,
         Err(err) => {
             tracing::error!(

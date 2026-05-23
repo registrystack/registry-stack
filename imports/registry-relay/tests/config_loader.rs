@@ -1432,7 +1432,7 @@ fn loader_does_not_leak_path_in_error_message() {
 fn update_frequency_termly_deserializes() {
     // Verify that the YAML value "termly" parses to UpdateFrequency::Termly.
     let freq: UpdateFrequency =
-        serde_yml::from_str("termly").expect("termly parses to UpdateFrequency");
+        serde_saphyr::from_str("termly").expect("termly parses to UpdateFrequency");
     assert_eq!(freq, UpdateFrequency::Termly);
 }
 
@@ -1483,7 +1483,7 @@ audit:
 fn update_frequency_as_needed_deserializes() {
     // Verify that the YAML value "as_needed" parses to UpdateFrequency::AsNeeded.
     let freq: UpdateFrequency =
-        serde_yml::from_str("as_needed").expect("as_needed parses to UpdateFrequency");
+        serde_saphyr::from_str("as_needed").expect("as_needed parses to UpdateFrequency");
     assert_eq!(freq, UpdateFrequency::AsNeeded);
 }
 

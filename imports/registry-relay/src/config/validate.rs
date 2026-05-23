@@ -57,7 +57,7 @@ pub fn run(config: &Config) -> Result<(), Error> {
 }
 
 fn validate_removed_evidence_server_config(config: &Config) -> Result<(), ConfigError> {
-    if matches!(config.evidence, serde_yml::Value::Null) {
+    if matches!(config.evidence, serde_json::Value::Null) {
         return Ok(());
     }
     tracing::error!(

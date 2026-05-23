@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6   # pinned to major v4
+        uses: actions/checkout@v6   # pinned to major v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable   # pinned to major stable channel
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6   # pinned to major v4
+        uses: actions/checkout@v6   # pinned to major v6
 
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2   # pinned to major v2

@@ -71,10 +71,8 @@ ryu = { version = "1" }
 # the core VC path does not pull in the CEL mapper dependency graph.
 cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", tag = "cel-mapper-core-v0.1.1", optional = true }
 jsonschema = { version = "0.18", optional = true }
-# serde_yml: maintained community fork of the archived serde_yaml.
-# Version is pinned to the exact minor as it is a young fork; re-evaluate
-# deliberately before changing it.
-serde_yml = { version = "0.0.12" }
+# Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
+serde-saphyr = { version = "0.0.26" }
 humantime-serde = { version = "1" }
 registry-manifest-core = { version = "0.1.1", git = "https://github.com/jeremi/registry-manifest", tag = "v0.1.2" }
 
