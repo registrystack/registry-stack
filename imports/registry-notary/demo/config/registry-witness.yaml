@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standalone Registry Witness process for the split Registry Witness demo.
 # It computes evidence by calling the separate registry-relay process declared
-# in registry_relay/demo/config/evidence_registries.yaml.
+# in registry-relay/demo/config/evidence_registries.yaml.
 
 server:
   bind: 127.0.0.1:4255

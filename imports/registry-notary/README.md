@@ -18,7 +18,7 @@ but Registry Witness does not import or link Registry Relay code.
 - `crates/registry-witness-bin`: process startup, config loading, bind address,
   tracing, and graceful shutdown.
 - `demo/config/registry-witness.yaml`: split demo config used by
-  `registry_relay`'s narrated Registry Witness walkthrough.
+  `registry-relay`'s narrated Registry Witness walkthrough.
 
 ## Local Run
 
