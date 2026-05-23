@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standalone Evidence Server routes.
+//! Standalone Registry Witness routes.
 
 use std::sync::Arc;
 
@@ -10,20 +10,20 @@ use axum::routing::{get, post};
 use axum::{Extension, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use evidence_core::sd_jwt;
-use evidence_core::{
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use registry_witness_core::sd_jwt;
+use registry_witness_core::{
     BatchEvaluateRequest, CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest,
     EvidenceConfig, EvidenceError, EvidencePrincipal, HolderRequest, RenderRequest,
     FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::{
-    credential_profile_for, openapi_document, BatchEvaluateOptions, EvidenceRuntime, EvidenceStore,
-    SourceReader,
+    credential_profile_for, openapi_document, BatchEvaluateOptions, EvidenceStore,
+    RegistryWitnessRuntime, SourceReader,
 };
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
@@ -57,7 +57,7 @@ pub trait EvidenceIssuerResolver: Send + Sync {
     fn issuer(
         &self,
         profile_id: &str,
-    ) -> Result<evidence_core::sd_jwt::EvidenceIssuer, EvidenceError>;
+    ) -> Result<registry_witness_core::sd_jwt::EvidenceIssuer, EvidenceError>;
 
     fn public_jwks(&self, evidence: &EvidenceConfig) -> Result<Vec<Value>, EvidenceError> {
         evidence
@@ -72,14 +72,14 @@ pub trait EvidenceIssuerResolver: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct EvidenceApiState {
+pub struct RegistryWitnessApiState {
     evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
     store: Arc<EvidenceStore>,
     issuers: Arc<dyn EvidenceIssuerResolver>,
 }
 
-impl EvidenceApiState {
+impl RegistryWitnessApiState {
     #[must_use]
     pub fn new(
         evidence: Arc<EvidenceConfig>,
@@ -116,7 +116,7 @@ pub struct EvidenceAuditContext {
 pub struct EvidenceErrorCodeContext(pub String);
 
 async fn service_document(
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
 ) -> Response {
     if principal.is_none() {
@@ -129,10 +129,10 @@ async fn service_document(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    Json(EvidenceRuntime::service_document(evidence)).into_response()
+    Json(RegistryWitnessRuntime::service_document(evidence)).into_response()
 }
 
-async fn issuer_jwks(state: Option<Extension<Arc<EvidenceApiState>>>) -> Response {
+async fn issuer_jwks(state: Option<Extension<Arc<RegistryWitnessApiState>>>) -> Response {
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -147,7 +147,7 @@ async fn issuer_jwks(state: Option<Extension<Arc<EvidenceApiState>>>) -> Respons
 }
 
 async fn list_claims(
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
 ) -> Response {
     let Some(Extension(state)) = state else {
@@ -161,14 +161,14 @@ async fn list_claims(
         Err(error) => return evidence_error_response(error),
     };
     Json(json!({
-        "data": EvidenceRuntime::list_claims(evidence, state.source.as_ref(), &principal),
+        "data": RegistryWitnessRuntime::list_claims(evidence, state.source.as_ref(), &principal),
     }))
     .into_response()
 }
 
 async fn get_claim(
     Path(claim_id): Path<String>,
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
 ) -> Response {
     let Some(Extension(state)) = state else {
@@ -181,7 +181,7 @@ async fn get_claim(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    result_json(EvidenceRuntime::get_claim(
+    result_json(RegistryWitnessRuntime::get_claim(
         evidence,
         state.source.as_ref(),
         &principal,
@@ -190,7 +190,7 @@ async fn get_claim(
 }
 
 async fn list_formats(
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
 ) -> Response {
     if principal.is_none() {
@@ -204,14 +204,14 @@ async fn list_formats(
         Err(error) => return evidence_error_response(error),
     };
     Json(json!({
-        "formats": EvidenceRuntime::list_formats(evidence),
+        "formats": RegistryWitnessRuntime::list_formats(evidence),
     }))
     .into_response()
 }
 
 async fn evaluate(
     headers: HeaderMap,
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     Json(request): Json<EvaluateRequest>,
 ) -> Response {
@@ -230,7 +230,7 @@ async fn evaluate(
         Ok(format) => request.format = Some(format),
         Err(error) => return evidence_error_response(error),
     }
-    let runtime = EvidenceRuntime::new();
+    let runtime = RegistryWitnessRuntime::new();
     let requested_claims = request.claims.clone();
     match runtime
         .evaluate(
@@ -261,7 +261,7 @@ async fn evaluate(
 
 async fn batch_evaluate(
     headers: HeaderMap,
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     Json(request): Json<BatchEvaluateRequest>,
 ) -> Response {
@@ -280,7 +280,7 @@ async fn batch_evaluate(
         Ok(format) => request.format = Some(format),
         Err(error) => return evidence_error_response(error),
     }
-    let runtime = EvidenceRuntime::new();
+    let runtime = RegistryWitnessRuntime::new();
     let requested_claims = request.claims.clone();
     let requested_subject_count = request.subjects.len();
     match runtime
@@ -313,7 +313,7 @@ async fn batch_evaluate(
 }
 
 async fn render(
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     Json(request): Json<RenderRequest>,
 ) -> Response {
@@ -336,7 +336,7 @@ async fn render(
             return evidence_error_response(error);
         }
     }
-    let runtime = EvidenceRuntime::new();
+    let runtime = RegistryWitnessRuntime::new();
     match runtime.render(evidence, &state.store, &principal, request) {
         Ok(value) => {
             let mut response = Json(value).into_response();
@@ -364,7 +364,7 @@ async fn render(
 }
 
 async fn issue_credential(
-    state: Option<Extension<Arc<EvidenceApiState>>>,
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     Json(request): Json<CredentialIssueRequest>,
 ) -> Response {
@@ -496,7 +496,7 @@ fn validate_holder_request(
     profile: &CredentialProfileConfig,
     profile_id: &str,
     request: &CredentialIssueRequest,
-    evaluation: &evidence_core::StoredEvaluation,
+    evaluation: &registry_witness_core::StoredEvaluation,
     holder: Option<&HolderRequest>,
 ) -> Result<Option<HolderProofBinding>, EvidenceError> {
     if profile.holder_binding.mode == "none" {
@@ -537,7 +537,7 @@ fn validate_holder_proof_payload(
     holder_id: &str,
     profile_id: &str,
     request: &CredentialIssueRequest,
-    evaluation: &evidence_core::StoredEvaluation,
+    evaluation: &registry_witness_core::StoredEvaluation,
 ) -> Result<HolderProofBinding, EvidenceError> {
     let header = decode_header(proof).map_err(|_| EvidenceError::HolderProofRequired)?;
     if header.alg != Algorithm::EdDSA {
@@ -548,7 +548,7 @@ fn validate_holder_proof_payload(
         DecodingKey::from_jwk(&jwk).map_err(|_| EvidenceError::HolderProofRequired)?;
     let mut validation = Validation::new(Algorithm::EdDSA);
     validation.algorithms = vec![Algorithm::EdDSA];
-    validation.set_audience(&["evidence-server"]);
+    validation.set_audience(&["registry-witness"]);
     validation.required_spec_claims = [
         "sub",
         "aud",
@@ -652,7 +652,7 @@ fn require_evaluation_access(
     evidence: &EvidenceConfig,
     source: &(impl SourceReader + ?Sized),
     principal: &EvidencePrincipal,
-    evaluation: &evidence_core::StoredEvaluation,
+    evaluation: &registry_witness_core::StoredEvaluation,
 ) -> Result<(), EvidenceError> {
     for claim_id in &evaluation.claim_ids {
         for scope in source.required_scopes(evidence, claim_id)? {
@@ -813,7 +813,7 @@ fn negotiate_request_format(
     headers: &HeaderMap,
     body_format: Option<&str>,
 ) -> Result<String, EvidenceError> {
-    let supported = EvidenceRuntime::list_formats(evidence)
+    let supported = RegistryWitnessRuntime::list_formats(evidence)
         .into_iter()
         .filter(|format| format.status == "enabled")
         .map(|format| format.id)

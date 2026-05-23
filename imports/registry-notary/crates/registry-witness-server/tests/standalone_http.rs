@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standalone Evidence Server tests that do not link Registry Relay.
+//! Standalone Registry Witness tests that do not link Registry Relay.
 
 use axum::extract::Query;
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 use axum::routing::post;
 use axum::{Json, Router};
 use axum_test::TestServer;
-use evidence_core::StandaloneEvidenceServerConfig;
-use evidence_server::{standalone_router, StandaloneServerError};
+use registry_witness_core::StandaloneRegistryWitnessConfig;
+use registry_witness_server::{standalone_router, StandaloneServerError};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -49,7 +49,7 @@ async fn registry_data_api(
     .into_response()
 }
 
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 async fn dci_source(
     State(observed): State<Arc<Mutex<Option<Value>>>>,
     headers: HeaderMap,
@@ -99,7 +99,7 @@ fn config(
     audit_path: &str,
     connector: &str,
     source_path: &str,
-) -> StandaloneEvidenceServerConfig {
+) -> StandaloneRegistryWitnessConfig {
     let source_connection = if connector == "dci" {
         r#"
       dci:
@@ -166,7 +166,7 @@ evidence:
         default: value
         allowed: [value, redacted]
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
     - id: farmer-under-4ha
       title: Farmer under four hectares
       version: 2026-05
@@ -186,13 +186,13 @@ evidence:
         default: predicate
         allowed: [predicate, redacted]
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
 "#
     );
     serde_yml::from_str(&raw).expect("config deserializes")
 }
 
-fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneEvidenceServerConfig {
+fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConfig {
     config(
         base_url,
         audit_path,
@@ -201,12 +201,12 @@ fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneEvide
     )
 }
 
-#[cfg(feature = "evidence-server-cel")]
-fn dci_config(base_url: &str, audit_path: &str) -> StandaloneEvidenceServerConfig {
+#[cfg(feature = "registry-witness-cel")]
+fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConfig {
     config(base_url, audit_path, "dci", "farmed_land_size_hectares")
 }
 
-fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneEvidenceServerConfig {
+fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConfig {
     let raw = format!(
         r#"
 server:
@@ -260,7 +260,7 @@ evidence:
         default: value
         allowed: [value, redacted]
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
 "#
     );
     serde_yml::from_str(&raw).expect("config deserializes")
@@ -326,7 +326,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     assert_eq!(body["results"][0]["value"], json!(3.5));
     assert_eq!(body["results"][0]["provenance"]["source_count"], json!(1));
 
-    #[cfg(feature = "evidence-server-cel")]
+    #[cfg(feature = "registry-witness-cel")]
     {
         let cel_response = server
             .post("/claims/evaluate")
@@ -358,7 +358,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 }
 
 #[tokio::test]
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

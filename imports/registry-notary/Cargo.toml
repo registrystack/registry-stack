@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/evidence-core",
-    "crates/evidence-server",
-    "crates/evidence-server-bin",
+    "crates/registry-witness-core",
+    "crates/registry-witness-server",
+    "crates/registry-witness-bin",
 ]
 resolver = "2"
 
@@ -11,14 +11,14 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/jeremi/evidence-server"
+repository = "https://github.com/jeremi/registry-witness"
 
 [workspace.dependencies]
 axum = { version = "0.8" }
 base64 = { version = "0.22" }
 clap = { version = "4", features = ["derive", "env"] }
-evidence-core = { version = "0.1.0", path = "crates/evidence-core" }
-evidence-server = { version = "0.1.0", path = "crates/evidence-server", default-features = false }
+registry-witness-core = { version = "0.1.0", path = "crates/registry-witness-core" }
+registry-witness-server = { version = "0.1.0", path = "crates/registry-witness-server", default-features = false }
 cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", tag = "cel-mapper-core-v0.1.1" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }

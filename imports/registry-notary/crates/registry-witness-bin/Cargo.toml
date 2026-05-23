@@ -1,26 +1,26 @@
 [package]
-name = "evidence-server-bin"
+name = "registry-witness-bin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Standalone Evidence Server process entrypoint."
+description = "Standalone Registry Witness process entrypoint."
 readme.workspace = true
 repository.workspace = true
 publish = false
 
 [[bin]]
-name = "evidence-server"
+name = "registry-witness"
 path = "src/main.rs"
 
 [features]
-default = ["evidence-server-cel"]
-evidence-server-cel = ["evidence-server/evidence-server-cel"]
+default = ["registry-witness-cel"]
+registry-witness-cel = ["registry-witness-server/registry-witness-cel"]
 
 [dependencies]
 axum.workspace = true
 clap.workspace = true
-evidence-core.workspace = true
-evidence-server = { workspace = true, default-features = false }
+registry-witness-core.workspace = true
+registry-witness-server = { workspace = true, default-features = false }
 serde_yml.workspace = true
 tokio.workspace = true
 tower-http.workspace = true

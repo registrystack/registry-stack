@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared Evidence Server domain model and credential primitives.
+//! Shared Registry Witness domain model and credential primitives.
 
 pub mod config;
 pub mod error;

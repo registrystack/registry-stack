@@ -700,64 +700,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "evidence-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "getrandom 0.4.2",
- "jsonwebtoken",
- "serde",
- "serde_json",
- "serde_yml",
- "sha2",
- "thiserror 2.0.18",
- "time",
- "ulid",
- "zeroize",
-]
-
-[[package]]
-name = "evidence-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "axum-test",
- "base64",
- "cel-mapper-core",
- "evidence-core",
- "jsonwebtoken",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yml",
- "sha2",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tower",
- "tracing",
- "ulid",
- "utoipa",
-]
-
-[[package]]
-name = "evidence-server-bin"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "evidence-core",
- "evidence-server",
- "serde_yml",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "expect-json"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2058,6 +2000,64 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "registry-witness-bin"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "registry-witness-core",
+ "registry-witness-server",
+ "serde_yml",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "registry-witness-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "getrandom 0.4.2",
+ "jsonwebtoken",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "sha2",
+ "thiserror 2.0.18",
+ "time",
+ "ulid",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-witness-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "base64",
+ "cel-mapper-core",
+ "jsonwebtoken",
+ "registry-witness-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "ulid",
+ "utoipa",
+]
 
 [[package]]
 name = "reqwest"

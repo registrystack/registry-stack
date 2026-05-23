@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Evidence Server configuration model.
+//! Registry Witness configuration model.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -9,16 +9,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct StandaloneEvidenceServerConfig {
+pub struct StandaloneRegistryWitnessConfig {
     #[serde(default)]
-    pub server: EvidenceServerHttpConfig,
+    pub server: RegistryWitnessHttpConfig,
     pub evidence: EvidenceConfig,
     pub auth: EvidenceAuthConfig,
     #[serde(default)]
     pub audit: EvidenceAuditConfig,
 }
 
-impl StandaloneEvidenceServerConfig {
+impl StandaloneRegistryWitnessConfig {
     pub fn validate(&self) -> Result<(), EvidenceConfigError> {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
@@ -127,12 +127,12 @@ fn detect_depends_on_cycle(
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct EvidenceServerHttpConfig {
+pub struct RegistryWitnessHttpConfig {
     #[serde(default = "default_bind_addr")]
     pub bind: SocketAddr,
 }
 
-impl Default for EvidenceServerHttpConfig {
+impl Default for RegistryWitnessHttpConfig {
     fn default() -> Self {
         Self {
             bind: default_bind_addr(),
@@ -188,7 +188,7 @@ fn default_audit_sink() -> String {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EvidenceConfigError {
-    #[error("evidence.enabled must be true for the standalone Evidence Server")]
+    #[error("evidence.enabled must be true for the standalone Registry Witness")]
     EvidenceDisabled,
     #[error("at least one API key or bearer token must be configured")]
     NoCredentialsConfigured,
@@ -218,7 +218,7 @@ pub enum EvidenceConfigError {
     DependsOnCycle { cycle: Vec<String> },
 }
 
-/// Evidence Server configuration. Disabled by default so existing
+/// Registry Witness configuration. Disabled by default so existing
 /// Registry Relay deployments load unchanged.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -246,7 +246,7 @@ pub struct EvidenceConfig {
 }
 
 fn default_service_id() -> String {
-    "evidence-server".to_string()
+    "registry-witness".to_string()
 }
 
 fn default_api_version() -> String {
@@ -381,7 +381,7 @@ fn default_dci_search_path() -> String {
 }
 
 fn default_dci_sender_id() -> String {
-    "evidence-server".to_string()
+    "registry-witness".to_string()
 }
 
 fn default_dci_query_type() -> String {
@@ -639,7 +639,7 @@ mod tests {
     use super::*;
 
     /// Builds a minimal valid config from which individual tests can deviate.
-    fn minimal_config() -> StandaloneEvidenceServerConfig {
+    fn minimal_config() -> StandaloneRegistryWitnessConfig {
         serde_yml::from_str(
             r#"
 evidence:

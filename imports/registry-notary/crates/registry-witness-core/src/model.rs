@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Evidence Server request, response, and view types.
+//! Registry Witness request, response, and view types.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const FORMAT_CLAIM_RESULT_JSON: &str = "application/vnd.evidence-server.claim-result+json";
+pub const FORMAT_CLAIM_RESULT_JSON: &str = "application/vnd.registry-witness.claim-result+json";
 pub const FORMAT_CCCEV_JSONLD: &str = "application/ld+json; profile=\"cccev\"";
 pub const FORMAT_SD_JWT_VC: &str = "application/dc+sd-jwt";
 

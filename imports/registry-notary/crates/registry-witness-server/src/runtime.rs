@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Evidence Server evaluation runtime.
+//! Registry Witness evaluation runtime.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 use cel_mapper_core::{
     MappingRuntime, RuntimeOptions, StandaloneEvalError, StandaloneExpressionInput,
 };
-use evidence_core::{
+use registry_witness_core::{
     BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
     BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, CelBindingsConfig,
     ClaimDefinition, ClaimProvenance, ClaimResultView, CredentialProfileConfig,
@@ -18,7 +18,7 @@ use evidence_core::{
     EvidenceFormat, EvidencePrincipal, RenderRequest, RuleConfig, SourceBindingConfig,
     SubjectRequest, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 use serde_json::Map;
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
@@ -75,7 +75,7 @@ struct HolderProofRecord {
 
 #[derive(Debug, Default)]
 pub struct EvidenceStore {
-    evaluations: Mutex<HashMap<String, evidence_core::StoredEvaluation>>,
+    evaluations: Mutex<HashMap<String, registry_witness_core::StoredEvaluation>>,
     idempotency: Mutex<HashMap<String, IdempotencyRecord>>,
     holder_proofs: Mutex<HashMap<String, HolderProofRecord>>,
 }
@@ -95,7 +95,7 @@ struct ClaimEvaluationContext<'a, R: SourceReader + ?Sized> {
     now: OffsetDateTime,
 }
 
-#[cfg_attr(not(feature = "evidence-server-cel"), allow(dead_code))]
+#[cfg_attr(not(feature = "registry-witness-cel"), allow(dead_code))]
 struct CelEvaluationContext<'a> {
     evidence: &'a EvidenceConfig,
     claim: &'a ClaimDefinition,
@@ -108,7 +108,7 @@ struct CelEvaluationContext<'a> {
 }
 
 impl EvidenceStore {
-    pub fn insert(&self, evaluation: evidence_core::StoredEvaluation) {
+    pub fn insert(&self, evaluation: registry_witness_core::StoredEvaluation) {
         let now = OffsetDateTime::now_utc();
         let mut evaluations = self
             .evaluations
@@ -124,7 +124,7 @@ impl EvidenceStore {
         evaluations.insert(first.evaluation_id.clone(), evaluation);
     }
 
-    pub fn get(&self, evaluation_id: &str) -> Option<evidence_core::StoredEvaluation> {
+    pub fn get(&self, evaluation_id: &str) -> Option<registry_witness_core::StoredEvaluation> {
         let evaluation = self
             .evaluations
             .lock()
@@ -199,9 +199,9 @@ impl EvidenceStore {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct EvidenceRuntime;
+pub struct RegistryWitnessRuntime;
 
-impl EvidenceRuntime {
+impl RegistryWitnessRuntime {
     #[must_use]
     pub fn new() -> Self {
         Self
@@ -336,7 +336,7 @@ impl EvidenceRuntime {
             })
             .collect::<Result<Vec<_>, EvidenceError>>()?;
         let expires_at = now + time::Duration::minutes(15);
-        store.insert(evidence_core::StoredEvaluation {
+        store.insert(registry_witness_core::StoredEvaluation {
             client_id: principal.principal_id.clone(),
             purpose,
             subject_id: request.subject.id,
@@ -729,11 +729,11 @@ fn get_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
 
 fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
     validate_cel_policy(ctx.expression, ctx.bindings, ctx.claim)?;
-    #[cfg(feature = "evidence-server-cel")]
+    #[cfg(feature = "registry-witness-cel")]
     {
         evaluate_with_cel(ctx)
     }
-    #[cfg(not(feature = "evidence-server-cel"))]
+    #[cfg(not(feature = "registry-witness-cel"))]
     {
         let _ = ctx;
         Err(EvidenceError::OperationUnsupported)
@@ -749,14 +749,14 @@ fn validate_cel_policy(
     if expression.trim().is_empty() {
         return Err(EvidenceError::InvalidRequest);
     }
-    #[cfg(not(feature = "evidence-server-cel"))]
+    #[cfg(not(feature = "registry-witness-cel"))]
     {
         let _ = expression;
     }
     Ok(())
 }
 
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
     let mut claim_values = Map::new();
     for (alias, binding) in &ctx.bindings.claims {
@@ -807,13 +807,15 @@ fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceEr
         })
 }
 
-#[cfg(feature = "evidence-server-cel")]
+#[cfg(feature = "registry-witness-cel")]
 fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
     let mut sources = Map::new();
     for (alias, binding) in &claim.source_bindings {
         let connector = match binding.connector {
-            evidence_core::config::SourceConnectorKind::RegistryDataApi => "registry_data_api",
-            evidence_core::config::SourceConnectorKind::Dci => "dci",
+            registry_witness_core::config::SourceConnectorKind::RegistryDataApi => {
+                "registry_data_api"
+            }
+            registry_witness_core::config::SourceConnectorKind::Dci => "dci",
         };
         sources.insert(
             alias.clone(),
@@ -930,7 +932,7 @@ fn render_cccev(config: &EvidenceConfig, results: &[ClaimResultView]) -> Value {
 
 fn render_cccev_evidence_node(config: &EvidenceConfig, result: &ClaimResultView) -> Value {
     let evidence_id = format!(
-        "urn:evidence-server:evidence-render:{}:{}",
+        "urn:registry-witness:evidence-render:{}:{}",
         result.evaluation_id, result.claim_id
     );
     let value_id = format!("{evidence_id}#value");
@@ -990,7 +992,7 @@ fn render_cccev_evidence_node(config: &EvidenceConfig, result: &ClaimResultView)
 
 pub fn credential_profile_for<'a>(
     config: &'a EvidenceConfig,
-    evaluation: &evidence_core::StoredEvaluation,
+    evaluation: &registry_witness_core::StoredEvaluation,
     requested_profile: Option<&'a str>,
 ) -> Result<(&'a str, &'a CredentialProfileConfig), EvidenceError> {
     if let Some(profile_id) = requested_profile {
@@ -1136,7 +1138,7 @@ mod tests {
             ..EvidenceConfig::default()
         };
 
-        let document = EvidenceRuntime::service_document(&evidence);
+        let document = RegistryWitnessRuntime::service_document(&evidence);
 
         assert_eq!(document["auth"]["methods"], json!(["api_key", "bearer"]));
         assert_eq!(document["auth"]["api_key"]["header"], json!("x-api-key"));

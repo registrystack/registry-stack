@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standalone Evidence Server assembly, auth, audit, and HTTP source connectors.
+//! Standalone Registry Witness assembly, auth, audit, and HTTP source connectors.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -14,11 +14,11 @@ use axum::http::{header, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use evidence_core::sd_jwt::EvidenceIssuer;
-use evidence_core::{
+use registry_witness_core::sd_jwt::EvidenceIssuer;
+use registry_witness_core::{
     DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig,
     EvidenceError, EvidencePrincipal, SourceBindingConfig, SourceConnectorKind,
-    StandaloneEvidenceServerConfig, SubjectRequest,
+    StandaloneRegistryWitnessConfig, SubjectRequest,
 };
 use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
@@ -27,21 +27,23 @@ use time::OffsetDateTime;
 use ulid::Ulid;
 
 use crate::{
-    router, EvidenceApiState, EvidenceAuditContext, EvidenceErrorCodeContext,
-    EvidenceIssuerResolver, EvidenceStore, SourceReader,
+    router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
+    RegistryWitnessApiState, SourceReader,
 };
 
 const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn standalone_router(
-    config: StandaloneEvidenceServerConfig,
+    config: StandaloneRegistryWitnessConfig,
 ) -> Result<Router, StandaloneServerError> {
     config.validate()?;
     let evidence = Arc::new(config.evidence.clone());
     let source = Arc::new(HttpEvidenceSources::from_config(&config.evidence)?);
     let store = Arc::new(EvidenceStore::default());
     let issuers = Arc::new(EvidenceIssuerRegistry::from_config(&config.evidence)?);
-    let api_state = Arc::new(EvidenceApiState::new(evidence, source, store, issuers));
+    let api_state = Arc::new(RegistryWitnessApiState::new(
+        evidence, source, store, issuers,
+    ));
     let auth_state = Arc::new(AuthAuditState::from_config(&config)?);
 
     Ok(router()
@@ -52,7 +54,7 @@ pub fn standalone_router(
 #[derive(Debug, thiserror::Error)]
 pub enum StandaloneServerError {
     #[error(transparent)]
-    Config(#[from] evidence_core::EvidenceConfigError),
+    Config(#[from] registry_witness_core::EvidenceConfigError),
     #[error("configured credential environment variable is missing or empty: {0}")]
     MissingCredentialEnv(String),
     #[error("configured source token environment variable is missing or empty: {0}")]
@@ -208,7 +210,9 @@ struct AuthAuditState {
 }
 
 impl AuthAuditState {
-    fn from_config(config: &StandaloneEvidenceServerConfig) -> Result<Self, StandaloneServerError> {
+    fn from_config(
+        config: &StandaloneRegistryWitnessConfig,
+    ) -> Result<Self, StandaloneServerError> {
         Ok(Self {
             api_keys: resolve_credentials(&config.auth.api_keys)?,
             bearer_tokens: resolve_credentials(&config.auth.bearer_tokens)?,
@@ -252,7 +256,7 @@ impl std::fmt::Debug for AuditSink {
 
 impl AuditSink {
     fn from_config(
-        config: &evidence_core::EvidenceAuditConfig,
+        config: &registry_witness_core::EvidenceAuditConfig,
     ) -> Result<Self, StandaloneServerError> {
         match config.sink.as_str() {
             "stdout" => Ok(Self::Stdout(Mutex::new(Box::new(std::io::stdout())))),
@@ -405,7 +409,7 @@ fn auth_error_response(error: EvidenceError) -> Response {
             "type": "https://data.example.gov/problems/auth/missing_credential",
             "title": "Missing credential",
             "status": status.as_u16(),
-            "detail": "missing or invalid Evidence Server credential",
+            "detail": "missing or invalid Registry Witness credential",
             "code": code,
         })),
     )
@@ -421,7 +425,7 @@ fn auth_error_response(error: EvidenceError) -> Response {
 }
 
 fn audit_error_response(error: io::Error) -> Response {
-    tracing::error!(target: "evidence_server::audit", error = %error, "audit event write failed");
+    tracing::error!(target: "registry_witness_server::audit", error = %error, "audit event write failed");
     let status = StatusCode::INTERNAL_SERVER_ERROR;
     let mut response = (
         status,
@@ -861,7 +865,7 @@ mod tests {
         let config = EvidenceConfig {
             source_connections: BTreeMap::from([(
                 "registry".to_string(),
-                evidence_core::SourceConnectionConfig {
+                registry_witness_core::SourceConnectionConfig {
                     base_url: "https://registry.example.test".to_string(),
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),

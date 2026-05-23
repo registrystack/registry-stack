@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standalone Evidence Server runtime.
+//! Standalone Registry Witness runtime.
 
 pub mod api;
 pub mod openapi;

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared test helpers for the evidence-server integration tests.
+//! Shared test helpers for the registry-witness-server integration tests.
 
 use std::sync::{Mutex, MutexGuard};
 
-/// Serialises tests that write `EVIDENCE_SERVER_ISSUER_JWK`.
+/// Serialises tests that write `REGISTRY_WITNESS_ISSUER_JWK`.
 ///
 /// Multiple integration-test binaries run in parallel under `cargo test`. Both
 /// `demo_config` and `decentralized_cross_source_cel` set this env var and
 /// read it back through the server config. Acquiring this lock before calling
-/// `std::env::set_var("EVIDENCE_SERVER_ISSUER_JWK", …)` ensures the two tests
+/// `std::env::set_var("REGISTRY_WITNESS_ISSUER_JWK", …)` ensures the two tests
 /// do not interfere.
 static ISSUER_JWK_LOCK: Mutex<()> = Mutex::new(());
 

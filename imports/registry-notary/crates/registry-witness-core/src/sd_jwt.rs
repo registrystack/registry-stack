@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Minimal SD-JWT VC issuer for Evidence Server claim views.
+//! Minimal SD-JWT VC issuer for Registry Witness claim views.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;

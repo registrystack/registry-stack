@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Decentralized demo config and cross-source CEL coverage.
 
-#![cfg(feature = "evidence-server-cel")]
+#![cfg(feature = "registry-witness-cel")]
 
 mod common;
 
@@ -11,8 +11,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use axum_test::TestServer;
-use evidence_core::StandaloneEvidenceServerConfig;
-use evidence_server::standalone_router;
+use registry_witness_core::StandaloneRegistryWitnessConfig;
+use registry_witness_server::standalone_router;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -84,7 +84,7 @@ fn source_response(
     Json(json!({ "data": [row] })).into_response()
 }
 
-fn shared_config(civil_base_url: &str, social_base_url: &str) -> StandaloneEvidenceServerConfig {
+fn shared_config(civil_base_url: &str, social_base_url: &str) -> StandaloneRegistryWitnessConfig {
     let raw = format!(
         r#"
 server:
@@ -100,7 +100,7 @@ audit:
   sink: stdout
 evidence:
   enabled: true
-  service_id: shared-eligibility-evidence-server
+  service_id: shared-eligibility-registry-witness
   source_connections:
     civil:
       base_url: "{civil_base_url}"
@@ -137,7 +137,7 @@ evidence:
         default: predicate
         allowed: [predicate, redacted]
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
     - id: social-program-active
       title: Social program active
       version: 2026-05
@@ -166,7 +166,7 @@ evidence:
         default: predicate
         allowed: [predicate, redacted]
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
     - id: eligible-for-combined-support
       title: Eligible for combined support
       version: 2026-05
@@ -189,7 +189,7 @@ evidence:
         default: predicate
         allowed: [predicate, redacted]
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
 "#
     );
     serde_yml::from_str(&raw).expect("shared config deserializes")
@@ -257,7 +257,7 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
 #[test]
 fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
     // Hold the shared lock for the duration of this test to prevent a race
-    // with demo_config, which sets the same EVIDENCE_SERVER_ISSUER_JWK env var.
+    // with demo_config, which sets the same REGISTRY_WITNESS_ISSUER_JWK env var.
     let _guard = common::issuer_jwk_guard();
 
     set_demo_env();
@@ -272,7 +272,7 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
         "registry_relay/demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
     ] {
         let raw = std::fs::read_to_string(root.join(config_path)).expect("config is readable");
-        let config: StandaloneEvidenceServerConfig =
+        let config: StandaloneRegistryWitnessConfig =
             serde_yml::from_str(&raw).expect("config deserializes");
         config.validate().expect("config validates");
         let _ = standalone_router(config).expect("config builds standalone router");
@@ -296,6 +296,11 @@ fn set_demo_env() {
         ] {
             std::env::set_var(key, "demo-token");
         }
+        std::env::set_var("REGISTRY_WITNESS_ISSUER_JWK", DEMO_ISSUER_JWK);
+        // The external registry_relay demo configs (loaded by
+        // decentralized_demo_evidence_configs_load_validate_and_build_router)
+        // still reference EVIDENCE_SERVER_ISSUER_JWK. Set it here until
+        // Phase 4 updates those files to the new name.
         std::env::set_var("EVIDENCE_SERVER_ISSUER_JWK", DEMO_ISSUER_JWK);
     }
 }

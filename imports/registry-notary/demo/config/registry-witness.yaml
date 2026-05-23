@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Standalone Evidence Server process for the split Evidence Server demo.
+# Standalone Registry Witness process for the split Registry Witness demo.
 # It computes evidence by calling the separate registry-relay process declared
 # in registry_relay/demo/config/evidence_registries.yaml.
 
@@ -9,24 +9,24 @@ server:
 auth:
   api_keys:
     - id: verification_service
-      token_env: EVIDENCE_SERVER_API_KEY
+      token_env: REGISTRY_WITNESS_API_KEY
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
   bearer_tokens:
     - id: verification_service
-      token_env: EVIDENCE_SERVER_BEARER_TOKEN
+      token_env: REGISTRY_WITNESS_BEARER_TOKEN
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
 
 audit:
   sink: file
-  path: demo/var/evidence-server-audit.jsonl
+  path: demo/var/registry-witness-audit.jsonl
 
 evidence:
   enabled: true
-  service_id: demo.evidence-server
+  service_id: demo.registry-witness
   api_base_url: http://127.0.0.1:4255
   inline_batch_limit: 20
   source_connections:
@@ -52,8 +52,8 @@ evidence:
     smallholder_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:agriculture.demo.example.gov
-      issuer_key_env: EVIDENCE_SERVER_ISSUER_JWK
-      issuer_kid: did:web:agriculture.demo.example.gov#evidence-server-demo-key-1
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_kid: did:web:agriculture.demo.example.gov#registry-witness-demo-key-1
       vct: https://demo.example.gov/credentials/smallholder-farmer/v1
       validity_seconds: 86400
       allowed_claims:
@@ -103,7 +103,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - 'application/ld+json; profile="cccev"'
     - id: farmed-land-size
       title: Farmed land size
@@ -143,7 +143,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
     - id: farmer-under-4ha
       title: Farmer under four hectares
       version: 2026-05
@@ -174,7 +174,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:

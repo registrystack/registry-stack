@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Evidence Server OpenAPI document generation.
+//! Registry Witness OpenAPI document generation.
 
 use serde_json::json;
 use utoipa::openapi::OpenApi;
@@ -9,7 +9,7 @@ pub fn openapi_document() -> OpenApi {
     serde_json::from_value(json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "Evidence Server API",
+            "title": "Registry Witness API",
             "version": "0.1.0",
             "description": "Standalone claim evaluation, rendering, and credential issuance API."
         },
@@ -30,7 +30,7 @@ pub fn openapi_document() -> OpenApi {
             },
             "/.well-known/evidence-service": {
                 "get": {
-                    "summary": "Discover Evidence Server capabilities",
+                    "summary": "Discover Registry Witness capabilities",
                     "operationId": "getEvidenceService",
                     "responses": {
                         "200": { "description": "Service document" },
@@ -274,7 +274,7 @@ pub fn openapi_document() -> OpenApi {
             }
         }
     }))
-    .expect("static Evidence Server OpenAPI document is valid")
+    .expect("static Registry Witness OpenAPI document is valid")
 }
 
 #[cfg(test)]
@@ -282,7 +282,7 @@ mod tests {
     use super::openapi_document;
 
     #[test]
-    fn documents_split_evidence_server_routes() {
+    fn documents_split_registry_witness_routes() {
         let doc = openapi_document();
         let paths = doc.paths.paths;
         for route in [

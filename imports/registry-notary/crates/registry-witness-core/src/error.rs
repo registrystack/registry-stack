@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Evidence Server stable error taxonomy.
+//! Registry Witness stable error taxonomy.
 
 use thiserror::Error;
 

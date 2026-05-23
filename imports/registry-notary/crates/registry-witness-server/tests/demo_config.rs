@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Demo configuration loading for the split Evidence Server repository.
+//! Demo configuration loading for the split Registry Witness repository.
 
 mod common;
 
-use evidence_core::StandaloneEvidenceServerConfig;
-use evidence_server::standalone_router;
+use registry_witness_core::StandaloneRegistryWitnessConfig;
+use registry_witness_server::standalone_router;
 
 const DEMO_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
@@ -15,13 +15,16 @@ fn split_demo_config_loads_validates_and_builds_router() {
     let _guard = common::issuer_jwk_guard();
 
     unsafe {
-        std::env::set_var("EVIDENCE_SERVER_API_KEY", "demo-evidence-api-key");
-        std::env::set_var("EVIDENCE_SERVER_BEARER_TOKEN", "demo-evidence-bearer-token");
+        std::env::set_var("REGISTRY_WITNESS_API_KEY", "demo-evidence-api-key");
+        std::env::set_var(
+            "REGISTRY_WITNESS_BEARER_TOKEN",
+            "demo-evidence-bearer-token",
+        );
         std::env::set_var(
             "EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN",
             "demo-evidence-casework-system",
         );
-        std::env::set_var("EVIDENCE_SERVER_ISSUER_JWK", DEMO_ISSUER_JWK);
+        std::env::set_var("REGISTRY_WITNESS_ISSUER_JWK", DEMO_ISSUER_JWK);
     }
 
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -29,14 +32,14 @@ fn split_demo_config_loads_validates_and_builds_router() {
         .parent()
         .and_then(std::path::Path::parent)
         .expect("workspace root")
-        .join("demo/config/evidence-server.yaml");
+        .join("demo/config/registry-witness.yaml");
     let raw = std::fs::read_to_string(config_path).expect("demo config is readable");
-    let mut config: StandaloneEvidenceServerConfig =
+    let mut config: StandaloneRegistryWitnessConfig =
         serde_yml::from_str(&raw).expect("demo config deserializes");
     let temp = tempfile::TempDir::new().expect("tempdir");
     config.audit.path = Some(
         temp.path()
-            .join("evidence-server-audit.jsonl")
+            .join("registry-witness-audit.jsonl")
             .to_string_lossy()
             .into_owned(),
     );

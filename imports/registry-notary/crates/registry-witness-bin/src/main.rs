@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Evidence Server process entrypoint.
+//! Registry Witness process entrypoint.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use evidence_core::StandaloneEvidenceServerConfig;
-use evidence_server::{openapi_document, standalone_router};
+use registry_witness_core::StandaloneRegistryWitnessConfig;
+use registry_witness_server::{openapi_document, standalone_router};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(author, version, about = "Run the standalone Evidence Server")]
+#[command(author, version, about = "Run the standalone Registry Witness")]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
     /// YAML config path.
-    #[arg(short, long, env = "EVIDENCE_SERVER_CONFIG")]
+    #[arg(short, long, env = "REGISTRY_WITNESS_CONFIG")]
     config: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Print the Evidence Server OpenAPI document as JSON.
+    /// Print the Registry Witness OpenAPI document as JSON.
     Openapi,
 }
 
@@ -38,19 +38,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("--config is required unless a subcommand is used")?;
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("info,evidence_server=debug,evidence_server_bin=debug")
+            EnvFilter::new("info,registry_witness_server=debug,registry_witness_bin=debug")
         }))
         .init();
 
     let raw = tokio::fs::read_to_string(&config_path).await?;
-    let config: StandaloneEvidenceServerConfig = serde_yml::from_str(&raw)?;
+    let config: StandaloneRegistryWitnessConfig = serde_yml::from_str(&raw)?;
     config.validate()?;
 
     let bind = config.server.bind;
     let app = standalone_router(config)?.layer(TraceLayer::new_for_http());
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local_addr: SocketAddr = listener.local_addr()?;
-    tracing::info!(%local_addr, "evidence server listening");
+    tracing::info!(%local_addr, "registry witness listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

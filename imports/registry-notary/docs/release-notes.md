@@ -1,5 +1,19 @@
 # Release Notes
 
+## 0.2.0 (rename)
+
+- Renamed: `evidence-server` → `registry-witness`. No backward compatibility; no aliases.
+  - Crates: `evidence-core` → `registry-witness-core`, `evidence-server` → `registry-witness-server`,
+    `evidence-server-bin` → `registry-witness-bin`.
+  - Binary: `evidence-server` → `registry-witness`.
+  - Media type: `application/vnd.evidence-server.claim-result+json` → `application/vnd.registry-witness.claim-result+json`.
+  - Default audience: `"evidence-server"` → `"registry-witness"`.
+  - Cargo feature: `evidence-server-cel` → `registry-witness-cel`.
+  - Project-labeled env vars: `EVIDENCE_SERVER_API_KEY`, `EVIDENCE_SERVER_BEARER_TOKEN`,
+    `EVIDENCE_SERVER_ISSUER_JWK` → `REGISTRY_WITNESS_API_KEY`, `REGISTRY_WITNESS_BEARER_TOKEN`,
+    `REGISTRY_WITNESS_ISSUER_JWK`.
+  - Demo config: `demo/config/evidence-server.yaml` → `demo/config/registry-witness.yaml`.
+
 ## 0.1.0
 
 - Initial Evidence Server repository cut from `registry_relay`.
