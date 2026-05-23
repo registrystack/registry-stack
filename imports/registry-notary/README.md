@@ -47,7 +47,7 @@ cargo run -p evidence-server-bin -- openapi > target/evidence-server.openapi.jso
 
 CEL is enabled by default through the `evidence-server-cel` feature and is
 implemented through `cel-mapper-core`, pinned to the published
-`cel-mapper-core-v0.1.0` tag in `PublicSchema/cel-mapping`.
+`cel-mapper-core-v0.1.1` tag in `PublicSchema/cel-mapping`.
 
 ## OpenAPI
 
