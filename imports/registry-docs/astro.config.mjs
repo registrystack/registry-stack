@@ -20,6 +20,7 @@ export default defineConfig({
       },
       customCss: ['./src/styles/custom.css'],
       components: {
+        Banner: './src/components/RegistryBanner.astro',
         Header: './src/components/RegistryHeader.astro',
         PageSidebar: './src/components/RegistryPageSidebar.astro',
         PageTitle: './src/components/RegistryPageTitle.astro',

@@ -697,3 +697,38 @@ mobile-starlight-toc summary {
     display: grid;
   }
 }
+
+.registry-preview-banner {
+  border-bottom: 1px solid #d9b300;
+  background: #fff8d6;
+  color: var(--registry-ink);
+  padding: 12px 40px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.registry-preview-banner p {
+  margin: 0;
+  max-inline-size: 1100px;
+}
+
+.registry-preview-banner strong {
+  font-weight: 700;
+  font-family: var(--__sl-font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-inline-end: 6px;
+}
+
+.registry-preview-banner a {
+  color: var(--registry-blue);
+  text-decoration: underline;
+}
+
+@media (max-width: 720px) {
+  .registry-preview-banner {
+    padding: 12px 20px;
+  }
+}
+
