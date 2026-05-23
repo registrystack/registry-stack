@@ -93,7 +93,6 @@ fn build_state_with_retired(
         signer,
         retired_keys,
         ResolvedClaimValidity {
-            verify_result: Duration::from_secs(3600),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(3600),
         },
@@ -251,7 +250,6 @@ async fn gateway_mode_surfaces_retired_keys_in_did_document() {
         verification_method_id: VM_ID.to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(3600),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(3600),
         },
@@ -337,7 +335,6 @@ async fn disabled_provenance_keeps_public_routes_invisible() {
         verification_method_id: VM_ID.to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(3600),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(3600),
         },
@@ -354,7 +351,7 @@ async fn disabled_provenance_keeps_public_routes_invisible() {
 
     for path in [
         "/.well-known/did.json",
-        "/schemas/verify-result/v1.json",
+        "/schemas/aggregate-result/v1.json",
         "/contexts/provenance/v1.jsonld",
     ] {
         let resp = server.get(path).await;
@@ -396,7 +393,7 @@ async fn route_is_not_mounted_when_no_provenance_state_configured() {
 // Clock-injection helpers for retired-key expiry tests.
 // `fixed_now` is a known epoch; all three tests are expressed relative to it.
 //
-// max_validity = max(24h, 24h, 24h) = 86400 s
+// max_validity = max(24h, 24h) = 86400 s
 // clock_skew_grace = 300 s
 // cutoff = retired_after + 86400 + 300
 // Key is present iff now <= cutoff, i.e. retired_after >= now - 86700
@@ -417,9 +414,8 @@ fn build_pinned_state_with_one_retired(
         issuer_did: ISSUER_DID.to_string(),
         verification_method_id: VM_ID.to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
-        // max_validity = 24 h across all three fields
+        // max_validity = 24 h across both claim type fields
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(86_400),
             aggregate_result: Duration::from_secs(86_400),
             entity_record: Duration::from_secs(86_400),
         },

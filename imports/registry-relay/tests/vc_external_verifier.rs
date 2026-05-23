@@ -29,13 +29,6 @@ struct VcFixture {
 
 const FIXTURES: &[VcFixture] = &[
     VcFixture {
-        dir: "verify-result-v1",
-        issuer: "did:web:fixture.example",
-        claim_type: "VerifyResult",
-        schema_id: "https://fixture.example/schemas/verify-result/v1.json",
-        schema_path: "tests/fixtures/vc/verify-result-v1/schema.json",
-    },
-    VcFixture {
         dir: "aggregate-result-v1",
         issuer: "did:web:aggregate.fixture.example",
         claim_type: "AggregateResult",
@@ -143,31 +136,11 @@ fn node_verifier_accepts_golden_fixtures() {
     }
 }
 
-#[test]
-fn node_verifier_accepts_golden_fixture_against_published_verify_schema() {
-    let mut args = fixture_args(&FIXTURES[0]);
-    let schema = args
-        .iter()
-        .position(|arg| arg == "--schema")
-        .expect("schema arg")
-        + 1;
-    args[schema] = repo_root()
-        .join("resources/schemas/verify-result/v1.json")
-        .display()
-        .to_string();
-    let output = run_with_owned_args(&args);
-    assert!(
-        output.status.success(),
-        "verifier failed against published schema\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
 
 #[test]
 fn node_verifier_rejects_unexpected_claim_type() {
     let mut args = fixture_args(&FIXTURES[0]);
-    replace_arg(&mut args, "--claim-type", "AggregateResult");
+    replace_arg(&mut args, "--claim-type", "EntityRecord");
     let output = run_with_owned_args(&args);
     assert!(
         !output.status.success(),
@@ -175,7 +148,7 @@ fn node_verifier_rejects_unexpected_claim_type() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("payload type[1] must be AggregateResult"),
+        stderr.contains("payload type[1] must be EntityRecord"),
         "unexpected stderr: {stderr}"
     );
 }

@@ -84,10 +84,6 @@ fn compiled_in_resources_match_pinned_sha256() {
         registry_relay::provenance::resources::VC_V2_CONTEXT,
     );
     compiled.insert(
-        "schemas/verify-result/v1.json",
-        registry_relay::provenance::resources::VERIFY_RESULT_V1,
-    );
-    compiled.insert(
         "schemas/aggregate-result/v1.json",
         registry_relay::provenance::resources::AGGREGATE_RESULT_V1,
     );

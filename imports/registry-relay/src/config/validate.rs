@@ -876,7 +876,6 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
     let min = std::time::Duration::from_secs(60);
     let max = std::time::Duration::from_secs(60 * 60 * 24 * 365);
     for (name, value) in [
-        ("verify_result", cfg.claim_validity.verify_result),
         ("aggregate_result", cfg.claim_validity.aggregate_result),
         ("entity_record", cfg.claim_validity.entity_record),
     ] {

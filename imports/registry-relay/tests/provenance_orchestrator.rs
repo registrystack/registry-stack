@@ -45,7 +45,6 @@ fn export_jwk(env_name: &str) -> VerifyingKey {
 
 fn build_state(
     env_name: &str,
-    verify_window: Duration,
     aggregate_window: Duration,
     entity_window: Duration,
 ) -> (ProvenanceState, VerifyingKey) {
@@ -64,7 +63,6 @@ fn build_state(
         verification_method_id: "did:web:gw.example#orch".to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: verify_window,
             aggregate_result: aggregate_window,
             entity_record: entity_window,
         },
@@ -93,12 +91,10 @@ fn decode_payload(jws: &str, vk: &VerifyingKey) -> Value {
 
 #[test]
 fn orchestrator_issues_signed_vc_for_each_claim_type() {
-    let verify_window = Duration::from_secs(300); // 5 min
     let aggregate_window = Duration::from_secs(3600); // 1 hour
     let entity_window = Duration::from_secs(86_400); // 24 hours
     let (state, vk) = build_state(
         "ORCHESTRATOR_TEST_JWK",
-        verify_window,
         aggregate_window,
         entity_window,
     );
@@ -106,12 +102,6 @@ fn orchestrator_issues_signed_vc_for_each_claim_type() {
     let issued_at = OffsetDateTime::from_unix_timestamp(1_730_000_000).unwrap();
 
     for (claim_type, expected_window, expected_schema, expected_tag) in [
-        (
-            ClaimType::VerifyResult,
-            verify_window,
-            "https://gw.example/schemas/verify-result/v1.json",
-            "VerifyResult",
-        ),
         (
             ClaimType::AggregateResult,
             aggregate_window,
@@ -174,11 +164,10 @@ fn each_issuance_gets_a_fresh_jti() {
         "ORCHESTRATOR_TEST_FRESH_JTI_JWK",
         Duration::from_secs(60),
         Duration::from_secs(60),
-        Duration::from_secs(60),
     );
     let issued_at = OffsetDateTime::from_unix_timestamp(1_730_100_000).unwrap();
     let ctx = || IssuanceContext {
-        claim_type: ClaimType::VerifyResult,
+        claim_type: ClaimType::AggregateResult,
         subject_uri: "https://gw.example/sub".to_string(),
         credential_subject: json!({"id": "https://gw.example/sub"}),
         issued_at,

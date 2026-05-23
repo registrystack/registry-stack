@@ -1828,7 +1828,7 @@ fn insert_provenance_paths(paths: &mut Map<String, Value>) {
             "application/schema+json",
             "JsonSchemaDocument",
             vec![
-                path_parameter("claim_type", "Provenance claim type, for example `verify-result`."),
+                path_parameter("claim_type", "Provenance claim type, for example `aggregate-result`."),
                 path_parameter("version", "Schema version filename, for example `v1.json`."),
             ],
         ),
@@ -2766,7 +2766,6 @@ mod tests {
             schema_base_url: "https://data.example.test/schemas".to_string(),
             context_base_url: "https://data.example.test/contexts".to_string(),
             claim_validity: ClaimValidity {
-                verify_result: Duration::from_secs(300),
                 aggregate_result: Duration::from_secs(3600),
                 entity_record: Duration::from_secs(86_400),
             },

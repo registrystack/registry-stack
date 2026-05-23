@@ -94,7 +94,6 @@ fn build_provenance_state(env_name: &str) -> (Arc<ProvenanceState>, VerifyingKey
         verification_method_id: "did:web:gw.example#issuance".to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: std::time::Duration::from_secs(300),
             aggregate_result: std::time::Duration::from_secs(3600),
             entity_record: std::time::Duration::from_secs(86_400),
         },

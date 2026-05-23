@@ -140,7 +140,6 @@ fn build_state_with_issuer_mode_vm_and_retired(
         verification_method_id: vm_id.to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(300),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(86_400),
         },

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Public `/schemas/{claim_type}/{version}` route coverage.
 //!
-//! Asserts that the three published schemas (verify-result,
-//! aggregate-result, entity-record) return their pinned bytes verbatim,
-//! that the response carries `application/schema+json` plus the long
-//! cache directive `public, max-age=86400`, and that unknown
-//! `(claim_type, version)` pairs surface 404 + the stable code
-//! `provenance.unknown_resource`.
+//! Asserts that the two published schemas (aggregate-result, entity-record)
+//! return their pinned bytes verbatim, that the response carries
+//! `application/schema+json` plus the long cache directive
+//! `public, max-age=86400`, and that unknown `(claim_type, version)` pairs
+//! surface 404 + the stable code `provenance.unknown_resource`.
 
 use std::env;
 use std::sync::Arc;
@@ -76,7 +75,6 @@ fn build_state() -> Arc<ProvenanceState> {
         verification_method_id: "did:web:example#k".to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(3600),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(3600),
         },
@@ -96,28 +94,6 @@ fn build_app() -> axum::Router {
     build_app_with_provenance(config, auth, sink, Some(build_state())).unwrap()
 }
 
-#[tokio::test]
-async fn verify_result_schema_is_served_verbatim() {
-    let server = TestServer::new(build_app());
-    let resp = server.get("/schemas/verify-result/v1.json").await;
-    resp.assert_status(StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("content-type").unwrap(),
-        "application/schema+json"
-    );
-    assert_eq!(
-        resp.headers().get("cache-control").unwrap(),
-        "public, max-age=86400"
-    );
-    assert_eq!(
-        resp.headers().get("access-control-allow-origin").unwrap(),
-        "*"
-    );
-    let body_bytes = resp.as_bytes();
-    assert_eq!(body_bytes.as_ref(), resources::VERIFY_RESULT_V1);
-    // Sanity: also a valid JSON document.
-    let _json: Value = serde_json::from_slice(body_bytes.as_ref()).expect("valid JSON");
-}
 
 #[tokio::test]
 async fn aggregate_result_schema_is_served_verbatim() {
@@ -147,7 +123,7 @@ async fn unknown_schema_returns_404_with_stable_code() {
 #[tokio::test]
 async fn unknown_version_for_known_type_returns_404() {
     let server = TestServer::new(build_app());
-    let resp = server.get("/schemas/verify-result/v99.json").await;
+    let resp = server.get("/schemas/aggregate-result/v99.json").await;
     resp.assert_status(StatusCode::NOT_FOUND);
     let body: Value = resp.json();
     assert_eq!(body["code"], "provenance.unknown_resource");
@@ -166,7 +142,7 @@ async fn schemas_route_is_not_mounted_without_provenance_state() {
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
     let app = build_app_with_provenance(config, auth, sink, None).unwrap();
     let server = TestServer::new(app);
-    let resp = server.get("/schemas/verify-result/v1.json").await;
+    let resp = server.get("/schemas/aggregate-result/v1.json").await;
     let status = resp.status_code();
     assert!(
         status == StatusCode::NOT_FOUND || status == StatusCode::UNAUTHORIZED,

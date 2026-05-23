@@ -74,7 +74,7 @@ fn vc_jwt_envelope_is_well_shaped_and_verifies() {
     let valid_until = OffsetDateTime::from_unix_timestamp(1_726_604_800).unwrap();
 
     let inputs = VcEnvelopeInputs {
-        claim_type: ClaimType::VerifyResult,
+        claim_type: ClaimType::AggregateResult,
         issuer_did: "did:web:example.test".to_string(),
         verification_method_id: "did:web:example.test#key-1".to_string(),
         subject_uri: "https://gw.example/datasets/foo/entity/X".to_string(),
@@ -88,7 +88,7 @@ fn vc_jwt_envelope_is_well_shaped_and_verifies() {
             "asOf": "2026-05-16T12:00:00Z",
         }),
         provenance_context_url: "https://gw.example/contexts/provenance/v1.jsonld".to_string(),
-        credential_schema_url: "https://gw.example/schemas/verify-result/v1.json".to_string(),
+        credential_schema_url: "https://gw.example/schemas/aggregate-result/v1.json".to_string(),
         issued_at,
         valid_until,
     };
@@ -127,7 +127,7 @@ fn vc_jwt_envelope_is_well_shaped_and_verifies() {
     // type: ["VerifiableCredential", "<ClaimType tag>"].
     let types = payload["type"].as_array().expect("type array");
     assert_eq!(types[0], "VerifiableCredential");
-    assert_eq!(types[1], "VerifyResult");
+    assert_eq!(types[1], "AggregateResult");
 
     // id and jti are the same urn:uuid; id is also returned in the
     // metadata struct.
@@ -152,7 +152,7 @@ fn vc_jwt_envelope_is_well_shaped_and_verifies() {
     // credentialSchema embeds the resolved schema URL.
     assert_eq!(
         payload["credentialSchema"]["id"],
-        "https://gw.example/schemas/verify-result/v1.json"
+        "https://gw.example/schemas/aggregate-result/v1.json"
     );
     assert_eq!(payload["credentialSchema"]["type"], "JsonSchema");
 

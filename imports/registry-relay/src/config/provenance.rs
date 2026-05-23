@@ -40,8 +40,6 @@ fn default_accepted_media_types() -> Vec<String> {
 #[serde(deny_unknown_fields)]
 pub struct ClaimValidity {
     #[serde(with = "humantime_serde")]
-    pub verify_result: Duration,
-    #[serde(with = "humantime_serde")]
     pub aggregate_result: Duration,
     #[serde(with = "humantime_serde")]
     pub entity_record: Duration,

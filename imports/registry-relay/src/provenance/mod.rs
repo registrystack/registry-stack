@@ -60,7 +60,6 @@ pub enum IssuerMode {
 /// holds the durations directly.
 #[derive(Debug, Clone)]
 pub struct ResolvedClaimValidity {
-    pub verify_result: Duration,
     pub aggregate_result: Duration,
     pub entity_record: Duration,
 }
@@ -266,7 +265,6 @@ impl ProvenanceState {
     ) -> Result<SignedVc, IssueError> {
         let cfg = &self.inner;
         let window = match ctx.claim_type {
-            ClaimType::VerifyResult => cfg.claim_validity.verify_result,
             ClaimType::AggregateResult => cfg.claim_validity.aggregate_result,
             ClaimType::EntityRecord => cfg.claim_validity.entity_record,
         };
@@ -317,17 +315,14 @@ impl ProvenanceState {
 
     /// Issue a signed evidence-verification JWT receipt.
     ///
-    /// The v1 receipt uses the existing verify-result validity window, capped
-    /// at five minutes so server-to-server evidence receipts stay short-lived.
+    /// The receipt validity is capped at five minutes so server-to-server
+    /// evidence receipts stay short-lived.
     pub fn issue_evidence_verification_receipt(
         &self,
         ctx: EvidenceVerificationReceiptContext,
     ) -> Result<SignedReceipt, IssueError> {
         let cfg = &self.inner;
-        let validity = cfg
-            .claim_validity
-            .verify_result
-            .min(MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY);
+        let validity = MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY;
         let valid_until = ctx
             .issued_at
             .checked_add(time::Duration::try_from(validity).map_err(|err| {
@@ -463,7 +458,6 @@ pub fn build_resolved_provenance_config(
         verification_method_id,
         accepted_media_types: cfg.accepted_media_types.clone(),
         claim_validity: ResolvedClaimValidity {
-            verify_result: cfg.claim_validity.verify_result,
             aggregate_result: cfg.claim_validity.aggregate_result,
             entity_record: cfg.claim_validity.entity_record,
         },

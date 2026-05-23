@@ -75,7 +75,6 @@ fn build_state() -> Arc<ProvenanceState> {
         verification_method_id: "did:web:example#k".to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(3600),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(3600),
         },

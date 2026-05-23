@@ -67,10 +67,7 @@ fn serve_did_document_at(state: &ProvenanceState, now: OffsetDateTime) -> Respon
     // any credential signed by the retired key can still be verified
     // before we remove the key from the DID Document (spec §13.4).
     let cv = &cfg.claim_validity;
-    let max_validity = cv
-        .verify_result
-        .max(cv.aggregate_result)
-        .max(cv.entity_record);
+    let max_validity = cv.aggregate_result.max(cv.entity_record);
 
     // A retired key stays in `verificationMethod` while
     // `now <= retired_after + max_validity + clock_skew_grace`.

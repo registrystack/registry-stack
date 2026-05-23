@@ -148,7 +148,7 @@ pub(crate) struct AggregateIssuanceArgs<'a> {
 }
 
 /// Issue an `AggregateResult` VC. Same opt-in contract as
-/// [`maybe_issue_verify_result`].
+/// [`maybe_issue_aggregate_result`].
 pub(crate) fn maybe_issue_aggregate_result(
     state: Option<&Arc<ProvenanceState>>,
     config: Option<&Arc<Config>>,
@@ -187,7 +187,7 @@ pub(crate) fn maybe_issue_aggregate_result(
 }
 
 /// Issue an `EntityRecord` VC. Same opt-in contract as
-/// [`maybe_issue_verify_result`].
+/// [`maybe_issue_aggregate_result`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn maybe_issue_entity_record(
     state: Option<&Arc<ProvenanceState>>,

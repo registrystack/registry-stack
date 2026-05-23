@@ -617,7 +617,6 @@ fn test_receipt_state() -> Arc<ProvenanceState> {
         verification_method_id: "did:web:data.example.test#evidence".to_string(),
         accepted_media_types: vec![EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(300),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(86_400),
         },

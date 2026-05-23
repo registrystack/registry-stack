@@ -8,8 +8,6 @@
 
 pub mod aggregate_result;
 pub mod entity_record;
-pub mod verify_result;
 
 pub use aggregate_result::{aggregate_result_subject, AggregateResultInput};
 pub use entity_record::{entity_record_subject, EntityRecordInput};
-pub use verify_result::{verify_result_subject, VerifyResultInput};

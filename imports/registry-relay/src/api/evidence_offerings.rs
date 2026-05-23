@@ -636,11 +636,7 @@ fn issue_evidence_receipt_response(
         None => None,
     };
     let issued_at = OffsetDateTime::now_utc();
-    let validity = state
-        .config()
-        .claim_validity
-        .verify_result
-        .min(MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY);
+    let validity = MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY;
     let validity = match time::Duration::try_from(validity) {
         Ok(value) => value,
         Err(_) => return Error::from(InternalError::Unhandled).into_response(),

@@ -89,7 +89,7 @@ provenance:
 
 fn gateway_provenance(
     enabled: bool,
-    verify_validity: &str,
+    aggregate_validity: &str,
     context_url: &str,
     schema_url: &str,
     vm_id: &str,
@@ -100,8 +100,7 @@ fn gateway_provenance(
   context_base_url: {context_url}
   schema_base_url: {schema_url}
   claim_validity:
-    verify_result: {verify_validity}
-    aggregate_result: 10m
+    aggregate_result: {aggregate_validity}
     entity_record: 10m
   issuer:
     mode: gateway
@@ -266,7 +265,6 @@ fn delegated_mode_validates_against_ministry_did() {
   context_base_url: https://data.example.test/contexts
   schema_base_url: https://data.example.test/schemas
   claim_validity:
-    verify_result: 10m
     aggregate_result: 10m
     entity_record: 10m
   issuer:
@@ -292,7 +290,6 @@ fn delegated_mode_rejects_mismatched_vm_did() {
   context_base_url: https://data.example.test/contexts
   schema_base_url: https://data.example.test/schemas
   claim_validity:
-    verify_result: 10m
     aggregate_result: 10m
     entity_record: 10m
   issuer:
@@ -429,7 +426,6 @@ fn software_signer_with_es256_is_rejected_at_load_time() {
   context_base_url: https://data.example.test/contexts
   schema_base_url: https://data.example.test/schemas
   claim_validity:
-    verify_result: 10m
     aggregate_result: 10m
     entity_record: 10m
   issuer:
@@ -456,7 +452,6 @@ fn kms_signer_kind_is_rejected_for_now() {
   context_base_url: https://data.example.test/contexts
   schema_base_url: https://data.example.test/schemas
   claim_validity:
-    verify_result: 10m
     aggregate_result: 10m
     entity_record: 10m
   issuer:

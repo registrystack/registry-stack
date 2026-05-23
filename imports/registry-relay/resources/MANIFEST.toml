@@ -19,11 +19,6 @@ sha256 = "0f3f6806198ec8436cc9d6604ddf17e21890f158a91f55fe6d7e38bb7c2df549"
 served_as = "vendored"
 
 [[resource]]
-path = "schemas/verify-result/v1.json"
-sha256 = "f3d07b30367f16f415bccb6ed51f2604824a10d11ca612b2f0359c6d6a2ae487"
-served_as = "schema"
-
-[[resource]]
 path = "schemas/aggregate-result/v1.json"
 sha256 = "d6c173e365da7c116b2a67c7900377624e7f20d32d8e3e0bb44f43aa86d38002"
 served_as = "schema"

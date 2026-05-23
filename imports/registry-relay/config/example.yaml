@@ -283,7 +283,6 @@ audit:
 #   schema_base_url: https://data.example.gov/schemas
 #   context_base_url: https://data.example.gov/contexts
 #   claim_validity:
-#     verify_result:    5m    # short, since callers re-verify cheaply
 #     aggregate_result: 1h    # tune to dataset refresh cadence
 #     entity_record:    24h   # tune to consumer caching window
 #   issuer:

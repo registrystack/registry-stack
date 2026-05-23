@@ -112,7 +112,6 @@ fn build_provenance_state(env_name: &str) -> (Arc<ProvenanceState>, VerifyingKey
         verification_method_id: "did:web:gw.example#issuance".to_string(),
         accepted_media_types: vec!["application/vc+jwt".to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(300),
             aggregate_result: Duration::from_secs(3600),
             entity_record: Duration::from_secs(86_400),
         },
@@ -146,9 +145,6 @@ fn assert_credential_subject_matches_schema(
     subject: &Value,
 ) {
     let schema_bytes = match claim_type {
-        registry_relay::provenance::jwt_vc::ClaimType::VerifyResult => {
-            registry_relay::provenance::resources::VERIFY_RESULT_V1
-        }
         registry_relay::provenance::jwt_vc::ClaimType::AggregateResult => {
             registry_relay::provenance::resources::AGGREGATE_RESULT_V1
         }

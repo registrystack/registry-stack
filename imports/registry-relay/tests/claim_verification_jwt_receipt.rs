@@ -187,7 +187,7 @@ fn receipt_header_payload_shape_and_signature_verify() {
 }
 
 #[test]
-fn provenance_state_receipt_uses_verify_result_validity_window() {
+fn provenance_state_receipt_validity_is_five_minutes() {
     let (signer, vk) = build_signer("did:web:data.example.gov#receipt");
     let signer: Arc<dyn Signer> = Arc::new(signer);
     let state = ProvenanceState::new(ResolvedProvenanceConfig {
@@ -197,7 +197,6 @@ fn provenance_state_receipt_uses_verify_result_validity_window() {
         verification_method_id: "did:web:data.example.gov#receipt".to_string(),
         accepted_media_types: vec![EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(300),
             aggregate_result: Duration::from_secs(86_400),
             entity_record: Duration::from_secs(86_400),
         },
@@ -268,7 +267,6 @@ fn provenance_state_caps_receipt_validity_at_five_minutes() {
         verification_method_id: "did:web:data.example.gov#receipt".to_string(),
         accepted_media_types: vec![EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE.to_string()],
         claim_validity: ResolvedClaimValidity {
-            verify_result: Duration::from_secs(86_400),
             aggregate_result: Duration::from_secs(86_400),
             entity_record: Duration::from_secs(86_400),
         },

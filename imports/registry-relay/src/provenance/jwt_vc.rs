@@ -33,7 +33,6 @@ pub const VCDM_V2_CONTEXT: &str = "https://www.w3.org/ns/credentials/v2";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClaimType {
-    VerifyResult,
     AggregateResult,
     EntityRecord,
 }
@@ -42,7 +41,6 @@ impl ClaimType {
     /// Type tag emitted as `type[1]` in the VC.
     pub fn type_tag(self) -> &'static str {
         match self {
-            ClaimType::VerifyResult => "VerifyResult",
             ClaimType::AggregateResult => "AggregateResult",
             ClaimType::EntityRecord => "EntityRecord",
         }
@@ -51,7 +49,6 @@ impl ClaimType {
     /// Schema URL path appended to the configured `schema_base_url`.
     pub fn schema_path(self) -> &'static str {
         match self {
-            ClaimType::VerifyResult => "verify-result/v1.json",
             ClaimType::AggregateResult => "aggregate-result/v1.json",
             ClaimType::EntityRecord => "entity-record/v1.json",
         }
@@ -209,17 +206,12 @@ mod tests {
 
     #[test]
     fn claim_type_tags_match_spec() {
-        assert_eq!(ClaimType::VerifyResult.type_tag(), "VerifyResult");
         assert_eq!(ClaimType::AggregateResult.type_tag(), "AggregateResult");
         assert_eq!(ClaimType::EntityRecord.type_tag(), "EntityRecord");
     }
 
     #[test]
     fn claim_type_schema_paths_match_spec() {
-        assert_eq!(
-            ClaimType::VerifyResult.schema_path(),
-            "verify-result/v1.json"
-        );
         assert_eq!(
             ClaimType::AggregateResult.schema_path(),
             "aggregate-result/v1.json"
