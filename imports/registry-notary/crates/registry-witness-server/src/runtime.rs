@@ -1000,6 +1000,23 @@ pub fn credential_profile_for<'a>(
             .credential_profiles
             .get(profile_id)
             .ok_or(EvidenceError::CredentialIssuerNotConfigured)?;
+        // The caller-supplied profile must also be on the allow-list of at
+        // least one claim in the evaluation. Without this check a client
+        // could mint a credential against a profile the claim never opted
+        // in to, bypassing per-claim policy.
+        let allowed = evaluation
+            .claim_ids
+            .iter()
+            .filter_map(|claim_id| find_claim(config, claim_id).ok())
+            .any(|claim| {
+                claim
+                    .credential_profiles
+                    .iter()
+                    .any(|allowed| allowed == profile_id)
+            });
+        if !allowed {
+            return Err(EvidenceError::CredentialIssuerNotConfigured);
+        }
         return Ok((profile_id, profile));
     }
     for claim_id in &evaluation.claim_ids {
@@ -1149,5 +1166,64 @@ mod tests {
             json!("Bearer <token>")
         );
         assert_eq!(document["auth"]["audience"], json!("evidence.test"));
+    }
+
+    #[test]
+    fn credential_profile_for_rejects_profile_not_listed_in_claim() {
+        // A caller-supplied credential_profile must be in the requested claim's
+        // own credential_profiles allow-list. Otherwise a client could mint a
+        // credential against a profile the claim never opted in to.
+        let evidence: EvidenceConfig = serde_yml::from_str(
+            r#"
+enabled: true
+service_id: test.witness
+claims:
+  - id: claim-a
+    title: A
+    version: "1.0"
+    subject_type: person
+    rule:
+      type: exists
+      source: src
+    credential_profiles:
+      - profile_a
+credential_profiles:
+  profile_a:
+    format: sd_jwt_vc
+    issuer: https://issuer.example
+    issuer_key_env: ISSUER_KEY
+    vct: https://vct.example/a
+    allowed_claims:
+      - claim-a
+  profile_b:
+    format: sd_jwt_vc
+    issuer: https://issuer.example
+    issuer_key_env: ISSUER_KEY_B
+    vct: https://vct.example/b
+    allowed_claims:
+      - claim-a
+"#,
+        )
+        .expect("evidence config is valid YAML");
+
+        let evaluation = registry_witness_core::StoredEvaluation {
+            client_id: "client".to_string(),
+            purpose: "test".to_string(),
+            claim_ids: vec!["claim-a".to_string()],
+            disclosure: "redacted".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: Vec::new(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            expires_at: "1970-01-01T00:00:00Z".to_string(),
+            request_hash: "h".to_string(),
+        };
+
+        let err = credential_profile_for(&evidence, &evaluation, Some("profile_b"))
+            .expect_err("profile_b is not listed on claim-a");
+        assert!(matches!(err, EvidenceError::CredentialIssuerNotConfigured));
+
+        let (profile_id, _) = credential_profile_for(&evidence, &evaluation, Some("profile_a"))
+            .expect("profile_a is listed on claim-a");
+        assert_eq!(profile_id, "profile_a");
     }
 }

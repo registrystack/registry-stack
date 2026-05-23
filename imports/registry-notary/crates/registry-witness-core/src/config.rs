@@ -64,6 +64,20 @@ impl StandaloneRegistryWitnessConfig {
                     );
                 }
             }
+            // An empty allowed_claims short-circuits the issuance-time filter
+            // in api.rs (`is_empty()` means "any claim allowed"). Require
+            // operators to enumerate the claims a profile may bind to. A list
+            // composed only of blank entries is treated the same as empty so
+            // operators cannot trip the short-circuit via `[""]`.
+            if profile
+                .allowed_claims
+                .iter()
+                .all(|claim| claim.trim().is_empty())
+            {
+                return Err(EvidenceConfigError::EmptyAllowedClaims {
+                    profile: profile_id.clone(),
+                });
+            }
         }
         // Finding 8: detect cycles in the depends_on graph using DFS with
         // grey (in-progress) and black (done) sets.
@@ -216,6 +230,15 @@ pub enum EvidenceConfigError {
         cycle = cycle.join(" -> ")
     )]
     DependsOnCycle { cycle: Vec<String> },
+    /// A credential profile with an empty `allowed_claims` would short-circuit
+    /// the issuance-time claim filter (api.rs treats empty as "all claims
+    /// allowed"). Reject at load time so operators must explicitly enumerate
+    /// the claims a profile may bind to.
+    #[error(
+        "credential profile '{profile}': allowed_claims must list at least one \
+         claim; an empty list would permit any claim at issuance"
+    )]
+    EmptyAllowedClaims { profile: String },
 }
 
 /// Registry Witness configuration. Disabled by default so existing
@@ -686,6 +709,8 @@ holder_binding:
   proof_of_possession: required
   allowed_did_methods:
     - did:jwk
+allowed_claims:
+  - some-claim
 "#,
         )
         .expect("profile YAML is valid");
@@ -714,6 +739,8 @@ holder_binding:
   allowed_did_methods:
     - did:jwk
     - did:key
+allowed_claims:
+  - some-claim
 "#,
         )
         .expect("profile YAML is valid");
@@ -756,6 +783,8 @@ holder_binding:
     - did:jwk
     - did:key
     - did:web
+allowed_claims:
+  - some-claim
 "#,
         )
         .expect("profile YAML is valid");
@@ -850,6 +879,69 @@ holder_binding:
             EvidenceConfigError::DependsOnUnknownClaim { claim, unknown } => {
                 assert_eq!(claim, "claim-a");
                 assert_eq!(unknown, "claim-nonexistent");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn empty_allowed_claims_is_rejected() {
+        // A credential profile with an empty allowed_claims would silently
+        // accept every claim at issue time (see api.rs `is_empty()` short
+        // circuit). Reject at config-load time so the operator must opt in.
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_yml::from_str(
+            r#"
+format: sd_jwt_vc
+issuer: https://issuer.example
+issuer_key_env: ISSUER_KEY
+vct: https://vct.example/test
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("the_profile_id".to_string(), profile);
+
+        let err = config
+            .validate()
+            .expect_err("empty allowed_claims must fail validation");
+        match &err {
+            EvidenceConfigError::EmptyAllowedClaims { profile } => {
+                assert_eq!(profile, "the_profile_id");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn blank_only_allowed_claims_is_rejected() {
+        // `allowed_claims: [""]` would pass an `is_empty()` guard but still
+        // fail every issuance with EvaluationBindingMismatch. Treat blank-only
+        // lists the same as empty so operators see the error at config load.
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_yml::from_str(
+            r#"
+format: sd_jwt_vc
+issuer: https://issuer.example
+issuer_key_env: ISSUER_KEY
+vct: https://vct.example/test
+allowed_claims: ["", "   "]
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("blank_profile".to_string(), profile);
+
+        let err = config
+            .validate()
+            .expect_err("blank-only allowed_claims must fail validation");
+        match &err {
+            EvidenceConfigError::EmptyAllowedClaims { profile } => {
+                assert_eq!(profile, "blank_profile");
             }
             other => panic!("unexpected error variant: {other}"),
         }

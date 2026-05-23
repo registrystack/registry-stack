@@ -441,6 +441,7 @@ async fn issue_credential(
         &request,
         &evaluation,
         request.holder.as_ref(),
+        &evidence.service_id,
     ) {
         Ok(binding) => binding,
         Err(error) => return evidence_error_response(error),
@@ -487,6 +488,7 @@ async fn issue_credential(
     response
 }
 
+#[derive(Debug)]
 struct HolderProofBinding {
     replay_key: String,
     expires_at: OffsetDateTime,
@@ -498,6 +500,7 @@ fn validate_holder_request(
     request: &CredentialIssueRequest,
     evaluation: &registry_witness_core::StoredEvaluation,
     holder: Option<&HolderRequest>,
+    service_id: &str,
 ) -> Result<Option<HolderProofBinding>, EvidenceError> {
     if profile.holder_binding.mode == "none" {
         return Ok(None);
@@ -526,8 +529,10 @@ fn validate_holder_request(
             .proof
             .as_deref()
             .ok_or(EvidenceError::HolderProofRequired)?;
-        return validate_holder_proof_payload(proof, holder_id, profile_id, request, evaluation)
-            .map(Some);
+        return validate_holder_proof_payload(
+            proof, holder_id, profile_id, request, evaluation, service_id,
+        )
+        .map(Some);
     }
     Ok(None)
 }
@@ -538,6 +543,7 @@ fn validate_holder_proof_payload(
     profile_id: &str,
     request: &CredentialIssueRequest,
     evaluation: &registry_witness_core::StoredEvaluation,
+    service_id: &str,
 ) -> Result<HolderProofBinding, EvidenceError> {
     let header = decode_header(proof).map_err(|_| EvidenceError::HolderProofRequired)?;
     if header.alg != Algorithm::EdDSA {
@@ -548,7 +554,7 @@ fn validate_holder_proof_payload(
         DecodingKey::from_jwk(&jwk).map_err(|_| EvidenceError::HolderProofRequired)?;
     let mut validation = Validation::new(Algorithm::EdDSA);
     validation.algorithms = vec![Algorithm::EdDSA];
-    validation.set_audience(&["registry-witness"]);
+    validation.set_audience(&[service_id]);
     validation.required_spec_claims = [
         "sub",
         "aud",
@@ -930,4 +936,123 @@ fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(IDEMPOTENCY_KEY_HEADER)
         .and_then(|value| value.to_str().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    // Ed25519 keypair: `d` is the seed, `x` is the corresponding public key,
+    // both base64url (no padding). Identical to the key in
+    // registry-witness-core::sd_jwt tests so behavior is consistent.
+    const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
+    const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
+
+    // PKCS#8-wrap a 32-byte Ed25519 seed so jsonwebtoken's
+    // `EncodingKey::from_ed_der` accepts it. Mirrors the helper in
+    // registry-witness-core::sd_jwt (kept local to avoid expanding the
+    // crate's public surface just for tests).
+    fn ed25519_pkcs8_seed(seed: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(48);
+        out.extend_from_slice(&[
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ]);
+        out.extend_from_slice(seed);
+        out
+    }
+
+    fn holder_did_jwk() -> String {
+        let public_jwk = json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": HOLDER_PUB_X_B64,
+        });
+        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&public_jwk).unwrap());
+        format!("did:jwk:{encoded}")
+    }
+
+    fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
+        let seed = URL_SAFE_NO_PAD.decode(HOLDER_PRIV_D_B64).unwrap();
+        let pkcs8 = ed25519_pkcs8_seed(&seed);
+        let key = EncodingKey::from_ed_der(&pkcs8);
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some(holder_id.to_string());
+        encode(&header, &payload, &key).expect("sign holder proof")
+    }
+
+    fn evaluation_for_proof() -> registry_witness_core::StoredEvaluation {
+        registry_witness_core::StoredEvaluation {
+            client_id: "client".to_string(),
+            purpose: "test".to_string(),
+            claim_ids: vec!["claim-a".to_string()],
+            disclosure: "redacted".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: Vec::new(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            expires_at: "1970-01-01T00:00:00Z".to_string(),
+            request_hash: "h".to_string(),
+        }
+    }
+
+    fn issue_request() -> CredentialIssueRequest {
+        CredentialIssueRequest {
+            evaluation_id: "eval-1".to_string(),
+            credential_profile: Some("profile-a".to_string()),
+            format: None,
+            claims: None,
+            disclosure: None,
+            holder: None,
+        }
+    }
+
+    fn proof_payload(holder_id: &str, aud: &str) -> Value {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        json!({
+            "sub": holder_id,
+            "aud": aud,
+            "iat": now,
+            "exp": now + 60,
+            "jti": "jti-1",
+            "evaluation_id": "eval-1",
+            "credential_profile": "profile-a",
+            "disclosure": "redacted",
+            "claims": ["claim-a"],
+        })
+    }
+
+    #[test]
+    fn holder_proof_audience_must_match_configured_service_id() {
+        // Aim: the holder proof JWT's `aud` is bound to the configured
+        // service_id, not the hard-coded literal "registry-witness".
+        let holder_id = holder_did_jwk();
+        let service_id = "my.witness.example";
+        let request = issue_request();
+        let evaluation = evaluation_for_proof();
+
+        let proof_matching = sign_holder_proof(&holder_id, proof_payload(&holder_id, service_id));
+        validate_holder_proof_payload(
+            &proof_matching,
+            &holder_id,
+            "profile-a",
+            &request,
+            &evaluation,
+            service_id,
+        )
+        .expect("proof signed with aud=service_id must be accepted");
+
+        let proof_legacy_literal =
+            sign_holder_proof(&holder_id, proof_payload(&holder_id, "registry-witness"));
+        let err = validate_holder_proof_payload(
+            &proof_legacy_literal,
+            &holder_id,
+            "profile-a",
+            &request,
+            &evaluation,
+            service_id,
+        )
+        .expect_err("proof with aud=\"registry-witness\" must be rejected when service_id differs");
+        assert!(matches!(err, EvidenceError::HolderProofRequired));
+    }
 }
