@@ -269,37 +269,37 @@ async fn entity_collection(
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
-    let audit_context = registry
-        .as_ref()
-        .and_then(|Extension(registry)| audit_context_for_entity(registry, &path));
-    let mut required_filters: Vec<String> = Vec::new();
-    if let Some(Extension(registry)) = registry.as_ref() {
-        match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-            Ok(entity) => {
-                if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
+    let Some(Extension(registry)) = registry.as_ref() else {
+        return query_unavailable(
+            "entity collection route matched, but entity registry state is not installed",
+        );
+    };
+    let audit_context = audit_context_for_entity(registry, &path);
+    let required_filters = match entity_from_registry(registry, &path.dataset_id, &path.entity) {
+        Ok(entity) => {
+            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
+                return error.into_response();
+            }
+            if let Some(expand) = params.get("expand") {
+                let expansions = match parse_expansions(expand) {
+                    Ok(expansions) => expansions,
+                    Err(error) => return error.into_response(),
+                };
+                if let Err(error) = require_expansion_access(
+                    registry,
+                    &path.dataset_id,
+                    entity,
+                    &expansions,
+                    principal.clone(),
+                    &headers,
+                ) {
                     return error.into_response();
                 }
-                if let Some(expand) = params.get("expand") {
-                    let expansions = match parse_expansions(expand) {
-                        Ok(expansions) => expansions,
-                        Err(error) => return error.into_response(),
-                    };
-                    if let Err(error) = require_expansion_access(
-                        registry,
-                        &path.dataset_id,
-                        entity,
-                        &expansions,
-                        principal.clone(),
-                        &headers,
-                    ) {
-                        return error.into_response();
-                    }
-                }
-                required_filters = entity.api.required_filters.clone();
             }
-            Err(error) => return error.into_response(),
+            entity.api.required_filters.clone()
         }
-    }
+        Err(error) => return error.into_response(),
+    };
 
     let Some(Extension(query)) = query else {
         return query_unavailable(
@@ -341,16 +341,14 @@ async fn entity_collection(
     }
     let cursor = query_params.cursor.clone();
     if cursor.is_none() && query_params.query.expansions.is_empty() {
-        if let Some(Extension(registry)) = registry.as_ref() {
-            if let Some(dataset) = registry.dataset(&path.dataset_id) {
-                if dataset.entity(&path.entity).is_some() {
-                    if let Err(error) = query.validate_collection_query(
-                        &path.dataset_id,
-                        &path.entity,
-                        &query_params.query,
-                    ) {
-                        return error.into_response();
-                    }
+        if let Some(dataset) = registry.dataset(&path.dataset_id) {
+            if dataset.entity(&path.entity).is_some() {
+                if let Err(error) = query.validate_collection_query(
+                    &path.dataset_id,
+                    &path.entity,
+                    &query_params.query,
+                ) {
+                    return error.into_response();
                 }
             }
         }
@@ -435,34 +433,35 @@ async fn entity_record(
     provenance: Option<Extension<Arc<crate::provenance::ProvenanceState>>>,
     publicschema: Option<Extension<Arc<crate::provenance::publicschema::PublicSchemaVcRegistry>>>,
 ) -> Response {
-    let audit_context = registry.as_ref().and_then(|Extension(registry)| {
-        audit_context_for_entity_record(registry, &path.dataset_id, &path.entity)
-    });
-    if let Some(Extension(registry)) = registry.as_ref() {
-        match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-            Ok(entity) => {
-                if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
+    let Some(Extension(registry)) = registry.as_ref() else {
+        return query_unavailable(
+            "entity record route matched, but entity registry state is not installed",
+        );
+    };
+    let audit_context = audit_context_for_entity_record(registry, &path.dataset_id, &path.entity);
+    match entity_from_registry(registry, &path.dataset_id, &path.entity) {
+        Ok(entity) => {
+            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
+                return error.into_response();
+            }
+            if let Some(expand) = params.get("expand") {
+                let expansions = match parse_expansions(expand) {
+                    Ok(expansions) => expansions,
+                    Err(error) => return error.into_response(),
+                };
+                if let Err(error) = require_expansion_access(
+                    registry,
+                    &path.dataset_id,
+                    entity,
+                    &expansions,
+                    principal.clone(),
+                    &headers,
+                ) {
                     return error.into_response();
                 }
-                if let Some(expand) = params.get("expand") {
-                    let expansions = match parse_expansions(expand) {
-                        Ok(expansions) => expansions,
-                        Err(error) => return error.into_response(),
-                    };
-                    if let Err(error) = require_expansion_access(
-                        registry,
-                        &path.dataset_id,
-                        entity,
-                        &expansions,
-                        principal.clone(),
-                        &headers,
-                    ) {
-                        return error.into_response();
-                    }
-                }
             }
-            Err(error) => return error.into_response(),
         }
+        Err(error) => return error.into_response(),
     }
 
     let Some(Extension(query)) = query else {
@@ -545,57 +544,60 @@ async fn entity_relationship(
     _readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>,
     signer: Option<Extension<Arc<CursorSigner>>>,
 ) -> Response {
-    let audit_context = registry.as_ref().and_then(|Extension(registry)| {
-        audit_context_for_relationship(registry, &path.dataset_id, &path.entity, &path.relationship)
-    });
+    let Some(Extension(registry)) = registry.as_ref() else {
+        return query_unavailable(
+            "entity relationship route matched, but entity registry state is not installed",
+        );
+    };
+    let audit_context = audit_context_for_relationship(
+        registry,
+        &path.dataset_id,
+        &path.entity,
+        &path.relationship,
+    );
     let mut page_context = None;
-    if let Some(Extension(registry)) = registry.as_ref() {
-        match entity_from_registry(registry, &path.dataset_id, &path.entity) {
-            Ok(entity) => {
-                if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
-                    return error.into_response();
-                }
-                if let Err(error) = require_relationship_target_access(
-                    registry,
-                    &path.dataset_id,
-                    entity,
-                    &path.relationship,
-                    principal.clone(),
-                    &headers,
-                ) {
-                    return error.into_response();
-                }
-                if let Some(relationship) = entity.relationships.get(&path.relationship) {
-                    let target = match entity_from_registry(
-                        registry,
-                        &path.dataset_id,
-                        &relationship.target,
-                    ) {
+    match entity_from_registry(registry, &path.dataset_id, &path.entity) {
+        Ok(entity) => {
+            if let Err(error) = require_read_access(principal.clone(), entity, &headers) {
+                return error.into_response();
+            }
+            if let Err(error) = require_relationship_target_access(
+                registry,
+                &path.dataset_id,
+                entity,
+                &path.relationship,
+                principal.clone(),
+                &headers,
+            ) {
+                return error.into_response();
+            }
+            if let Some(relationship) = entity.relationships.get(&path.relationship) {
+                let target =
+                    match entity_from_registry(registry, &path.dataset_id, &relationship.target) {
                         Ok(target) => target,
                         Err(error) => return error.into_response(),
                     };
-                    if relationship.kind == crate::config::RelationshipKind::HasMany {
-                        let target_fk_name =
-                            match field_name_by_table_column(target, &relationship.foreign_key) {
-                                Ok(field) => field,
-                                Err(error) => return error.into_response(),
-                            };
-                        page_context = Some(CursorContext {
-                            dataset_id: path.dataset_id.clone(),
-                            entity: path.entity.clone(),
-                            relationship: Some(path.relationship.clone()),
-                            filters: vec![CursorFilter {
-                                field: target_fk_name,
-                                op: "eq".to_string(),
-                                value: json!(path.id.clone()),
-                            }],
-                            ingest_version: None,
-                        });
-                    }
+                if relationship.kind == crate::config::RelationshipKind::HasMany {
+                    let target_fk_name =
+                        match field_name_by_table_column(target, &relationship.foreign_key) {
+                            Ok(field) => field,
+                            Err(error) => return error.into_response(),
+                        };
+                    page_context = Some(CursorContext {
+                        dataset_id: path.dataset_id.clone(),
+                        entity: path.entity.clone(),
+                        relationship: Some(path.relationship.clone()),
+                        filters: vec![CursorFilter {
+                            field: target_fk_name,
+                            op: "eq".to_string(),
+                            value: json!(path.id.clone()),
+                        }],
+                        ingest_version: None,
+                    });
                 }
             }
-            Err(error) => return error.into_response(),
         }
+        Err(error) => return error.into_response(),
     }
 
     let Some(Extension(query)) = query else {

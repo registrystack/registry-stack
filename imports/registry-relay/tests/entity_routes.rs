@@ -644,6 +644,97 @@ async fn entity_schema_route_matches() {
 }
 
 #[tokio::test]
+async fn entity_read_routes_fail_closed_when_registry_extension_is_missing() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("missing_registry.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: individual_id
+        schema:
+          strict: true
+          fields:
+            - name: individual_id
+              type: string
+              nullable: false
+    entities:
+      - name: individual
+        table: individuals_table
+        fields:
+          - name: id
+            from: individual_id
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_expansions: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    )
+    .expect("write config");
+    let cfg = config::load(&config_path).expect("config loads");
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let query = Arc::new(EntityQueryEngine::new(
+        Arc::new(SessionContext::new()),
+        Arc::clone(&registry),
+    ));
+    let server = TestServer::new(
+        entity_router::<()>()
+            .layer(Extension(query))
+            .layer(Extension(Arc::new(CursorSigner::new_random())))
+            .layer(Extension(principal(&["social_registry:rows"]))),
+    );
+
+    for url in [
+        "/datasets/social_registry/individual",
+        "/datasets/social_registry/individual/ind-1",
+        "/datasets/social_registry/individual/ind-1/household",
+    ] {
+        let resp = server.get(url).await;
+        resp.assert_status(StatusCode::NOT_IMPLEMENTED);
+        let body: Value = resp.json();
+        assert_eq!(body["code"], "entity.query_unavailable");
+        assert!(
+            body["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("entity registry state is not installed")),
+            "unexpected body: {body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn entity_schema_route_returns_metadata_schema_when_state_installed() {
     let resp = server_with_query()
         .await

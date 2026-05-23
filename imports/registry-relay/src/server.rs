@@ -15,23 +15,25 @@
 //!    `x-request-id` header). The propagate layer copies the request
 //!    id onto the response so clients can correlate without parsing
 //!    the audit log.
-//! 2. Audit middleware: emits one record per request to the configured
+//! 2. Baseline security headers: browser hardening headers applied to
+//!    every response.
+//! 3. Audit middleware: emits one record per request to the configured
 //!    sink, with health/ready gated by `audit.include_health`.
-//! 3. Metrics middleware: records low-cardinality request counters and
+//! 4. Metrics middleware: records low-cardinality request counters and
 //!    duration buckets for the admin-only Prometheus exposition route.
-//! 4. `TraceLayer`: structured request/response spans for operational
+//! 5. `TraceLayer`: structured request/response spans for operational
 //!    logs. The audit log is the load-bearing observability surface;
 //!    this layer adds debugging context.
-//! 5. `CorsLayer`: built from `config.server.cors.allowed_origins`.
+//! 6. `CorsLayer`: built from `config.server.cors.allowed_origins`.
 //!    Empty allowlist (the default) means no `Access-Control-Allow-*`
 //!    headers go out, matching the default-deny CORS policy.
-//! 6. Internal error normalizer: maps timeout/body-limit responses into
+//! 7. Internal error normalizer: maps timeout/body-limit responses into
 //!    RFC 7807 Problem Details before audit records them.
-//! 7. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
-//! 8. `TimeoutLayer`: built from `config.server.request_timeout`.
-//! 9. Auth middleware on a *sub-router* that mounts data-plane routes
-//!    only. The health sub-router is merged separately so `/health`
-//!    and `/ready` stay unauthenticated.
+//! 8. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
+//! 9. `TimeoutLayer`: built from `config.server.request_timeout`.
+//! 10. Auth middleware on a *sub-router* that mounts data-plane routes
+//!     only. The health sub-router is merged separately so `/health`
+//!     and `/ready` stay unauthenticated.
 //!
 //! ## Admin listener
 //!
@@ -91,6 +93,15 @@ const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 /// installed at the transport layer. Requests exceeding the cap are
 /// rejected with `414 URI Too Long` before any handler runs.
 const MAX_URI_BYTES: usize = 8192;
+
+const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
+const REFERRER_POLICY: HeaderName = HeaderName::from_static("referrer-policy");
+const X_FRAME_OPTIONS: HeaderName = HeaderName::from_static("x-frame-options");
+const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
+const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
+    HeaderName::from_static("cross-origin-opener-policy");
+const CROSS_ORIGIN_RESOURCE_POLICY: HeaderName =
+    HeaderName::from_static("cross-origin-resource-policy");
 
 /// `MakeRequestId` impl that mints fresh ULIDs. Generic over header
 /// name so the same shape is reusable if we ever change `x-request-id`
@@ -427,6 +438,7 @@ fn apply_cross_cutting_layers_with_metrics(
         trust_proxy_enabled: config.server.trust_proxy.enabled,
         trusted_proxies: config.server.trust_proxy.trusted_proxies.clone(),
         sensitive_fields: audit_sensitive_fields(config),
+        hash_secret: load_audit_hash_secret(config.audit.hash_secret_env.as_deref()),
     };
 
     let with_operational_layers = router
@@ -464,6 +476,7 @@ fn apply_cross_cutting_layers_with_metrics(
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
         .layer(from_fn(strip_untrusted_request_id))
+        .layer(from_fn(add_security_headers))
 }
 
 fn operational_route(request: &Request<Body>) -> &str {
@@ -486,6 +499,85 @@ async fn strip_untrusted_request_id(mut request: Request<Body>, next: Next) -> R
     request.headers_mut().remove("x-request-id");
     request.extensions_mut().remove::<RequestId>();
     next.run(request).await
+}
+
+async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        PERMISSIONS_POLICY,
+        HeaderValue::from_static(
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+        ),
+    );
+    headers.insert(
+        CROSS_ORIGIN_OPENER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    // CORP same-origin would defeat a deliberate CORS allowance under
+    // COEP. If the CORS layer already approved this response for
+    // cross-origin use (signalled by `Access-Control-Allow-Origin`),
+    // emit `cross-origin` so the browser can actually use it; otherwise
+    // keep the stricter default so internal endpoints stay locked down.
+    let corp_value = if headers.contains_key(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN) {
+        HeaderValue::from_static("cross-origin")
+    } else {
+        HeaderValue::from_static("same-origin")
+    };
+    headers.insert(CROSS_ORIGIN_RESOURCE_POLICY, corp_value);
+    // HSTS is intentionally omitted at the application layer. Production
+    // deployments terminate TLS upstream (load balancer / ingress) and
+    // own the HSTS policy there; local development runs plain HTTP on
+    // loopback. Emitting HSTS from the relay would either be no-op text
+    // on dev or duplicate (and potentially conflict with) the edge
+    // value. If the relay ever serves TLS directly, set it here.
+    response
+}
+
+/// Resolve the audit hash secret from the env var named by config.
+///
+/// Returns `None` (with a `warn!` log) when no env var name is
+/// configured or the named variable is unset/empty. In that case the
+/// audit middleware falls back to unkeyed SHA-256, which is fine for
+/// local development but rainbow-tableable for small keyspaces (see
+/// [`AuditSettings::hash_secret`]). Production deployments must set
+/// `audit.hash_secret_env` and populate the named env var with at
+/// least 32 bytes of high-entropy random data.
+fn load_audit_hash_secret(env_var: Option<&str>) -> Option<crate::audit::AuditHashSecret> {
+    let Some(var_name) = env_var.filter(|name| !name.is_empty()) else {
+        tracing::warn!(
+            "audit.hash_secret_env not configured: sensitive audit values will use unkeyed \
+             SHA-256, which is rainbow-tableable for small keyspaces; do not run this way \
+             in production"
+        );
+        return None;
+    };
+    match env::var(var_name) {
+        Ok(value) if !value.is_empty() => {
+            let bytes: Box<[u8]> = value.into_bytes().into_boxed_slice();
+            // We don't enforce a minimum length here: any length works
+            // for HMAC, and operators who want to verify entropy can do
+            // so out of band. But surface a soft warning under 32 bytes.
+            if bytes.len() < 32 {
+                tracing::warn!(
+                    env_var = %var_name,
+                    bytes = bytes.len(),
+                    "audit hash secret is shorter than 32 bytes; consider using a longer key"
+                );
+            }
+            Some(Arc::from(bytes))
+        }
+        Ok(_) | Err(_) => {
+            tracing::warn!(
+                env_var = %var_name,
+                "audit hash secret env var is unset or empty: falling back to unkeyed SHA-256"
+            );
+            None
+        }
+    }
 }
 
 fn audit_sensitive_fields(config: &Config) -> Vec<String> {
@@ -645,6 +737,107 @@ mod tests {
             allowed_origins: vec!["https://bad\norigin".to_string()],
         };
         let _ = build_cors_layer(&cors);
+    }
+
+    #[tokio::test]
+    async fn cross_cutting_layers_add_baseline_security_headers() {
+        let config = Arc::new(load_example_config());
+        let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+        let router = Router::new().route("/ok", get(|| async { StatusCode::OK }));
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        assert_eq!(
+            headers
+                .get(X_CONTENT_TYPE_OPTIONS)
+                .expect("x-content-type-options"),
+            "nosniff"
+        );
+        assert_eq!(
+            headers.get(REFERRER_POLICY).expect("referrer-policy"),
+            "no-referrer"
+        );
+        assert_eq!(
+            headers.get(X_FRAME_OPTIONS).expect("x-frame-options"),
+            "DENY"
+        );
+        assert_eq!(
+            headers.get(PERMISSIONS_POLICY).expect("permissions-policy"),
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"
+        );
+        assert_eq!(
+            headers
+                .get(CROSS_ORIGIN_OPENER_POLICY)
+                .expect("cross-origin-opener-policy"),
+            "same-origin"
+        );
+        assert_eq!(
+            headers
+                .get(CROSS_ORIGIN_RESOURCE_POLICY)
+                .expect("cross-origin-resource-policy"),
+            "same-origin"
+        );
+    }
+
+    #[tokio::test]
+    async fn corp_relaxes_to_cross_origin_when_cors_allows_request() {
+        // When the CORS layer approves a cross-origin request, CORP must
+        // not block it under COEP. The middleware reads the
+        // `Access-Control-Allow-Origin` echo and downgrades CORP to
+        // `cross-origin` for that specific response.
+        let mut config = load_example_config();
+        config.server.cors.allowed_origins = vec!["https://allowed.example.gov".to_string()];
+        let config = Arc::new(config);
+        let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+        let router = Router::new().route("/ok", get(|| async { StatusCode::OK }));
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("origin", "https://allowed.example.gov")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        assert_eq!(
+            headers
+                .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .expect("cors layer echoes allowed origin"),
+            "https://allowed.example.gov"
+        );
+        assert_eq!(
+            headers
+                .get(CROSS_ORIGIN_RESOURCE_POLICY)
+                .expect("cross-origin-resource-policy"),
+            "cross-origin"
+        );
     }
 
     #[tokio::test]

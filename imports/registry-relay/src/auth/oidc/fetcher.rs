@@ -13,6 +13,7 @@
 //! configured with native-tls, a 10s connect / 30s overall timeout,
 //! and JSON content-type expectations on responses.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -47,11 +48,10 @@ impl ReqwestJwksFetcher {
     /// Returns an error only if the [`reqwest::Client`] cannot be built
     /// (e.g. TLS backend initialisation failure on this host).
     pub fn from_jwks_url(jwks_url: impl Into<String>) -> Result<Self, JwksFetchError> {
+        let jwks_url = jwks_url.into();
+        validate_fetch_url(&jwks_url, "jwks")?;
         let client = build_client()?;
-        Ok(Self {
-            client,
-            jwks_url: jwks_url.into(),
-        })
+        Ok(Self { client, jwks_url })
     }
 
     /// Resolve a JWKS URL from an OIDC discovery document, then build a
@@ -68,6 +68,7 @@ impl ReqwestJwksFetcher {
     ) -> Result<Self, JwksFetchError> {
         let client = build_client()?;
         let discovery_url = discovery_url.as_ref();
+        validate_fetch_url(discovery_url, "discovery")?;
         let response = client
             .get(discovery_url)
             .send()
@@ -104,6 +105,7 @@ impl JwksFetcher for ReqwestJwksFetcher {
         Box<dyn std::future::Future<Output = Result<JwksFetchResult, JwksFetchError>> + Send + 'a>,
     > {
         Box::pin(async move {
+            validate_fetch_url(&self.jwks_url, "jwks")?;
             let response = self
                 .client
                 .get(&self.jwks_url)
@@ -130,8 +132,69 @@ fn build_client() -> Result<reqwest::Client, JwksFetchError> {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| JwksFetchError::Transport(format!("client build failed: {err}")))
+}
+
+fn validate_fetch_url(url: &str, context: &str) -> Result<(), JwksFetchError> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| {
+        JwksFetchError::Transport(format!(
+            "{context}: URL must be absolute https:// (or http:// localhost for dev)"
+        ))
+    })?;
+
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if is_local_dev_host(parsed.host_str()) => Ok(()),
+        _ => Err(JwksFetchError::Transport(format!(
+            "{context}: URL must be https:// (or http:// localhost for dev)"
+        ))),
+    }
+}
+
+/// Accept only loopback for `http://` (dev convenience). Everything else
+/// must be `https://`. Rejecting non-loopback IPs and arbitrary hostnames
+/// here blocks SSRF into RFC1918 (`10/8`, `192.168/16`), link-local
+/// (`169.254/16`, including cloud metadata `169.254.169.254`), the
+/// "this host" address `0.0.0.0`, and IPv4-mapped IPv6 forms of the
+/// same ranges (`::ffff:169.254.169.254`).
+///
+/// The only non-IP hostname accepted is the literal `localhost`. Any
+/// other hostname is rejected so an attacker-controlled DNS name cannot
+/// be smuggled past validation and resolved to an internal IP at
+/// connect time. This still allows DNS rebinding via a hosts-file or
+/// resolver override on `localhost` itself, which we accept as a
+/// development trade-off (a malicious resolver on the operator host is
+/// already game over).
+fn is_local_dev_host(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(ip) => is_loopback_ip(ip),
+        Err(_) => false,
+    }
+}
+
+fn is_loopback_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return true;
+            }
+            // ::ffff:a.b.c.d — the IPv4-mapped IPv6 form of `a.b.c.d`.
+            // Treat it as the underlying v4 address for loopback checks.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_loopback();
+            }
+            false
+        }
+    }
 }
 
 /// Strip URLs from reqwest's display string. reqwest embeds the full
@@ -191,13 +254,20 @@ fn validate_discovery_document_bytes(
             actual: document.issuer,
         });
     }
+    validate_fetch_url(&document.jwks_uri, "discovery jwks_uri")?;
     Ok(document.jwks_uri)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        http::{header, StatusCode},
+        routing::get,
+        Router,
+    };
     use serde_json::json;
+    use tokio::net::TcpListener;
 
     fn discovery_bytes(issuer: &str, jwks_uri: &str) -> Bytes {
         Bytes::from(
@@ -238,6 +308,92 @@ mod tests {
         assert_eq!(jwks_uri, "https://idp.example.gov/jwks");
     }
 
+    #[test]
+    fn discovery_rejects_remote_http_jwks_uri() {
+        let body = discovery_bytes("https://idp.example.gov", "http://idp.example.gov/jwks");
+        let err = validate_discovery_document_bytes(&body, "https://idp.example.gov")
+            .expect_err("remote http jwks_uri must fail");
+        assert!(
+            matches!(err, JwksFetchError::Transport(ref message)
+                if message.contains("discovery jwks_uri")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn discovery_allows_localhost_http_jwks_uri_for_dev() {
+        let body = discovery_bytes(
+            "http://localhost:8080/realms/relay",
+            "http://localhost:8080/realms/relay/protocol/openid-connect/certs",
+        );
+        let jwks_uri =
+            validate_discovery_document_bytes(&body, "http://localhost:8080/realms/relay")
+                .expect("localhost dev jwks_uri accepted");
+        assert_eq!(
+            jwks_uri,
+            "http://localhost:8080/realms/relay/protocol/openid-connect/certs"
+        );
+    }
+
+    #[test]
+    fn explicit_jwks_url_rejects_remote_http() {
+        let err = match ReqwestJwksFetcher::from_jwks_url("http://idp.example.gov/jwks") {
+            Ok(_) => panic!("remote http jwks url must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, JwksFetchError::Transport(ref message)
+                if message.contains("jwks")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_fetch_rejects_remote_http_before_network() {
+        let result = ReqwestJwksFetcher::from_discovery_url(
+            "http://idp.example.gov/.well-known/openid-configuration",
+            "https://idp.example.gov",
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("remote http discovery url must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, JwksFetchError::Transport(ref message)
+                if message.contains("discovery")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_does_not_follow_redirects() {
+        let app = Router::new()
+            .route(
+                "/redirect",
+                get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/jwks")]) }),
+            )
+            .route("/jwks", get(|| async { axum::Json(json!({ "keys": [] })) }));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let fetcher = ReqwestJwksFetcher::from_jwks_url(format!("http://{addr}/redirect")).unwrap();
+        let err = match fetcher.fetch().await {
+            Ok(_) => panic!("redirect must not be followed"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, JwksFetchError::Transport(ref message)
+                if message == "jwks: HTTP 302"),
+            "unexpected error: {err}"
+        );
+    }
+
     // --- Fix S-H2: response body size cap ---
 
     #[test]
@@ -258,6 +414,73 @@ mod tests {
         let value: serde_json::Value =
             parse_response_bytes(&body, 1024).expect("body within limit parses");
         assert!(value.get("keys").is_some());
+    }
+
+    // --- F1: SSRF host allowlist ---
+
+    #[test]
+    fn local_dev_host_accepts_loopback_forms() {
+        // Full 127.0.0.0/8, ::1, the literal `localhost`, and ::ffff:127.0.0.1.
+        for host in [
+            "localhost",
+            "LocalHost",
+            "127.0.0.1",
+            "127.0.0.2",
+            "127.255.255.254",
+            "::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(
+                is_local_dev_host(Some(host)),
+                "expected dev host accepted: {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_dev_host_rejects_non_loopback_and_metadata_targets() {
+        // 0.0.0.0, RFC1918, link-local (including cloud metadata IP),
+        // IPv4-mapped IPv6 metadata, public IP, arbitrary hostname.
+        for host in [
+            "0.0.0.0",
+            "169.254.169.254",
+            "10.0.0.1",
+            "192.168.1.1",
+            "172.16.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:10.0.0.1",
+            "fe80::1",
+            "fd00::1",
+            "8.8.8.8",
+            "example.com",
+            "metadata.google.internal",
+            "",
+        ] {
+            assert!(
+                !is_local_dev_host(Some(host)),
+                "expected dev host rejected: {host}"
+            );
+        }
+        assert!(!is_local_dev_host(None));
+    }
+
+    #[test]
+    fn validate_fetch_url_rejects_http_to_non_loopback() {
+        // The discovery-document path runs the same check; this asserts
+        // each forbidden host via the function used by both callers.
+        for url in [
+            "http://0.0.0.0/jwks",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/jwks",
+            "http://[::ffff:169.254.169.254]/jwks",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ] {
+            let err = validate_fetch_url(url, "jwks").expect_err(&format!("must reject {url}"));
+            assert!(
+                matches!(err, JwksFetchError::Transport(_)),
+                "unexpected error for {url}: {err}"
+            );
+        }
     }
 
     #[test]

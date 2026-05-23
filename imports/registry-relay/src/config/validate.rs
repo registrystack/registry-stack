@@ -1372,14 +1372,90 @@ fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
     for dataset in &config.datasets {
         let dataset_id = dataset.id.as_str();
         for entity in &dataset.entities {
-            if !entity.access.evidence_verification_scope.trim().is_empty() {
-                validate_scope(
-                    &entity.access.evidence_verification_scope,
-                    &dataset_ids,
+            validate_entity_scope(
+                &entity.access.metadata_scope,
+                dataset_id,
+                &entity.name,
+                "metadata_scope",
+                true,
+            )?;
+            validate_entity_scope(
+                &entity.access.aggregate_scope,
+                dataset_id,
+                &entity.name,
+                "aggregate_scope",
+                true,
+            )?;
+            validate_entity_scope(
+                &entity.access.read_scope,
+                dataset_id,
+                &entity.name,
+                "read_scope",
+                true,
+            )?;
+            validate_entity_scope(
+                &entity.access.evidence_verification_scope,
+                dataset_id,
+                &entity.name,
+                "evidence_verification_scope",
+                false,
+            )?;
+            if let Some(scope) = &entity.access.claim_verification_scope {
+                validate_entity_scope(
+                    scope,
                     dataset_id,
+                    &entity.name,
+                    "claim_verification_scope",
+                    true,
                 )?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_entity_scope(
+    scope: &str,
+    dataset_id: &str,
+    entity_name: &str,
+    field: &str,
+    required: bool,
+) -> Result<(), ConfigError> {
+    if scope.trim().is_empty() {
+        if required {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset_id,
+                entity = %entity_name,
+                field = %field,
+                "entity access scope must not be empty"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        return Ok(());
+    }
+
+    let (scope_dataset, suffix) = scope.split_once(':').ok_or_else(|| {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset_id,
+            entity = %entity_name,
+            field = %field,
+            scope = %scope,
+            "entity access scope must be '<dataset_id>:<scope-suffix>'"
+        );
+        ConfigError::ValidationError
+    })?;
+    if scope_dataset != dataset_id || suffix.trim().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset_id,
+            entity = %entity_name,
+            field = %field,
+            scope = %scope,
+            "entity access scope must be bound to its enclosing dataset id"
+        );
+        return Err(ConfigError::ValidationError);
     }
     Ok(())
 }

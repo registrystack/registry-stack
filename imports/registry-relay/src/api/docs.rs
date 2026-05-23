@@ -14,13 +14,16 @@
 //! content. The OpenAPI document at `/openapi.json` stays inside the
 //! auth-gated data-plane router; the shell attaches the operator's bearer
 //! token to that fetch and passes the same token to Scalar for "Try it"
-//! calls.
+//! calls. A route-local CSP keeps the docs page on same-origin network
+//! access and allows only the static bootstrap script hashes plus the
+//! same-origin Scalar bundle. `style-src 'unsafe-inline'` remains because
+//! the vendored Scalar runtime injects styles dynamically.
 //!
 //! The bundle is hash-pinned in `resources/MANIFEST.toml`; the
 //! `tests/resources_manifest.rs` invariant re-hashes both the on-disk
 //! file and `SCALAR_BUNDLE` to assert sha256 equality with the manifest.
 
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -36,6 +39,13 @@ const APPLICATION_JAVASCRIPT: HeaderValue =
 const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
 const CACHE_CONTROL_7D_IMMUTABLE: HeaderValue =
     HeaderValue::from_static("public, max-age=604800, immutable");
+const CONTENT_SECURITY_POLICY: HeaderName = HeaderName::from_static("content-security-policy");
+const DOCS_HTML_CSP: HeaderValue = HeaderValue::from_static(
+    "default-src 'none'; script-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=' 'sha256-O+yKSHtPIjBdJ+bty0Fj1HzND1gVaz+ApkQRleQYXIc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'",
+);
+const SCALAR_BUNDLE_CSP: HeaderValue = HeaderValue::from_static(
+    "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'",
+);
 
 /// HTML shell that mounts Scalar with a pre-fetched OpenAPI document.
 ///
@@ -50,9 +60,9 @@ const CACHE_CONTROL_7D_IMMUTABLE: HeaderValue =
 ///
 /// Storing the token in `localStorage` accepts the standard XSS-exfil
 /// risk: any script that lands on this origin can read it. The viewer
-/// is an operator-facing tool, not a production app, and the gateway
-/// sets no CSP yet; flag this if /docs gets exposed beyond a trusted
-/// network.
+/// is an operator-facing tool, not a production app. The route-local
+/// CSP narrows the script surface to this same-origin shell and its
+/// static bootstrap hashes.
 const DOCS_HTML: &str = r#"<!doctype html>
 <html lang="en">
   <head>
@@ -194,6 +204,7 @@ async fn serve_html() -> Response {
         [
             (header::CONTENT_TYPE, TEXT_HTML),
             (header::CACHE_CONTROL, NO_STORE),
+            (CONTENT_SECURITY_POLICY, DOCS_HTML_CSP),
         ],
         DOCS_HTML,
     )
@@ -206,6 +217,7 @@ async fn serve_bundle() -> Response {
         [
             (header::CONTENT_TYPE, APPLICATION_JAVASCRIPT),
             (header::CACHE_CONTROL, CACHE_CONTROL_7D_IMMUTABLE),
+            (CONTENT_SECURITY_POLICY, SCALAR_BUNDLE_CSP),
         ],
         SCALAR_BUNDLE,
     )
@@ -258,5 +270,103 @@ mod tests {
             config_pos < bundle_pos,
             "Scalar configuration must be set before the bundle is loaded"
         );
+    }
+
+    #[test]
+    fn docs_html_csp_hashes_cover_inline_scripts() {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        let script_hashes: Vec<String> = DOCS_HTML
+            .split("<script")
+            .skip(1)
+            .filter_map(|part| part.split_once('>').map(|(_, rest)| rest))
+            .filter_map(|part| part.split_once("</script>").map(|(script, _)| script))
+            .map(|script| {
+                let digest = Sha256::digest(script.as_bytes());
+                format!(
+                    "'sha256-{}'",
+                    base64::engine::general_purpose::STANDARD.encode(digest)
+                )
+            })
+            .collect();
+        let csp_header = DOCS_HTML_CSP;
+        let csp = csp_header.to_str().expect("CSP is ASCII");
+
+        assert!(!script_hashes.is_empty());
+        for hash in script_hashes {
+            assert!(
+                csp.contains(&hash),
+                "docs CSP must allow inline script hash {hash}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn docs_html_response_includes_route_local_csp() {
+        use tower::ServiceExt;
+
+        let response = router::<()>()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/docs")
+                    .body(axum::body::Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = response
+            .headers()
+            .get(CONTENT_SECURITY_POLICY)
+            .expect("content-security-policy header");
+        let csp = csp.to_str().expect("CSP is ASCII");
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("script-src 'self'"));
+        assert!(csp.contains("connect-src 'self'"));
+        assert!(csp.contains("style-src 'self' 'unsafe-inline'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+
+        // `'unsafe-inline'` must never appear in `script-src`: inline
+        // scripts are pinned to their sha256 hashes, and a regression
+        // here would re-open the XSS surface the docs CSP exists to
+        // close (the bearer token in localStorage stays exfiltratable).
+        let script_src = csp
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("script-src"))
+            .expect("script-src directive present");
+        assert!(
+            !script_src.contains("'unsafe-inline'"),
+            "script-src must not allow 'unsafe-inline': {script_src}"
+        );
+    }
+
+    #[tokio::test]
+    async fn scalar_bundle_response_includes_deny_all_csp() {
+        use tower::ServiceExt;
+
+        let response = router::<()>()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/docs/scalar.js")
+                    .body(axum::body::Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = response
+            .headers()
+            .get(CONTENT_SECURITY_POLICY)
+            .expect("content-security-policy header");
+        let csp = csp.to_str().expect("CSP is ASCII");
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("script-src 'none'"));
+        assert!(csp.contains("style-src 'none'"));
+        assert!(csp.contains("connect-src 'none'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
     }
 }

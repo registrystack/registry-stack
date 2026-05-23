@@ -18,8 +18,9 @@ use axum::routing::get;
 use axum::Extension;
 use axum::Router;
 use registry_relay::audit::{
-    audit_layer, redact_query, AuditContextExt, AuditEnvelope, AuditOutcome, AuditRecord,
-    AuditSettings, AuditSink, EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
+    audit_layer, redact_query, sensitive_value_hash, sensitive_value_hash_keyed, AuditContextExt,
+    AuditEnvelope, AuditHashSecret, AuditOutcome, AuditRecord, AuditSettings, AuditSink,
+    EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
 };
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use serde_json::Value;
@@ -495,6 +496,7 @@ async fn middleware_hashes_configured_sensitive_query_values() {
         trust_proxy_enabled: false,
         trusted_proxies: Vec::new(),
         sensitive_fields: vec!["social_registry:individual:id".to_string()],
+        hash_secret: None,
     };
     let app = Router::new()
         .route(
@@ -539,6 +541,272 @@ async fn middleware_hashes_configured_sensitive_query_values() {
         .starts_with("sha256:"));
     assert_eq!(parsed["query_params"]["limit"]["op"], "eq");
     assert!(!records[0].contains("IND-001234"));
+}
+
+#[tokio::test]
+async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
+    let sink = Arc::new(InMemorySink::new());
+    let app = Router::new()
+        .route(
+            "/datasets/social_registry/individual/IND-001234",
+            get(|| async { StatusCode::OK }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/datasets/social_registry/individual/IND-001234")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    assert!(
+        !records[0].contains("IND-001234"),
+        "audit record must not contain raw primary key: {}",
+        records[0]
+    );
+    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    assert_eq!(parsed["path"], "/datasets/social_registry/individual/{id}");
+    assert_eq!(
+        parsed["primary_key"],
+        sensitive_value_hash("primary_key:social_registry:individual", "IND-001234")
+    );
+    assert_eq!(parsed["dataset_id"], "social_registry");
+    assert_eq!(parsed["entity_name"], "individual");
+}
+
+#[tokio::test]
+async fn middleware_primary_key_hash_is_stable_and_context_bound() {
+    let sink = Arc::new(InMemorySink::new());
+    let app = Router::new()
+        .route(
+            "/datasets/social_registry/individual/IND-001234",
+            get(|| async { StatusCode::OK }),
+        )
+        .route(
+            "/datasets/other_registry/individual/IND-001234",
+            get(|| async { StatusCode::OK }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+
+    for uri in [
+        "/datasets/social_registry/individual/IND-001234",
+        "/datasets/social_registry/individual/IND-001234",
+        "/datasets/other_registry/individual/IND-001234",
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 3);
+    let first: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let second: Value = serde_json::from_str(records[1].trim_end()).unwrap();
+    let other_dataset: Value = serde_json::from_str(records[2].trim_end()).unwrap();
+
+    assert_eq!(first["primary_key"], second["primary_key"]);
+    assert_ne!(first["primary_key"], other_dataset["primary_key"]);
+    assert!(first["primary_key"]
+        .as_str()
+        .expect("primary key hash")
+        .starts_with("sha256:"));
+    assert!(!records.join("").contains("IND-001234"));
+}
+
+#[tokio::test]
+async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
+    // With a per-deploy secret in AuditSettings, the primary_key hash
+    // must be HMAC-SHA256 (prefix `hmac-sha256:`), and two deployments
+    // with different secrets must produce different hashes for the same
+    // (dataset, entity, id) tuple. This is the property that closes the
+    // rainbow-table attack on small keyspaces (national IDs etc.).
+    let secret_a: AuditHashSecret = Arc::from(
+        b"deploy-a-32-bytes-of-entropy----"
+            .to_vec()
+            .into_boxed_slice(),
+    );
+    let secret_b: AuditHashSecret = Arc::from(
+        b"deploy-b-32-bytes-of-entropy----"
+            .to_vec()
+            .into_boxed_slice(),
+    );
+
+    async fn run_with_secret(secret: AuditHashSecret) -> String {
+        let sink = Arc::new(InMemorySink::new());
+        let settings = AuditSettings {
+            hash_secret: Some(secret),
+            ..AuditSettings::default()
+        };
+        let app = Router::new()
+            .route(
+                "/datasets/social_registry/individual/IND-001234",
+                get(|| async { StatusCode::OK }),
+            )
+            .layer(from_fn(audit_layer))
+            .layer(Extension(settings))
+            .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/datasets/social_registry/individual/IND-001234")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        sink.snapshot().pop().expect("one record")
+    }
+
+    let record_a = run_with_secret(secret_a.clone()).await;
+    let record_b = run_with_secret(secret_b).await;
+    let parsed_a: Value = serde_json::from_str(record_a.trim_end()).unwrap();
+    let parsed_b: Value = serde_json::from_str(record_b.trim_end()).unwrap();
+
+    let hash_a = parsed_a["primary_key"].as_str().expect("hash a present");
+    let hash_b = parsed_b["primary_key"].as_str().expect("hash b present");
+    assert!(
+        hash_a.starts_with("hmac-sha256:"),
+        "expected HMAC prefix on keyed hash: {hash_a}"
+    );
+    assert!(hash_b.starts_with("hmac-sha256:"));
+    assert_ne!(
+        hash_a, hash_b,
+        "different per-deploy secrets must produce different hashes"
+    );
+
+    // Cross-check the exact value against the keyed helper to pin the
+    // construction (HMAC-SHA256(secret, field || \0 || id)).
+    assert_eq!(
+        parsed_a["primary_key"],
+        sensitive_value_hash_keyed(
+            Some(secret_a.as_ref()),
+            "primary_key:social_registry:individual",
+            "IND-001234",
+        )
+    );
+
+    // Negative control: the unkeyed sha256 form must not match either.
+    let unkeyed = sensitive_value_hash("primary_key:social_registry:individual", "IND-001234");
+    assert_ne!(hash_a, unkeyed);
+}
+
+#[tokio::test]
+async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
+    let sink = Arc::new(InMemorySink::new());
+    let app = Router::new()
+        .route(
+            "/datasets/social_registry/household/HH-001/members",
+            get(|| async { StatusCode::OK }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/datasets/social_registry/household/HH-001/members")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].contains("HH-001"));
+    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    assert_eq!(
+        parsed["path"],
+        "/datasets/social_registry/household/{id}/members"
+    );
+    assert_eq!(parsed["relationship"], "members");
+    assert_eq!(
+        parsed["primary_key"],
+        sensitive_value_hash("primary_key:social_registry:household", "HH-001")
+    );
+}
+
+#[tokio::test]
+async fn middleware_leaves_non_record_dataset_paths_unredacted() {
+    let sink = Arc::new(InMemorySink::new());
+    let app = Router::new()
+        .route(
+            "/datasets/social_registry/individual/schema",
+            get(|| async { StatusCode::OK }),
+        )
+        .route(
+            "/datasets/social_registry/individual/verify",
+            get(|| async { StatusCode::OK }),
+        )
+        .route(
+            "/datasets/social_registry/individual/aggregates",
+            get(|| async { StatusCode::OK }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+
+    for uri in [
+        "/datasets/social_registry/individual/schema",
+        "/datasets/social_registry/individual/verify",
+        "/datasets/social_registry/individual/aggregates",
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 3);
+    let paths: Vec<String> = records
+        .iter()
+        .map(|line| {
+            let parsed: Value = serde_json::from_str(line.trim_end()).unwrap();
+            assert!(parsed["primary_key"].is_null());
+            parsed["path"].as_str().expect("path").to_string()
+        })
+        .collect();
+
+    assert_eq!(
+        paths,
+        [
+            "/datasets/social_registry/individual/schema",
+            "/datasets/social_registry/individual/verify",
+            "/datasets/social_registry/individual/aggregates",
+        ]
+    );
 }
 
 /// BLK-1 (production layer order): in the real server stack, audit
@@ -663,6 +931,7 @@ async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
         trust_proxy_enabled: true,
         trusted_proxies: vec!["10.0.0.0/8".to_string()],
         sensitive_fields: Vec::new(),
+        hash_secret: None,
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
@@ -697,6 +966,7 @@ async fn middleware_ignores_x_forwarded_for_from_untrusted_peer() {
         trust_proxy_enabled: true,
         trusted_proxies: vec!["10.0.0.0/8".to_string()],
         sensitive_fields: Vec::new(),
+        hash_secret: None,
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))

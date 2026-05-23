@@ -402,6 +402,8 @@ fn audit_record_for(sink: &InMemorySink, path: &str) -> Value {
     serde_json::from_str(line).expect("audit line is JSON")
 }
 
+const INDIVIDUAL_RECORD_AUDIT_PATH: &str = "/datasets/social_registry/individual/{id}";
+
 // ---------------------------------------------------------------------------
 // Removed legacy /verify route
 // ---------------------------------------------------------------------------
@@ -499,10 +501,7 @@ async fn entity_record_returns_signed_vc_when_accept_opts_in() {
         &payload["credentialSubject"],
     );
 
-    let record = audit_record_for(
-        &harness.audit_sink,
-        "/datasets/social_registry/individual/ind-1",
-    );
+    let record = audit_record_for(&harness.audit_sink, INDIVIDUAL_RECORD_AUDIT_PATH);
     assert_eq!(record["provenance"]["claim_type"], "EntityRecord");
 }
 
@@ -810,7 +809,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
         &payload["credentialSubject"],
     );
 
-    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/ind-1");
+    let record = audit_record_for(&audit_sink, INDIVIDUAL_RECORD_AUDIT_PATH);
     assert_eq!(record["principal_id"], "vc-full-stack");
     assert_eq!(record["auth_mode"], "api_key");
     assert_eq!(record["provenance"]["event"], "provenance.vc.issued");

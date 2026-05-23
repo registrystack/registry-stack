@@ -155,6 +155,19 @@ fn entity_referencing_missing_table_is_rejected() {
     assert_eq!(err.code(), "config.validation_error");
 }
 
+#[test]
+fn entity_access_scopes_must_be_bound_to_enclosing_dataset() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          read_scope: social_registry:rows",
+        "          read_scope: shared_rows",
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects unbound entity read scope");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
 fn dataset_with_required_filters(required_filters: &str) -> String {
     format!(
         r#"

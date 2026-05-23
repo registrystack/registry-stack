@@ -491,6 +491,17 @@ pub struct AuditConfig {
     pub chain: bool,
     #[serde(default)]
     pub include_health: bool,
+    /// Name of the environment variable holding the per-deploy secret
+    /// used to HMAC sensitive audit values (single-record primary keys,
+    /// sensitive query parameters). The variable should carry at least
+    /// 32 bytes of high-entropy random data. When the field is unset,
+    /// or the env var resolves to an empty string, the audit middleware
+    /// falls back to unkeyed SHA-256: hashes stay stable across
+    /// processes but become rainbow-tableable for small keyspaces. This
+    /// fallback is acceptable for local development; production
+    /// deployments must set it.
+    #[serde(default)]
+    pub hash_secret_env: Option<String>,
 }
 
 fn default_audit_format() -> AuditFormat {

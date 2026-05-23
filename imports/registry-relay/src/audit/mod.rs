@@ -44,7 +44,10 @@ pub mod syslog;
 
 pub use chain::ChainingSink;
 pub use file::FileSink;
-pub use redact::{redact_query_with_sensitive_fields, sensitive_value_hash, QueryRedactor};
+pub use redact::{
+    redact_query_with_secret_and_fields, redact_query_with_sensitive_fields, sensitive_value_hash,
+    sensitive_value_hash_keyed, AuditHashSecret, QueryRedactor,
+};
 pub use stdout::StdoutSink;
 pub use syslog::SyslogSink;
 
@@ -58,12 +61,22 @@ pub struct ErrorCodeExt(pub String);
 
 /// Runtime knobs used by the audit middleware. Production installs this
 /// from `Config`; unit tests may omit it and get secure defaults.
+///
+/// `hash_secret` is the per-deploy HMAC key used to hash sensitive
+/// audit values (single-record primary keys, sensitive query-parameter
+/// values). Production deployments inject the secret from the env var
+/// named by `audit.hash_secret_env`. When `None`, the middleware falls
+/// back to unkeyed SHA-256 hashing: stable across processes, but
+/// rainbow-tableable for small enumerable keyspaces (national IDs,
+/// household composites). `None` is intended for local development and
+/// the test suite; production should always set it.
 #[derive(Debug, Clone, Default)]
 pub struct AuditSettings {
     pub include_health: bool,
     pub trust_proxy_enabled: bool,
     pub trusted_proxies: Vec<String>,
     pub sensitive_fields: Vec<String>,
+    pub hash_secret: Option<AuditHashSecret>,
 }
 
 /// Optional structured context projected by handlers that have
@@ -527,11 +540,13 @@ pub async fn audit_layer(
         .extensions()
         .get::<ErrorCodeExt>()
         .map(|c| c.0.clone());
+    let inferred_context = infer_context_from_path(&path);
     let context = response
         .extensions()
         .get::<AuditContextExt>()
         .cloned()
-        .unwrap_or_else(|| infer_context_from_path(&path));
+        .map(|context| merge_inferred_context(context, inferred_context.clone()))
+        .unwrap_or(inferred_context);
     let provenance = response
         .extensions()
         .get::<ProvenanceIssuanceExt>()
@@ -562,8 +577,13 @@ pub async fn audit_layer(
         return response;
     }
 
-    let query_params =
-        redact_query_with_sensitive_fields(&query, context_sensitive_fields(&settings, &context));
+    let query_params = redact_query_with_secret_and_fields(
+        settings.hash_secret.clone(),
+        &query,
+        context_sensitive_fields(&settings, &context),
+    );
+    let primary_key = audit_primary_key_hash(&context, settings.hash_secret.as_deref());
+    let record_path = audit_path(&path, &context, endpoint_kind);
 
     let record = AuditRecord {
         ts: now_iso8601_millis(),
@@ -572,7 +592,7 @@ pub async fn audit_layer(
         auth_mode,
         remote_addr,
         method,
-        path,
+        path: record_path,
         endpoint_kind,
         dataset_id: context.dataset_id,
         entity_name: context.entity_name,
@@ -581,7 +601,7 @@ pub async fn audit_layer(
         aggregate_id: context.aggregate_id,
         underlying_kind: context.underlying_kind,
         collection_id: context.collection_id,
-        primary_key: context.primary_key,
+        primary_key,
         offering_id: context.offering_id,
         verification_id: context.verification_id,
         verification_decision: context.verification_decision,
@@ -609,6 +629,104 @@ pub async fn audit_layer(
     }
 
     response
+}
+
+fn merge_inferred_context(
+    mut context: AuditContextExt,
+    inferred: AuditContextExt,
+) -> AuditContextExt {
+    if context.dataset_id.is_none() {
+        context.dataset_id = inferred.dataset_id;
+    }
+    if context.entity_name.is_none() {
+        context.entity_name = inferred.entity_name;
+    }
+    if context.relationship.is_none() {
+        context.relationship = inferred.relationship;
+    }
+    if context.aggregate_id.is_none() {
+        context.aggregate_id = inferred.aggregate_id;
+    }
+    if context.underlying_kind.is_none() {
+        context.underlying_kind = inferred.underlying_kind;
+    }
+    if context.collection_id.is_none() {
+        context.collection_id = inferred.collection_id;
+    }
+    if context.primary_key.is_none() {
+        context.primary_key = inferred.primary_key;
+    }
+    context
+}
+
+fn audit_primary_key_hash(context: &AuditContextExt, secret: Option<&[u8]>) -> Option<String> {
+    let value = context.primary_key.as_deref()?;
+    Some(sensitive_value_hash_keyed(
+        secret,
+        &primary_key_hash_field(context),
+        value,
+    ))
+}
+
+fn primary_key_hash_field(context: &AuditContextExt) -> String {
+    let mut field = String::from("primary_key");
+    if let Some(dataset_id) = context.dataset_id.as_deref().filter(|s| !s.is_empty()) {
+        field.push(':');
+        field.push_str(dataset_id);
+    }
+    if let Some(entity_or_collection) = context
+        .entity_name
+        .as_deref()
+        .or(context.collection_id.as_deref())
+        .filter(|s| !s.is_empty())
+    {
+        field.push(':');
+        field.push_str(entity_or_collection);
+    }
+    field
+}
+
+fn audit_path(path: &str, context: &AuditContextExt, endpoint_kind: EndpointKind) -> String {
+    if context.primary_key.is_none()
+        && !matches!(endpoint_kind, EndpointKind::Rows | EndpointKind::OgcFeature)
+    {
+        return path.to_string();
+    }
+
+    redacted_single_record_path(path).unwrap_or_else(|| path.to_string())
+}
+
+fn redacted_single_record_path(path: &str) -> Option<String> {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["datasets", dataset, entity, id]
+            if !dataset.is_empty()
+                && !entity.is_empty()
+                && !id.is_empty()
+                && *id != "schema"
+                && *id != "verify" =>
+        {
+            Some(format!("/datasets/{dataset}/{entity}/{{id}}"))
+        }
+        ["datasets", dataset, entity, id, relationship]
+            if !dataset.is_empty()
+                && !entity.is_empty()
+                && !id.is_empty()
+                && !relationship.is_empty() =>
+        {
+            Some(format!(
+                "/datasets/{dataset}/{entity}/{{id}}/{relationship}"
+            ))
+        }
+        ["ogc", "v1", "datasets", dataset, "collections", collection, "items", feature]
+            if !dataset.is_empty() && !collection.is_empty() && !feature.is_empty() =>
+        {
+            Some(format!(
+                "/ogc/v1/datasets/{dataset}/collections/{collection}/items/{{feature_id}}"
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Marker attached to request extensions so downstream handlers (and
@@ -777,15 +895,21 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
         },
         ["datasets", dataset, entity]
         | ["datasets", dataset, entity, "schema"]
-        | ["datasets", dataset, entity, "verify"]
-        | ["datasets", dataset, entity, _] => AuditContextExt {
+        | ["datasets", dataset, entity, "verify"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             entity_name: Some((*entity).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, entity, _id, relationship] => AuditContextExt {
+        ["datasets", dataset, entity, id] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             entity_name: Some((*entity).to_string()),
+            primary_key: Some((*id).to_string()),
+            ..AuditContextExt::default()
+        },
+        ["datasets", dataset, entity, id, relationship] => AuditContextExt {
+            dataset_id: Some((*dataset).to_string()),
+            entity_name: Some((*entity).to_string()),
+            primary_key: Some((*id).to_string()),
             relationship: Some((*relationship).to_string()),
             ..AuditContextExt::default()
         },
