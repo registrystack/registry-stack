@@ -1,0 +1,193 @@
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version: registry-metadata/v1
+catalog:
+  id: decentralized-demo-static-publication
+  base_url: http://static-metadata-publisher:8080/metadata
+  title: Decentralized Demo Static Metadata
+  description: Static portable metadata for simulated registry and evidence services.
+  publisher:
+    name: Interoperability Metadata Publisher (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+requirements:
+  - id: child_support_requirement
+    iri: https://demo.example.gov/requirements/child-support
+    title: Child support identity and alive-status requirement
+  - id: household_support_requirement
+    iri: https://demo.example.gov/requirements/household-support
+    title: Household support review requirement
+  - id: health_linked_support_requirement
+    iri: https://demo.example.gov/requirements/health-linked-support
+    title: Health-linked conditional support requirement
+evidence_types:
+  - id: civil_child_status_evidence
+    iri: https://demo.example.gov/evidence-types/civil-child-status
+    title: Civil child status evidence
+    proves:
+      - child_support_requirement
+  - id: household_support_evidence
+    iri: https://demo.example.gov/evidence-types/household-support
+    title: Household support evidence
+    proves:
+      - household_support_requirement
+  - id: combined_support_evidence
+    iri: https://demo.example.gov/evidence-types/combined-support
+    title: Combined cross-authority support evidence
+    proves:
+      - child_support_requirement
+      - household_support_requirement
+      - health_linked_support_requirement
+datasets:
+  - id: civil_registry
+    title: Civil Registry
+    description: Static description of the simulated civil registry authority.
+    owner: Civil Registration Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: daily
+    evidence_offerings:
+      - id: civil_child_status_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/civil-child-status
+        title: Civil child status evidence service
+        evidence_type: civil_child_status_evidence
+        issuing_authority:
+          id: civil_registration_authority
+          iri: did:web:civil-registry.demo.example.gov
+          name: Civil Registration Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: civil_person
+        lookup_keys:
+          - national_id
+        access:
+          kind: evidence-server
+          conforms_to: registry_relay:evidence-server-v1
+          endpoint_url: http://civil-evidence-server:8080
+          discovery_url: http://civil-evidence-server:8080/.well-known/evidence-service
+          ruleset: civil-child-status-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/child-support-eligibility
+    entities:
+      - name: civil_person
+        title: Civil Person
+        identifiers:
+          - name: national_id
+            kind: primary
+        fields:
+          - name: national_id
+            type: string
+            required: true
+          - name: birth_date
+            type: date
+            required: true
+          - name: civil_status
+            type: string
+            required: true
+          - name: deceased
+            type: boolean
+            required: true
+          - name: district
+            type: string
+            required: true
+  - id: social_protection_registry
+    title: Social Protection Registry
+    description: Static description of the simulated social protection registry authority.
+    owner: Social Protection Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    evidence_offerings:
+      - id: household_support_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/household-support
+        title: Household support evidence service
+        evidence_type: household_support_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: program_enrollment
+        lookup_keys:
+          - national_id
+        access:
+          kind: evidence-server
+          conforms_to: registry_relay:evidence-server-v1
+          endpoint_url: http://social-protection-evidence-server:8080
+          discovery_url: http://social-protection-evidence-server:8080/.well-known/evidence-service
+          ruleset: program-enrollment-status-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/social-protection-review
+    entities:
+      - name: program_enrollment
+        title: Program Enrollment
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: enrollment_status
+            type: string
+            required: true
+  - id: combined_support_registry_view
+    title: Combined Support Registry View
+    description: Static policy metadata describing a cross-authority evidence service.
+    owner: Interoperability Metadata Publisher
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    evidence_offerings:
+      - id: combined_support_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/combined-support
+        title: Combined support evidence service
+        description: Shared Evidence Server claim that composes civil, social protection, and health registry facts.
+        evidence_type: combined_support_evidence
+        issuing_authority:
+          id: interoperability_metadata_publisher
+          iri: did:web:static-metadata.demo.example.gov
+          name: Interoperability Metadata Publisher
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: applicant
+        lookup_keys:
+          - national_id
+        access:
+          kind: evidence-server
+          conforms_to: registry_relay:evidence-server-v1
+          endpoint_url: http://shared-eligibility-evidence-server:8080
+          discovery_url: http://shared-eligibility-evidence-server:8080/.well-known/evidence-service
+          ruleset: eligible-for-combined-support-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/health-linked-support-eligibility
+    entities:
+      - name: applicant
+        title: Applicant
+        identifiers:
+          - name: national_id
+            kind: primary
+        fields:
+          - name: national_id
+            type: string
+            required: true
+vocabularies:
+  registry_relay: https://registry-relay.dev/

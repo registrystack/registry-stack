@@ -1,0 +1,124 @@
+name: registry-relay-decentralized-evidence
+
+x-relay-common: &relay-common
+  image: registry-relay:demo
+  build:
+    context: ../..
+    dockerfile: Dockerfile.demo
+  env_file:
+    - .env
+  environment:
+    RUST_LOG: info
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/registry-relay", "--help"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+
+x-evidence-common: &evidence-common
+  image: evidence-server:demo
+  build:
+    context: ../../../evidence-server
+  env_file:
+    - .env
+  environment:
+    RUST_LOG: info
+  restart: unless-stopped
+
+services:
+  civil-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/civil-registry-relay.yaml"]
+    ports:
+      - "4311:8080"
+    volumes:
+      - ./config/relay:/etc/registry-relay:ro
+      - ./data/civil:/demo/data/civil:ro
+      - civil-registry-cache:/var/lib/registry-relay/cache
+
+  social-protection-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/social-protection-registry-relay.yaml"]
+    ports:
+      - "4312:8080"
+    volumes:
+      - ./config/relay:/etc/registry-relay:ro
+      - ./data/social-protection:/demo/data/social-protection:ro
+      - social-protection-registry-cache:/var/lib/registry-relay/cache
+
+  health-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/health-registry-relay.yaml"]
+    ports:
+      - "4313:8080"
+    volumes:
+      - ./config/relay:/etc/registry-relay:ro
+      - ./data/health:/demo/data/health:ro
+      - health-registry-cache:/var/lib/registry-relay/cache
+
+  civil-evidence-server:
+    <<: *evidence-common
+    command: ["--config", "/etc/evidence-server/civil-evidence-server.yaml"]
+    ports:
+      - "4321:8080"
+    volumes:
+      - ./config/evidence/civil-evidence-server.yaml:/etc/evidence-server/civil-evidence-server.yaml:ro
+
+  social-protection-evidence-server:
+    <<: *evidence-common
+    command: ["--config", "/etc/evidence-server/social-protection-evidence-server.yaml"]
+    ports:
+      - "4322:8080"
+    volumes:
+      - ./config/evidence/social-protection-evidence-server.yaml:/etc/evidence-server/social-protection-evidence-server.yaml:ro
+
+  shared-eligibility-evidence-server:
+    <<: *evidence-common
+    command: ["--config", "/etc/evidence-server/shared-eligibility-evidence-server.yaml"]
+    ports:
+      - "4323:8080"
+    volumes:
+      - ./config/evidence/shared-eligibility-evidence-server.yaml:/etc/evidence-server/shared-eligibility-evidence-server.yaml:ro
+
+  static-metadata-publisher:
+    image: python:3.12.3-slim-bookworm
+    command: ["python", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/static"]
+    ports:
+      - "4331:8080"
+    volumes:
+      - ./static-metadata:/srv/static:ro
+    restart: unless-stopped
+
+  demo-client:
+    image: python:3.12.3-slim-bookworm
+    profiles: ["client"]
+    env_file:
+      - .env
+    environment:
+      CIVIL_RELAY_URL: http://civil-registry-relay:8080
+      SOCIAL_RELAY_URL: http://social-protection-registry-relay:8080
+      HEALTH_RELAY_URL: http://health-registry-relay:8080
+      CIVIL_EVIDENCE_URL: http://civil-evidence-server:8080
+      SOCIAL_EVIDENCE_URL: http://social-protection-evidence-server:8080
+      SHARED_EVIDENCE_URL: http://shared-eligibility-evidence-server:8080
+      STATIC_METADATA_URL: http://static-metadata-publisher:8080
+      DEMO_OUTPUT_DIR: /demo/output
+    working_dir: /workspace
+    command: ["python", "/workspace/scripts/demo-flow.py"]
+    volumes:
+      - ./scripts:/workspace/scripts:ro
+      - ./output:/demo/output
+    depends_on:
+      - civil-registry-relay
+      - social-protection-registry-relay
+      - health-registry-relay
+      - civil-evidence-server
+      - social-protection-evidence-server
+      - shared-eligibility-evidence-server
+      - static-metadata-publisher
+
+volumes:
+  civil-registry-cache:
+  social-protection-registry-cache:
+  health-registry-cache:
