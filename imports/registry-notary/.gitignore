@@ -1,3 +1,11 @@
 /target/
 demo/var/
 /.security-review/
+
+# Python bytecode (perf scripts and stub)
+__pycache__/
+*.py[cod]
+
+# Perf testing: secrets and stub runtime output
+perf/.env
+perf/.env.*
