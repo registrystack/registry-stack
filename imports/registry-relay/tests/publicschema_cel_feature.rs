@@ -738,7 +738,7 @@ async fn entity_record_vc_can_be_issued_as_publicschema_person() {
         panic!("mapped PublicSchema Person subject must validate: {messages:?}");
     }
 
-    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/ind-1");
+    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/{id}");
     assert_eq!(record["provenance"]["claim_type"], "Person");
     assert_eq!(
         record["provenance"]["subject"],
