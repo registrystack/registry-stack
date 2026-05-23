@@ -28,6 +28,32 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 #[test]
+fn help_flags_exit_zero_and_print_usage_to_stdout() {
+    for flag in &["--help", "-h", "help"] {
+        let output = Command::new(bin())
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|e| panic!("run cli with {flag}: {e}"));
+
+        assert!(
+            output.status.success(),
+            "{flag} must exit 0, got {:?}",
+            output.status.code()
+        );
+        let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+        assert!(
+            stdout.contains("usage:"),
+            "{flag} stdout must contain usage text; got: {stdout}"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{flag} must produce no stderr; got: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn render_rejects_undeclared_dcat_profile() {
     let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let output = Command::new(bin())

@@ -34,6 +34,10 @@ fn run() -> Result<(), String> {
         Some("render") => render_command(&args[1..]),
         Some("publish") => publish_command(&args[1..]),
         Some("validate-profiles") => validate_profiles_command(&args[1..]),
+        Some("--help") | Some("-h") | Some("help") => {
+            println!("{}", usage());
+            Ok(())
+        }
         _ => Err(usage()),
     }
 }
