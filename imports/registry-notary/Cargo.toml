@@ -22,7 +22,7 @@ registry-witness-server = { version = "0.2.0", path = "crates/registry-witness-s
 cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "32679bb78c969b8f33129113e31465dbe54b0ea0" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_yml = { version = "0.0.12" }
