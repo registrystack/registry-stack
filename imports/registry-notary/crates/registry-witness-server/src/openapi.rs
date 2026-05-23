@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Witness OpenAPI document generation.
 
+use registry_witness_core::model::{
+    BatchEvaluateRequest, CredentialIssueRequest, EvaluateRequest, HolderRequest, RenderRequest,
+    SubjectRequest,
+};
 use serde_json::json;
 use utoipa::openapi::OpenApi;
+use utoipa::PartialSchema;
 
 #[must_use]
 pub fn openapi_document() -> OpenApi {
-    serde_json::from_value(json!({
+    let mut document: OpenApi = serde_json::from_value(json!({
         "openapi": "3.1.0",
         "info": {
             "title": "Registry Witness API",
@@ -187,94 +192,36 @@ pub fn openapi_document() -> OpenApi {
                     "type": "http",
                     "scheme": "bearer"
                 }
-            },
-            "schemas": {
-                "SubjectRequest": {
-                    "type": "object",
-                    "required": ["id"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "id": { "type": "string" },
-                        "id_type": { "type": "string" }
-                    }
-                },
-                "EvaluateRequest": {
-                    "type": "object",
-                    "required": ["subject", "claims"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "subject": { "$ref": "#/components/schemas/SubjectRequest" },
-                        "claims": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "disclosure": { "type": "string" },
-                        "format": { "type": "string" },
-                        "purpose": { "type": "string" }
-                    }
-                },
-                "BatchEvaluateRequest": {
-                    "type": "object",
-                    "required": ["subjects", "claims"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "subjects": {
-                            "type": "array",
-                            "items": { "$ref": "#/components/schemas/SubjectRequest" }
-                        },
-                        "claims": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "disclosure": { "type": "string" },
-                        "format": { "type": "string" },
-                        "purpose": { "type": "string" },
-                        "prefer": { "type": "string" }
-                    }
-                },
-                "RenderRequest": {
-                    "type": "object",
-                    "required": ["evaluation_id", "format"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "evaluation_id": { "type": "string" },
-                        "format": { "type": "string" },
-                        "disclosure": { "type": "string" },
-                        "claims": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "purpose": { "type": "string" }
-                    }
-                },
-                "CredentialIssueRequest": {
-                    "type": "object",
-                    "required": ["evaluation_id"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "evaluation_id": { "type": "string" },
-                        "credential_profile": { "type": "string" },
-                        "format": { "type": "string" },
-                        "claims": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "disclosure": { "type": "string" },
-                        "holder": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "properties": {
-                                "binding": { "type": "string" },
-                                "id": { "type": "string" },
-                                "proof": { "type": "string" }
-                            }
-                        }
-                    }
-                }
             }
         }
     }))
-    .expect("static Registry Witness OpenAPI document is valid")
+    .expect("static Registry Witness OpenAPI document is valid");
+
+    let components = document
+        .components
+        .get_or_insert_with(utoipa::openapi::Components::new);
+    components
+        .schemas
+        .insert("SubjectRequest".to_string(), SubjectRequest::schema());
+    components
+        .schemas
+        .insert("EvaluateRequest".to_string(), EvaluateRequest::schema());
+    components.schemas.insert(
+        "BatchEvaluateRequest".to_string(),
+        BatchEvaluateRequest::schema(),
+    );
+    components
+        .schemas
+        .insert("RenderRequest".to_string(), RenderRequest::schema());
+    components.schemas.insert(
+        "CredentialIssueRequest".to_string(),
+        CredentialIssueRequest::schema(),
+    );
+    components
+        .schemas
+        .insert("HolderRequest".to_string(), HolderRequest::schema());
+
+    document
 }
 
 #[cfg(test)]

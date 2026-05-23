@@ -59,7 +59,7 @@ impl DisclosureDowngrade {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
     pub subject: SubjectRequest,
@@ -72,7 +72,7 @@ pub struct EvaluateRequest {
     pub purpose: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectRequest {
     pub id: String,
@@ -80,7 +80,7 @@ pub struct SubjectRequest {
     pub id_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchEvaluateRequest {
     pub subjects: Vec<SubjectRequest>,
@@ -91,8 +91,6 @@ pub struct BatchEvaluateRequest {
     pub format: Option<String>,
     #[serde(default)]
     pub purpose: Option<String>,
-    #[serde(default)]
-    pub prefer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,7 +152,7 @@ pub struct BatchItemError {
     pub retryable: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RenderRequest {
     pub evaluation_id: String,
@@ -167,7 +165,7 @@ pub struct RenderRequest {
     pub purpose: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialIssueRequest {
     pub evaluation_id: String,
@@ -183,7 +181,7 @@ pub struct CredentialIssueRequest {
     pub holder: Option<HolderRequest>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HolderRequest {
     #[serde(default)]
@@ -192,15 +190,6 @@ pub struct HolderRequest {
     pub id: Option<String>,
     #[serde(default)]
     pub proof: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialIssueResponse {
-    pub credential_id: String,
-    pub format: String,
-    pub issuer: String,
-    pub expires_at: String,
-    pub credential: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
