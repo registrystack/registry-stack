@@ -1,5 +1,7 @@
 # Evidence Offering Refactor Spec: Consolidated Review
 
+> **Note:** the external crate is now published as `registry-manifest-core`. This document was written when it was called `registry-metadata-core`; the old name is preserved in the body for historical accuracy.
+
 Status: review notes (2026-05-21)
 
 Review of [`evidence-offering-refactor-spec.md`](evidence-offering-refactor-spec.md) by five domain reviewers:

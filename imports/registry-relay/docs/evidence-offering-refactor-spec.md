@@ -282,7 +282,7 @@ Validation must preserve the current split:
 - runtime config describes physical sources, scopes, filters, secrets, and
   execution behavior.
 
-Pure manifest validation in `registry-metadata-core` can check only
+Pure manifest validation in `registry-manifest-core` can check only
 metadata-internal rules: duplicate IDs, unresolved compact IRIs, missing
 manifest references, entity/field references inside a dataset, and unsupported
 metadata enum values. Cross-boundary validation belongs in runtime config
@@ -717,14 +717,14 @@ Relay must not publish Atlas classifications back into its own metadata.
 
 1. Add manifest structs and deserializers for requirements, evidence types,
    issuing authorities, evidence offerings, jurisdiction, level of assurance,
-   and offering access bindings in `registry-metadata-core`. Do this before
+   and offering access bindings in `registry-manifest-core`. Do this before
    adding the new YAML fields anywhere, because the manifest structs use
    `#[serde(deny_unknown_fields)]`.
 2. Add compiled metadata structs and deterministic ordering. Extend
    `CompiledMetadata::filter()` or add a sibling so filtered metadata removes
    offerings whose backing entity is hidden before deciding whether a dataset is
    visible.
-3. Add pure manifest validation in `registry-metadata-core`: duplicate IDs,
+3. Add pure manifest validation in `registry-manifest-core`: duplicate IDs,
    local ID shape, manifest cross references, missing entity and lookup-field
    references inside the dataset, compact IRI expansion, access-kind enum
    validation, and runtime/metadata separation.
@@ -890,7 +890,7 @@ Before completion, run the relevant project checks:
 
 ```sh
 cargo fmt --check
-cargo test -p registry-metadata-core
+cargo test -p registry-manifest-core
 cargo test --test demo_configs_load
 cargo test --test catalog_entity
 cargo test --test config_metadata_bindings

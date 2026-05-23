@@ -1,5 +1,7 @@
 # Evidence Offering Refactor: Implementation Review (Pass 2)
 
+> **Note:** the external crate is now published as `registry-manifest-core`. This document was written when it was called `registry-metadata-core`; the old name is preserved in the body for historical accuracy.
+
 Status: review notes (2026-05-21)
 
 Second-pass review of the work on `main` after the pass-1 findings in
