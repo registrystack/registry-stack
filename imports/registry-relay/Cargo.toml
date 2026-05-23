@@ -172,3 +172,17 @@ harness = false
 [[bench]]
 name = "claim_verification_bench"
 harness = false
+
+# Slim DWARF in dev builds. Each of the 50 integration test files links
+# its own binary that statically pulls in datafusion / axum / etc.; full
+# debug info pushes each binary past 200 MB and dominates link time. The
+# `line-tables-only` setting keeps panic backtraces and source-line
+# resolution intact while cutting binary size (and link wall time)
+# roughly 5-10x. Override locally with `CARGO_PROFILE_DEV_DEBUG=2` if a
+# debugger needs full DWARF.
+[profile.dev]
+debug = "line-tables-only"
+
+# Same treatment for the `test` profile, which integration tests use.
+[profile.test]
+debug = "line-tables-only"
