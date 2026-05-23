@@ -88,10 +88,6 @@ zeroize = { version = "1" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # urn:uuid:* identifiers for VC jti / id.
 uuid = { version = "1", features = ["v4"] }
-# Robust Accept media-type parsing for provenance content negotiation.
-# Already a transitive dep of axum, pinned here so the
-# public surface compiles without depending on a re-export path.
-mime = { version = "0.3" }
 # base64url encoding used by the VC-JWT compact serialization.
 base64 = { version = "0.22" }
 # Used by the OIDC auth provider to fetch JWKS documents and resolve
@@ -106,7 +102,6 @@ ulid = { version = "1" }
 # ─── observability ───────────────────────────────────────────────────────────
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
-tracing-error = { version = "0.2" }
 
 # ─── errors / problem details ────────────────────────────────────────────────
 thiserror = { version = "2" }
@@ -125,7 +120,6 @@ assert-json-diff = { version = "2" }
 proptest = { version = "1" }
 tempfile = { version = "3" }
 insta = { version = "1", features = ["json"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
 # Used only by format_xlsx tests to construct a synthetic XLSX (a ZIP)
 # whose `<dimension>` element advertises a cell count over the cap. The
 # package version matches the one calamine 0.35 pulls transitively so we
