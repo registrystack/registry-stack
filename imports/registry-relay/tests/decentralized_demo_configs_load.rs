@@ -56,6 +56,7 @@ fn seed_demo_secret_env() {
 fn decentralized_demo_configs_load() {
     seed_demo_secret_env();
 
+    #[cfg(feature = "spdci-api-standards")]
     let configs = [
         (
             "civil-registry-relay.yaml",
@@ -63,6 +64,22 @@ fn decentralized_demo_configs_load() {
             "civil_person",
             "csv",
         ),
+        (
+            "social-protection-registry-relay.yaml",
+            "social_protection_registry",
+            "household",
+            "xlsx",
+        ),
+        (
+            "health-registry-relay.yaml",
+            "health_registry",
+            "health_facility",
+            "parquet",
+        ),
+    ];
+
+    #[cfg(not(feature = "spdci-api-standards"))]
+    let configs = [
         (
             "social-protection-registry-relay.yaml",
             "social_protection_registry",
