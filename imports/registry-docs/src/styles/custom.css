@@ -694,6 +694,19 @@ mobile-starlight-toc summary {
   }
 }
 
+/* Figures with SVG diagrams are authored at a 720px viewBox; cap them so the
+   embedded text renders at its designed size on wide layouts. */
+.sl-markdown-content figure {
+  margin: 1.5rem 0;
+  max-width: 720px;
+}
+
+.sl-markdown-content figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 /* ── Card layouts (StandardsTable, ContractsTable, OpenApiSourcesTable, ProjectMap) ── */
 
 .standards-list,
