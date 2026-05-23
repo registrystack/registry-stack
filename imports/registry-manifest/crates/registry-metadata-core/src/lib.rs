@@ -3639,7 +3639,10 @@ fn frequency_uri(frequency: UpdateFrequency) -> &'static str {
         UpdateFrequency::Irregular => {
             "http://publications.europa.eu/resource/authority/frequency/IRREG"
         }
-        UpdateFrequency::Termly | UpdateFrequency::AsNeeded | UpdateFrequency::Unknown => {
+        UpdateFrequency::AsNeeded => {
+            "http://publications.europa.eu/resource/authority/frequency/AS_NEEDED"
+        }
+        UpdateFrequency::Termly | UpdateFrequency::Unknown => {
             "http://publications.europa.eu/resource/authority/frequency/UNKNOWN"
         }
     }

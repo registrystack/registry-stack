@@ -8,6 +8,39 @@ use registry_metadata_core::{
 };
 use serde_json::{json, Value};
 
+#[test]
+fn as_needed_update_frequency_maps_to_eu_as_needed_iri() {
+    let manifest: MetadataManifest = serde_yml::from_str(
+        r#"
+schema_version: registry-metadata/v1
+catalog:
+  id: as-needed-freq
+  base_url: https://data.example.test
+  title: As Needed Frequency
+  publisher:
+    name: Publisher
+  application_profiles:
+    - id: bregdcat-ap
+      version: "3.0.0"
+datasets:
+  - id: dataset
+    title: Dataset
+    update_frequency: as_needed
+    entities: []
+codelists: []
+"#,
+    )
+    .expect("manifest parses");
+
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let breg = render_breg_dcat_ap(&compiled);
+    assert_eq!(
+        breg["dcat:dataset"][0]["dcterms:accrualPeriodicity"],
+        json!("http://publications.europa.eu/resource/authority/frequency/AS_NEEDED"),
+        "as_needed update frequency must map to EU frequency/AS_NEEDED, not UNKNOWN"
+    );
+}
+
 fn fixture(path: &str) -> MetadataManifest {
     let raw = match path {
         "example-civil-registration" => EXAMPLE_CIVIL_REGISTRATION_FIXTURE,
