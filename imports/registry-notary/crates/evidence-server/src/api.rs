@@ -22,7 +22,8 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::{
-    credential_profile_for, BatchEvaluateOptions, EvidenceRuntime, EvidenceStore, SourceReader,
+    credential_profile_for, openapi_document, BatchEvaluateOptions, EvidenceRuntime, EvidenceStore,
+    SourceReader,
 };
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
@@ -33,6 +34,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
         .route("/.well-known/evidence/jwks.json", get(issuer_jwks))
         .route("/claims", get(list_claims))
@@ -42,6 +44,13 @@ where
         .route("/claims/batch-evaluate", post(batch_evaluate))
         .route("/evidence/render", post(render))
         .route("/credentials/issue", post(issue_credential))
+}
+
+async fn openapi_json(principal: Option<Extension<EvidencePrincipal>>) -> Response {
+    if principal.is_none() {
+        return evidence_error_response(EvidenceError::MissingCredential);
+    }
+    Json(openapi_document()).into_response()
 }
 
 pub trait EvidenceIssuerResolver: Send + Sync {

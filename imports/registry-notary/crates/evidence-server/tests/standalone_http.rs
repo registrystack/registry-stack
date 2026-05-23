@@ -291,6 +291,15 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     let denied = server.get("/claims").await;
     denied.assert_status(StatusCode::UNAUTHORIZED);
 
+    let openapi = server
+        .get("/openapi.json")
+        .add_header("x-api-key", "api-token")
+        .await;
+    openapi.assert_status_ok();
+    let openapi_body: Value = openapi.json();
+    assert_eq!(openapi_body["openapi"], json!("3.1.0"));
+    assert!(openapi_body["paths"]["/claims/evaluate"].is_object());
+
     let discovery = server
         .get("/.well-known/evidence-service")
         .add_header("x-api-key", "api-token")

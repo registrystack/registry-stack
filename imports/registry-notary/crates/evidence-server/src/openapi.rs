@@ -18,6 +18,16 @@ pub fn openapi_document() -> OpenApi {
             { "bearerAuth": [] }
         ],
         "paths": {
+            "/openapi.json": {
+                "get": {
+                    "summary": "Fetch this OpenAPI document",
+                    "operationId": "getOpenApi",
+                    "responses": {
+                        "200": { "description": "OpenAPI document" },
+                        "401": { "description": "Missing or invalid credential" }
+                    }
+                }
+            },
             "/.well-known/evidence-service": {
                 "get": {
                     "summary": "Discover Evidence Server capabilities",
@@ -276,6 +286,7 @@ mod tests {
         let doc = openapi_document();
         let paths = doc.paths.paths;
         for route in [
+            "/openapi.json",
             "/.well-known/evidence-service",
             "/.well-known/evidence/jwks.json",
             "/claims",
