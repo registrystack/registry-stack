@@ -25,17 +25,17 @@ breaking refactor now, while keeping the implementation simple enough to finish.
 Split by responsibility, not by current file names:
 
 ```text
-registry-metadata-core
-registry-metadata-cli
+registry-manifest-core
+registry-manifest-cli
 registry-relay
 profiles/
 ```
 
-`registry-metadata-core` owns the portable standard-facing metadata model,
+`registry-manifest-core` owns the portable standard-facing metadata model,
 validation, syntactic IRI normalization, compilation, and pure renderers.
 
-`registry-metadata-cli` is a thin binary crate for validating manifests and
-rendering static artifacts. It depends on `registry-metadata-core`; the core
+`registry-manifest-cli` is a thin binary crate for validating manifests and
+rendering static artifacts. It depends on `registry-manifest-core`; the core
 library must not depend on `clap` or CLI concerns.
 
 `registry-relay` owns live behavior: HTTP routing, auth, audit, observability,
@@ -60,7 +60,7 @@ Use these terms consistently:
 - `metadata manifest`: the portable `metadata.yaml` document.
 - `relay config`: the operational `relay.yaml` document.
 - `compiled metadata`: the validated, normalized, renderer-ready view produced
-  by `registry-metadata-core`.
+  by `registry-manifest-core`.
 - `runtime rows`: source-backed entity data served by Relay.
 - `OGC API Records records`: catalog records that describe resources.
 
@@ -158,13 +158,13 @@ publish static metadata without Relay
 - No generic registry platform.
 - No replacement for civil registration, social protection, OpenIMIS, or SP DCI APIs.
 - No vocabulary dereferencing or semantic reasoning in core.
-- No profile-specific business logic in `registry-metadata-core`.
+- No profile-specific business logic in `registry-manifest-core`.
 - No runtime dependency from metadata-core back into Relay.
 - No OGC HTTP link generation in metadata-core.
 
 ## Package Boundaries
 
-### `registry-metadata-core`
+### `registry-manifest-core`
 
 Owns portable metadata.
 
@@ -205,7 +205,7 @@ Must not depend on:
 Candidate layout:
 
 ```text
-crates/registry-metadata-core/
+crates/registry-manifest-core/
   Cargo.toml
   src/
     lib.rs
@@ -230,7 +230,7 @@ types in core, then adapt current `Config` plus `EntityRegistry` into those
 types from Relay. Feature-gated runtime concerns stay in Relay unless the output
 is a pure metadata profile selected by manifest data.
 
-### `registry-metadata-cli`
+### `registry-manifest-cli`
 
 Owns local validation and rendering commands.
 
@@ -244,7 +244,7 @@ Responsibilities:
 Candidate layout:
 
 ```text
-crates/registry-metadata-cli/
+crates/registry-manifest-cli/
   Cargo.toml
   src/main.rs
 ```
@@ -272,7 +272,7 @@ Owns live behavior.
 Responsibilities:
 
 - Load Relay runtime config.
-- Load and compile metadata manifests through `registry-metadata-core`.
+- Load and compile metadata manifests through `registry-manifest-core`.
 - Adapt current config and `EntityRegistry` state into compiled metadata during
   the transition.
 - Validate runtime bindings against compiled metadata.
@@ -572,7 +572,7 @@ Ownership rules:
 - Runtime principals, scopes, and authorization decisions stay in Relay.
 - Relay supplies the predicate used to build a public, authenticated, or
   caller-scoped compiled view.
-- Core errors use `registry_metadata_core::Error`.
+- Core errors use `registry_manifest_core::Error`.
 - Relay errors use `registry_relay::Error` and wrap core errors with
   `#[from]`.
 - Problem-details HTTP mapping stays in Relay.
@@ -828,7 +828,7 @@ metadata artifacts.
 
 ## Standards Boundary
 
-### Owned By `registry-metadata-core`
+### Owned By `registry-manifest-core`
 
 - Catalog document model.
 - DCAT JSON-LD rendering.
@@ -889,7 +889,7 @@ This mirrors the useful standard-facing part of X-Road's `listMethods` versus
 
 ### Metadata Validation
 
-`registry-metadata-core` validates:
+`registry-manifest-core` validates:
 
 - schema version
 - required catalog fields
@@ -965,7 +965,7 @@ Profile errors:
 
 Error type decision:
 
-- `registry-metadata-core` owns portable manifest validation.
+- `registry-manifest-core` owns portable manifest validation.
 - Relay maps core failures into stable `metadata.manifest.*` startup codes and
   owns `runtime.binding.*` validation plus runtime HTTP mappings.
 - Profile validation errors stay outside core and use `profile.*`.
@@ -989,19 +989,19 @@ Required checks:
 
 Dependency checks:
 
-- `registry-metadata-core` must not depend on Axum, DataFusion, Tokio Postgres,
+- `registry-manifest-core` must not depend on Axum, DataFusion, Tokio Postgres,
   auth, audit, observability, source ingestion, `utoipa`, `clap`, Relay, or
   profiles.
-- `registry-metadata-cli` may depend on `registry-metadata-core`.
-- `registry-relay` may depend on `registry-metadata-core`.
-- Relay tests may depend on `registry-metadata-core` as a dev dependency.
+- `registry-manifest-cli` may depend on `registry-manifest-core`.
+- `registry-relay` may depend on `registry-manifest-core`.
+- Relay tests may depend on `registry-manifest-core` as a dev dependency.
 - Metadata-core tests must not depend on profiles.
-- Profile validators may depend on `registry-metadata-core`.
+- Profile validators may depend on `registry-manifest-core`.
 - Profiles must not depend on `registry-relay`.
 
 ## Locked Decisions
 
-- CLI lives in `registry-metadata-cli`, not metadata-core.
+- CLI lives in `registry-manifest-cli`, not metadata-core.
 - Profiles start as a `profiles/` directory of data, fixtures, validators, and
   optional generators, not as a crate.
 - Public Relay metadata endpoints are opt-in. Static publication is the default
@@ -1029,8 +1029,8 @@ source of truth.
 
 ### Phase 1: Core Projection And Split Demo Configs
 
-- Add `crates/registry-metadata-core`.
-- Add `crates/registry-metadata-cli`.
+- Add `crates/registry-manifest-core`.
+- Add `crates/registry-manifest-cli`.
 - Define `MetadataManifest`, `CompiledMetadata`, codelist schemes, field
   constraints, application profile claims, and renderer inputs.
 - Add split `*.metadata.yaml` manifests for the demo runtime configs.
@@ -1121,8 +1121,8 @@ Done when:
 
 Start with the smallest slice that proves phases 1 and 2 only:
 
-1. Create `registry-metadata-core`.
-2. Create `registry-metadata-cli` with minimal `validate`.
+1. Create `registry-manifest-core`.
+2. Create `registry-manifest-cli` with minimal `validate`.
 3. Define the portable manifest and compiled metadata types.
 4. Add `*.metadata.yaml` manifests and runtime `metadata.manifest_path` bindings
    for the demo configs.
@@ -1214,8 +1214,8 @@ Worker lanes:
 - Relay package lane: move the existing Relay package into
   `crates/registry-relay` with the smallest path changes needed.
 - Metadata package lane: add a minimal compiling
-  `crates/registry-metadata-core`.
-- CLI lane: add a minimal compiling `crates/registry-metadata-cli`.
+  `crates/registry-manifest-core`.
+- CLI lane: add a minimal compiling `crates/registry-manifest-cli`.
 - Profiles lane: add `profiles/` as data, not a crate.
 - Dependency lane: keep runtime dependencies only in `registry-relay`.
 
@@ -1223,8 +1223,8 @@ Deliverables:
 
 - Workspace `Cargo.toml`.
 - Compiling `registry-relay` package.
-- Minimal compiling `registry-metadata-core`.
-- Minimal compiling `registry-metadata-cli`.
+- Minimal compiling `registry-manifest-core`.
+- Minimal compiling `registry-manifest-cli`.
 - `profiles/` directory with initial descriptor shape.
 - Dependency guard for core.
 
@@ -1232,15 +1232,15 @@ Verification:
 
 - `cargo metadata`
 - `cargo check -p registry-relay`
-- `cargo check -p registry-metadata-core`
-- `cargo check -p registry-metadata-cli`
+- `cargo check -p registry-manifest-core`
+- `cargo check -p registry-manifest-cli`
 - `cargo fmt --all -- --check`
-- `cargo tree -p registry-metadata-core`
+- `cargo tree -p registry-manifest-core`
 
 Exit gate:
 
 - `registry-relay` still builds.
-- `registry-metadata-core` has no dependency on runtime, OpenAPI, CLI, Relay,
+- `registry-manifest-core` has no dependency on runtime, OpenAPI, CLI, Relay,
   or profile code.
 - Package dependency direction is enforced.
 
@@ -1273,17 +1273,17 @@ Deliverables:
 
 - `MetadataManifest`.
 - `CompiledMetadata`.
-- `registry_metadata_core::Error`.
+- `registry_manifest_core::Error`.
 - Split demo configs.
 - Relay binding validation against compiled metadata.
 - Golden fixtures for catalog and SHACL.
 
 Verification:
 
-- `cargo test -p registry-metadata-core`
+- `cargo test -p registry-manifest-core`
 - `cargo test -p registry-relay config`
 - `cargo test -p registry-relay metadata`
-- `cargo tree -p registry-metadata-core`
+- `cargo tree -p registry-manifest-core`
 
 Exit gate:
 
@@ -1326,9 +1326,9 @@ Deliverables:
 
 Verification:
 
-- `cargo test -p registry-metadata-core`
+- `cargo test -p registry-manifest-core`
 - Renderer golden tests.
-- `cargo run -p registry-metadata-cli -- validate demo/.../metadata.yaml`
+- `cargo run -p registry-manifest-cli -- validate demo/.../metadata.yaml`
 - One CLI render check per supported format.
 
 Exit gate:
@@ -1474,7 +1474,7 @@ Deliverables:
 Verification:
 
 - Profile validation fixture tests.
-- `cargo test -p registry-metadata-core`
+- `cargo test -p registry-manifest-core`
 - Fixture and golden output checks.
 
 Exit gate:
@@ -1528,7 +1528,7 @@ Verification:
 - `cargo test --workspace --all-features`
 - `cargo test --workspace`
 - `cargo bench --no-run`, if benchmark surfaces or public APIs moved
-- `cargo tree -p registry-metadata-core`
+- `cargo tree -p registry-manifest-core`
 - `just validate-catalog-shacl catalog=<generated-dcat-or-catalog>`, if the
   command exists
 

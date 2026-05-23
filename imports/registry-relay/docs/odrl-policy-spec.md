@@ -90,7 +90,7 @@ authorization, governance, and contract processes before production data use.
 Registry Relay v0.1 should publish **ODRL Offers** attached to datasets using
 `odrl:hasPolicy`.
 
-`registry-metadata-core` owns ODRL policy publication. The core manifest,
+`registry-manifest-core` owns ODRL policy publication. The core manifest,
 compiled metadata view, validation, and DCAT/BRegDCAT-AP renderers must own
 default and configured policy output. The legacy Relay renderer must either
 delegate to the compiled metadata output or be updated to produce semantically
@@ -180,7 +180,7 @@ Default `assigner` resolution:
 The default policy must not invent purpose, recipient, legal basis, duties, or
 prohibitions.
 
-Default policy generation belongs in `registry-metadata-core`, because static
+Default policy generation belongs in `registry-manifest-core`, because static
 metadata publication should behave the same inside and outside Registry Relay.
 
 ## Manifest Types
@@ -498,7 +498,7 @@ They must not infer:
 
 ### Wave 1: Manifest Model And Validation
 
-- Add policy manifest structs to `registry-metadata-core`.
+- Add policy manifest structs to `registry-manifest-core`.
 - Add policy to `CompiledDataset` or an equivalent compiled metadata structure.
 - Add validation and compact IRI expansion for policy fields.
 - Add focused tests for valid policy, unresolved prefix, empty policy,
@@ -507,7 +507,7 @@ They must not infer:
 
 Done when:
 
-- `cargo test -p registry-metadata-core policy` passes.
+- `cargo test -p registry-manifest-core policy` passes.
 - Existing metadata fixture tests still pass.
 - Invalid policy manifests produce stable `metadata.manifest.*` error codes.
 
@@ -557,7 +557,7 @@ Done when:
 
 Done when:
 
-- `cargo test -p registry-metadata-core --no-default-features` passes.
+- `cargo test -p registry-manifest-core --no-default-features` passes.
 - `cargo test -p registry-relay --test catalog_entity` passes.
 - A demo-render smoke test verifies `odrl:hasPolicy`, `odrl:uid`,
   `odrl:assigner`, `odrl:permission`, one `odrl:constraint`, one `odrl:duty`,
@@ -615,8 +615,8 @@ Owner: core metadata worker.
 
 Files:
 
-- `crates/registry-metadata-core/src/lib.rs`
-- focused core tests and fixtures under `crates/registry-metadata-core/tests/`
+- `crates/registry-manifest-core/src/lib.rs`
+- focused core tests and fixtures under `crates/registry-manifest-core/tests/`
 
 Tasks:
 
@@ -629,7 +629,7 @@ Tasks:
 
 Done when:
 
-- `cargo test -p registry-metadata-core policy` passes.
+- `cargo test -p registry-manifest-core policy` passes.
 - Invalid policy tests assert stable field paths.
 - The core model can round-trip a manifest containing permission, duty,
   prohibition, profile, IRI operand, and literal operand.
@@ -645,7 +645,7 @@ Owner: renderer worker.
 
 Files:
 
-- `crates/registry-metadata-core/src/lib.rs`
+- `crates/registry-manifest-core/src/lib.rs`
 - `src/metadata/shacl.rs`
 - `tests/catalog_entity.rs`
 - golden DCAT/BRegDCAT fixtures
@@ -714,7 +714,7 @@ Review:
 The feature is release-ready only after all of these pass in the worktree:
 
 ```sh
-cargo test -p registry-metadata-core --no-default-features
+cargo test -p registry-manifest-core --no-default-features
 cargo test -p registry-relay --test catalog_entity
 cargo fmt --all --check
 just validate-catalog-semic-local catalog=target/dcat-ap/metadata.bregdcat-ap.jsonld profile=dcatap.2_0_0

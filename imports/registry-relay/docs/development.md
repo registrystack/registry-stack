@@ -63,7 +63,7 @@ cargo test --test demo_configs_load
 
 `just metadata-*` recipes use an installed `registry-metadata` binary when one
 is present, a sibling checkout during local development, or the published
-`https://github.com/jeremi/registry-metadata` tag configured by
+`https://github.com/jeremi/registry-manifest` tag configured by
 `scripts/run_registry_metadata_cli.sh`.
 
 The demo runtime configs are split-backed: every `demo/config/*.yaml` points
@@ -154,9 +154,9 @@ profiles/        ecosystem profile descriptors and fixture metadata manifests
 ```
 
 Portable metadata crates live in the public
-`https://github.com/jeremi/registry-metadata` repository. Relay consumes
+`https://github.com/jeremi/registry-manifest` repository. Relay consumes
 `registry-manifest-core` as a tagged Git dependency and shells out to
-`registry-metadata-cli` only for local validation, rendering, and static
+`registry-manifest-cli` only for local validation, rendering, and static
 publication helper recipes.
 
 Storage tables are private. Public routes must go through entity config, scope checks, audit, and query planning.
