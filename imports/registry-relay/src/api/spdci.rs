@@ -6,7 +6,6 @@
 //! routes translate the SP DCI Disability Registry synchronous request
 //! envelope onto one configured entity.
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -265,10 +264,11 @@ async fn search_response(
         response_mapper,
         principal,
     } = deps;
-    // Prefer the registered named-registry config when one exists so
-    // its `response_fields` / mapping path drive projection through
-    // the same code path as `sync_search`. Fall back to a synthesized
-    // shape for the legacy single-binding setup.
+    // Look up the named-registry config so its `response_fields` /
+    // mapping path drive projection through the same code path as
+    // `sync_search`. `RouteState::resolve` below requires the same
+    // entry, so the lookup is guaranteed to succeed when route
+    // resolution does.
     let named_search_config = config.as_ref().and_then(|Extension(cfg)| {
         cfg.standards
             .spdci
@@ -279,8 +279,8 @@ async fn search_response(
         Ok(route) => route,
         Err(error) => return error.into_response(),
     };
-    let search_registry_config =
-        named_search_config.unwrap_or_else(|| search_config_from_disability(&route.config));
+    let search_registry_config = named_search_config
+        .expect("named_search_config must be Some when RouteState::resolve succeeded");
     let result = run_search_response(
         &route,
         &registry_name,
@@ -388,14 +388,6 @@ fn resolve_disability_config(
         }
         return Err(SchemaError::UnknownResource.into());
     }
-    // Legacy back-compat: when no `spdci.registries` bindings are
-    // declared and the caller hits the canonical `dr` slug, fall back
-    // to the disability_registry block. Aligns with the matching arm
-    // in `resolve_search_config` so the four DR endpoints accept the
-    // same paths.
-    if spdci.registries.is_empty() && registry_name == "dr" {
-        return Ok(disability);
-    }
     Err(SchemaError::UnknownResource.into())
 }
 
@@ -449,37 +441,7 @@ fn resolve_search_config(
             .map(|(name, registry)| (name.clone(), registry.clone()))
             .ok_or_else(|| SchemaError::UnknownResource.into());
     }
-    if spdci.registries.is_empty() {
-        if let Some(disability) = &spdci.disability_registry {
-            return Ok(("dr".to_string(), search_config_from_disability(disability)));
-        }
-    }
     Err(SchemaError::UnknownResource.into())
-}
-
-fn search_config_from_disability(
-    disability: &SpdciDisabilityRegistryConfig,
-) -> SpdciRegistryConfig {
-    let identifiers = ["DISABILITY_ID", "MEMBER_ID", "UIN", "NIN"]
-        .into_iter()
-        .map(|name| (name.to_string(), disability.query_field.clone()))
-        .collect();
-    let expression_fields = BTreeMap::from([(
-        "disability_status".to_string(),
-        disability.disabled_status_field.clone(),
-    )]);
-    SpdciRegistryConfig {
-        dataset: disability.dataset.clone(),
-        entity: disability.entity.clone(),
-        registry_type: "ns:org:RegistryType:DR".to_string(),
-        record_type: "spdci-extensions-dci:DisabledPerson".to_string(),
-        identifiers,
-        expression_fields,
-        response_fields: BTreeMap::new(),
-        response_mapping_path: None,
-        response_schema_path: None,
-        default_limit: 100,
-    }
 }
 
 struct SpdciRequest {
