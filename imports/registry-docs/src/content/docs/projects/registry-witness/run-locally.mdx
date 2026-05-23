@@ -13,22 +13,7 @@ standards_referenced:
   - openapi
 ---
 
-Use this page when you want to confirm that Registry Witness starts, authenticates callers,
-and responds to API requests before connecting it to a source registry.
-The steps below start the service with the demo config and use `curl` to probe the claims list.
-Full claim evaluation requires a source registry at the configured `base_url`; the
-[configure a claim](../configure-a-claim/) page covers that step.
-
-## When to use this
-
-Use this page when you are:
-
-- Verifying a local build before wiring Registry Witness to a source connector.
-- Exploring the API surface without a full Registry Lab topology.
-- Confirming that a new issuer key loads and the JWKS endpoint responds.
-
-For an end-to-end topology with source registries and a demo client, use
-[Registry Lab](../../registry-lab/).
+The steps below start Registry Witness with the demo config and use `curl` to probe the claims list, the JWKS endpoint, and the service capabilities document. Full claim evaluation requires a source registry at the configured `base_url`; [configure a claim](../configure-a-claim/) covers that step, and [Registry Lab](../../registry-lab/) wires the full topology together.
 
 ## Prerequisites
 

@@ -15,21 +15,9 @@ standards_referenced:
   - json-schema
 ---
 
-Use this page when you want to check that a manifest conforms to a named profile's requirements,
-or when you are authoring a new domain profile and need to run the fixture suite against your descriptor.
+Check that a manifest conforms to a named profile's requirements, or run the fixture suite against a new domain profile descriptor. Also useful for reproducing a `validate-profiles` CI failure locally.
 
-## When to use this
-
-- You are using one of the example profiles (`example-civil-registration`,
-  `example-social-benefits`, `example-person-schema`, `example-benefits-sync`) as a starting
-  point and want to confirm your fixture still passes.
-- You are creating a new profile descriptor and want to run its fixture against the profile
-  validator before committing.
-- A CI check reports a `validate-profiles` failure and you need to reproduce it locally.
-
-For basic manifest validation (schema version, field format, reference integrity), use the
-`validate` subcommand instead.
-See the [validate-and-render how-to](../validate-and-render/).
+For basic manifest validation (schema version, field format, reference integrity), use the `validate` subcommand instead. See the [validate-and-render how-to](../validate-and-render/).
 
 ## What profile fixtures are
 

@@ -17,21 +17,11 @@ standards_referenced:
   - odrl
 ---
 
-Use this page when you have a `metadata.yaml` file and want to check it for errors, inspect
-individual rendered artifacts, or produce a complete static publication bundle for hosting.
+Check a `metadata.yaml` file for errors, inspect individual rendered artifacts (DCAT, BRegDCAT-AP, SHACL, JSON Schemas, etc.), or produce a complete static publication bundle for hosting.
 
-## When to use this
+The validator collects all errors across every validation pass before reporting, so a single run surfaces every problem in the file. You don't need to fix one error at a time and re-run.
 
-- You edited a manifest and want to confirm it is structurally valid before committing.
-- You want to inspect the DCAT or BRegDCAT-AP output for a specific dataset.
-- You are preparing a static metadata bundle to serve alongside a Registry Relay deployment
-  or as a standalone hosted artifact.
-
-The validator collects all errors across every validation pass before reporting, so a single
-run surfaces every problem in the file. You don't need to fix one error at a time and re-run.
-
-This how-to does not cover profile fixture validation.
-For that, see the [profile fixtures how-to](../profile-fixtures/).
+For profile fixture validation, see the [profile fixtures how-to](../profile-fixtures/) instead.
 
 ## Prerequisites
 
