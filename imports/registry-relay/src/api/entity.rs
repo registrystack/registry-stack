@@ -134,7 +134,6 @@ where
         .route("/datasets/{dataset_id}/{entity}/{id}", get(entity_record))
 }
 
-
 #[derive(Debug, Deserialize)]
 struct EntityPath {
     dataset_id: String,

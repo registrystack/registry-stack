@@ -136,7 +136,6 @@ fn node_verifier_accepts_golden_fixtures() {
     }
 }
 
-
 #[test]
 fn node_verifier_rejects_unexpected_claim_type() {
     let mut args = fixture_args(&FIXTURES[0]);

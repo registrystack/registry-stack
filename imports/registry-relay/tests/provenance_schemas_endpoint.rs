@@ -94,7 +94,6 @@ fn build_app() -> axum::Router {
     build_app_with_provenance(config, auth, sink, Some(build_state())).unwrap()
 }
 
-
 #[tokio::test]
 async fn aggregate_result_schema_is_served_verbatim() {
     let server = TestServer::new(build_app());

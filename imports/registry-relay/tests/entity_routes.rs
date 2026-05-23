@@ -1132,7 +1132,6 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
     assert_eq!(body["code"], "pagination.cursor_invalidated");
 }
 
-
 #[tokio::test]
 async fn verify_only_principal_cannot_read_rows_or_schema() {
     let tmp = TempDir::new().expect("tempdir");
@@ -1629,7 +1628,6 @@ async fn evidence_verification_enforces_ruleset_specific_scope() {
     let body: Value = allowed.json();
     assert_eq!(body["decision"], "match");
 }
-
 
 #[tokio::test]
 async fn evidence_verification_subject_targeting_requires_targeted_scope() {

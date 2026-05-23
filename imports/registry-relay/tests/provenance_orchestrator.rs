@@ -93,11 +93,7 @@ fn decode_payload(jws: &str, vk: &VerifyingKey) -> Value {
 fn orchestrator_issues_signed_vc_for_each_claim_type() {
     let aggregate_window = Duration::from_secs(3600); // 1 hour
     let entity_window = Duration::from_secs(86_400); // 24 hours
-    let (state, vk) = build_state(
-        "ORCHESTRATOR_TEST_JWK",
-        aggregate_window,
-        entity_window,
-    );
+    let (state, vk) = build_state("ORCHESTRATOR_TEST_JWK", aggregate_window, entity_window);
 
     let issued_at = OffsetDateTime::from_unix_timestamp(1_730_000_000).unwrap();
 
