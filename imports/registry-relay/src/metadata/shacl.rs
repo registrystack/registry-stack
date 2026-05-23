@@ -109,6 +109,13 @@ pub(crate) fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
     obj
 }
 
+/// Builds the flat route schema served at `/datasets/{ds}/{entity}/schema`.
+///
+/// Despite living in `shacl.rs`, this is neither SHACL nor JSON Schema:
+/// it is Relay's own `{dataset_id, entity, fields[], relationships[], links}`
+/// blob. For standards documents, see `registry-manifest-core`'s
+/// `render_entity_shacl` and `render_entity_schema_draft_2020_12`, exposed
+/// under `/metadata/*`.
 #[must_use]
 pub fn entity_schema_document(
     config: &Config,
@@ -762,6 +769,9 @@ fn iri_object(iri: &str) -> Value {
     json!({ "@id": iri })
 }
 
+// TODO(registry-manifest-core >=0.1.3): drop once upstream emits absolute
+// IRIs instead of `#dataset-{id}` / `#dataset-{id}-offer` fragment
+// defaults from `dataset_url_from_id`.
 fn legacy_policy_dataset_iri(dataset: &DatasetMetadata, iri: &str) -> String {
     if iri == format!("#dataset-{}", dataset.dataset_id) {
         return dataset.links.self_url.clone();

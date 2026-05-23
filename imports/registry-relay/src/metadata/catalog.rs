@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Stable JSON catalog renderer over configured entity metadata.
+//!
+//! `CatalogDocument` feeds the OpenAPI generator (`src/api/openapi.rs`)
+//! and the entity route schema (`src/metadata/shacl.rs::entity_schema_document`).
+//! The shape (relationship `kind` strings, `field_property_uri` URLs,
+//! `FieldMetadata` columns) is part of Relay's published OpenAPI contract
+//! and intentionally diverges from `registry-manifest-core`'s
+//! `CompiledMetadata`, which targets external standards consumers.
 
 use std::collections::{BTreeMap, BTreeSet};
 

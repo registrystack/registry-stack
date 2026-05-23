@@ -15,6 +15,11 @@ use crate::auth::Principal;
 use crate::config::{AuthMode, Config, EntityConfig, FilterOp};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
+// Reads the local `CatalogDocument`, not `registry-manifest-core`'s
+// `CompiledMetadata`, because the OpenAPI synthesizer below depends on
+// Relay-specific wire vocabulary (`has_many` cardinality, the local
+// `field_property_uri` shape, `FieldMetadata`'s type strings) that is part
+// of the published OpenAPI contract.
 use crate::metadata::catalog::{
     catalog_document_for_entity_ids, entity_class_uri, field_property_uri, CatalogDocument,
     DatasetMetadata, EntityMetadata, FieldMetadata, RelationshipMetadata,
