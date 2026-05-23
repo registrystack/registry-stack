@@ -1,6 +1,6 @@
 ---
 title: Registry Relay overview
-description: What Registry Relay is, how it models data access, how it handles auth and audit, and what it explicitly does not do.
+description: What Registry Relay is, how it models data access, and how it handles auth and audit.
 status: draft
 owner: registry-relay
 source_repos:
@@ -24,7 +24,6 @@ Registry Relay gives authorized systems a stable HTTP API for reading registry d
 (records, aggregates, metadata) without database access or raw SQL.
 
 The upstream source is [`registry-relay`](https://github.com/jeremi/registry-relay).
-Authoritative sources are the upstream files linked from each section.
 
 ## The two-layer model
 
@@ -54,14 +53,12 @@ that have header notes around the data table.
 **Parquet** files, inferred from the `.parquet` extension.
 **PostgreSQL** in two materialization modes: `snapshot` (loaded at startup or on refresh)
 and `live` (structured table only, with column projection pushdown for filter-free scans).
-[Source: docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
 
 Stream ingestion (Kafka, pub/sub, event streaming) is not supported in v0.
 
 ## Auth model
 
 Registry Relay runs in exactly one auth mode at a time, configured at startup.
-[Source: docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
 
 **API key mode** (`auth.mode: api_key`): the client sends a high-entropy bearer token
 in `Authorization: Bearer` or `X-Api-Key`.
@@ -74,7 +71,6 @@ The client sends a bearer JWT.
 Registry Relay validates standard claims (`iss`, `aud`, `exp`, optional `nbf`) against
 a configured external IdP's JWKS, refreshing the JWKS on unknown `kid`.
 Registry Relay is a resource server only: it never mints, refreshes, or stores tokens.
-[Source: docs/configuration.md OIDC section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
 
 ### Scopes
 
@@ -82,13 +78,11 @@ Scopes are independent and granular.
 The scope suffixes are `metadata`, `rows`, `aggregate`, `evidence_verification`, and `admin`.
 A key or token must carry `<dataset_id>:<suffix>` for the operation it needs.
 A metadata-only key cannot read rows; a rows key cannot run aggregates.
-[Source: docs/api.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
 
 ## Audit logging
 
 Every authenticated request produces one JSONL audit record.
 Audit records are separate from operational logs (which go to stderr).
-[Source: docs/configuration.md audit section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
 
 Key fields in each record include:
 
@@ -107,7 +101,6 @@ Key fields in each record include:
 Supported audit sinks are `stdout`, `file` (with in-process rotation), and `syslog`.
 Setting `audit.chain: true` wraps records with `prev_hash` and `record_hash` fields for
 tamper evidence.
-[Source: src/audit/mod.rs; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
 
 Audit records never contain raw API keys, raw query values for sensitive fields,
 or row-level data.
@@ -121,7 +114,6 @@ using the same renderers provided by
 [`registry-manifest-core`](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core).
 These routes expose caller-scoped views filtered by the authenticated principal's
 `metadata` scopes.
-[Source: docs/metadata.md; .research/registry-relay.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
 
 The `/metadata/*` routes are the canonical standards-facing metadata surface.
 They do not grant row, aggregate, evidence-verification, or admin access.
@@ -147,7 +139,6 @@ scopes, filters, aggregates, and refresh settings.
 Startup failures produce stable error codes such as `runtime.binding.dataset_missing`
 and `metadata.manifest.validation_failed`; the process exits non-zero so misconfiguration
 is immediately visible.
-[Source: docs/metadata.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
 
 ## Optional capability families
 
@@ -183,7 +174,6 @@ Registry Relay is at v0.1.0.
 The following capabilities are not yet supported:
 
 - **Live keyring reload.** Key and JWKS reloads require a process restart.
-  [Source: docs/ops.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
 - **Config reload without restart.** Dataset data can be reloaded via the admin
   listener, but the config file itself is not re-read at runtime.
 - **PostgreSQL live mode for query sources.** Live materialization is supported only
@@ -196,7 +186,6 @@ The rename from the legacy underscore form `registry_relay` to the hyphenated
 `registry-relay` is complete in v0.1.0.
 No legacy underscore references appear in the API, config surface, binary name,
 or Cargo.toml.
-[Source: .research/registry-relay.md naming section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/README.md)
 
 ## Next
 
