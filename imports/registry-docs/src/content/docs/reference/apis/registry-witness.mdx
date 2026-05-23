@@ -22,7 +22,7 @@ The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, what disclosure profiles the specification exposes, and what is not in scope.
 
-Evidence source: Registry Witness commit `b4128a369c62ddb8e75dafb2e3834cd87f28d2d0`, reviewed 2026-05-23.
+Evidence source: [Registry Witness](../../../projects/registry-witness/) commit `b4128a369c62ddb8e75dafb2e3834cd87f28d2d0`, reviewed 2026-05-23.
 
 Generate or refresh the artifact:
 
@@ -38,7 +38,7 @@ cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.
 
 Registry Witness is a standalone Rust workspace (Axum, Tokio) for claim evaluation, disclosure policy,
 credential issuance, and audit.
-It is decoupled from Registry Relay by design: Registry Witness does not import or link Registry Relay code.
+It is decoupled from [Registry Relay](../../../projects/registry-relay/) by design: Registry Witness does not import or link Registry Relay code.
 
 The OpenAPI document is titled "Registry Witness API" at version `0.1.0`.
 All routes are defined in `crates/registry-witness-server/src/api.rs` and require authentication.

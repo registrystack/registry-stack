@@ -14,7 +14,7 @@ const descriptions = new Map([
 <ol class="legend-list">
   {projects.map((project, index) => (
     <li id={project.id}>
-      <a href={`${base}map/#${project.id}`}>
+      <a href={`${base}projects/${project.id}/`}>
         <span class="legend-index">{index + 1}.</span>
         <span class="legend-project">
           <span>{project.name}</span>

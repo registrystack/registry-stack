@@ -43,7 +43,7 @@ SHACL (Shapes Constraint Language) node shapes, JSON Schema Draft 2020-12, OGC A
 (Open Digital Rights Language) policy documents, and evidence-offering metadata;
 CLI validation, static publication, and profile fixture validation.
 
-**Does not own:** Registry Relay runtime data access; auth, audit, observability,
+**Does not own:** [Registry Relay](../../projects/registry-relay/) runtime data access; auth, audit, observability,
 DataFusion, Postgres, Axum, or secret handling; production source configuration.
 
 The `registry-manifest-cli publish` command produces a static bundle including
@@ -63,7 +63,7 @@ over CSV, XLSX, Parquet, and PostgreSQL sources; API key and OIDC resource-serve
 caller-scoped metadata publication at `/metadata/*`; relay-native evidence offering verification.
 
 **Does not own:** record provisioning or writes in v1; portable metadata schema ownership
-(that belongs to Registry Manifest); standalone claim service internals owned by Registry Witness;
+(that belongs to [Registry Manifest](../../projects/registry-manifest/)); standalone claim service internals owned by [Registry Witness](../../projects/registry-witness/);
 storage table identifiers or arbitrary SQL in public APIs.
 
 Registry Relay emits DCAT, BRegDCAT-AP, SHACL, JSON Schema, and ODRL artifacts at runtime
@@ -85,7 +85,7 @@ HTTP source connectors for Registry Data API and SP DCI-style sources.
 
 **Does not own:** Registry Relay source code or runtime internals;
 portable metadata renderers owned by Registry Manifest;
-browser inspection workflows owned by Registry Atlas.
+browser inspection workflows owned by [Registry Atlas](../../projects/registry-atlas/).
 
 Registry Witness evaluates YAML-configured claims against data fetched from source connectors,
 applies per-claim disclosure rules (full value, predicate, or redacted), and can issue
@@ -142,7 +142,7 @@ Each project can be operated, validated, and audited independently:
 - Runtime source bindings, authorization, and audit stay inside Registry Relay.
 - Claim evaluation and credential issuance stay in Registry Witness, which can be operated and audited separately.
 - Browser inspection tools read published outputs without becoming a source of truth.
-- Registry Lab proves flows locally without becoming production guidance.
+- [Registry Lab](../../projects/registry-lab/) proves flows locally without becoming production guidance.
 
 ## What Registry Legend owns
 

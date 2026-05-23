@@ -37,11 +37,11 @@ The table is generated from `src/data/openapi-sources.yaml`.
 
 ## Provenance and freshness
 
-Registry Relay exposes its OpenAPI document through an auth-gated runtime route (`GET /openapi.json`).
+[Registry Relay](../../../projects/registry-relay/) exposes its OpenAPI document through an auth-gated runtime route (`GET /openapi.json`).
 The v0 artifact is a pinned civil demo snapshot.
 Replace it with a release-grade artifact when Registry Relay has a documented standalone export path.
 
-Registry Witness generates its OpenAPI document via a subcommand:
+[Registry Witness](../../../projects/registry-witness/) generates its OpenAPI document via a subcommand:
 
 ```sh
 cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.json

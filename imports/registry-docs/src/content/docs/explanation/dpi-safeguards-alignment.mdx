@@ -38,10 +38,10 @@ Those are technical foundations that can support a DPI program's governance work
 
 | Safeguards concern | Registry family support |
 | --- | --- |
-| Privacy by design | Registry Relay can expose only configured fields, require filters, separate metadata from runtime bindings, and verify evidence without returning raw registry rows by default. |
+| Privacy by design | [Registry Relay](../../projects/registry-relay/) can expose only configured fields, require filters, separate metadata from runtime bindings, and verify evidence without returning raw registry rows by default. |
 | Data security by design | Registry Relay supports API key or OIDC authentication, independent scopes, private admin routes, read-only source bindings, source-required scopes, body limits, and timeouts. |
-| Transparency and accountability | Registry Manifest and Registry Relay can publish OpenAPI, metadata routes, schemas, evidence offering descriptions, audit records, stable error codes, and provenance artifacts. |
-| Open assets and interoperability | Registry Manifest, Registry Relay, and Registry Witness produce or reference standards-shaped artifacts such as DCAT, SHACL, JSON Schema, ODRL, OpenAPI, and SD-JWT VC profiles. |
+| Transparency and accountability | [Registry Manifest](../../projects/registry-manifest/) and Registry Relay can publish OpenAPI, metadata routes, schemas, evidence offering descriptions, audit records, stable error codes, and provenance artifacts. |
+| Open assets and interoperability | Registry Manifest, Registry Relay, and [Registry Witness](../../projects/registry-witness/) produce or reference standards-shaped artifacts such as DCAT, SHACL, JSON Schema, ODRL, OpenAPI, and SD-JWT VC profiles. |
 | Evidence-based improvement | Audit logs, aggregate disclosure records, validation reports, provenance receipts, and standards registers can provide material for review and impact assessment. |
 
 This alignment is strongest at the implementation-evidence layer.
@@ -58,7 +58,7 @@ It turns configured registry sources into read-only APIs with scoped access, dec
 Registry Witness provides the claim evaluation layer.
 It evaluates configured claims against registry sources, applies disclosure policy, records redacted audit events, and can issue credentials where a reviewed trust model allows it.
 
-Registry Atlas provides the inspection layer.
+[Registry Atlas](../../projects/registry-atlas/) provides the inspection layer.
 It helps implementers and reviewers inspect published discovery artifacts and capability descriptions, making registry claims easier to verify and discuss.
 
 ## Governance boundary

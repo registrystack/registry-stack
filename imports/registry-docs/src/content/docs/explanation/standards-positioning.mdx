@@ -41,8 +41,8 @@ Each row defines one level; the third column gives a concrete example drawn from
 
 | Level | Meaning | Example from the register |
 | --- | --- | --- |
-| `implements` | Implements a normative requirement or API shape from the standard. | Registry Relay publishes a `/.well-known/did.json` DID document and Registry Witness parses `did:jwk` credential subjects. Both satisfy normative DID Core requirements (`w3c-did`). |
-| `emits` | Produces artifacts shaped like the standard, such as JSON-LD, SHACL, OpenAPI, or catalog records. | Registry Manifest renders `render_breg_dcat_ap()` to a JSON-LD bundle that includes CPSV public service nodes, ADMS status, and dcatap namespace terms (`bregdcat-ap`). |
+| `implements` | Implements a normative requirement or API shape from the standard. | [Registry Relay](../../projects/registry-relay/) publishes a `/.well-known/did.json` DID document and [Registry Witness](../../projects/registry-witness/) parses `did:jwk` credential subjects. Both satisfy normative DID Core requirements (`w3c-did`). |
+| `emits` | Produces artifacts shaped like the standard, such as JSON-LD, SHACL, OpenAPI, or catalog records. | [Registry Manifest](../../projects/registry-manifest/) renders `render_breg_dcat_ap()` to a JSON-LD bundle that includes CPSV public service nodes, ADMS status, and dcatap namespace terms (`bregdcat-ap`). |
 | `maps_to` | Maps local concepts or fields to standard terms. | Registry Relay and Registry Witness map request and response shapes to SP DCI search and sync paths (`sp-dci`). |
 | `aligns_with` | Follows the standard's model or intent without a formal conformance claim. | Registry Relay and Registry Witness use VC-oriented provenance fixtures and issue SD-JWT credentials, but no reviewed W3C VC Data Model profile or validation suite has been pinned (`verifiable-credentials`). |
 | `inspired_by` | The standard shaped design decisions without a compatibility claim. | Relay config carries `src/config/provenance.rs` and Witness carries a `ClaimProvenance` struct, but neither emits PROV-O vocabulary terms directly (`prov-o`). |

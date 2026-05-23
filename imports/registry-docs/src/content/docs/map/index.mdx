@@ -38,21 +38,14 @@ Use this map to decide which repository owns a question before opening implement
 
 ## Flow across the family
 
-Registry Manifest defines portable metadata and compiles it into standards-facing artifacts.
-Registry Relay binds logical datasets and entities to protected runtime sources and exposes them as authorized read-only APIs.
-Registry Witness evaluates configured claims against registry sources and issues SD-JWT VC credentials.
-Registry Atlas inspects published discovery artifacts, parses DCAT catalogs and capability envelopes, and answers strict capability queries.
-Registry Lab runs the smallest local ecosystem demo, composing three Relay authorities, three Witness services, a static metadata publisher, and a narrated client.
+[Registry Manifest](../../projects/registry-manifest/) defines portable metadata and compiles it into standards-facing artifacts.
+[Registry Relay](../../projects/registry-relay/) binds logical datasets and entities to protected runtime sources and exposes them as authorized read-only APIs.
+[Registry Witness](../../projects/registry-witness/) evaluates configured claims against registry sources and issues SD-JWT VC credentials.
+[Registry Atlas](../../projects/registry-atlas/) inspects published discovery artifacts, parses DCAT catalogs and capability envelopes, and answers strict capability queries.
+[Registry Lab](../../projects/registry-lab/) runs the smallest local ecosystem demo, composing three Relay authorities, three Witness services, a static metadata publisher, and a narrated client.
 
-## Rename status
-
-Current repo slugs are `registry-relay`, `registry-manifest`, `registry-witness`, `registry-atlas`, and `registry-lab`.
-The 2026-05-23 rename plan resolved the two legacy names:
-
-- `registry_relay` (underscore form) is complete as of v0.1.0; the public-facing binary, crate, and repo all use the hyphen form `registry-relay`.
-- `decentralized-evidence-demo` has been renamed to `registry-lab`. Some scripts and fixtures inside the repo still reference the old name in identifiers and docstrings; those internal references are intentionally stable and do not affect the repo slug or product label.
-
-Until the rename finishes propagating through all linked docs, Registry Legend uses target product labels in explanatory prose and current local paths in evidence links.
+For the legacy-to-current name mapping and per-repo rename state, see the
+[2026-05-23 rename decision](../decisions/rename-2026-05-23/).
 
 ---
 
@@ -63,7 +56,6 @@ Until the rename finishes propagating through all linked docs, Registry Legend u
     - SVG (public/images/registry-family-map.svg) restored with descriptive alt text.
     - source_repos updated: replaced `registry_relay` and `decentralized-evidence-demo`
       with `registry-relay` and `registry-lab`.
-    - The "Rename Status" content was condensed into prose grounded in the registry-relay
-      and registry-lab evidence packets.
     - The ProjectMap component renders from src/data/projects.yaml; no hand-written table added.
-    - Flow paragraph verified against all five evidence packets. */}
+    - Flow paragraph verified against all five evidence packets.
+    - Rename status content lives in decisions/rename-2026-05-23.mdx; this page links to it. */}

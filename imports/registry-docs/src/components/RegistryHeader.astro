@@ -3,21 +3,8 @@ import config from 'virtual:starlight/user-config';
 import Search from '@astrojs/starlight/components/Search.astro';
 
 const base = import.meta.env.BASE_URL;
-const path = Astro.url.pathname.replace(base, '/');
 const shouldRenderSearch =
   config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
-
-const navItems = [
-  { label: 'Start', href: `${base}start/`, match: ['/start/', '/'] },
-  { label: 'Project map', href: `${base}map/`, match: ['/map/'] },
-  { label: 'Architecture', href: `${base}explanation/architecture/`, match: ['/explanation/architecture/'] },
-  { label: 'Standards', href: `${base}reference/standards/`, match: ['/reference/standards/'] },
-  { label: 'Contracts', href: `${base}reference/contracts/`, match: ['/reference/contracts/'] },
-  { label: 'API reference', href: `${base}reference/apis/`, match: ['/reference/apis/'] },
-  { label: 'Lab tutorial', href: `${base}tutorials/first-run-with-registry-lab/`, match: ['/tutorials/first-run-with-registry-lab/'] },
-];
-
-const isActive = (matches: string[]) => matches.some((match) => path === match || path.startsWith(match));
 ---
 
 <div class="registry-header">
@@ -34,18 +21,8 @@ const isActive = (matches: string[]) => matches.some((match) => path === match |
       </div>
     )}
 
-    <nav class="registry-utility" aria-label="Language and source">
-      <a class="active" href={base} aria-current="true">EN</a>
-      <span aria-disabled="true" title="French will be added after the English v0 is approved">FR</span>
+    <nav class="registry-utility" aria-label="Source">
       <a href="https://github.com/jeremi/registry-legend">GitHub ↗</a>
     </nav>
   </div>
-
-  <nav class="registry-primary-nav" aria-label="Primary">
-    {navItems.map((item) => (
-      <a href={item.href} aria-current={isActive(item.match) ? 'page' : undefined}>
-        {item.label}
-      </a>
-    ))}
-  </nav>
 </div>

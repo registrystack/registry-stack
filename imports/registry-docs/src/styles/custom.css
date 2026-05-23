@@ -159,52 +159,18 @@ body {
   white-space: nowrap;
 }
 
-.registry-utility,
-.registry-primary-nav {
+.registry-utility {
   display: flex;
   align-items: center;
-}
-
-.registry-utility {
   justify-content: flex-end;
   gap: 22px;
   font-size: 15px;
   font-weight: 600;
 }
 
-.registry-utility a,
-.registry-utility span {
+.registry-utility a {
   color: var(--registry-muted);
   text-decoration: none;
-}
-
-.registry-utility .active {
-  color: var(--registry-ink);
-}
-
-.registry-primary-nav {
-  gap: 40px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--registry-rule);
-}
-
-.registry-primary-nav a {
-  display: flex;
-  align-items: center;
-  block-size: 44px;
-  border-bottom: 2px solid transparent;
-  color: var(--registry-ink);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.registry-primary-nav a[aria-current='page'] {
-  border-bottom-color: var(--registry-blue);
-  color: var(--registry-blue);
-  font-weight: 700;
 }
 
 button[data-open-modal] {
@@ -679,10 +645,6 @@ mobile-starlight-toc summary {
   .registry-utility {
     gap: 12px;
     font-size: 13px;
-  }
-
-  .registry-primary-nav {
-    gap: 24px;
   }
 
   .legend-list a {

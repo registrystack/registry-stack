@@ -47,15 +47,10 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Map',
-          items: [
-            { label: 'Overview', slug: 'map' },
-            { label: 'Ownership & boundaries', slug: 'map/ownership-boundaries' },
-          ],
-        },
-        {
           label: 'Projects',
           items: [
+            { label: 'Project map', slug: 'map' },
+            { label: 'Ownership & boundaries', slug: 'map/ownership-boundaries' },
             { label: 'All projects', slug: 'projects' },
             {
               label: 'Registry Manifest',

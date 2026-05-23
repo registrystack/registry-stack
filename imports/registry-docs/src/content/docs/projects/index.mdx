@@ -26,61 +26,16 @@ appear inline; gaps are marked with `TODO[evidence]` notes rather than asserted.
 
 ## The five projects
 
-### Registry Manifest
-
-Portable metadata renderers and a CLI that compile a single YAML manifest into
-catalog, DCAT, BRegDCAT-AP, SHACL, JSON Schema, OGC API Records, ODRL, and
-evidence-offering artifacts.
-
-- [Overview](./registry-manifest/)
-- [Validate and render a manifest](./registry-manifest/validate-and-render/)
-- [Profile fixtures](./registry-manifest/profile-fixtures/)
-- [Reference](./registry-manifest/reference/)
-
-### Registry Relay
-
-Read-only HTTP gateway that binds protected tabular sources (CSV, XLSX, Parquet,
-Postgres) to entity-shaped APIs with API-key and OIDC authorization, audit
-logging, and runtime metadata routes.
-
-- [Overview](./registry-relay/)
-- [Run Registry Relay locally](./registry-relay/run-locally/)
-- [Authorize callers](./registry-relay/authorize-callers/)
-- [Reference](./registry-relay/reference/)
-
-### Registry Witness
-
-Standalone claim service that evaluates configured eligibility claims against
-registry sources and issues SD-JWT VC credentials with selective disclosure.
-
-- [Overview](./registry-witness/)
-- [Run Registry Witness locally](./registry-witness/run-locally/)
-- [Configure a claim](./registry-witness/configure-a-claim/)
-- [Reference](./registry-witness/reference/)
-
-### Registry Atlas
-
-Browser workbench for inspecting what a registry publishes and checking strict
-capability matches against the standards it claims to emit.
-
-- [Overview](./registry-atlas/)
-- [Run Registry Atlas locally](./registry-atlas/run-locally/)
-- [Inspect a registry](./registry-atlas/inspect-a-registry/)
-- [Reference](./registry-atlas/reference/)
-
-### Registry Lab
-
-Docker Compose demo of the registry runtime on a laptop. Wires three Relay
-instances, three Witness instances, a static metadata publisher, and a narrated
-demo client into a single topology.
-
-- [Overview](./registry-lab/)
-- [Run the narrated demo flow](./registry-lab/demo-flow/)
-- [Reference](./registry-lab/reference/)
+- [Registry Manifest](./registry-manifest/): describe a registry once in YAML and render every standards-facing metadata artifact other systems need.
+- [Registry Relay](./registry-relay/): expose protected tabular sources as authorized, read-only entity APIs with audit logging.
+- [Registry Witness](./registry-witness/): evaluate eligibility claims against registry data and issue SD-JWT VC credentials with selective disclosure.
+- [Registry Atlas](./registry-atlas/): inspect what a registry publishes in your browser and check strict capability matches against the standards it claims to emit.
+- [Registry Lab](./registry-lab/): run three Relay instances, three Witness services, a static metadata publisher, and a narrated demo client together in one Docker Compose topology.
 
 ## Next
 
 - [Project map](../map/): the cross-project view with ownership and flow.
+- [Ownership boundaries](../map/ownership-boundaries/): what each project does not own.
 - [First run with Registry Lab](../tutorials/first-run-with-registry-lab/): the
   end-to-end tutorial that brings the topology up before you walk the demo flow.
 - [Architecture overview](../explanation/architecture/): how the projects
