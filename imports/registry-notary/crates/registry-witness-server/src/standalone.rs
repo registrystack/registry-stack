@@ -32,6 +32,7 @@ use crate::{
 };
 
 const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 
 pub fn standalone_router(
     config: StandaloneRegistryWitnessConfig,
@@ -71,11 +72,21 @@ pub enum StandaloneServerError {
     HttpClient(#[source] reqwest::Error),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ResolvedEvidenceSourceConnection {
     base_url: String,
     bearer_token: String,
     dci: DciSourceConnectionConfig,
+}
+
+impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedEvidenceSourceConnection")
+            .field("base_url", &self.base_url)
+            .field("bearer_token", &"<redacted>")
+            .field("dci", &self.dci)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +117,7 @@ impl HttpEvidenceSources {
         }
         let client = reqwest::Client::builder()
             .timeout(SOURCE_REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(StandaloneServerError::HttpClient)?;
         Ok(Self {
@@ -195,11 +207,21 @@ impl EvidenceIssuerResolver for EvidenceIssuerRegistry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 struct ResolvedCredential {
     id: String,
     token: String,
     scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for ResolvedCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedCredential")
+            .field("id", &self.id)
+            .field("token", &"<redacted>")
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -230,7 +252,7 @@ impl AuthAuditState {
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(header_str)
-            .and_then(|raw| raw.strip_prefix("Bearer "))
+            .and_then(bearer_auth_token)
         {
             if let Some(credential) = find_credential(&self.bearer_tokens, value) {
                 return Ok(principal_from_credential(credential));
@@ -400,6 +422,16 @@ fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
 }
 
+fn bearer_auth_token(raw: &str) -> Option<&str> {
+    let mut parts = raw.split_whitespace();
+    let scheme = parts.next()?;
+    let token = parts.next()?;
+    if parts.next().is_some() || !scheme.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
+    Some(token)
+}
+
 fn auth_error_response(error: EvidenceError) -> Response {
     let code = error.code().to_string();
     let status = StatusCode::UNAUTHORIZED;
@@ -458,8 +490,7 @@ async fn read_remote_registry_data_api_one(
     let lookup_field = binding.lookup.field.clone();
     let lookup_value = lookup_value(binding, subject)?;
     let fields = projected_source_fields_with_lookup(binding, &lookup_field);
-    let base = connection.base_url.trim_end_matches('/');
-    let url = format!("{base}/datasets/{}/{}", binding.dataset, binding.entity);
+    let url = registry_data_api_url(&connection.base_url, binding)?;
     let response = sources
         .client
         .get(url)
@@ -478,10 +509,7 @@ async fn read_remote_registry_data_api_one(
     if !response.status().is_success() {
         return Err(EvidenceError::SourceUnavailable);
     }
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|_| EvidenceError::SourceUnavailable)?;
+    let body = read_source_json(response).await?;
     let rows = body
         .get("data")
         .and_then(Value::as_array)
@@ -504,7 +532,7 @@ async fn read_external_dci_http_one(
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
     let lookup_value = lookup_value(binding, subject)?;
-    let url = source_url(&connection.base_url, &connection.dci.search_path);
+    let url = source_url(&connection.base_url, &connection.dci.search_path)?;
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
     let response = sources
         .client
@@ -521,10 +549,7 @@ async fn read_external_dci_http_one(
     if !response.status().is_success() {
         return Err(EvidenceError::SourceUnavailable);
     }
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|_| EvidenceError::SourceUnavailable)?;
+    let body = read_source_json(response).await?;
     let rows = get_json_path(&body, &connection.dci.records_path)
         .and_then(Value::as_array)
         .ok_or(EvidenceError::SourceUnavailable)?;
@@ -535,15 +560,56 @@ async fn read_external_dci_http_one(
     }
 }
 
-fn source_url(base_url: &str, path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        return path.to_string();
+async fn read_source_json(response: reqwest::Response) -> Result<Value, EvidenceError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_SOURCE_JSON_BYTES as u64)
+    {
+        return Err(EvidenceError::SourceUnavailable);
     }
-    format!(
+    let mut body = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| EvidenceError::SourceUnavailable)?
+    {
+        let new_len = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(EvidenceError::SourceUnavailable)?;
+        if new_len > MAX_SOURCE_JSON_BYTES {
+            return Err(EvidenceError::SourceUnavailable);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| EvidenceError::SourceUnavailable)
+}
+
+fn registry_data_api_url(
+    base_url: &str,
+    binding: &SourceBindingConfig,
+) -> Result<reqwest::Url, EvidenceError> {
+    let mut url = reqwest::Url::parse(base_url).map_err(|_| EvidenceError::SourceUnavailable)?;
+    url.path_segments_mut()
+        .map_err(|_| EvidenceError::SourceUnavailable)?
+        .extend([
+            "datasets",
+            binding.dataset.as_str(),
+            binding.entity.as_str(),
+        ]);
+    Ok(url)
+}
+
+fn source_url(base_url: &str, path: &str) -> Result<String, EvidenceError> {
+    if reqwest::Url::parse(path).is_ok() {
+        return Err(EvidenceError::SourceUnavailable);
+    }
+    Ok(format!(
         "{}/{}",
         base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
-    )
+    ))
 }
 
 fn dci_search_request_body(
@@ -740,8 +806,11 @@ fn projected_source_fields_with_lookup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::response::Redirect;
     use axum::routing::get;
     use axum_test::TestServer;
+    use registry_witness_core::{SourceConnectionConfig, SourceLookupConfig};
     use std::io::{Error, ErrorKind};
 
     #[derive(Clone)]
@@ -801,6 +870,23 @@ mod tests {
         })
     }
 
+    fn test_binding(dataset: &str, entity: &str) -> SourceBindingConfig {
+        SourceBindingConfig {
+            connector: SourceConnectorKind::RegistryDataApi,
+            connection: Some("registry".to_string()),
+            required_scope: None,
+            dataset: dataset.to_string(),
+            entity: entity.to_string(),
+            lookup: SourceLookupConfig {
+                input: "subject_id".to_string(),
+                field: "id".to_string(),
+                op: "eq".to_string(),
+                cardinality: "one".to_string(),
+            },
+            fields: BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn stdout_audit_sink_emits_raw_jsonl() {
         let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -857,6 +943,178 @@ mod tests {
         response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
         let body: Value = response.json();
         assert_eq!(body["code"], json!("audit.write_failed"));
+    }
+
+    #[test]
+    fn bearer_auth_token_accepts_case_insensitive_scheme_and_whitespace() {
+        assert_eq!(bearer_auth_token("bEaReR api-token"), Some("api-token"));
+        assert_eq!(bearer_auth_token("Bearer\tapi-token"), Some("api-token"));
+        assert_eq!(bearer_auth_token("Bearer"), None);
+        assert_eq!(bearer_auth_token("Bearer api-token extra"), None);
+    }
+
+    #[test]
+    fn auth_state_accepts_case_insensitive_bearer_scheme() {
+        let state = AuthAuditState {
+            api_keys: Vec::new(),
+            bearer_tokens: vec![ResolvedCredential {
+                id: "caseworker".to_string(),
+                token: "api-token".to_string(),
+                scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            }],
+            audit: AuditSink::Stdout(Mutex::new(Box::new(SharedBuffer(Arc::new(Mutex::new(
+                Vec::new(),
+            )))))),
+        };
+        let request = Request::builder()
+            .uri("/claims")
+            .header(header::AUTHORIZATION, "BEARER api-token")
+            .body(Body::empty())
+            .expect("request builds");
+
+        let principal = state.authenticate(&request).expect("bearer auth succeeds");
+
+        assert_eq!(principal.principal_id, "caseworker");
+    }
+
+    #[test]
+    fn resolved_token_debug_output_is_redacted() {
+        let credential = ResolvedCredential {
+            id: "caseworker".to_string(),
+            token: "api-token".to_string(),
+            scopes: vec!["farmer_registry:evidence_verification".to_string()],
+        };
+        let connection = ResolvedEvidenceSourceConnection {
+            base_url: "https://registry.example.test".to_string(),
+            bearer_token: "source-token".to_string(),
+            dci: DciSourceConnectionConfig::default(),
+        };
+
+        let debug = format!("{credential:?} {connection:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("api-token"));
+        assert!(!debug.contains("source-token"));
+    }
+
+    #[test]
+    fn registry_data_api_url_percent_encodes_dataset_and_entity_segments() {
+        let binding = test_binding("farmer/registry", "farmer?active");
+
+        let url = registry_data_api_url("https://registry.example.test/api", &binding)
+            .expect("url builds");
+
+        assert_eq!(
+            url.as_str(),
+            "https://registry.example.test/api/datasets/farmer%2Fregistry/farmer%3Factive"
+        );
+    }
+
+    #[test]
+    fn dci_source_url_rejects_absolute_search_paths() {
+        assert!(source_url(
+            "https://registry.example.test",
+            "https://attacker.example.test/dci/search"
+        )
+        .is_err());
+        assert!(source_url("https://registry.example.test", "file:///tmp/search").is_err());
+        assert_eq!(
+            source_url("https://registry.example.test/base", "/dci/search")
+                .expect("relative path is accepted"),
+            "https://registry.example.test/base/dci/search"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_json_reader_rejects_oversized_body() {
+        let app = Router::new().route(
+            "/too-large",
+            get(|| async { "x".repeat(MAX_SOURCE_JSON_BYTES + 1) }),
+        );
+        let server = TestServer::builder().http_transport().build(app);
+        let url = format!(
+            "{}too-large",
+            server
+                .server_address()
+                .expect("HTTP transport exposes upstream address")
+        );
+        let response = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client builds")
+            .get(url)
+            .send()
+            .await
+            .expect("request succeeds");
+
+        let error = read_source_json(response)
+            .await
+            .expect_err("oversized body is rejected");
+
+        assert!(matches!(error, EvidenceError::SourceUnavailable));
+    }
+
+    #[tokio::test]
+    async fn http_sources_do_not_follow_upstream_redirects() {
+        std::env::set_var("TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN", "source-token");
+        let app = Router::new()
+            .route(
+                "/datasets/farmer_registry/farmer",
+                get(|| async { Redirect::temporary("/redirect-target") }),
+            )
+            .route(
+                "/redirect-target",
+                get(|| async {
+                    Json(json!({
+                        "data": [{
+                            "id": "person-1",
+                            "total_farmed_area": 3.5
+                        }]
+                    }))
+                }),
+            );
+        let server = TestServer::builder().http_transport().build(app);
+        let config = EvidenceConfig {
+            source_connections: BTreeMap::from([(
+                "registry".to_string(),
+                SourceConnectionConfig {
+                    base_url: server
+                        .server_address()
+                        .expect("HTTP transport exposes upstream address")
+                        .to_string(),
+                    token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
+                    dci: DciSourceConnectionConfig::default(),
+                },
+            )]),
+            ..EvidenceConfig::default()
+        };
+        let sources = HttpEvidenceSources::from_config(&config).expect("source config resolves");
+        let mut binding = test_binding("farmer_registry", "farmer");
+        binding.fields.insert(
+            "total_farmed_area".to_string(),
+            registry_witness_core::SourceFieldConfig {
+                field: "total_farmed_area".to_string(),
+                field_type: Some("number".to_string()),
+                unit: None,
+                required: true,
+                semantic_term: None,
+            },
+        );
+        let subject = SubjectRequest {
+            id: "person-1".to_string(),
+            id_type: None,
+        };
+
+        let error = sources
+            .read_one(
+                &binding,
+                &subject,
+                "https://purpose.example.test/eligibility",
+            )
+            .await
+            .expect_err("redirect response is not followed");
+
+        assert!(matches!(error, EvidenceError::SourceUnavailable));
     }
 
     #[test]

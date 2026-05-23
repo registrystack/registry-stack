@@ -237,7 +237,6 @@ pub struct ClaimProvenance {
 pub struct StoredEvaluation {
     pub client_id: String,
     pub purpose: String,
-    pub subject_id: String,
     pub claim_ids: Vec<String>,
     pub disclosure: String,
     pub format: String,

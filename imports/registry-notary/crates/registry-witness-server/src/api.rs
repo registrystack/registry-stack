@@ -132,7 +132,13 @@ async fn service_document(
     Json(RegistryWitnessRuntime::service_document(evidence)).into_response()
 }
 
-async fn issuer_jwks(state: Option<Extension<Arc<RegistryWitnessApiState>>>) -> Response {
+async fn issuer_jwks(
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
+    principal: Option<Extension<EvidencePrincipal>>,
+) -> Response {
+    if principal.is_none() {
+        return evidence_error_response(EvidenceError::MissingCredential);
+    }
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -329,12 +335,16 @@ async fn render(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    if let Some(evaluation) = state.store.get(&request.evaluation_id) {
-        if let Err(error) =
-            require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
-        {
-            return evidence_error_response(error);
-        }
+    let Some(evaluation) = state.store.get(&request.evaluation_id) else {
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    };
+    if evaluation.client_id != principal.principal_id {
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    }
+    if let Err(error) =
+        require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
+    {
+        return evidence_error_response(error);
     }
     let runtime = RegistryWitnessRuntime::new();
     match runtime.render(evidence, &state.store, &principal, request) {
@@ -620,6 +630,9 @@ fn validate_holder_proof_payload(
     }
     let expires_at =
         OffsetDateTime::from_unix_timestamp(exp).map_err(|_| EvidenceError::HolderProofRequired)?;
+    if exp > iat + 300 {
+        return Err(EvidenceError::HolderProofRequired);
+    }
     Ok(HolderProofBinding {
         replay_key: format!(
             "{}:{}:{}:{}:{}",

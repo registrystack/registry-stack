@@ -5,10 +5,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
+#[cfg(feature = "registry-witness-cel")]
+use std::time::Duration;
 
 #[cfg(feature = "registry-witness-cel")]
 use cel_mapper_core::{
-    MappingRuntime, RuntimeOptions, StandaloneEvalError, StandaloneExpressionInput,
+    MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
 };
 use registry_witness_core::{
     BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
@@ -23,7 +25,14 @@ use serde_json::Map;
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+#[cfg(feature = "registry-witness-cel")]
+use tokio::task;
+#[cfg(feature = "registry-witness-cel")]
+use tokio::time::timeout;
 use ulid::Ulid;
+
+#[cfg(feature = "registry-witness-cel")]
+const CEL_EVALUATION_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub trait SourceReader: Send + Sync {
     fn map_subject<'a>(
@@ -339,7 +348,6 @@ impl RegistryWitnessRuntime {
         store.insert(registry_witness_core::StoredEvaluation {
             client_id: principal.principal_id.clone(),
             purpose,
-            subject_id: request.subject.id,
             claim_ids: request.claims,
             disclosure: stored_disclosure(&views),
             format,
@@ -508,16 +516,19 @@ impl RegistryWitnessRuntime {
                 RuleConfig::Cel {
                     expression,
                     bindings,
-                } => evaluate_cel_expression(&CelEvaluationContext {
-                    evidence: ctx.evidence,
-                    claim,
-                    expression,
-                    bindings,
-                    claims: prior,
-                    sources: &sources,
-                    subject: ctx.subject,
-                    purpose: ctx.purpose,
-                })?,
+                } => {
+                    evaluate_cel_expression(&CelEvaluationContext {
+                        evidence: ctx.evidence,
+                        claim,
+                        expression,
+                        bindings,
+                        claims: prior,
+                        sources: &sources,
+                        subject: ctx.subject,
+                        purpose: ctx.purpose,
+                    })
+                    .await?
+                }
                 RuleConfig::Plugin { .. } => return Err(EvidenceError::OperationUnsupported),
             };
             // The source_count for this claim is the number of direct sources it
@@ -536,7 +547,7 @@ impl RegistryWitnessRuntime {
                 claim_id: claim.id.clone(),
                 claim_version: claim.version.clone(),
                 subject_type: claim.subject_type.clone(),
-                subject_ref: subject_ref(&ctx.subject.id),
+                subject_ref: evaluation_subject_ref(ctx.evaluation_id),
                 value,
                 issued_at: ctx.now,
                 expires_at: None,
@@ -727,11 +738,11 @@ fn get_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
-fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
+async fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
     validate_cel_policy(ctx.expression, ctx.bindings, ctx.claim)?;
     #[cfg(feature = "registry-witness-cel")]
     {
-        evaluate_with_cel(ctx)
+        evaluate_with_cel(ctx).await
     }
     #[cfg(not(feature = "registry-witness-cel"))]
     {
@@ -757,7 +768,7 @@ fn validate_cel_policy(
 }
 
 #[cfg(feature = "registry-witness-cel")]
-fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
+async fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {
     let mut claim_values = Map::new();
     for (alias, binding) in &ctx.bindings.claims {
         let result = ctx
@@ -793,18 +804,55 @@ fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceEr
         ),
         ("meta".to_string(), cel_meta(ctx.evidence, ctx.claim)),
     ]);
-    let runtime = MappingRuntime::new(RuntimeOptions::default());
-    runtime
-        .evaluate_cel_expression_with_input(
-            ctx.expression,
-            StandaloneExpressionInput::new(root_bindings),
-        )
-        .map_err(|error| match error {
-            StandaloneEvalError::Compile(_) | StandaloneEvalError::InvalidBindingName { .. } => {
-                EvidenceError::InvalidRequest
+    let limits = SecurityLimits::default();
+    validate_cel_binding_limits(
+        &Value::Object(root_bindings.clone().into_iter().collect()),
+        &limits,
+    )?;
+    let expression = ctx.expression.to_string();
+    let input = StandaloneExpressionInput::new(root_bindings);
+    let handle = task::spawn_blocking(move || {
+        let runtime = MappingRuntime::new(RuntimeOptions::default());
+        runtime.evaluate_cel_expression_with_input(&expression, input)
+    });
+    let result = timeout(CEL_EVALUATION_TIMEOUT, handle)
+        .await
+        .map_err(|_| EvidenceError::RuleEvaluationFailed)?
+        .map_err(|_| EvidenceError::RuleEvaluationFailed)?;
+    result.map_err(|error| match error {
+        StandaloneEvalError::Compile(_) | StandaloneEvalError::InvalidBindingName { .. } => {
+            EvidenceError::InvalidRequest
+        }
+        StandaloneEvalError::Evaluate { .. } => EvidenceError::RuleEvaluationFailed,
+    })
+}
+
+#[cfg(feature = "registry-witness-cel")]
+fn validate_cel_binding_limits(
+    value: &Value,
+    limits: &SecurityLimits,
+) -> Result<(), EvidenceError> {
+    match value {
+        Value::String(value) if value.len() > limits.max_string_bytes => {
+            Err(EvidenceError::RuleEvaluationFailed)
+        }
+        Value::Array(values) => {
+            if values.len() > limits.max_list_len {
+                return Err(EvidenceError::RuleEvaluationFailed);
             }
-            StandaloneEvalError::Evaluate { .. } => EvidenceError::RuleEvaluationFailed,
-        })
+            for value in values {
+                validate_cel_binding_limits(value, limits)?;
+            }
+            Ok(())
+        }
+        Value::Object(values) => {
+            for value in values.values() {
+                validate_cel_binding_limits(value, limits)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(feature = "registry-witness-cel")]
@@ -1036,9 +1084,8 @@ pub fn format_time(value: OffsetDateTime) -> String {
         .expect("OffsetDateTime within supported RFC3339 range")
 }
 
-pub fn subject_ref(subject_id: &str) -> String {
-    let digest = sha256_hex(subject_id.as_bytes());
-    format!("urn:subject:sha256:{digest}")
+fn evaluation_subject_ref(evaluation_id: &str) -> String {
+    format!("urn:subject:evaluation:{evaluation_id}")
 }
 
 fn batch_subject_ref(input_index: usize) -> String {
@@ -1166,6 +1213,34 @@ mod tests {
             json!("Bearer <token>")
         );
         assert_eq!(document["auth"]["audience"], json!("evidence.test"));
+    }
+
+    #[test]
+    fn subject_ref_is_evaluation_scoped_not_subject_hash() {
+        assert_eq!(
+            evaluation_subject_ref("01KSARTEST"),
+            "urn:subject:evaluation:01KSARTEST"
+        );
+    }
+
+    #[cfg(feature = "registry-witness-cel")]
+    #[test]
+    fn cel_binding_limits_reject_large_strings_and_lists() {
+        let limits = SecurityLimits {
+            max_string_bytes: 4,
+            max_list_len: 2,
+            ..SecurityLimits::default()
+        };
+
+        assert!(validate_cel_binding_limits(&json!({ "value": "abcd" }), &limits).is_ok());
+        assert!(matches!(
+            validate_cel_binding_limits(&json!({ "value": "abcde" }), &limits),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+        assert!(matches!(
+            validate_cel_binding_limits(&json!({ "items": [1, 2, 3] }), &limits),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
     }
 
     #[test]

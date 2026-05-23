@@ -596,7 +596,7 @@ pub struct CredentialProfileConfig {
 }
 
 const fn default_credential_validity_seconds() -> i64 {
-    90 * 24 * 60 * 60
+    24 * 60 * 60
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
