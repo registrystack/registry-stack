@@ -155,7 +155,7 @@ profiles/        ecosystem profile descriptors and fixture metadata manifests
 
 Portable metadata crates live in the public
 `https://github.com/jeremi/registry-metadata` repository. Relay consumes
-`registry-metadata-core` as a tagged Git dependency and shells out to
+`registry-manifest-core` as a tagged Git dependency and shells out to
 `registry-metadata-cli` only for local validation, rendering, and static
 publication helper recipes.
 
@@ -165,7 +165,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 - Keep the public URL space entity-shaped. Do not expose table ids in data-plane paths.
 - Add config fields through `src/config/mod.rs` and validation in `src/config/validate.rs`.
-- Keep portable metadata in the split `registry-metadata-core` crate; it must not depend on Relay runtime, Axum, DataFusion, auth, scopes, OpenAPI, or connector code.
+- Keep portable metadata in the split `registry-manifest-core` crate; it must not depend on Relay runtime, Axum, DataFusion, auth, scopes, OpenAPI, or connector code.
 - Keep auth scopes independent. Metadata, rows, evidence verification, aggregate, and admin must not imply one another.
 - Treat audit as a product surface. New routes should populate endpoint kind, dataset/entity/table ids, purpose, row count, suppression count, and stable error code when applicable.
 - Prefer structured parsers and DataFusion expressions over string-built query logic.

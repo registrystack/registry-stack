@@ -1,5 +1,7 @@
 # Relay Metadata Core Integration Map
 
+> **Note:** the external crate is now published as `registry-manifest-core`. This document was written when it was called `registry-metadata-core`; the old name is preserved in the body for historical accuracy. The filename is left unchanged to keep links stable.
+
 Status: implemented in the metadata runtime split branch.
 
 This map records Relay integration points used by the split metadata runtime
