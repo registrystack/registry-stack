@@ -119,7 +119,7 @@ pub fn build_app(
     config: Arc<Config>,
     auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     build_app_with_provenance(config, auth, audit_sink, None)
 }
 
@@ -131,7 +131,7 @@ pub fn build_app_with_provenance(
     auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     build_app_with_provenance_and_metrics(
         config,
         auth,
@@ -149,7 +149,7 @@ pub fn build_app_with_provenance_and_metrics(
     audit_sink: Arc<dyn AuditSink>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     build_app_with_provenance_metadata_and_metrics(
         config, auth, audit_sink, provenance, None, metrics,
     )
@@ -162,7 +162,7 @@ fn build_app_with_provenance_metadata_and_metrics(
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metadata: Option<Arc<CompiledMetadata>>,
     metrics: Arc<RequestMetrics>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     // Health/ready routes: unauthenticated sub-router. Merged onto the
     // top-level router *outside* the auth layer. The Scalar viewer
     // (`/docs` + `/docs/scalar.js`) is a static HTML+JS shell with no
@@ -214,7 +214,8 @@ fn build_app_with_provenance_metadata_and_metrics(
     // verification uses a configured stable HMAC key so audit hashes
     // survive process restarts.
     let cursor_signer = Arc::new(CursorSigner::new_random());
-    let claim_verification_hasher = claim_verification_hasher_from_config(&config).map(Arc::new);
+    let claim_verification_hasher =
+        claim_verification_hasher_from_config(&config)?.map(Arc::new);
     let evidence_verification_limiter = Arc::new(EvidenceVerificationLimiter::new(
         &config.evidence_verification.rate_limit,
     ));
@@ -231,20 +232,21 @@ fn build_app_with_provenance_metadata_and_metrics(
     if let Some(metadata) = metadata {
         router = router.layer(Extension(metadata));
     }
-    router
+    Ok(router)
 }
 
-fn claim_verification_hasher_from_config(config: &Config) -> Option<ClaimVerificationHasher> {
+fn claim_verification_hasher_from_config(
+    config: &Config,
+) -> Result<Option<ClaimVerificationHasher>, ConfigError> {
     let Some(binding) = &config.claim_verification else {
-        return None;
+        return Ok(None);
     };
-    let key = env::var(&binding.binding_key_env)
-        .expect("config validation ensures claim_verification.binding_key_env is set");
-    let key = decode_binding_key(&key).expect("config validation ensures HMAC key format is valid");
-    Some(ClaimVerificationHasher::new(
+    let key = env::var(&binding.binding_key_env).map_err(|_| ConfigError::MissingSecret)?;
+    let key = decode_binding_key(&key).map_err(|_| ConfigError::ValidationError)?;
+    Ok(Some(ClaimVerificationHasher::new(
         binding.binding_key_id.clone(),
         key,
-    ))
+    )))
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -266,8 +268,8 @@ pub fn build_app_with_readiness(
     auth: AuthProviderRef,
     audit_sink: Arc<dyn AuditSink>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
-) -> Router {
-    build_app(config, auth, audit_sink).layer(Extension(readiness))
+) -> Result<Router, ConfigError> {
+    Ok(build_app(config, auth, audit_sink)?.layer(Extension(readiness)))
 }
 
 /// Assemble the main app with readiness plus entity/query state installed
@@ -280,11 +282,11 @@ pub fn build_app_with_entity_query(
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
-) -> Router {
-    build_app_with_readiness(config, auth, audit_sink, readiness)
+) -> Result<Router, ConfigError> {
+    Ok(build_app_with_readiness(config, auth, audit_sink, readiness)?
         .layer(Extension(aggregate_query))
         .layer(Extension(query))
-        .layer(Extension(entity_registry))
+        .layer(Extension(entity_registry)))
 }
 
 /// Production assembly: readiness, entity/query state, and optional
@@ -301,7 +303,7 @@ pub fn build_app_with_entity_query_and_provenance(
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     build_app_with_entity_query_and_provenance_and_metrics(
         config,
         auth,
@@ -330,12 +332,14 @@ pub fn build_app_with_entity_query_and_provenance_and_metrics(
     aggregate_query: Arc<AggregateQueryEngine>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
-) -> Router {
-    build_app_with_provenance_and_metrics(config, auth, audit_sink, provenance, metrics)
-        .layer(Extension(readiness))
-        .layer(Extension(aggregate_query))
-        .layer(Extension(query))
-        .layer(Extension(entity_registry))
+) -> Result<Router, ConfigError> {
+    Ok(
+        build_app_with_provenance_and_metrics(config, auth, audit_sink, provenance, metrics)?
+            .layer(Extension(readiness))
+            .layer(Extension(aggregate_query))
+            .layer(Extension(query))
+            .layer(Extension(entity_registry)),
+    )
 }
 
 /// Production assembly with split metadata compiled from `metadata.yaml`.
@@ -351,14 +355,14 @@ pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
     metadata: Option<Arc<CompiledMetadata>>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
-) -> Router {
-    build_app_with_provenance_metadata_and_metrics(
+) -> Result<Router, ConfigError> {
+    Ok(build_app_with_provenance_metadata_and_metrics(
         config, auth, audit_sink, provenance, metadata, metrics,
-    )
+    )?
     .layer(Extension(readiness))
     .layer(Extension(aggregate_query))
     .layer(Extension(query))
-    .layer(Extension(entity_registry))
+    .layer(Extension(entity_registry)))
 }
 
 /// Assemble the admin HTTP application for `config.server.admin_bind`.
@@ -766,5 +770,26 @@ mod tests {
         let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
         assert_eq!(record["error_code"], "internal.uri_too_long");
         assert_eq!(record["status_code"], 414);
+    }
+
+    #[test]
+    fn claim_verification_hasher_returns_error_when_env_var_missing() {
+        use crate::config::ClaimVerificationConfig;
+
+        let mut config = load_example_config();
+        // Override the binding_key_env to a name that is guaranteed
+        // absent from the test process environment.
+        config.claim_verification = Some(ClaimVerificationConfig {
+            binding_key_id: "test-key".to_string(),
+            binding_key_env: "REGISTRY_RELAY_TEST_CLAIM_KEY_ABSENT_12345".to_string(),
+        });
+        // Ensure the env var is not set.
+        unsafe { std::env::remove_var("REGISTRY_RELAY_TEST_CLAIM_KEY_ABSENT_12345") };
+
+        let result = claim_verification_hasher_from_config(&config);
+        assert!(
+            matches!(result, Err(crate::error::ConfigError::MissingSecret)),
+            "expected MissingSecret, got {result:?}"
+        );
     }
 }

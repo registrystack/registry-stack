@@ -177,12 +177,15 @@ fn build_fixture() -> MetricsFixture {
     );
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ready_snapshot());
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    let public = TestServer::new(build_app_with_readiness(
-        Arc::clone(&config),
-        build_auth(),
-        Arc::clone(&sink),
-        readiness_rx.clone(),
-    ));
+    let public = TestServer::new(
+        build_app_with_readiness(
+            Arc::clone(&config),
+            build_auth(),
+            Arc::clone(&sink),
+            readiness_rx.clone(),
+        )
+        .unwrap(),
+    );
     let admin = TestServer::new(build_admin_app(
         config,
         build_auth(),
@@ -352,7 +355,7 @@ async fn bare_public_app_does_not_mount_metrics() {
     let config_path = write_config(&tmp);
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    let public = TestServer::new(build_app(config, build_auth(), sink));
+    let public = TestServer::new(build_app(config, build_auth(), sink).unwrap());
 
     let resp = public.get("/metrics").await;
     assert!(

@@ -1088,7 +1088,8 @@ mod full_stack {
             query,
             aggregate_query,
             None,
-        );
+        )
+        .unwrap();
         // Mirror the `if let Some(...) { app.layer(...) }` block in
         // `main.rs`: when the config configures response mapping, the
         // extension must be installed before the request reaches the

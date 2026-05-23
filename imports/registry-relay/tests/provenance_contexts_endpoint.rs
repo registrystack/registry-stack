@@ -92,7 +92,7 @@ fn build_app() -> axum::Router {
     let config = Arc::new(load_example_config());
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    build_app_with_provenance(config, auth, sink, Some(build_state()))
+    build_app_with_provenance(config, auth, sink, Some(build_state())).unwrap()
 }
 
 #[tokio::test]
@@ -148,7 +148,7 @@ async fn contexts_route_is_not_mounted_without_provenance_state() {
     let config = Arc::new(load_example_config());
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    let app = build_app_with_provenance(config, auth, sink, None);
+    let app = build_app_with_provenance(config, auth, sink, None).unwrap();
     let server = TestServer::new(app);
     let resp = server.get("/contexts/provenance/v1.jsonld").await;
     let status = resp.status_code();

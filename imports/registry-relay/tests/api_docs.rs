@@ -30,7 +30,7 @@ fn full_app_server() -> TestServer {
     let config = Arc::new(registry_relay::config::load(&path).expect("example config loads"));
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    TestServer::new(build_app(config, auth, sink))
+    TestServer::new(build_app(config, auth, sink).unwrap())
 }
 
 #[tokio::test]

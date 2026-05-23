@@ -179,7 +179,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             compiled_metadata,
             provenance_state.clone(),
             Arc::clone(&metrics),
-        );
+        )?;
     if let Some(publicschema_registry) = publicschema_registry {
         app = app.layer(axum::Extension(publicschema_registry));
     }

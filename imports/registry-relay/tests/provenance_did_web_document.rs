@@ -151,7 +151,7 @@ fn build_app(state: Option<Arc<ProvenanceState>>) -> axum::Router {
     let config = Arc::new(load_example_config());
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
-    build_app_with_provenance(config, auth, sink, state)
+    build_app_with_provenance(config, auth, sink, state).unwrap()
 }
 
 #[tokio::test]

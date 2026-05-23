@@ -786,7 +786,8 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
         query,
         aggregate_query,
         Some(provenance),
-    );
+    )
+    .unwrap();
     let server = TestServer::new(app);
 
     let resp = server

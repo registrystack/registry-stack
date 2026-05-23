@@ -72,7 +72,7 @@ fn load_example_config() -> Config {
 fn build_test_app(sink: Arc<dyn AuditSink>) -> axum::Router {
     let config = Arc::new(load_example_config());
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
-    build_app(config, auth, sink)
+    build_app(config, auth, sink).unwrap()
 }
 
 fn build_test_app_with_health_audit(sink: Arc<dyn AuditSink>) -> axum::Router {
@@ -80,12 +80,12 @@ fn build_test_app_with_health_audit(sink: Arc<dyn AuditSink>) -> axum::Router {
     cfg.audit.include_health = true;
     let config = Arc::new(cfg);
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
-    build_app(config, auth, sink)
+    build_app(config, auth, sink).unwrap()
 }
 
 fn build_test_app_with_config(config: Arc<Config>, sink: Arc<dyn AuditSink>) -> axum::Router {
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
-    build_app(config, auth, sink)
+    build_app(config, auth, sink).unwrap()
 }
 
 fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -97,7 +97,7 @@ fn build_test_app_with_readiness(snapshot: ReadinessSnapshot) -> axum::Router {
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
     let (_tx, rx) = watch::channel(snapshot);
-    build_app_with_readiness(config, auth, sink, rx)
+    build_app_with_readiness(config, auth, sink, rx).unwrap()
 }
 
 #[tokio::test]
@@ -411,7 +411,7 @@ async fn admin_bind_serves_health_on_second_listener() {
         .expect("empty ingest registry builds"),
     );
     let (readiness_tx, readiness_rx) = watch::channel(ingest.snapshot());
-    let main_app = build_app(Arc::clone(&config), Arc::clone(&auth), Arc::clone(&sink));
+    let main_app = build_app(Arc::clone(&config), Arc::clone(&auth), Arc::clone(&sink)).unwrap();
     let admin_app = build_admin_app(
         Arc::clone(&config),
         Arc::clone(&auth),
