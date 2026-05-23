@@ -15,7 +15,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hmac::{Mac, SimpleHmac};
+use hmac::{KeyInit, Mac, SimpleHmac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -81,7 +81,7 @@ impl CursorSigner {
     }
 
     fn tag(&self, message: &[u8]) -> [u8; CURSOR_MAC_LEN] {
-        let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(self.key.as_ref())
+        let mut mac = <SimpleHmac<Sha256> as KeyInit>::new_from_slice(self.key.as_ref())
             .expect("HMAC-SHA256 accepts any key length");
         mac.update(message);
         let full = mac.finalize().into_bytes();

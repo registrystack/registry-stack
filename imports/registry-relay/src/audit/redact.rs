@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -124,7 +124,7 @@ pub fn sensitive_value_hash(field: &str, value: &str) -> String {
 pub fn sensitive_value_hash_keyed(secret: Option<&[u8]>, field: &str, value: &str) -> String {
     match secret {
         Some(key) => {
-            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+            let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
                 .expect("HMAC-SHA256 accepts any key length");
             mac.update(field.as_bytes());
             mac.update(b"\0");

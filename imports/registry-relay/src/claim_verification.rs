@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use hmac::{Mac, SimpleHmac};
+use hmac::{KeyInit, Mac, SimpleHmac};
 use serde_json::{Number, Value};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -58,7 +58,7 @@ impl ClaimVerificationHasher {
         offering_iri: &str,
         value: &Value,
     ) -> Result<String, Error> {
-        let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(self.key.as_ref())
+        let mut mac = <SimpleHmac<Sha256> as KeyInit>::new_from_slice(self.key.as_ref())
             .expect("HMAC-SHA256 accepts any key length");
         mac.update(b"registry-relay:evidence-offering:v1:");
         mac.update(offering_iri.as_bytes());
@@ -68,7 +68,7 @@ impl ClaimVerificationHasher {
 
     fn hmac_hex_with_key(&self, key: &[u8], value: &Value) -> Result<String, Error> {
         let canonical = canonical_json(value)?;
-        let mut mac = <SimpleHmac<Sha256> as Mac>::new_from_slice(key)
+        let mut mac = <SimpleHmac<Sha256> as KeyInit>::new_from_slice(key)
             .expect("HMAC-SHA256 accepts any key length");
         mac.update(canonical.as_bytes());
         let bytes = mac.finalize().into_bytes();
