@@ -2,6 +2,7 @@
 //! Evidence Server configuration model.
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,86 @@ impl StandaloneEvidenceServerConfig {
                 }
             }
         }
+        // Finding 3: when proof_of_possession is required, only did:jwk is
+        // supported by holder_jwk(). Reject configs that list any other method
+        // so the mismatch is caught at startup rather than at request time.
+        for (profile_id, profile) in &self.evidence.credential_profiles {
+            if profile.holder_binding.proof_of_possession.as_deref() == Some("required") {
+                let unsupported: Vec<String> = profile
+                    .holder_binding
+                    .allowed_did_methods
+                    .iter()
+                    .filter(|m| m.as_str() != "did:jwk")
+                    .cloned()
+                    .collect();
+                if !unsupported.is_empty() {
+                    return Err(
+                        EvidenceConfigError::UnsupportedDidMethodsForProofOfPossession {
+                            profile: profile_id.clone(),
+                            methods: unsupported,
+                        },
+                    );
+                }
+            }
+        }
+        // Finding 8: detect cycles in the depends_on graph using DFS with
+        // grey (in-progress) and black (done) sets.
+        let claim_ids: HashSet<&str> = self.evidence.claims.iter().map(|c| c.id.as_str()).collect();
+        for claim in &self.evidence.claims {
+            for dep in &claim.depends_on {
+                if !claim_ids.contains(dep.as_str()) {
+                    return Err(EvidenceConfigError::DependsOnUnknownClaim {
+                        claim: claim.id.clone(),
+                        unknown: dep.clone(),
+                    });
+                }
+            }
+        }
+        let mut grey: HashSet<String> = HashSet::new();
+        let mut black: HashSet<String> = HashSet::new();
+        for claim in &self.evidence.claims {
+            if !black.contains(&claim.id) {
+                detect_depends_on_cycle(
+                    &self.evidence.claims,
+                    &claim.id,
+                    &mut grey,
+                    &mut black,
+                    &mut Vec::new(),
+                )?;
+            }
+        }
         Ok(())
     }
+}
+
+fn detect_depends_on_cycle(
+    claims: &[ClaimDefinition],
+    claim_id: &str,
+    grey: &mut HashSet<String>,
+    black: &mut HashSet<String>,
+    path: &mut Vec<String>,
+) -> Result<(), EvidenceConfigError> {
+    grey.insert(claim_id.to_string());
+    path.push(claim_id.to_string());
+    let claim = claims.iter().find(|c| c.id == claim_id);
+    if let Some(claim) = claim {
+        for dep in &claim.depends_on {
+            if grey.contains(dep.as_str()) {
+                // Back edge found: build the cycle path from where dep appears.
+                let cycle_start = path.iter().position(|id| id == dep).unwrap_or(0);
+                let mut cycle = path[cycle_start..].to_vec();
+                cycle.push(dep.clone());
+                return Err(EvidenceConfigError::DependsOnCycle { cycle });
+            }
+            if !black.contains(dep.as_str()) {
+                detect_depends_on_cycle(claims, dep, grey, black, path)?;
+            }
+        }
+    }
+    path.pop();
+    grey.remove(claim_id);
+    black.insert(claim_id.to_string());
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -117,6 +196,26 @@ pub enum EvidenceConfigError {
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
     MissingSourceConnection,
+    /// proof_of_possession = "required" only works with did:jwk because
+    /// holder_jwk() only implements did:jwk resolution. Restrict
+    /// allowed_did_methods to ["did:jwk"] or remove proof_of_possession.
+    #[error(
+        "credential profile '{profile}': proof_of_possession = \"required\" is only supported \
+         with did:jwk, but allowed_did_methods contains unsupported method(s): {methods}; \
+         restrict allowed_did_methods to [\"did:jwk\"] or remove proof_of_possession",
+        methods = methods.join(", ")
+    )]
+    UnsupportedDidMethodsForProofOfPossession {
+        profile: String,
+        methods: Vec<String>,
+    },
+    #[error("claim '{claim}' depends_on unknown claim '{unknown}'")]
+    DependsOnUnknownClaim { claim: String, unknown: String },
+    #[error(
+        "depends_on cycle detected: {cycle}",
+        cycle = cycle.join(" -> ")
+    )]
+    DependsOnCycle { cycle: Vec<String> },
 }
 
 /// Evidence Server configuration. Disabled by default so existing
@@ -533,4 +632,226 @@ pub struct OotsConfig {
     pub languages: Vec<String>,
     #[serde(default)]
     pub authentication_level_of_assurance: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal valid config from which individual tests can deviate.
+    fn minimal_config() -> StandaloneEvidenceServerConfig {
+        serde_yml::from_str(
+            r#"
+evidence:
+  enabled: true
+auth:
+  api_keys:
+    - id: test-key
+      token_env: TEST_TOKEN
+"#,
+        )
+        .expect("minimal config is valid YAML")
+    }
+
+    fn minimal_claim(id: &str) -> ClaimDefinition {
+        serde_yml::from_str(&format!(
+            r#"
+id: {id}
+title: Test Claim
+version: "1.0"
+subject_type: person
+rule:
+  type: exists
+  source: src
+"#
+        ))
+        .expect("minimal claim is valid YAML")
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding 3: holder binding / did-method mismatch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn proof_of_possession_required_with_only_did_jwk_is_valid() {
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_yml::from_str(
+            r#"
+format: sd_jwt_vc
+issuer: https://issuer.example
+issuer_key_env: ISSUER_KEY
+vct: https://vct.example/test
+holder_binding:
+  mode: did
+  proof_of_possession: required
+  allowed_did_methods:
+    - did:jwk
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+        assert!(
+            config.validate().is_ok(),
+            "did:jwk only should pass validation"
+        );
+    }
+
+    #[test]
+    fn proof_of_possession_required_with_non_jwk_method_is_rejected() {
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_yml::from_str(
+            r#"
+format: sd_jwt_vc
+issuer: https://issuer.example
+issuer_key_env: ISSUER_KEY
+vct: https://vct.example/test
+holder_binding:
+  mode: did
+  proof_of_possession: required
+  allowed_did_methods:
+    - did:jwk
+    - did:key
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+
+        let err = config
+            .validate()
+            .expect_err("did:key with proof_of_possession required must fail");
+        match &err {
+            EvidenceConfigError::UnsupportedDidMethodsForProofOfPossession { profile, methods } => {
+                assert_eq!(profile, "test-profile");
+                assert!(
+                    methods.contains(&"did:key".to_string()),
+                    "error must name did:key, got: {methods:?}"
+                );
+                assert!(
+                    !methods.contains(&"did:jwk".to_string()),
+                    "did:jwk must not appear in the unsupported list"
+                );
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn proof_of_possession_not_required_allows_any_did_methods() {
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_yml::from_str(
+            r#"
+format: sd_jwt_vc
+issuer: https://issuer.example
+issuer_key_env: ISSUER_KEY
+vct: https://vct.example/test
+holder_binding:
+  mode: did
+  allowed_did_methods:
+    - did:jwk
+    - did:key
+    - did:web
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+        assert!(
+            config.validate().is_ok(),
+            "proof_of_possession absent should allow any did method"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding 8: depends_on cycle detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn valid_dag_passes_cycle_detection() {
+        // A -> B -> C (no cycle)
+        let mut config = minimal_config();
+        let mut claim_a = minimal_claim("claim-a");
+        claim_a.depends_on = vec!["claim-b".to_string()];
+        let mut claim_b = minimal_claim("claim-b");
+        claim_b.depends_on = vec!["claim-c".to_string()];
+        let claim_c = minimal_claim("claim-c");
+        config.evidence.claims = vec![claim_a, claim_b, claim_c];
+        assert!(config.validate().is_ok(), "A->B->C DAG should pass");
+    }
+
+    #[test]
+    fn two_node_cycle_is_detected() {
+        // A -> B -> A
+        let mut config = minimal_config();
+        let mut claim_a = minimal_claim("claim-a");
+        claim_a.depends_on = vec!["claim-b".to_string()];
+        let mut claim_b = minimal_claim("claim-b");
+        claim_b.depends_on = vec!["claim-a".to_string()];
+        config.evidence.claims = vec![claim_a, claim_b];
+
+        let err = config
+            .validate()
+            .expect_err("A->B->A cycle must fail validation");
+        match &err {
+            EvidenceConfigError::DependsOnCycle { cycle } => {
+                assert!(
+                    cycle.contains(&"claim-a".to_string()),
+                    "cycle must mention claim-a, got: {cycle:?}"
+                );
+                assert!(
+                    cycle.contains(&"claim-b".to_string()),
+                    "cycle must mention claim-b, got: {cycle:?}"
+                );
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn self_loop_is_detected() {
+        // A -> A
+        let mut config = minimal_config();
+        let mut claim_a = minimal_claim("claim-a");
+        claim_a.depends_on = vec!["claim-a".to_string()];
+        config.evidence.claims = vec![claim_a];
+
+        let err = config
+            .validate()
+            .expect_err("self-loop must fail validation");
+        match &err {
+            EvidenceConfigError::DependsOnCycle { cycle } => {
+                assert!(
+                    cycle.contains(&"claim-a".to_string()),
+                    "cycle must mention claim-a, got: {cycle:?}"
+                );
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn unknown_depends_on_is_rejected() {
+        let mut config = minimal_config();
+        let mut claim_a = minimal_claim("claim-a");
+        claim_a.depends_on = vec!["claim-nonexistent".to_string()];
+        config.evidence.claims = vec![claim_a];
+
+        let err = config
+            .validate()
+            .expect_err("depends_on unknown claim must fail validation");
+        match &err {
+            EvidenceConfigError::DependsOnUnknownClaim { claim, unknown } => {
+                assert_eq!(claim, "claim-a");
+                assert_eq!(unknown, "claim-nonexistent");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
 }
