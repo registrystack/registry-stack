@@ -46,7 +46,6 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     validate_claim_verification_runtime(config).map_err(Error::from)?;
-    validate_removed_evidence_server_config(config).map_err(Error::from)?;
     validate_evidence_verification_runtime(config).map_err(Error::from)?;
     if let Some(provenance) = &config.provenance {
         validate_provenance(provenance).map_err(Error::from)?;
@@ -54,17 +53,6 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
     Ok(())
-}
-
-fn validate_removed_evidence_server_config(config: &Config) -> Result<(), ConfigError> {
-    if matches!(config.evidence, serde_json::Value::Null) {
-        return Ok(());
-    }
-    tracing::error!(
-        code = "config.validation_error",
-        "top-level evidence config belongs to the standalone Evidence Server and is no longer accepted by Registry Relay"
-    );
-    Err(ConfigError::ValidationError)
 }
 
 fn validate_evidence_verification_runtime(config: &Config) -> Result<(), ConfigError> {

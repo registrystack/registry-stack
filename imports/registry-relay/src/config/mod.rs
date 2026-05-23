@@ -62,13 +62,6 @@ pub struct Config {
     /// Runtime controls for evidence-offering verification.
     #[serde(default)]
     pub evidence_verification: EvidenceVerificationConfig,
-    /// Deprecated embedded Evidence Server config.
-    ///
-    /// Registry Relay no longer runs Evidence Server. The field remains in
-    /// the parser only so validation can reject old non-null configs with a
-    /// migration error instead of surfacing an unknown-field parse error.
-    #[serde(default = "default_ignored_evidence_config")]
-    pub evidence: serde_json::Value,
     /// Optional external standards adapters. The config model is parsed
     /// in every build so feature-disabled binaries can reject it with a
     /// stable taxonomy code.
@@ -81,10 +74,6 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
     pub manifest_path: PathBuf,
-}
-
-fn default_ignored_evidence_config() -> serde_json::Value {
-    serde_json::Value::Null
 }
 
 #[derive(Debug, Clone, Deserialize)]

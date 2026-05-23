@@ -384,8 +384,8 @@ evidence:
   service_id: old-embedded-evidence-server
 "#,
     );
-    let msg = assert_config_code(config::load(&path), "config.validation_error");
-    assert!(msg.contains("validation"), "got: {msg}");
+    // `evidence:` is now an unknown field rejected at parse time.
+    assert_config_code(config::load(&path), "config.parse_error");
 }
 
 #[test]
