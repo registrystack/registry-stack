@@ -1,0 +1,12 @@
+extends:
+  - recommended
+apis:
+  registry-relay:
+    root: openapi/registry-relay.openapi.json
+  registry-witness:
+    root: openapi/registry-witness.openapi.json
+rules:
+  no-empty-servers: off
+  no-unused-components: warn
+  operation-operationId: warn
+  security-defined: warn

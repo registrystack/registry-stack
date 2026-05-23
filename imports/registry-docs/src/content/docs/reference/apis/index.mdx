@@ -1,0 +1,50 @@
+---
+title: API references
+description: Generated Redoc API reference pages for Registry Relay and Registry Witness, built from pinned OpenAPI artifacts.
+wide: true
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-witness
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
+
+Registry Legend publishes generated API reference pages using Redoc.
+Each page is built from a pinned OpenAPI artifact owned by the project it describes.
+Narrative docs in the explanation and how-to sections cover workflows, auth patterns, and
+privacy boundaries. Do not duplicate endpoint reference content in narrative pages.
+
+## Pinned sources
+
+The table below shows the current artifact status, source generator, and link to each Redoc page.
+The table is generated from `src/data/openapi-sources.yaml`.
+
+<OpenApiSourcesTable />
+
+## Per-project pages
+
+- [Registry Relay API](./registry-relay/) documents the Protected Registry Data API, metadata API,
+  evidence offering verification, health and readiness endpoints, and optional standards adapters.
+- [Registry Witness API](./registry-witness/) documents the claim discovery, evaluation, batch
+  evaluation, rendering, JWKS, service discovery, and credential issuance endpoints.
+
+## Provenance and freshness
+
+Registry Relay exposes its OpenAPI document through an auth-gated runtime route (`GET /openapi.json`).
+The v0 artifact is a pinned civil demo snapshot.
+Replace it with a release-grade artifact when Registry Relay has a documented standalone export path.
+
+Registry Witness generates its OpenAPI document via a subcommand:
+
+```sh
+cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.json
+```
+
+Regenerate and re-pin the artifact when the Witness API changes.

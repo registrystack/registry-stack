@@ -1,0 +1,52 @@
+---
+import standards from '../data/generated/standards.json';
+---
+
+<div class="registry-table">
+  <table>
+    <thead>
+      <tr>
+        <th>Standard</th>
+        <th>Status</th>
+        <th>Used by</th>
+        <th>Claim level</th>
+        <th>Surface</th>
+        <th>Profile and notes</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {standards.map((standard) => (
+        <tr>
+          <td>
+            <a href={standard.official_url}><strong>{standard.name}</strong></a><br />
+            <code>{standard.id}</code>
+          </td>
+          <td>
+            <span class="status-chip">{standard.status}</span><br />
+            <small>Checked {standard.last_checked}</small>
+          </td>
+          <td>{standard.used_by.join(', ')}</td>
+          <td><span class="claim-chip">{standard.claim_level}</span></td>
+          <td>
+            <ul>
+              {standard.surfaces.map((surface) => <li>{surface}</li>)}
+            </ul>
+          </td>
+          <td>
+            <strong>{standard.version_or_profile}</strong><br />
+            <span>{standard.notes}</span>
+          </td>
+          <td>
+            <ul>
+              {standard.evidence_docs.map((doc) => (
+                <li><a href={doc.url}>{doc.label}</a></li>
+              ))}
+            </ul>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+<p class="source-note">Generated from <code>src/data/standards.yaml</code>.</p>

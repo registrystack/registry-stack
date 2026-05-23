@@ -1,0 +1,62 @@
+---
+title: Accessibility
+description: Accessibility commitments for the Registry Legend documentation site.
+status: current
+owner: registry-legend
+source_repos: []
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Registry Legend targets WCAG 2.1 Level AA conformance
+as its accessibility baseline for the v0 launch.
+This page records the commitments, keyboard navigation guarantee, and alt-text policy.
+The design decisions that back these commitments are in
+[`design-registry-legend.md`](https://github.com/jeremi/registry-legend/blob/main/design-registry-legend.md).
+
+## WCAG target
+
+The site targets WCAG 2.1 Level AA.
+All text meets AA contrast ratios against their backgrounds.
+Blue France `#000091` on white `#ffffff` passes AA for normal text.
+Blue France on the active-sidebar tint `#eeeefd` also passes AA for normal text.
+Status text uses ink `#161616` on white, well above the AA threshold.
+
+{/* TODO[evidence]: WCAG 2.1 AA is stated in the design doc (design-registry-legend.md, Accessibility section).
+     No automated contrast-check result has been run against the built site yet.
+     Verify with a tool such as axe-core or Colour Contrast Analyser before marking as audited. */}
+
+## Keyboard navigation
+
+The site is keyboard-navigable end to end.
+A skip-link is present on the implemented version to bypass repeated navigation.
+Focus rings are 2 px Blue France with 2 px offset, square corners.
+Browser focus defaults are not suppressed.
+
+The masthead, secondary navigation, sidebar, and footer use semantic HTML landmarks:
+`<header>`, `<nav>`, `<aside>`, and `<footer>`.
+The content column uses `<main>`.
+
+## Alt text and image policy
+
+Every image has either `alt` text or a visible caption that conveys the essential information
+without requiring the image to be visible.
+Conceptual diagrams use SVG.
+Important labels in a diagram also appear in nearby HTML text,
+so machine contracts are not encoded only inside an image.
+
+The site does not use animated GIFs or videos in v0.
+
+## Search
+
+The search input has a visible label on the implemented version.
+The placeholder text is not a substitute for a label.
+
+## Known limitations
+
+- The v0 site has not yet undergone an external WCAG audit.
+  The commitments above reflect design intent and in-progress implementation.
+- French routes are not enabled in v0.
+  When French content is added, translated `alt` text and landmark labels will be required.

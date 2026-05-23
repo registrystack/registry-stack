@@ -1,0 +1,101 @@
+---
+title: Architecture overview
+description: How Registry Manifest, Registry Relay, Registry Witness, Registry Atlas, and Registry Lab fit together as the registry family.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+  - registry-lab
+last_reviewed: "2026-05-23"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - ogc-api-records
+  - openapi
+  - shacl
+  - json-schema
+  - json-ld
+  - sd-jwt-vc
+  - verifiable-credentials
+  - cccev
+  - w3c-did
+---
+
+
+The registry family separates portable metadata, protected consultation, evidence evaluation, inspection, and local demos into five distinct projects.
+That separation is the core architecture decision: each project owns a bounded responsibility and does not import the internals of another.
+
+{/* SVG diagram. Essential labels are restated in the HTML list that follows. */}
+<figure>
+  <img src="/registry-legend/images/registry-architecture-flow.svg"
+       alt="Architecture flow: Registry Manifest compiles metadata artifacts. Registry Relay binds those artifacts to protected runtime sources. Registry Witness evaluates claims against HTTP sources and issues credentials. Registry Atlas inspects published discovery outputs. Registry Lab wires all services into a local compose topology." />
+</figure>
+
+The five projects and their roles in the flow:
+
+- **Registry Manifest** (`registry-manifest`): portable metadata compiler and renderer
+- **Registry Relay** (`registry-relay`): protected, read-only consultation gateway
+- **Registry Witness** (`registry-witness`): claim evaluation, attestation, and credential issuance
+- **Registry Atlas** (`registry-atlas`): inspection workbench for published discovery artifacts
+- **Registry Lab** (`registry-lab`): compose-based runnable demo of the full topology
+
+## Responsibility boundaries
+
+Registry Manifest stays portable.
+It validates metadata manifests and renders standards-facing artifacts without any dependency on Relay runtime concerns.
+`registry-manifest-core` explicitly excludes Axum, DataFusion, Postgres, auth, audit, secret handling, and observability.
+The `publish` subcommand of `registry-manifest-cli` writes a static bundle: `catalog.json`, `dcat.jsonld`, per-profile DCAT variants, `shacl.jsonld`, entity JSON Schemas, OGC Records items, policy documents, evidence-offering listings, and an `index.json` manifest.
+
+Registry Relay is the protected gateway.
+It binds configured datasets and entities to local CSV, XLSX, Parquet, or PostgreSQL sources using Apache Arrow and DataFusion, then exposes authorized read-only APIs.
+Registry Relay listens on a configurable socket address (default `0.0.0.0:8080`) and an optional admin listener (default `127.0.0.1:8081`).
+Runtime scopes, auth (API key or OIDC), audit, reload commands, and backend source details stay inside Registry Relay.
+Registry Relay publishes metadata at runtime via `/metadata/*` routes and exposes a `/.well-known/did.json` DID document when provenance is enabled.
+
+Registry Witness is a separate service for claim evaluation.
+Registry Relay may publish metadata that points to a Registry Witness endpoint, but Registry Witness owns claim configuration, source connectors (Registry Data API and SP DCI), disclosure policy, audit events, and SD-JWT VC credential issuance.
+Registry Witness does not import or link Registry Relay code.
+The default demo bind address is `127.0.0.1:4255`.
+Registry Witness publishes its capabilities at `/.well-known/evidence-service`.
+
+Registry Atlas is the inspection workbench.
+Registry Atlas is a browser SPA built with React 19, TypeScript, and Vite.
+A Node.js/Express fetch proxy runs at port `3717` (default) and provides a same-origin proxy for metadata URLs.
+The workspace UI runs at port `5177` (Vite dev server).
+Four workspace tabs cover: overview (validation status, missing items), registry (datasets and services), capabilities (strict capability queries), and evidence (raw discovery report and artifact tree).
+Registry Atlas reads published DCAT catalogs, SHACL shapes, JSON Schemas, OpenAPI documents, and OGC API Records items through the fetch proxy.
+Its v0.1 capability discovery is strict: exact matches against machine terms only, no fuzzy matching or AI inference.
+
+Registry Lab is the runnable demo.
+Registry Lab is a Docker Compose topology that wires three Registry Relay instances, three Registry Witness instances, a static metadata publisher, and a narrated demo client.
+It does not define production deployment guidance or normative contracts.
+
+## Data and contract flow
+
+1. A metadata manifest (`registry-manifest/v1` schema) describes datasets, entities, fields, policies, and evidence offerings.
+2. Registry Manifest compiles and validates the manifest, then renders a static discovery bundle.
+3. Registry Relay starts with runtime config that binds manifest concepts to actual data sources.
+   Clients reach entity routes, metadata routes, and evidence-offering endpoints through configured auth.
+4. Registry Witness evaluates claims against configured HTTP sources (Registry Data API or SP DCI connectors).
+   It renders results as `application/vnd.registry-witness.claim-result+json`, CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VCs (`application/dc+sd-jwt`).
+5. Registry Atlas fetches published catalog and discovery artifacts through its proxy,
+   classifies them by artifact kind, and runs strict capability queries over the indexed metadata terms.
+
+## Non-goals for v0
+
+- Registry Relay v1 does not provide a write or provisioning platform.
+- Registry Manifest does not become a service framework.
+- Registry Witness does not share code with Registry Relay.
+- Registry Atlas does not apply fuzzy matching, synonym expansion, or AI inference in v0.1 capability discovery.
+- Registry Lab does not define production deployment guidance and is not a real integration with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
+
+## Next
+
+- [Standards positioning](../standards-positioning/) explains claim levels and evidence discipline.
+- [Project map](../../map/) shows responsibility boundaries across repos.
+- [Registry Lab first-run tutorial](../../tutorials/first-run-with-registry-lab/) shows how to run the full topology locally.

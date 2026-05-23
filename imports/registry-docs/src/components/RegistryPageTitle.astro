@@ -1,0 +1,57 @@
+---
+const { starlightRoute } = Astro.locals;
+const PAGE_TITLE_ID = '_top';
+const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
+
+const sectionLabels = new Map([
+  ['start', 'Start'],
+  ['map', 'Project map'],
+  ['tutorials', 'Tutorials'],
+  ['explanation', 'Explanation'],
+  ['reference', 'Reference'],
+  ['decisions', 'Decisions'],
+]);
+
+const sectionHref = new Map([
+  ['start', 'start/'],
+  ['map', 'map/'],
+  ['reference', 'reference/'],
+]);
+
+const currentLabels = new Map([
+  ['/start/', 'Introduction'],
+  ['/start/what-is-the-registry-family/', 'What is the registry family'],
+  ['/start/quickstart/', 'Quickstart'],
+  ['/map/', 'Overview'],
+  ['/reference/apis/', 'API reference'],
+]);
+
+const parts = path.split('/').filter(Boolean);
+const section = parts[0] ? sectionLabels.get(parts[0]) : undefined;
+const current = currentLabels.get(path) ?? starlightRoute.entry.data.title;
+const isWide = starlightRoute.entry.data.wide === true;
+---
+
+{isWide && (
+  <style is:inline set:html={`@media (min-width: 72rem) {
+    :root { --sl-content-width: min(1280px, calc(100vw - 240px - 56px - 56px - 80px)) !important; }
+    main { max-width: none !important; }
+    .right-sidebar-container { display: none !important; }
+    :root[data-has-sidebar][data-has-toc] .main-pane,
+    .main-pane { width: 100% !important; }
+    .sl-markdown-content { margin-inline-start: 0 !important; margin-inline-end: auto !important; }
+  }`}></style>
+)}
+
+<nav class="registry-breadcrumb" aria-label="Breadcrumb">
+  <a href={import.meta.env.BASE_URL}>Docs</a>
+  {section && <span aria-hidden="true"> / </span>}
+  {section && sectionHref.has(parts[0]) && (
+    <a href={`${import.meta.env.BASE_URL}${sectionHref.get(parts[0])}`}>{section}</a>
+  )}
+  {section && !sectionHref.has(parts[0]) && <span>{section}</span>}
+  <span aria-hidden="true"> / </span>
+  <span aria-current="page">{current}</span>
+</nav>
+
+<h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>

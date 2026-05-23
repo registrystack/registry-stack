@@ -1,0 +1,167 @@
+---
+title: Historical docs index
+description: Pointers to documentation that still lives in the source repos, categorized by status so readers know what to rely on and what to treat as historical record.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+  - registry-lab
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Documentation for the registry family still lives in the individual source repos.
+This index classifies each entry so readers know which docs are authoritative today,
+which are historical context, and which are archive or vendored content.
+
+Status values:
+
+- `current`: still authoritative for its topic; not yet migrated to Registry Legend.
+- `historical`: superseded or scope-replaced; keep as record, not as instructions.
+- `archive`: vendored copy, pre-rename worktree content, or nested demo staging area.
+
+The plan for how these docs move is in the
+[registry-legend plan (2026-05-23)](https://github.com/jeremi/registry-legend/blob/main/registry-legend-plan-2026-05-23.md),
+"Existing docs to triage" section.
+
+## Registry Relay docs
+
+Paths in this table are relative to `apps/registry-relay/`.
+All paths verified against commit `aec4394` (registry-relay evidence packet).
+
+| Path | Topic | Status |
+| --- | --- | --- |
+| `README.md` | Entry point: build, run, config, API routes, auth | `current` |
+| `docs/api.md` | Public API routes reference | `current` |
+| `docs/configuration.md` | Full configuration reference | `current` |
+| `docs/metadata.md` | Metadata publication surface | `current` |
+| `docs/evidence-verification.md` | Evidence offering verification | `current` |
+| `docs/ops.md` | Operations and deployment | `current` |
+| `docs/provenance.md` | Verifiable Credentials and provenance | `current` |
+| `docs/development.md` | Contributor and development guide | `current` |
+| `STANDARDS_ASSUMPTIONS.md` | Standards claims and boundaries | `current` |
+| `docs/evidence-server-spec.md` | Original evidence server design spec | `historical` |
+| `docs/evidence-server-spec-review.md` | Review pass on the original spec | `historical` |
+| `docs/evidence-server-implementation-review-pass3.md` | Reviewer findings, pass 3 | `historical` |
+| `docs/evidence-server-implementation-review-pass4.md` | Reviewer findings, pass 4 | `historical` |
+| `docs/evidence-server-implementation-review-pass5.md` | Reviewer findings, pass 5 | `historical` |
+| `docs/evidence-offering-refactor-spec.md` | Refactor spec for evidence offerings | `historical` |
+| `docs/evidence-offering-refactor-spec-review.md` | Review of the refactor spec | `historical` |
+| `docs/evidence-offering-refactor-implementation-review.md` | Implementation review pass 1 | `historical` |
+| `docs/evidence-offering-refactor-implementation-review-pass2.md` | Implementation review pass 2 | `historical` |
+| `docs/metadata-and-evidence-repo-split-spec.md` | Spec for splitting metadata and evidence into separate repos | `historical` |
+| `docs/metadata-runtime-split-spec.md` | Spec for splitting metadata rendering from runtime | `historical` |
+| `docs/relay-metadata-core-integration-map.md` | Integration map after the metadata-core split | `historical` |
+| `docs/decentralized-evidence-demo-spec.md` | Original decentralized demo spec | `historical` |
+| `docs/odrl-policy-spec.md` | ODRL policy design spec | `historical` |
+| `docs/ogc-api-features-spec.md` | OGC API Features design spec | `historical` |
+| `docs/performance-load-testing-spec.md` | Performance testing spec | `historical` |
+| `demo/decentralized/` | Nested decentralized demo (compose, config, data, scripts, static-metadata) | `archive` |
+
+**Note on `demo/decentralized/`:** The rename plan (Phase 4, Decision 6) specifies this directory
+be collapsed to a one-line pointer README once Registry Lab absorbs any unique fixtures.
+As of 2026-05-23 the directory still contains a full compose setup and has not been collapsed.
+It is listed as `archive` because Registry Lab is the canonical demo going forward,
+but unique fixtures must be migrated before deletion.
+
+## Registry Manifest docs
+
+Paths in this table are relative to `apps/registry-manifest/`.
+All paths verified against commit `77125ec` (registry-manifest evidence packet).
+
+The plan listed these paths under `registry-metadata/`, the pre-rename directory name.
+The directory is now `registry-manifest/`; the table uses the current name.
+
+| Path | Topic | Status |
+| --- | --- | --- |
+| `README.md` | Library and CLI entry point, manifest model, renderers | `current` |
+| `docs/repository-split.md` | Background on the metadata/evidence split from Registry Relay | `historical` |
+
+## Registry Witness docs
+
+Paths in this table are relative to `apps/registry-witness/`.
+All paths verified against commit `b4128a3` (registry-witness evidence packet).
+
+The plan listed these paths under `evidence-server/`, the pre-rename directory name.
+The directory is now `registry-witness/`; the table uses the current name.
+
+| Path | Topic | Status |
+| --- | --- | --- |
+| `README.md` | Service overview, claim model, auth, build, run | `current` |
+
+## Registry Atlas docs
+
+Paths in this table are relative to `apps/registry-atlas/`.
+All paths verified against commit `e4092a1` (registry-atlas evidence packet).
+
+The plan listed `dataspace-atlas/README.md` and `dataspace-atlas/SPEC.md`.
+The directory is now `registry-atlas/`; the table uses the current name.
+
+| Path | Topic | Status |
+| --- | --- | --- |
+| `README.md` | UI, fetch proxy, capability discovery, entry points | `current` |
+| `SPEC.md` | Original Atlas workbench specification | `historical` |
+| `SYSTEM_CAPABILITY_DISCOVERY_SPEC.md` | Capability discovery spec (V0.1) | `current` |
+| `STANDARDS_ASSUMPTIONS.md` | Standards scope and non-goals | `current` |
+| `HOW_TO_TEST_V0_1.md` | Manual test guide for v0.1 | `historical` |
+| `SEMANTIC_ASSET_DISCOVERY_SPEC.md` | Semantic asset discovery design spec | `current` |
+| `SEMANTIC_ASSET_DISCOVERY_FACADE_SPEC.md` | Facade layer spec | `historical` |
+| `SEMANTIC_ASSET_DISCOVERY_SCHEMA.md` | Schema reference for discovery artifacts | `historical` |
+| `SEMANTIC_ASSET_DISCOVERY_README.md` | Discovery readme (pre-integration) | `historical` |
+| `SEMANTIC_ASSET_DISCOVERY_V0.1_RELEASE.md` | V0.1 release notes | `historical` |
+
+## Registry Lab docs
+
+Paths in this table are relative to `apps/registry-lab/`.
+All paths verified against commit `aaa6f80` (registry-lab evidence packet).
+
+The plan listed these paths under `decentralized-evidence-demo/`, the pre-rename directory name.
+The directory is now `registry-lab/`; the table uses the current name.
+
+| Path | Topic | Status |
+| --- | --- | --- |
+| `README.md` | Demo topology, scripts, setup, scenarios | `current` |
+| `vendor/registry-relay/` | Git submodule: Registry Relay source | `archive` |
+| `vendor/registry-witness/` | Git submodule: Registry Witness source | `archive` |
+
+## Top-level `apps/docs/` docs
+
+Paths in this table are relative to `apps/docs/`.
+Path existence verified by direct filesystem check (2026-05-23).
+
+| Path | Topic | Status |
+| --- | --- | --- |
+| `docs/registry-discovery-evidence-standard.md` | Discovery and evidence standard background | `historical` |
+| `docs/registry-relay-dpi-safeguards.md` | DPI safeguards background; candidate for a future explanation page | `historical` |
+
+{/* TODO[evidence]: registry-legend-plan-2026-05-23.md lists docs/registry-relay-dpi-safeguards.md
+     as a candidate for a future explanation page. Verify whether the content is still current
+     or has been superseded by relay's STANDARDS_ASSUMPTIONS.md and docs/ops.md before promoting. */}
+
+## Omitted plan entries
+
+The following paths appeared in the plan's "Existing docs to triage" section but do not exist
+at the expected locations as of 2026-05-23:
+
+- `registry-metadata/README.md` and `registry-metadata/docs/repository-split.md`:
+  The `registry-metadata` directory does not exist locally; it was renamed to `registry-manifest`.
+  Current paths are listed in the "Registry Manifest docs" section.
+- `evidence-server/README.md`: The `evidence-server` directory does not exist locally;
+  it was renamed to `registry-witness`. The current path is listed in the "Registry Witness docs" section.
+- `dataspace-atlas/README.md` and `dataspace-atlas/SPEC.md`: The `dataspace-atlas` directory
+  does not exist locally; it was renamed to `registry-atlas`.
+  Current paths are listed in the "Registry Atlas docs" section.
+- `decentralized-evidence-demo/README.md` and `decentralized-evidence-demo/vendor/`:
+  The `decentralized-evidence-demo` directory does not exist locally; it was renamed to `registry-lab`.
+  Current paths are listed in the "Registry Lab docs" section.
+
+## Rule
+
+Move ideas, not file piles.
+A historical document earns a link here when it explains why the current shape exists,
+not merely because it exists in the workspace.

@@ -1,0 +1,46 @@
+---
+import projects from '../data/generated/projects.json';
+---
+
+<div class="registry-table">
+  <table>
+    <thead>
+      <tr>
+        <th>Project</th>
+        <th>Role</th>
+        <th>Owns</th>
+        <th>Does not own</th>
+        <th>Source docs</th>
+      </tr>
+    </thead>
+    <tbody>
+      {projects.map((project) => (
+        <tr id={project.id}>
+          <td>
+            <strong>{project.name}</strong><br />
+            <code>{project.id}</code>
+          </td>
+          <td>{project.role}</td>
+          <td>
+            <ul>
+              {project.owns.map((item) => <li>{item}</li>)}
+            </ul>
+          </td>
+          <td>
+            <ul>
+              {project.does_not_own.map((item) => <li>{item}</li>)}
+            </ul>
+          </td>
+          <td>
+            <ul>
+              {project.source_docs.map((doc) => (
+                <li><a href={doc.url}>{doc.label}</a></li>
+              ))}
+            </ul>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+<p class="source-note">Generated from <code>src/data/projects.yaml</code>.</p>

@@ -1,0 +1,62 @@
+---
+title: Contracts
+description: Machine-readable surfaces owned by the registry family, with status and source-of-truth links.
+wide: true
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-manifest
+  - registry-witness
+  - registry-atlas
+  - registry-lab
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - shacl
+  - dcat
+  - sd-jwt-vc
+---
+
+import ContractsTable from '../../../components/ContractsTable.astro';
+
+A contract is a machine-readable surface that integrators can depend on: an OpenAPI document,
+a portable metadata schema, a static publication bundle, a capability query envelope, or a demo
+acceptance path.
+Each contract has one owning project.
+When a contract changes, the owning repo is the source of truth.
+
+The table is generated from `src/data/contracts.yaml`.
+
+## Column guide
+
+- **Contract** shows the display name and a stable identifier (`id`).
+- **Owner** names the repo whose source artifact defines the contract.
+- **Status** describes the maturity of the contract artifact:
+  - `current-source` means the artifact is actively maintained and production-ready.
+  - `pinned-generated-snapshot` means the artifact was generated from the owning repo and pinned here for stable publication.
+  - `pinned-demo-snapshot` means the artifact is pinned from a demo run, not a release export; treat it as a preview.
+  - `pre-rename-source` means the artifact exists but the owning repo is mid-rename; use for demo acceptance only.
+- **Source of truth** links to the module, file, or CLI that produces the artifact.
+- **Consumer note** records the current limitation or regeneration path.
+
+<ContractsTable />
+
+## Rules
+
+- Do not duplicate generated API reference text in Registry Legend prose.
+- Preserve route paths, media types, env vars, schema names, crate names, and Docker image names verbatim.
+- Pin OpenAPI artifacts before publishing Redoc pages.
+- Treat demo outputs as verification evidence, not as contract sources.
+- Keep runtime secrets and local data paths out of published examples.
+
+## Known gaps
+
+- The Registry Relay OpenAPI artifact is a pinned civil demo snapshot (`pinned-demo-snapshot`).
+  Registry Relay exposes OpenAPI through an auth-gated runtime route (`GET /openapi.json`).
+  A release-grade export path or published artifact does not yet exist.
+  {/* TODO[evidence]: no standalone Relay OpenAPI export command found at commit aec4394. Confirm whether a `cargo run -- openapi` subcommand is planned. */}
+- Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.

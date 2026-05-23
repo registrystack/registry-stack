@@ -1,0 +1,16 @@
+family_name: registry family
+site_name: Registry Legend
+last_reviewed: 2026-05-23
+projects:
+  - registry-relay
+  - registry-manifest
+  - registry-witness
+  - registry-atlas
+  - registry-lab
+current_source_repos:
+  registry-relay: ../registry-relay
+  registry-manifest: ../registry-manifest
+  registry-witness: ../registry-witness
+  registry-atlas: ../registry-atlas
+  registry-lab: ../registry-lab
+rename_plan: ../rename-plan-2026-05-23.md

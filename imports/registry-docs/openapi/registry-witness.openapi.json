@@ -1,0 +1,411 @@
+{
+  "components": {
+    "schemas": {
+      "BatchEvaluateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "prefer": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "$ref": "#/components/schemas/SubjectRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "subjects",
+          "claims"
+        ],
+        "type": "object"
+      },
+      "CredentialIssueRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "credential_profile": {
+            "type": "string"
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "holder": {
+            "additionalProperties": false,
+            "properties": {
+              "binding": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "proof": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "evaluation_id"
+        ],
+        "type": "object"
+      },
+      "EvaluateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SubjectRequest"
+          }
+        },
+        "required": [
+          "subject",
+          "claims"
+        ],
+        "type": "object"
+      },
+      "RenderRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "disclosure": {
+            "type": "string"
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "evaluation_id",
+          "format"
+        ],
+        "type": "object"
+      },
+      "SubjectRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "id_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "in": "header",
+        "name": "x-api-key",
+        "type": "apiKey"
+      },
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Standalone claim evaluation, rendering, and credential issuance API.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "Registry Witness API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/.well-known/evidence-service": {
+      "get": {
+        "operationId": "getEvidenceService",
+        "responses": {
+          "200": {
+            "description": "Service document"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          }
+        },
+        "summary": "Discover Registry Witness capabilities"
+      }
+    },
+    "/.well-known/evidence/jwks.json": {
+      "get": {
+        "operationId": "getEvidenceJwks",
+        "responses": {
+          "200": {
+            "description": "Public JWKS"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          }
+        },
+        "summary": "Fetch public issuer verification keys"
+      }
+    },
+    "/claims": {
+      "get": {
+        "operationId": "listClaims",
+        "responses": {
+          "200": {
+            "description": "Visible claims"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          }
+        },
+        "summary": "List claims visible to the caller"
+      }
+    },
+    "/claims/batch-evaluate": {
+      "post": {
+        "operationId": "batchEvaluateClaims",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchEvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per-subject claim evaluation results"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Not authorized for requested claim, purpose, disclosure, or format"
+          }
+        },
+        "summary": "Evaluate claims for multiple subjects inline"
+      }
+    },
+    "/claims/evaluate": {
+      "post": {
+        "operationId": "evaluateClaims",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Claim evaluation result"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Not authorized for requested claim, purpose, disclosure, or format"
+          }
+        },
+        "summary": "Evaluate claims for one subject"
+      }
+    },
+    "/claims/{claim_id}": {
+      "get": {
+        "operationId": "getClaim",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Claim definition"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "404": {
+            "description": "Claim not found"
+          }
+        },
+        "summary": "Get one claim definition"
+      }
+    },
+    "/credentials/issue": {
+      "post": {
+        "operationId": "issueCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialIssueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Issued credential"
+          },
+          "400": {
+            "description": "Invalid request or disclosure widening attempt"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "404": {
+            "description": "Evaluation not found"
+          }
+        },
+        "summary": "Issue a credential from a stored evaluation"
+      }
+    },
+    "/evidence/render": {
+      "post": {
+        "operationId": "renderEvidence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered evidence artifact"
+          },
+          "400": {
+            "description": "Invalid request or disclosure widening attempt"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "404": {
+            "description": "Evaluation not found"
+          }
+        },
+        "summary": "Render a stored evaluation"
+      }
+    },
+    "/formats": {
+      "get": {
+        "operationId": "listFormats",
+        "responses": {
+          "200": {
+            "description": "Supported formats"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          }
+        },
+        "summary": "List supported output formats"
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "responses": {
+          "200": {
+            "description": "OpenAPI document"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          }
+        },
+        "summary": "Fetch this OpenAPI document"
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKeyAuth": []
+    },
+    {
+      "bearerAuth": []
+    }
+  ]
+}

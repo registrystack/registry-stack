@@ -1,0 +1,152 @@
+---
+title: Registry Witness API
+description: Narrative context for the Registry Witness OpenAPI reference, covering API surface, auth modes, disclosure profiles, and documented limitations.
+status: current
+owner: registry-witness
+source_repos:
+  - registry-witness
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - sd-jwt-vc
+  - cccev
+  - json-ld
+  - w3c-did
+---
+
+[Open Registry Witness API reference](/registry-legend/api/registry-witness.html)
+
+The Redoc page above is generated from a pinned OpenAPI artifact.
+This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
+which auth modes are declared, what disclosure profiles the specification exposes, and what is not in scope.
+
+Evidence source: Registry Witness commit `b4128a369c62ddb8e75dafb2e3834cd87f28d2d0`, reviewed 2026-05-23.
+
+Generate or refresh the artifact:
+
+```sh
+cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.json
+```
+
+{/* The pinned artifact has an `info.license` block (Apache-2.0) added locally so Redocly
+    `info-license` validation passes. When refreshing the artifact, preserve the license
+    block or add it upstream in the registry-witness OpenAPI generator. */}
+
+## API surface
+
+Registry Witness is a standalone Rust workspace (Axum, Tokio) for claim evaluation, disclosure policy,
+credential issuance, and audit.
+It is decoupled from Registry Relay by design: Registry Witness does not import or link Registry Relay code.
+
+The OpenAPI document is titled "Registry Witness API" at version `0.1.0`.
+All routes are defined in `crates/registry-witness-server/src/api.rs` and require authentication.
+There are ten HTTP routes:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/openapi.json` | Fetch the OpenAPI document |
+| GET | `/.well-known/evidence-service` | Discover service capabilities and claim catalog |
+| GET | `/.well-known/evidence/jwks.json` | Fetch the issuer JWKS |
+| GET | `/claims` | List configured claim definitions |
+| GET | `/claims/{claim_id}` | Get one claim definition |
+| GET | `/formats` | List supported output formats |
+| POST | `/claims/evaluate` | Evaluate claims for one subject |
+| POST | `/claims/batch-evaluate` | Evaluate claims for multiple subjects |
+| POST | `/evidence/render` | Render evidence in a requested format |
+| POST | `/credentials/issue` | Issue a credential from an evaluation result |
+
+Default bind address: `127.0.0.1:4255` (from the demo config).
+
+## Auth modes
+
+Registry Witness supports two credential types per runtime instance, checked in order:
+
+**API key**: The client sends the token in `x-api-key: <token>`.
+The server performs a constant-time comparison against values loaded from environment variables at startup.
+
+**Bearer token**: The client sends `Authorization: Bearer <token>`.
+The server strips the `Bearer` prefix and performs a constant-time comparison.
+
+Both types are configured in `auth.api_keys` and `auth.bearer_tokens` respectively.
+Each credential carries a `scopes` list.
+Per-claim scope requirements are enforced before evaluation proceeds.
+
+## Disclosure profiles
+
+Registry Witness controls what a caller receives through a three-level disclosure system declared in
+`crates/registry-witness-core/src/model.rs`:
+
+- `Value`: the full claim value is disclosed.
+- `Predicate`: only the satisfaction result (true or false) is disclosed.
+- `Redacted`: the value is fully hidden from the caller.
+
+Each claim definition configures a `default` disclosure level and an `allowed` list.
+When a caller requests a level not in the allowed list, Witness applies a downgrade strategy: `Deny`
+returns an error, `Default` falls back to the claim's configured default, and `Redacted` downgrades
+to the `Redacted` profile.
+
+The `POST /claims/evaluate` and `POST /credentials/issue` routes expose this surface directly through
+the request body and response shape.
+
+## Credential issuance
+
+When a caller requests `POST /credentials/issue`, Registry Witness issues an SD-JWT VC credential.
+The credential uses:
+
+- Token type: `dc+sd-jwt` (the `typ` header).
+- Signing algorithm: EdDSA (Ed25519).
+- Key source: environment variable `REGISTRY_WITNESS_ISSUER_JWK` (OKP Ed25519 JWK with `d` and `x` components).
+- Selective disclosure: individual claim fields are wrapped in SD-JWT disclosures with SHA-256 digests.
+- Media type: `application/dc+sd-jwt`.
+
+The issuer public key is available at `GET /.well-known/evidence/jwks.json`.
+
+Registry Witness does not emit W3C Verifiable Credentials Data Model envelopes.
+The credential format is SD-JWT, not a W3C VC JSON object.
+{/* Confirmed absence: witness evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-witness.md). The SD-JWT vs W3C VC distinction is a boundary statement, not an evidence gap. */}
+
+## CCCEV rendering
+
+`POST /evidence/render` can return CCCEV-shaped JSON-LD when the caller requests
+`application/ld+json; profile="cccev"`.
+The renderer in `crates/registry-witness-server/src/runtime.rs` produces:
+
+- `@context` including the `cccev`, `dcterms`, `foaf`, `time`, and `xsd` namespaces.
+- Evidence nodes typed as `cccev:Evidence`.
+- CCCEV properties: `cccev:isProvidedBy`, `cccev:supportsRequirement`, `cccev:supportsValue`,
+  `cccev:validityPeriod`, and `cccev:isConformantTo`.
+
+Profile conformance against CCCEV 2.00 is not claimed.
+
+## Source connectors
+
+Registry Witness reads registry facts from external sources over HTTP.
+Two connector kinds are configured in `source_connections`:
+
+**Registry Data API** connector: posts queries to `{base_url}/{dataset}/{entity}` on a Registry Relay instance.
+Authenticates with a bearer token per connection.
+
+**SP DCI** connector: sends DCI-shaped search requests and parses the response using configured field paths.
+Default search path: `/registry/sync/search`.
+Default sender ID: `registry-witness`.
+
+There is no generic file-based or database connector in Registry Witness.
+Source connectors must reach their targets over HTTP.
+
+## What the OpenAPI specification does not cover
+
+**Plugin rule type.** The `Plugin` rule variant is declared in `crates/registry-witness-core/src/config.rs`
+but no implementation is present at the reviewed commit.
+{/* Confirmed absence: `config.rs:454-455` defines `RuleConfig::Plugin` but no implementation found in `runtime.rs` at the reviewed commit. Update this page when a plugin runtime lands upstream. */}
+
+**Proof-of-possession binding.** `did:jwk` is the only supported holder binding method.
+Other DID methods are not supported.
+
+**Audit events.** Every evaluated request emits a `EvidenceAuditEvent` to a configured sink (stdout
+or file) in JSONL format. Audit write failures surface as request errors, not as transparent log
+entries.
+
+**Admin operations.** Registry Witness does not expose an admin route for live reload.
+Key and configuration changes require a service restart.

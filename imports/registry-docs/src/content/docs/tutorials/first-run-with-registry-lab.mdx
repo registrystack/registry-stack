@@ -1,0 +1,141 @@
+---
+title: First run with Registry Lab
+description: Run the Registry Lab compose demo on a laptop and verify the full service topology with smoke tests.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-lab
+  - registry-relay
+  - registry-witness
+last_reviewed: "2026-05-23"
+doc_type: tutorial
+locale: en
+standards_referenced:
+  - openapi
+---
+
+Registry Lab is the compose-based local demo for the registry family.
+It wires three Registry Relay instances, three Registry Witness instances,
+a static metadata publisher, and a narrated demo client into a single topology you can run on a laptop.
+
+## Prerequisites
+
+- Docker with Compose v2.20 or later (required for `additional_contexts` support in the Dockerfiles).
+- `uv` CLI installed (used to run `scripts/generate-fixtures.py`, which is a PEP 723 inline-dependency script).
+- `python3` and `openssl` on your PATH (used by `scripts/generate-demo-secrets.py` and `scripts/demo-flow.py`).
+- No production secrets in the demo environment. The generated `.env` uses inert local credentials only.
+
+## Steps
+
+Run the following commands in order from the `registry-lab` checkout root.
+
+1. Generate synthetic fixture data for civil, social protection, and health registries:
+
+    ```sh
+    uv run scripts/generate-fixtures.py
+    ```
+
+2. Generate the local demo `.env` with credential hashes and JWK issuer keys:
+
+    ```sh
+    scripts/generate-demo-secrets.py
+    ```
+
+3. Publish the static metadata bundle:
+
+    ```sh
+    scripts/publish-static-metadata.sh
+    ```
+
+4. Build the compose images:
+
+    ```sh
+    docker compose -f compose.yaml build
+    ```
+
+5. Start all background services:
+
+    ```sh
+    docker compose -f compose.yaml up -d
+    ```
+
+6. Run the smoke tests:
+
+    ```sh
+    scripts/smoke.sh
+    ```
+
+7. Run the narrated demo client flow:
+
+    ```sh
+    docker compose -f compose.yaml --profile client run --rm demo-client
+    ```
+
+## Service topology
+
+The compose file starts eight services. Host ports are fixed in `compose.yaml`:
+
+| Service | Role | Host port |
+| --- | --- | --- |
+| `civil-registry-relay` | Registry Relay for civil domain | 4311 |
+| `social-protection-registry-relay` | Registry Relay for social protection domain | 4312 |
+| `health-registry-relay` | Registry Relay for health domain | 4313 |
+| `civil-witness` | Registry Witness for civil claims | 4321 |
+| `social-protection-witness` | Registry Witness for social protection claims | 4322 |
+| `shared-eligibility-witness` | Registry Witness for cross-authority eligibility claims | 4323 |
+| `static-metadata-publisher` | Python HTTP server for portable metadata bundle | 4331 |
+| `demo-client` | Narrated client (one-shot, `--profile client` only) | none |
+
+Inside the compose network, services communicate via DNS names on port 8080 (for example, `http://civil-registry-relay:8080`).
+Witness containers do not mount source data directly; they read registry facts over HTTP from the Relay services.
+
+Atlas is not in the compose topology at v0.1; it is run separately when needed for browser-side inspection.
+
+## Expected output
+
+After step 5, all Relay and Witness services start in the background.
+`scripts/smoke.sh` runs approximately 30 checks, including:
+
+- Health and readiness endpoints (`/health`, `/ready`) on all three Relay instances.
+- Discovery endpoint (`/.well-known/evidence-service`) on all three Witness instances.
+- OpenAPI endpoints (`/openapi.json`) on all Relay and Witness instances.
+- Authorization scope denial responses (403 with `auth.scope_denied`) for out-of-scope credentials.
+- Positive row-read and aggregate-read responses on the social protection Relay.
+- Evidence evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility witnesses.
+- A cross-authority claim result with `source_count >= 2` on the shared eligibility witness.
+- Credential-bound evaluation returning `application/dc+sd-jwt`.
+
+The demo client (step 7) runs three narrated scenarios and writes artifacts to `output/`.
+All requests use the correlation ID `decentralized-demo-correlation-001` by default
+(overridable via the `DEMO_CORRELATION_ID` environment variable).
+
+## Verify
+
+Run `scripts/smoke.sh` as the primary verification command.
+A passing smoke run means all services are reachable and all authorization checks behave as configured.
+
+To manually spot-check the static metadata publisher:
+
+```sh
+curl http://127.0.0.1:4331/metadata/index.json
+```
+
+The static publisher endpoints require no authentication.
+
+## Cleanup
+
+Remove all containers and named cache volumes:
+
+```sh
+docker compose -f compose.yaml down -v
+```
+
+The `-v` flag removes the named volumes `civil-registry-cache`, `social-protection-registry-cache`,
+and `health-registry-cache`.
+
+## Stable identifiers
+
+The strings `decentralized-demo-correlation-001` (default correlation ID) and
+`decentralized-demo-static-publication` (static metadata manifest ID) are intentionally stable protocol
+and log-correlation values. They are not renamed when the directory moves from
+`decentralized-evidence-demo` to `registry-lab`.

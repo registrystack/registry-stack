@@ -1,0 +1,2502 @@
+{
+  "components": {
+    "schemas": {
+      "AggregateListResponse": {
+        "examples": [
+          {
+            "data": [
+              {
+                "aggregate_id": "households_by_region",
+                "description": "Household count by region",
+                "group_by": [
+                  "region"
+                ],
+                "measures": [
+                  {
+                    "column": "id",
+                    "function": "count",
+                    "name": "household_count"
+                  }
+                ],
+                "min_group_size": 2
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "data": {
+            "items": {
+              "properties": {
+                "aggregate_id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "group_by": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "measures": {
+                  "items": {
+                    "properties": {
+                      "column": {
+                        "type": "string"
+                      },
+                      "function": {
+                        "enum": [
+                          "count",
+                          "sum",
+                          "avg",
+                          "min",
+                          "max",
+                          "median",
+                          "count_distinct",
+                          "stddev"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "function",
+                      "column"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "min_group_size": {
+                  "format": "int32",
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "aggregate_id",
+                "description",
+                "group_by",
+                "measures",
+                "min_group_size"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "AggregateResult": {
+        "examples": [
+          {
+            "aggregate_id": "households_by_region",
+            "computed_at": "2026-05-16T08:00:00Z",
+            "dataset_id": "social_registry",
+            "entity": "household",
+            "min_group_size": 2,
+            "rows": [
+              {
+                "household_count": 42,
+                "region": "north"
+              }
+            ],
+            "suppressed_groups": 1
+          }
+        ],
+        "properties": {
+          "aggregate_id": {
+            "type": "string"
+          },
+          "computed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "min_group_size": {
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "suppressed_groups": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "entity",
+          "aggregate_id",
+          "computed_at",
+          "min_group_size",
+          "suppressed_groups",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "DatasetList": {
+        "description": "Listing of datasets visible to the calling principal.",
+        "type": "object"
+      },
+      "DatasetSummary": {
+        "description": "Per-dataset metadata. See `/datasets/{id}` for the live shape.",
+        "type": "object"
+      },
+      "Entity_civil_registry_civil_person": {
+        "description": "Person-level civil status projection for evidence computation.",
+        "examples": [
+          {
+            "birth_date": "2026-01-15",
+            "civil_status": "<civil_status>",
+            "deceased": true,
+            "district": "<district>",
+            "given_name": "Alex Example",
+            "national_id": "01HZX9...",
+            "surname": "Alex Example"
+          }
+        ],
+        "properties": {
+          "birth_date": {
+            "description": "Required `date` field.",
+            "examples": [
+              "2026-01-15"
+            ],
+            "format": "date",
+            "type": "string",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/birth_date"
+          },
+          "civil_status": {
+            "description": "Required `string` field.",
+            "examples": [
+              "<civil_status>"
+            ],
+            "type": "string",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/civil_status"
+          },
+          "deceased": {
+            "description": "Required `boolean` field.",
+            "examples": [
+              true
+            ],
+            "type": "boolean",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/deceased"
+          },
+          "district": {
+            "description": "Required `string` field.",
+            "examples": [
+              "<district>"
+            ],
+            "type": "string",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/district"
+          },
+          "given_name": {
+            "description": "Required `string` field.",
+            "examples": [
+              "Alex Example"
+            ],
+            "type": "string",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/given_name"
+          },
+          "national_id": {
+            "description": "Required `string` field.",
+            "examples": [
+              "01HZX9..."
+            ],
+            "type": "string",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/national_id"
+          },
+          "surname": {
+            "description": "Required `string` field.",
+            "examples": [
+              "Alex Example"
+            ],
+            "type": "string",
+            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/surname"
+          }
+        },
+        "required": [
+          "national_id",
+          "given_name",
+          "surname",
+          "birth_date",
+          "civil_status",
+          "deceased",
+          "district"
+        ],
+        "type": "object",
+        "x-concept-uri": "https://schema.spdci.org/extensions/crvs/v1/Person",
+        "x-dataset-id": "civil_registry",
+        "x-entity-name": "civil_person"
+      },
+      "Entity_civil_registry_civil_personCollection": {
+        "examples": [
+          {
+            "data": [
+              {
+                "birth_date": "2026-01-15",
+                "civil_status": "<civil_status>",
+                "deceased": true,
+                "district": "<district>",
+                "given_name": "Alex Example",
+                "national_id": "01HZX9...",
+                "surname": "Alex Example"
+              }
+            ],
+            "pagination": {
+              "has_more": false,
+              "next_cursor": null
+            }
+          }
+        ],
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Entity_civil_registry_civil_person"
+            },
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "type": "object"
+      },
+      "Entity_civil_registry_civil_personSchema": {
+        "properties": {
+          "dataset_id": {
+            "type": "string"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "primary_key": {
+            "type": "string"
+          },
+          "relationships": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "x-concept-uri": "https://schema.spdci.org/extensions/crvs/v1/Person",
+        "x-dataset-id": "civil_registry",
+        "x-entity-name": "civil_person"
+      },
+      "EvidenceOffering": {
+        "additionalProperties": true,
+        "properties": {
+          "access": {
+            "additionalProperties": true,
+            "properties": {
+              "conforms_to": {
+                "format": "uri",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "discovery_url": {
+                "format": "uri",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endpoint_url": {
+                "format": "uri",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "href": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "registry-relay-verification",
+                  "evidence-server"
+                ],
+                "type": "string"
+              },
+              "ruleset": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "ruleset"
+            ],
+            "type": "object"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity": {
+            "type": "string"
+          },
+          "evidence_type": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "iri": {
+            "format": "uri",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuing_authority": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "jurisdiction": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "level_of_assurance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lookup_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "policy": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "procedure_contexts": {
+            "items": {
+              "format": "uri",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requirement": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "verification_request_schema_url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "verification_request_schema_url",
+          "evidence_type",
+          "issuing_authority",
+          "dataset_id",
+          "entity",
+          "lookup_keys",
+          "access"
+        ],
+        "type": "object"
+      },
+      "EvidenceOfferingList": {
+        "properties": {
+          "evidence_offerings": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceOffering"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "evidence_offerings"
+        ],
+        "type": "object"
+      },
+      "EvidenceVerificationRequest": {
+        "additionalProperties": false,
+        "examples": [
+          {
+            "claims": {
+              "date_of_birth": "1992-04-18",
+              "family_name": "Durand",
+              "given_name": "Camille"
+            }
+          }
+        ],
+        "properties": {
+          "claims": {
+            "additionalProperties": true,
+            "description": "Caller-submitted facts. Per-ruleset shape is configured by the deployment; V1 matching is `normalized_exact` only.",
+            "examples": [
+              {
+                "date_of_birth": "1992-04-18",
+                "family_name": "Durand",
+                "given_name": "Camille"
+              }
+            ],
+            "type": "object"
+          },
+          "evidence": {
+            "description": "Optional metadata about external documents or artifacts the caller already holds. Raw evidence is not echoed by default.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "additionalProperties": false,
+            "description": "Optional targeted registry subject. The offering binding must explicitly allow targeted verification.",
+            "properties": {
+              "id": {
+                "description": "Known entity primary key to verify against.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "claims"
+        ],
+        "type": "object"
+      },
+      "EvidenceVerificationResponse": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "claim_hash": {
+            "type": "string"
+          },
+          "claim_salt": {
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "match",
+              "mismatch",
+              "ambiguous"
+            ],
+            "type": "string"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "evidence_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_offering": {
+            "format": "uri",
+            "type": "string"
+          },
+          "evidence_type": {
+            "format": "uri",
+            "type": "string"
+          },
+          "ingest_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuing_authority": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "jurisdiction": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "level_of_assurance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requirement": {
+            "format": "uri",
+            "type": "string"
+          },
+          "verification_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "verification_id",
+          "decision",
+          "checked_at",
+          "requirement",
+          "evidence_type",
+          "evidence_offering",
+          "issuing_authority",
+          "dataset_id",
+          "entity",
+          "claim_salt",
+          "claim_hash"
+        ],
+        "type": "object"
+      },
+      "HealthResponse": {
+        "examples": [
+          {
+            "status": "ok"
+          }
+        ],
+        "properties": {
+          "status": {
+            "examples": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MetadataCatalogDocument": {
+        "description": "Portable metadata catalog. See `/metadata/catalog` for the live document.",
+        "type": "object"
+      },
+      "MetadataLanding": {
+        "additionalProperties": true,
+        "description": "Portable metadata landing document with links and an embedded scoped catalog.",
+        "type": "object"
+      },
+      "Pagination": {
+        "examples": [
+          {
+            "has_more": true,
+            "next_cursor": "eyJvIjoyMH0="
+          }
+        ],
+        "properties": {
+          "has_more": {
+            "description": "True when more pages remain after this one.",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "description": "Opaque cursor for the next page; null when `has_more` is false.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "ProblemDetails": {
+        "additionalProperties": true,
+        "description": "RFC 7807 Problem Details, returned for every non-2xx response.",
+        "examples": [
+          {
+            "code": "auth.missing_credential",
+            "detail": "no credential provided in Authorization or X-Api-Key header",
+            "status": 401,
+            "title": "Missing credential",
+            "type": "https://data.example.gov/problems/auth/missing_credential"
+          }
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "examples": [
+          {
+            "status": "ready"
+          }
+        ],
+        "properties": {
+          "status": {
+            "examples": [
+              "ready"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SpdciSyncRequest": {
+        "additionalProperties": true,
+        "description": "SP DCI sync request envelope.",
+        "type": "object"
+      },
+      "SpdciSyncResponse": {
+        "additionalProperties": true,
+        "description": "SP DCI sync response envelope.",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "description": "Compatibility API-key header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present.",
+        "in": "header",
+        "name": "X-Api-Key",
+        "type": "apiKey"
+      },
+      "bearerAuth": {
+        "description": "API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint against `config.auth.api_keys[*].hash_env`.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "contact": {
+      "name": "Civil Registration Authority (Demo)"
+    },
+    "description": "Best-effort Registry Relay API document generated from visible metadata.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "summary": "Read-only data gateway exposing entity records, catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.",
+    "title": "Civil Registry Relay (Decentralized Demo)",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/datasets": {
+      "get": {
+        "description": "Lists every dataset visible to the calling principal.",
+        "operationId": "list_datasets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetList"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "List datasets",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/datasets/civil_registry": {
+      "get": {
+        "description": "Returns metadata for the `civil_registry` dataset: entities, publishers, sensitivity, update frequency, and links to JSON, JSON-LD, and SHACL artifacts.\n\nSynthetic civil status records for decentralized evidence demo flows.",
+        "operationId": "get_civil_registry_metadata",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetSummary"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Dataset not found or not visible to the caller."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Dataset metadata",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/datasets/civil_registry/civil_person": {
+      "get": {
+        "description": "List `civil_person` records from dataset `civil_registry`. Person-level civil status projection for evidence computation.\n\nSupports pagination via `limit`+`cursor`, projection via `fields`, relationship expansion via `expand`, and configured filters.",
+        "operationId": "list_civil_registry_civil_person_records",
+        "parameters": [
+          {
+            "description": "Maximum records to return. Capped by the entity's `api.max_limit`.",
+            "examples": {
+              "default": {
+                "value": 10
+              }
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque pagination cursor returned in a prior response's `pagination.next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated list of entity fields to project. Unknown fields are rejected.",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `national_id`.",
+            "in": "query",
+            "name": "national_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by inclusion in a comma-separated list of `national_id` values.",
+            "in": "query",
+            "name": "national_id.in",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `birth_date`.",
+            "in": "query",
+            "name": "birth_date",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter where `birth_date` is greater than or equal to the value.",
+            "in": "query",
+            "name": "birth_date.gte",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter where `birth_date` is less than or equal to the value.",
+            "in": "query",
+            "name": "birth_date.lte",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `civil_status`.",
+            "in": "query",
+            "name": "civil_status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by inclusion in a comma-separated list of `civil_status` values.",
+            "in": "query",
+            "name": "civil_status.in",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `deceased`.",
+            "in": "query",
+            "name": "deceased",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `district`.",
+            "in": "query",
+            "name": "district",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by inclusion in a comma-separated list of `district` values.",
+            "in": "query",
+            "name": "district.in",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entity_civil_registry_civil_personCollection"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "List records",
+        "tags": [
+          "civil_registry / civil_person"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/civil_registry/civil_person?limit=10'"
+          },
+          {
+            "label": "httpx",
+            "lang": "Python",
+            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nresp = httpx.get(\n    'http://localhost:4242/datasets/civil_registry/civil_person',\n    params={'limit': 10},\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\npage = resp.json()\nfor row in page['data']:\n    print(row)\nnext_cursor = page['pagination'].get('next_cursor')"
+          }
+        ]
+      }
+    },
+    "/datasets/civil_registry/civil_person/aggregates": {
+      "get": {
+        "description": "Lists the named aggregate queries defined for `civil_person` in `civil_registry`. Each entry declares its group-by columns, measures, and minimum group size used for disclosure control.",
+        "operationId": "list_civil_registry_civil_person_aggregates",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AggregateListResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "List aggregates",
+        "tags": [
+          "civil_registry / civil_person"
+        ]
+      }
+    },
+    "/datasets/civil_registry/civil_person/aggregates/{aggregate_id}": {
+      "get": {
+        "description": "Runs the named aggregate against `civil_person`. Returns the configured group-by and measures, with sub-threshold groups suppressed per disclosure control.",
+        "operationId": "run_civil_registry_civil_person_aggregate",
+        "parameters": [
+          {
+            "description": "Aggregate identifier",
+            "in": "path",
+            "name": "aggregate_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AggregateResult"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Aggregate definition not found for this entity."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Run aggregate",
+        "tags": [
+          "civil_registry / civil_person"
+        ]
+      }
+    },
+    "/datasets/civil_registry/civil_person/schema": {
+      "get": {
+        "description": "Returns the `civil_person` field schema in a JSON-friendly form: field names, types, concept URIs, codelists, units, and language tags. Useful for codegen and validation.",
+        "operationId": "get_civil_registry_civil_person_field_schema",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entity_civil_registry_civil_personSchema"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Field schema",
+        "tags": [
+          "civil_registry / civil_person"
+        ]
+      }
+    },
+    "/datasets/civil_registry/civil_person/{id}": {
+      "get": {
+        "description": "Return a single `civil_person` record from `civil_registry` by primary key. Person-level civil status projection for evidence computation.",
+        "operationId": "get_civil_registry_civil_person_record",
+        "parameters": [
+          {
+            "description": "Entity primary key",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated list of entity fields to project. Unknown fields are rejected.",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entity_civil_registry_civil_person"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "`civil_person` record with the given primary key not found."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Get record by id",
+        "tags": [
+          "civil_registry / civil_person"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/civil_registry/civil_person/$ID'"
+          },
+          {
+            "label": "httpx",
+            "lang": "Python",
+            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nrecord_id = '...'\nresp = httpx.get(\n    f'http://localhost:4242/datasets/civil_registry/civil_person/{record_id}',\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\nprint(resp.json())"
+          }
+        ]
+      }
+    },
+    "/dci/{registry}/registry/sync/disabled": {
+      "post": {
+        "description": "Returns disability status using the configured SP DCI disability registry binding.",
+        "operationId": "spdci_disabled_status",
+        "parameters": [
+          {
+            "description": "Configured SP DCI registry adapter name.",
+            "in": "path",
+            "name": "registry",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpdciSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                }
+              }
+            },
+            "description": "Successful SP DCI response envelope."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid SP DCI request header or message envelope."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this adapter."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Configured SP DCI registry adapter was not found."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "SP DCI disabled status",
+        "tags": [
+          "SP DCI"
+        ]
+      }
+    },
+    "/dci/{registry}/registry/sync/get-disability-details": {
+      "post": {
+        "description": "Returns disability details using the configured SP DCI registry binding.",
+        "operationId": "spdci_get_disability_details",
+        "parameters": [
+          {
+            "description": "Configured SP DCI registry adapter name.",
+            "in": "path",
+            "name": "registry",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpdciSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                }
+              }
+            },
+            "description": "Successful SP DCI response envelope."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid SP DCI request header or message envelope."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this adapter."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Configured SP DCI registry adapter was not found."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "SP DCI disability details",
+        "tags": [
+          "SP DCI"
+        ]
+      }
+    },
+    "/dci/{registry}/registry/sync/get-disability-support": {
+      "post": {
+        "description": "Returns disability support using the configured SP DCI registry binding.",
+        "operationId": "spdci_get_disability_support",
+        "parameters": [
+          {
+            "description": "Configured SP DCI registry adapter name.",
+            "in": "path",
+            "name": "registry",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpdciSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                }
+              }
+            },
+            "description": "Successful SP DCI response envelope."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid SP DCI request header or message envelope."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this adapter."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Configured SP DCI registry adapter was not found."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "SP DCI disability support",
+        "tags": [
+          "SP DCI"
+        ]
+      }
+    },
+    "/dci/{registry}/registry/sync/search": {
+      "post": {
+        "description": "Runs the configured SP DCI registry sync search adapter for a named registry.",
+        "operationId": "spdci_sync_search",
+        "parameters": [
+          {
+            "description": "Configured SP DCI registry adapter name.",
+            "in": "path",
+            "name": "registry",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpdciSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                }
+              }
+            },
+            "description": "Successful SP DCI response envelope."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid SP DCI request header or message envelope."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this adapter."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Configured SP DCI registry adapter was not found."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "SP DCI sync search",
+        "tags": [
+          "SP DCI"
+        ]
+      }
+    },
+    "/evidence-offerings/{offering_id}/verifications": {
+      "post": {
+        "description": "Verifies caller-submitted claims against the registry binding selected by the evidence offering. The offering determines the dataset, entity, lookup keys, and ruleset; callers cannot select legacy verification rulesets directly.",
+        "operationId": "create_evidence_offering_verification",
+        "parameters": [
+          {
+            "description": "Evidence offering identifier",
+            "in": "path",
+            "name": "offering_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent. Required when the selected evidence offering's bound entity requires a purpose-of-use header.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": false,
+            "schema": {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Use `application/json` or omit for the default JSON response. Use `application/vnd.registry-relay.evidence-verification+jwt` to request a signed server-to-server receipt when provenance is enabled and the media type is configured.",
+            "in": "header",
+            "name": "Accept",
+            "required": false,
+            "schema": {
+              "enum": [
+                "application/json",
+                "application/vnd.registry-relay.evidence-verification+jwt"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceVerificationResponse"
+                }
+              },
+              "application/vnd.registry-relay.evidence-verification+jwt": {
+                "schema": {
+                  "description": "Compact JWS signed evidence-verification receipt.",
+                  "examples": [
+                    "eyJhbGciOiJFZERTQSIsInR5cCI6ImV2aWRlbmNlLXZlcmlmaWNhdGlvbi1yZWNlaXB0K2p3dCJ9..."
+                  ],
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Completed evidence verification decision.",
+            "headers": {
+              "Cache-Control": {
+                "description": "`no-store`; evidence verification responses must not be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "At least `Authorization, Accept`.",
+                "schema": {
+                  "examples": [
+                    "Authorization, Accept"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Malformed request body, missing required claims, or missing required `Data-Purpose` header."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Evidence offering is unknown or hidden from the caller. Runtime code is `offering.not_found`."
+          },
+          "406": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Requested evidence-verification JWT receipt format is not enabled for this deployment or offering."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request body exceeds the configured verification limit (`internal.payload_too_large`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Configured entity resource is unavailable."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Create evidence verification",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Returns 200 once the gateway process has started. Unauthenticated.",
+        "operationId": "get_health",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "security": [],
+        "summary": "Liveness probe",
+        "tags": [
+          "Service"
+        ]
+      }
+    },
+    "/metadata": {
+      "get": {
+        "description": "Lists canonical metadata publication links and embeds the scoped metadata catalog.",
+        "operationId": "get_metadata_landing",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataLanding"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Metadata landing page",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/catalog": {
+      "get": {
+        "description": "Returns the canonical route-neutral metadata catalog for datasets and entities visible to the calling principal.",
+        "operationId": "get_metadata_catalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataCatalogDocument"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Portable metadata catalog",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/datasets/{dataset_id}/policy": {
+      "get": {
+        "description": "Returns the ODRL access-policy document for one visible dataset.",
+        "operationId": "get_metadata_dataset_policy",
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ODRL JSON-LD dataset policy"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Dataset policy (ODRL JSON-LD)",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/dcat": {
+      "get": {
+        "description": "Returns the visible metadata catalog as a base DCAT JSON-LD document.",
+        "operationId": "get_metadata_dcat",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Base DCAT JSON-LD catalog"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Base DCAT catalog (JSON-LD)",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/dcat/bregdcat-ap": {
+      "get": {
+        "description": "Returns the visible metadata catalog as a BRegDCAT-AP JSON-LD document.",
+        "operationId": "get_metadata_dcat_bregdcat_ap",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "BRegDCAT-AP JSON-LD catalog"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "BRegDCAT-AP catalog (JSON-LD)",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/evidence-offerings": {
+      "get": {
+        "description": "Returns evidence offerings visible to the caller. Evidence offerings describe the requirement, evidence type, issuing authority, dataset/entity binding, and access route.",
+        "operationId": "list_metadata_evidence_offerings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceOfferingList"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "List visible evidence offerings",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/evidence-offerings/{offering_id}": {
+      "get": {
+        "description": "Returns one visible evidence offering. Unknown, hidden, and unauthorized offerings return `offering.not_found`.",
+        "operationId": "get_metadata_evidence_offering",
+        "parameters": [
+          {
+            "description": "Evidence offering identifier",
+            "in": "path",
+            "name": "offering_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceOffering"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Evidence offering metadata",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/policies": {
+      "get": {
+        "description": "Returns the ODRL access-policy documents for datasets visible to the calling principal.",
+        "operationId": "get_metadata_policies",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ODRL JSON-LD policy collection"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Visible dataset policies (ODRL JSON-LD)",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Returns 200 once dependent state (entity registry, audit sink) is initialised. Unauthenticated.",
+        "operationId": "get_ready",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "security": [],
+        "summary": "Readiness probe",
+        "tags": [
+          "Service"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    },
+    {
+      "apiKeyAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Configured base URL for this gateway instance.",
+      "url": "http://civil-registry-relay:8080"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Liveness and readiness probes. Unauthenticated.",
+      "name": "Service"
+    },
+    {
+      "description": "Catalog discovery: dataset listing, dataset metadata, DCAT-AP export.",
+      "name": "Catalog"
+    },
+    {
+      "description": "Social Protection Digital Convergence Initiative sync adapter routes.",
+      "name": "SP DCI"
+    },
+    {
+      "description": "Operations on the `civil_person` entity in dataset `civil_registry`. Person-level civil status projection for evidence computation.",
+      "name": "civil_registry / civil_person",
+      "x-displayName": "Civil Person"
+    }
+  ],
+  "x-tagGroups": [
+    {
+      "name": "Service",
+      "tags": [
+        "Service"
+      ]
+    },
+    {
+      "name": "Catalog",
+      "tags": [
+        "Catalog"
+      ]
+    },
+    {
+      "name": "SP DCI",
+      "tags": [
+        "SP DCI"
+      ]
+    },
+    {
+      "name": "Civil Registry",
+      "tags": [
+        "civil_registry / civil_person"
+      ]
+    }
+  ]
+}

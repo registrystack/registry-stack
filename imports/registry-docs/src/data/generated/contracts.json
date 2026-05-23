@@ -1,0 +1,74 @@
+[
+  {
+    "id": "registry-relay.openapi",
+    "name": "Registry Relay OpenAPI",
+    "owner": "registry-relay",
+    "status": "pinned-demo-snapshot",
+    "surface": "Protected Registry Data API, metadata API, evidence offering verification, health, readiness, and optional standards adapters.",
+    "source_of_truth": {
+      "label": "Registry Relay OpenAPI generator",
+      "url": "https://github.com/jeremi/registry-relay/blob/main/src/api/openapi.rs"
+    },
+    "consumer_note": "Registry Legend publishes a pinned demo snapshot until Relay has a release-grade export artifact."
+  },
+  {
+    "id": "registry-witness.openapi",
+    "name": "Registry Witness OpenAPI",
+    "owner": "registry-witness",
+    "status": "pinned-generated-snapshot",
+    "surface": "Claim discovery, claim evaluation, batch evaluation, rendering, JWKS, service metadata, and credential issuance.",
+    "source_of_truth": {
+      "label": "Registry Witness OpenAPI generator",
+      "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs"
+    },
+    "consumer_note": "Generate with `cargo run -p registry-witness-bin -- openapi`."
+  },
+  {
+    "id": "registry-manifest.metadata-yaml",
+    "name": "Metadata Manifest",
+    "owner": "registry-manifest",
+    "status": "current-source",
+    "surface": "Portable `metadata.yaml` documents, compiled metadata model, policies, and evidence offering metadata.",
+    "source_of_truth": {
+      "label": "Registry Manifest core",
+      "url": "https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core"
+    },
+    "consumer_note": "Runtime source paths, scopes, table names, and backend URLs belong in Relay config, not manifests."
+  },
+  {
+    "id": "registry-manifest.static-publication",
+    "name": "Static Metadata Publication Bundle",
+    "owner": "registry-manifest",
+    "status": "current-source",
+    "surface": "Static index, catalog JSON, evidence offerings, policies, DCAT, BRegDCAT-AP, SHACL, and entity JSON Schemas.",
+    "source_of_truth": {
+      "label": "Registry Manifest CLI",
+      "url": "https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-cli"
+    },
+    "consumer_note": "The bundle can be hosted as static files without running Registry Relay."
+  },
+  {
+    "id": "registry-atlas.capability-envelope",
+    "name": "System Capability Query Envelope",
+    "owner": "registry-atlas",
+    "status": "current-source",
+    "surface": "Capability query envelopes, information needs, term labels, field terms, and evidence links.",
+    "source_of_truth": {
+      "label": "Registry Atlas fixtures",
+      "url": "https://github.com/jeremi/registry-atlas/tree/main/fixtures/system-capability"
+    },
+    "consumer_note": "v0.1 matching is strict and based on accepted machine terms."
+  },
+  {
+    "id": "registry-lab.release-check",
+    "name": "Registry Lab Release Check",
+    "owner": "registry-lab",
+    "status": "pre-rename-source",
+    "surface": "Compose build, fixture generation, secret generation, smoke checks, and narrated demo flow.",
+    "source_of_truth": {
+      "label": "Pre-rename demo README",
+      "url": "https://github.com/jeremi/registry-lab/blob/main/README.md"
+    },
+    "consumer_note": "Use as a demo acceptance path only; production contracts remain in the owning repos."
+  }
+]

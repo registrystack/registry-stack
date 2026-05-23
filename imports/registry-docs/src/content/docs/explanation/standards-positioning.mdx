@@ -1,0 +1,147 @@
+---
+title: Standards positioning
+description: How the registry family uses existing standards, what claim levels mean, and why no new standard is being invented.
+status: draft
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+last_reviewed: "2026-05-23"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - ogc-api-records
+  - ogc-api-features
+  - openapi
+  - shacl
+  - json-schema
+  - json-ld
+  - sd-jwt-vc
+  - verifiable-credentials
+  - cccev
+  - odrl
+  - prov-o
+  - govstack-digital-registries
+  - sp-dci
+  - w3c-did
+---
+
+The registry family is not a new standard.
+It packages practical implementation surfaces around existing standards and ties each claim to an owning repo and verifiable evidence.
+When the code or artifacts do not support a strong claim, the data uses a weaker level.
+
+## Claim levels
+
+Six levels describe how a project relates to a standard.
+Each row defines one level; the third column gives a concrete example drawn from `src/data/standards.yaml`.
+
+| Level | Meaning | Example from the register |
+| --- | --- | --- |
+| `implements` | Implements a normative requirement or API shape from the standard. | Registry Relay publishes a `/.well-known/did.json` DID document and Registry Witness parses `did:jwk` credential subjects. Both satisfy normative DID Core requirements (`w3c-did`). |
+| `emits` | Produces artifacts shaped like the standard, such as JSON-LD, SHACL, OpenAPI, or catalog records. | Registry Manifest renders `render_breg_dcat_ap()` to a JSON-LD bundle that includes CPSV public service nodes, ADMS status, and dcatap namespace terms (`bregdcat-ap`). |
+| `maps_to` | Maps local concepts or fields to standard terms. | Registry Relay and Registry Witness map request and response shapes to SP DCI search and sync paths (`sp-dci`). |
+| `aligns_with` | Follows the standard's model or intent without a formal conformance claim. | Registry Relay and Registry Witness use VC-oriented provenance fixtures and issue SD-JWT credentials, but no reviewed W3C VC Data Model profile or validation suite has been pinned (`verifiable-credentials`). |
+| `inspired_by` | The standard shaped design decisions without a compatibility claim. | Relay config carries `src/config/provenance.rs` and Witness carries a `ClaimProvenance` struct, but neither emits PROV-O vocabulary terms directly (`prov-o`). |
+| `compares_against` | The standard is discussed to explain boundaries or alternatives. | The GovStack Digital Registries Building Block describes a single mandatory CRUD platform. Registry Relay explores a protected consultation gateway with optional capability families instead (`govstack-digital-registries`). |
+
+The claim levels are enforced in `src/data/standards.yaml` and validated by the standards register check in CI.
+Do not use "compliant" in prose unless the data entry and owning-repo evidence support that exact claim.
+
+## Per-standard stance
+
+**DCAT and BRegDCAT-AP** (`emits`):
+Registry Relay emits DCAT-shaped metadata at `/metadata/dcat` and a BRegDCAT-AP profile at `/metadata/dcat/bregdcat-ap`.
+Registry Manifest renders the same artifacts offline via `render_base_dcat()` and `render_breg_dcat_ap()`.
+Both are artifact claims: the published bundle uses DCAT and BRegDCAT-AP vocabulary terms.
+Profile-specific validation evidence has not yet been pinned.
+
+**OGC API Records** (`emits`):
+Registry Relay exposes OGC Records routes under the `ogcapi-records` Cargo feature flag.
+Registry Manifest renders OGC Records item bodies via `render_ogc_records_items()` and includes conformance class declarations.
+The claim level is `emits` because a feature flag gates the routes and full conformance test results are not yet available.
+
+**OGC API Features** (`aligns_with`):
+A `ogcapi-features` feature flag exists in Registry Relay for GeoJSON support.
+The data shows `aligns_with` because route evidence has not been pinned to a reviewed fixture.
+
+**OpenAPI** (`emits`):
+Registry Relay generates an OpenAPI document at `/openapi.json`.
+Registry Witness generates its OpenAPI document via `crates/registry-witness-server/src/openapi.rs` and exposes it at `/openapi.json`.
+Registry Legend publishes pinned artifacts through Redoc rather than hand-writing endpoint reference pages.
+
+**SHACL and JSON Schema** (`emits`):
+Registry Relay exposes SHACL node shapes at `/metadata/shacl` and entity JSON Schemas at `/datasets/{dataset_id}/{entity}/schema`.
+Registry Manifest renders `shacl.jsonld` and per-entity `schema.json` files in its static publication bundle.
+The claim is `emits`; external SHACL validation via pySHACL or the SEMIC validator is available but not wired into CI.
+
+**JSON-LD** (`emits`):
+DCAT, BRegDCAT-AP, SHACL, ODRL, and CCCEV outputs from Registry Relay, Registry Manifest, and Registry Witness all use JSON-LD with `@context`, `@type`, and `@id` structure.
+No broad RDF dataset conformance claim is made.
+
+**SD-JWT VC** (`emits`):
+Registry Witness owns SD-JWT VC issuance.
+The issuer signs with EdDSA and uses the `dc+sd-jwt` token type.
+Individual claim fields are wrapped in SHA-256-hashed disclosures.
+The evidence is in `crates/registry-witness-core/src/sd_jwt.rs`.
+The claim level is `emits`; credential claims stay on Witness pages unless Registry Relay is publishing provenance contexts or discovery metadata that points to Witness.
+
+**W3C Verifiable Credentials Data Model** (`aligns_with`):
+Registry Relay has VC-oriented provenance contexts and test fixtures.
+Registry Witness issues SD-JWT credentials.
+Neither has a pinned W3C VC Data Model profile or a validation suite result.
+The claim level stays at `aligns_with` until a reviewed profile lands.
+
+**W3C Decentralized Identifiers** (`implements`):
+Registry Relay publishes a `did:web` document at `/.well-known/did.json` when provenance is enabled.
+Registry Witness parses `did:jwk` values to resolve credential subjects.
+Both satisfy normative requirements from DID Core 1.0.
+The claim covers `did:web` and `did:jwk` only; no other DID methods are supported.
+
+**CCCEV** (`emits`):
+Registry Witness renders CCCEV-shaped JSON-LD for claim evaluation results.
+The `render_cccev()` function emits `cccev:Evidence` nodes with `cccev:isProvidedBy`, `cccev:supportsRequirement`, and `cccev:supportsValue` properties.
+The media type constant is `application/ld+json; profile="cccev"`.
+Profile conformance is not claimed.
+
+**ODRL** (`emits`):
+Registry Manifest renders ODRL policy documents with `odrl:Policy`, `odrl:Rule`, and `odrl:Constraint` terms.
+Registry Relay exposes dataset-scoped ODRL Offers at `/metadata/datasets/{dataset_id}/policy`.
+Relay publishes these policies as metadata for downstream governance; it does not evaluate or enforce them at runtime.
+
+**PROV-O** (`inspired_by`):
+Provenance concepts appear in Registry Relay's `src/config/provenance.rs` and Registry Witness's `ClaimProvenance` struct.
+Neither emits standalone PROV-O vocabulary terms.
+The claim stays at `inspired_by` until PROV-O terms are emitted or a reviewed mapping is available.
+
+**GovStack Digital Registries** (`compares_against`):
+Registry Relay is not positioned as a GovStack conformant system.
+The GovStack Digital Registries Building Block describes a single uniform CRUD platform.
+Registry Relay explores a protected consultation-only gateway model instead.
+
+**SP DCI** (`maps_to`):
+Registry Relay exposes an SP DCI sync adapter behind the `spdci-api-standards` feature flag.
+Registry Witness ships an HTTP source connector that maps SP DCI search and sync responses into claim evaluation inputs.
+Claims stay narrow until reviewed official SP DCI fixtures are available.
+
+## Publication rule
+
+A standard appears in the register only when it has all five:
+
+- An official URL.
+- An approved claim level.
+- At least one owning project in `used_by`.
+- At least one surface.
+- At least one evidence document or source link.
+
+If evidence is weak, lower the claim level rather than removing the entry.
+Use `TODO[evidence]` MDX comments and `evidence_gap: true` in `src/data/standards.yaml` when a claim cannot be grounded.
+
+## Next
+
+- [Standards reference](../../reference/standards/) shows the full generated table from `src/data/standards.yaml`.
+- [Architecture overview](../architecture/) explains where each project uses its standards claims.
+- [Contracts index](../../reference/contracts/) lists machine contracts by project and status.

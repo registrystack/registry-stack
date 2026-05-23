@@ -1,0 +1,25 @@
+---
+import MobileTableOfContents from '@astrojs/starlight/components/MobileTableOfContents.astro';
+import TableOfContents from '@astrojs/starlight/components/TableOfContents.astro';
+
+const { starlightRoute } = Astro.locals;
+const { editUrl } = starlightRoute;
+const reviewedLabel = starlightRoute.entry.data.last_reviewed;
+---
+
+<div class="registry-mobile-toc lg:sl-hidden">
+  {starlightRoute.toc && <MobileTableOfContents />}
+</div>
+
+<aside class="registry-page-sidebar sl-hidden lg:sl-block" aria-label="Page tools">
+  {starlightRoute.toc && (
+    <div class="registry-page-sidebar-section">
+      <TableOfContents />
+    </div>
+  )}
+
+  <div class="registry-page-meta">
+    {editUrl && <a href={editUrl}>Edit this page on GitHub</a>}
+    <p>Last reviewed {reviewedLabel}</p>
+  </div>
+</aside>

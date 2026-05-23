@@ -1,0 +1,123 @@
+---
+title: Registry Relay API
+description: Narrative context for the Registry Relay OpenAPI reference, covering API surface, auth modes, and documented limitations.
+status: current
+owner: registry-relay
+source_repos:
+  - registry-relay
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - dcat
+  - ogc-api-records
+  - odrl
+  - shacl
+  - json-ld
+  - sp-dci
+  - w3c-did
+---
+
+[Open Registry Relay API reference](/registry-legend/api/registry-relay.html)
+
+The Redoc page above is generated from a pinned OpenAPI artifact.
+This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
+which auth modes are declared, and what the specification does not cover.
+
+Evidence source: Registry Relay commit `aec4394300c87e1f0e93b73580c9b12150552111`, reviewed 2026-05-23.
+
+## API surface
+
+Registry Relay is a Rust async HTTP service (Axum framework) that turns sensitive government
+tabular files and database tables into protected, read-only, domain-oriented consultation APIs.
+The OpenAPI document covers the routes registered in `src/server.rs`.
+
+The API groups into six domains:
+
+### Catalog and entity routes
+
+- `GET /datasets` and `GET /datasets/{dataset_id}` return configured dataset listings.
+- `GET /datasets/{dataset_id}/{entity}` returns entity rows with filter and pagination.
+- `GET /datasets/{dataset_id}/{entity}/{id}` returns a single entity record.
+- `GET /datasets/{dataset_id}/{entity}/{id}/{relationship}` returns related entity records.
+- `GET /datasets/{dataset_id}/{entity}/schema` returns the entity JSON Schema.
+- `GET /datasets/{dataset_id}/{entity}/aggregates` and `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}` return declared aggregate definitions and computed aggregate results.
+
+### Metadata routes
+
+- `GET /metadata` returns a catalog landing page.
+- `GET /metadata/catalog` returns the full catalog JSON.
+- `GET /metadata/dcat` returns a DCAT (Data Catalog Vocabulary) catalog in JSON-LD.
+- `GET /metadata/dcat/{profile}` returns a profile variant, for example `bregdcat-ap` for BRegDCAT-AP JSON-LD.
+- `GET /metadata/shacl` returns SHACL node shapes in JSON-LD.
+- `GET /metadata/policies` returns ODRL policy statements.
+- `GET /metadata/datasets`, `GET /metadata/datasets/{dataset_id}`, and `GET /metadata/datasets/{dataset_id}/policy` return dataset-scoped metadata and policy.
+- `GET /metadata/datasets/{dataset_id}/entities/{entity}/schema` returns an entity schema scoped to the caller.
+
+### Evidence offering routes
+
+- `GET /metadata/evidence-offerings` lists configured evidence offerings.
+- `GET /metadata/evidence-offerings/{offering_id}` returns one offering.
+- `POST /evidence-offerings/{offering_id}/verifications` submits claims for Relay-native verification and returns a verification receipt.
+
+### Provenance routes (when provenance is enabled)
+
+- `GET /.well-known/did.json` returns the W3C Decentralized Identifier (DID) document.
+- `GET /schemas/{schema_id}` returns JSON Schemas for verifiable credential subjects.
+- `GET /contexts/{context_id}` returns JSON-LD contexts.
+
+### Standards adapter routes (feature-gated)
+
+- `GET /ogc/v1/records`, `/ogc/v1/records/collections`, and `/ogc/v1/records/collections/datasets/items` are available when the `ogcapi-records` feature is enabled.
+- `/sp-dci/*` routes are available when the `spdci-api-standards` feature is enabled.
+
+### Health routes
+
+- `GET /health` is a liveness probe. It requires no authentication.
+- `GET /ready` is a readiness probe. It requires no authentication.
+- `GET /docs` serves a Scalar HTML API reference shell. It requires no authentication and exposes no secrets.
+
+## Auth modes
+
+Registry Relay supports exactly one auth mode per runtime instance, configured in `auth`:
+
+**API key** (default for v1): The client sends a bearer token in `Authorization: Bearer <key>` or `X-Api-Key: <key>`.
+The server validates against a SHA-256 fingerprint stored in an environment variable, not in the config file.
+Scopes per key control access: `<dataset_id>:metadata`, `<dataset_id>:aggregate`, `<dataset_id>:rows`,
+`<dataset_id>:evidence_verification`, and `admin`.
+
+**OIDC / OAuth2**: The client sends a bearer JWT in `Authorization: Bearer <token>`.
+The server validates against an external identity provider JWKS, resolved from a discovery URL or explicit URL.
+No tokens are minted by Relay.
+
+Health and readiness endpoints are unauthenticated.
+Metadata routes enforce dataset-level scopes.
+Evidence verification enforces `<dataset_id>:evidence_verification` scope.
+
+## What the OpenAPI specification does not cover
+
+The pinned OpenAPI artifact documents the HTTP contract at the time of the demo snapshot.
+The following surfaces exist in the source but are not fully captured by the specification or require
+additional context:
+
+**Evidence offering verification flow.** `POST /evidence-offerings/{offering_id}/verifications`
+accepts claim JSON and returns a verification receipt. This is a Relay-native check, not an
+authority credential or eligibility decision. The verification response can be a JSON receipt or a
+`VC-JWT` compact serialization when the client sends `Accept: application/vc+jwt` and provenance is
+enabled.
+{/* The VC-JWT Accept variant is documented in the relay README:301–311 and lives in `src/provenance/` (per .research/registry-relay.md, "issues: Compact JWS-wrapped VCs for responses when provenance enabled and client sends `Accept: application/vc+jwt`"). It is NOT present in the pinned civil-demo OpenAPI artifact; that is an artifact-snapshot lag, not a missing feature. The "Artifact snapshot" caveat below applies. */}
+
+**Admin routes.** `POST /admin/reload`, `POST /admin/datasets/{dataset_id}/tables/{table_id}/reload`,
+and `GET /metrics` are mounted on a separate admin listener (`server.admin_bind`, default
+`127.0.0.1:8081`) and require `admin` scope. They do not appear in the public OpenAPI document.
+
+**Artifact snapshot.** The current artifact is a pinned civil demo snapshot, not a release-grade
+export. Some configurations (OIDC auth, SP DCI adapter, OGC API Records) may not be reflected.
+Regenerate from `GET /openapi.json` on a running Relay instance configured with the relevant features.
+
+**No write operations.** Registry Relay is a read-only service. Write operations (provisioning,
+inserts, updates) are explicitly out of scope.
+
+**No stream ingestion.** File and database sources are batch (snapshot or table scan). There is no
+Kafka, pub/sub, or event-streaming backend.

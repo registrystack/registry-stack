@@ -1,0 +1,319 @@
+- id: dcat
+  name: DCAT and DCAT-AP
+  standards_body: W3C and SEMIC
+  official_url: https://www.w3.org/TR/vocab-dcat-3/
+  version_or_profile: DCAT 3 plus DCAT-AP profile usage
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+  surfaces:
+    - metadata rendering
+    - catalog JSON-LD
+    - access service metadata
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Manifest README
+      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay and Manifest emit DCAT-shaped metadata. Conformance claims require profile-specific validation evidence.
+- id: bregdcat-ap
+  name: BRegDCAT-AP
+  standards_body: SEMIC
+  official_url: https://semiceu.github.io/BRegDCAT-AP/releases/2.00/
+  version_or_profile: BRegDCAT-AP 2.00
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+  surfaces:
+    - business registry catalog metadata
+    - embedded SHACL entity shapes
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Manifest README
+      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Current docs describe generated BRegDCAT-AP JSON-LD with SHACL node shapes.
+- id: ogc-api-records
+  name: OGC API Records
+  standards_body: Open Geospatial Consortium
+  official_url: https://ogcapi.ogc.org/records/
+  version_or_profile: OGC API Records
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+  surfaces:
+    - dataset catalogue discovery
+    - OGC records item bodies
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Manifest README
+      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay exposes records routes behind the ogcapi-records feature, and Manifest renders OGC records artifacts.
+- id: ogc-api-features
+  name: OGC API Features
+  standards_body: Open Geospatial Consortium
+  official_url: https://ogcapi.ogc.org/features/
+  version_or_profile: OGC API Features
+  status: referenced
+  claim_level: aligns_with
+  used_by:
+    - registry-relay
+  surfaces:
+    - standards adapter discussion
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Listed as an optional standards integration. Keep the claim below implementation until route evidence is pinned.
+- id: openapi
+  name: OpenAPI
+  standards_body: OpenAPI Initiative
+  official_url: https://spec.openapis.org/oas/latest.html
+  version_or_profile: OpenAPI 3.x
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-witness
+  surfaces:
+    - generated API reference
+    - Redoc publication
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Witness README
+      url: https://github.com/jeremi/registry-witness/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay and Witness generate OpenAPI. Registry Legend should publish pinned artifacts through Redoc.
+- id: shacl
+  name: SHACL
+  standards_body: W3C
+  official_url: https://www.w3.org/TR/shacl/
+  version_or_profile: SHACL Core
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+  surfaces:
+    - validation workflow
+    - entity node shapes
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Manifest README
+      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay docs describe SHACL validation and Manifest renders SHACL.
+- id: json-schema
+  name: JSON Schema
+  standards_body: JSON Schema
+  official_url: https://json-schema.org/draft/2020-12/json-schema-core.html
+  version_or_profile: Draft 2020-12
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+  surfaces:
+    - entity schema documents
+    - static publication bundle
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Manifest README
+      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Manifest renders entity JSON Schemas and Relay exposes entity schema endpoints.
+- id: json-ld
+  name: JSON-LD
+  standards_body: W3C
+  official_url: https://www.w3.org/TR/json-ld11/
+  version_or_profile: JSON-LD 1.1
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+    - registry-witness
+  surfaces:
+    - catalog JSON-LD
+    - policy JSON-LD
+    - CCCEV render output
+    - provenance contexts
+  evidence_docs:
+    - label: Registry Relay JSON-LD renderers
+      url: https://github.com/jeremi/registry-relay/blob/main/src/metadata/shacl.rs
+    - label: Registry Witness CCCEV renderer
+      url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs
+  last_checked: 2026-05-23
+  notes: The projects emit JSON-LD artifacts and contexts. No broad RDF dataset conformance claim is made here.
+- id: sd-jwt-vc
+  name: SD-JWT VC
+  standards_body: IETF
+  official_url: https://datatracker.ietf.org/doc/draft-ietf-oauth-selective-disclosure-jwt/
+  version_or_profile: Draft SD-JWT VC usage
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-witness
+  surfaces:
+    - credential issuance
+    - selective disclosure contracts
+  evidence_docs:
+    - label: Registry Witness README
+      url: https://github.com/jeremi/registry-witness/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Witness owns SD-JWT VC issuance primitives.
+- id: verifiable-credentials
+  name: Verifiable Credentials Data Model
+  standards_body: W3C
+  official_url: https://www.w3.org/TR/vc-data-model-2.0/
+  version_or_profile: Verifiable Credentials Data Model 2.0
+  status: referenced
+  claim_level: aligns_with
+  used_by:
+    - registry-relay
+    - registry-witness
+  surfaces:
+    - provenance contexts
+    - static VC fixtures
+    - credential issuance positioning
+  evidence_docs:
+    - label: Registry Relay provenance context tests
+      url: https://github.com/jeremi/registry-relay/blob/main/tests/provenance_contexts_endpoint.rs
+    - label: Registry Relay VC fixtures
+      url: https://github.com/jeremi/registry-relay/tree/main/tests/fixtures/vc
+    - label: Registry Witness README
+      url: https://github.com/jeremi/registry-witness/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay has VC-oriented provenance fixtures and contexts, and Witness issues SD-JWT VC. Keep this below an emits claim until a reviewed VC profile and validation fixtures are pinned.
+- id: cccev
+  name: Core Criterion and Core Evidence Vocabulary
+  standards_body: SEMIC
+  official_url: https://semiceu.github.io/CCCEV/releases/2.00/
+  version_or_profile: CCCEV 2.00
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-witness
+  surfaces:
+    - claim result rendering
+    - evidence node JSON-LD
+  evidence_docs:
+    - label: Registry Witness CCCEV renderer
+      url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs
+    - label: Registry Witness media type constants
+      url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs
+  last_checked: 2026-05-23
+  notes: Witness renders CCCEV-shaped JSON-LD for claim evaluation results. Profile conformance is not claimed.
+- id: odrl
+  name: ODRL
+  standards_body: W3C
+  official_url: https://www.w3.org/TR/odrl-model/
+  version_or_profile: ODRL Information Model
+  status: used
+  claim_level: emits
+  used_by:
+    - registry-relay
+    - registry-manifest
+  surfaces:
+    - dataset-scoped offers
+    - policy documents
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Manifest README
+      url: https://github.com/jeremi/registry-manifest/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers; Manifest renders policies.
+- id: prov-o
+  name: PROV-O
+  standards_body: W3C
+  official_url: https://www.w3.org/TR/prov-o/
+  version_or_profile: PROV-O
+  status: referenced
+  claim_level: inspired_by
+  used_by:
+    - registry-relay
+    - registry-witness
+  surfaces:
+    - provenance model discussion
+    - provenance-shaped audit and claim fields
+  evidence_docs:
+    - label: Registry Relay provenance configuration
+      url: https://github.com/jeremi/registry-relay/blob/main/src/config/provenance.rs
+    - label: Registry Witness claim model
+      url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs
+  last_checked: 2026-05-23
+  notes: The code uses provenance concepts, but current evidence does not show a PROV-O vocabulary emission surface. Keep this as design influence until PROV-O terms are emitted or mapped.
+- id: govstack-digital-registries
+  name: GovStack Digital Registries Building Block
+  standards_body: GovStack
+  official_url: https://govstack.global/
+  version_or_profile: Digital Registries Building Block
+  status: evaluated
+  claim_level: compares_against
+  used_by:
+    - registry-relay
+  surfaces:
+    - product positioning
+    - capability boundary
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+  last_checked: 2026-05-23
+  notes: Relay explores a protected consultation gateway model rather than the current single uniform CRUD platform.
+- id: sp-dci
+  name: Social Protection Digital Convergence Initiative
+  standards_body: SP DCI
+  official_url: https://spdci.org/
+  version_or_profile: Optional sync adapter and source connector
+  status: referenced
+  claim_level: maps_to
+  used_by:
+    - registry-relay
+    - registry-witness
+  surfaces:
+    - optional sync adapter
+    - HTTP source connector
+  evidence_docs:
+    - label: Registry Relay README
+      url: https://github.com/jeremi/registry-relay/blob/main/README.md
+    - label: Registry Witness source connector
+      url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs
+  last_checked: 2026-05-23
+  notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. Witness ships an HTTP source connector that maps SP-DCI search and sync responses into claim evaluation inputs.
+- id: w3c-did
+  name: W3C Decentralized Identifiers (DID Core)
+  standards_body: W3C
+  official_url: https://www.w3.org/TR/did-core/
+  version_or_profile: DID Core 1.0 with did:web and did:jwk methods
+  status: used
+  claim_level: implements
+  used_by:
+    - registry-relay
+    - registry-witness
+  surfaces:
+    - did:web document publication
+    - did:jwk parsing for credential subjects
+    - issuer identifier handling
+  evidence_docs:
+    - label: Registry Relay did:web document builder
+      url: https://github.com/jeremi/registry-relay/blob/main/src/provenance/did_web.rs
+    - label: Registry Relay DID route
+      url: https://github.com/jeremi/registry-relay/blob/main/src/api/did.rs
+    - label: Registry Witness did:jwk handling
+      url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs
+  last_checked: 2026-05-23
+  notes: Relay publishes a did:web document and Witness parses did:jwk values for credential subjects. The site does not claim conformance to the wider DID method registry beyond did:web and did:jwk.

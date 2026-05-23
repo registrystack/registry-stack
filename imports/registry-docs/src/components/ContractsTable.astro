@@ -1,0 +1,34 @@
+---
+import contracts from '../data/generated/contracts.json';
+---
+
+<div class="registry-table">
+  <table>
+    <thead>
+      <tr>
+        <th>Contract</th>
+        <th>Owner</th>
+        <th>Status</th>
+        <th>Surface</th>
+        <th>Source of truth</th>
+        <th>Consumer note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {contracts.map((contract) => (
+        <tr>
+          <td>
+            <strong>{contract.name}</strong><br />
+            <code>{contract.id}</code>
+          </td>
+          <td>{contract.owner}</td>
+          <td><span class="status-chip">{contract.status}</span></td>
+          <td>{contract.surface}</td>
+          <td><a href={contract.source_of_truth.url}>{contract.source_of_truth.label}</a></td>
+          <td>{contract.consumer_note}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+<p class="source-note">Generated from <code>src/data/contracts.yaml</code>.</p>

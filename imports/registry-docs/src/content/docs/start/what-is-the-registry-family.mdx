@@ -1,0 +1,158 @@
+---
+title: What is the registry family
+description: Plain-language description of the five registry projects, their responsibilities, and their boundaries.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-manifest
+  - registry-witness
+  - registry-atlas
+  - registry-lab
+last_reviewed: "2026-05-23"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - shacl
+  - json-schema
+  - sd-jwt-vc
+  - cccev
+  - odrl
+---
+
+The registry family is a set of five repositories with disjoint responsibilities
+built around protected registry consultation.
+No single repository owns the full stack.
+Each one has a defined scope, and the boundaries are recorded in
+[`src/data/projects.yaml`](https://github.com/jeremi/registry-legend/blob/main/src/data/projects.yaml).
+
+## The five projects
+
+### Registry Manifest
+
+Describe a registry once in YAML; render every standards-facing artifact other systems need
+to find, understand, and connect to it, without standing up a runtime.
+`registry-manifest` is a Rust library and CLI that compiles the metadata manifest and
+produces these artifacts.
+
+**Owns:** metadata manifest model and compiled metadata model; pure renderers for
+catalog JSON, DCAT (Distributed Catalog Application Profile) JSON-LD, BRegDCAT-AP JSON-LD,
+SHACL (Shapes Constraint Language) node shapes, JSON Schema Draft 2020-12, OGC API Records
+(the Open Geospatial Consortium API specification for records) item bodies, ODRL
+(Open Digital Rights Language) policy documents, and evidence-offering metadata;
+CLI validation, static publication, and profile fixture validation.
+
+**Does not own:** Registry Relay runtime data access; auth, audit, observability,
+DataFusion, Postgres, Axum, or secret handling; production source configuration.
+
+The `registry-manifest-cli publish` command produces a static bundle including
+`catalog.json`, `dcat.jsonld`, `shacl.jsonld`, entity JSON Schemas, and an `index.json` manifest.
+This bundle can be served without running Registry Relay.
+
+### Registry Relay
+
+Let authorized systems query a registry over HTTP without giving them database access or
+write paths.
+`registry-relay` is a config-driven Rust HTTP service that turns sensitive tabular files
+(CSV, XLSX, Parquet) and PostgreSQL tables into protected, read-only, domain-oriented APIs.
+It is a restricted consultation gateway, not an open-data portal and not a write platform.
+
+**Owns:** runtime configuration and source binding; entity-shaped Registry Data API routes
+over CSV, XLSX, Parquet, and PostgreSQL sources; API key and OIDC resource-server authorization;
+caller-scoped metadata publication at `/metadata/*`; relay-native evidence offering verification.
+
+**Does not own:** record provisioning or writes in v1; portable metadata schema ownership
+(that belongs to Registry Manifest); standalone claim service internals owned by Registry Witness;
+storage table identifiers or arbitrary SQL in public APIs.
+
+Registry Relay emits DCAT, BRegDCAT-AP, SHACL, JSON Schema, and ODRL artifacts at runtime
+via its `/metadata/*` routes, using the same renderers provided by `registry-manifest-core`.
+It also exposes OGC API Records routes behind the `ogcapi-records` feature flag,
+and an optional SP DCI (Social Protection Digital Convergence Initiative) sync adapter
+behind the `spdci-api-standards` feature flag.
+
+### Registry Witness
+
+Prove a person qualifies for a program without sharing the records that prove it.
+`registry-witness` is a standalone Rust HTTP service that evaluates eligibility claims against
+registry data and issues SD-JWT VC credentials with selective disclosure.
+It does not import or link Registry Relay code.
+
+**Owns:** claim configuration and evaluation; disclosure policy and redacted audit events;
+Registry Witness API routes; SD-JWT VC issuance primitives;
+HTTP source connectors for Registry Data API and SP DCI-style sources.
+
+**Does not own:** Registry Relay source code or runtime internals;
+portable metadata renderers owned by Registry Manifest;
+browser inspection workflows owned by Registry Atlas.
+
+Registry Witness evaluates YAML-configured claims against data fetched from source connectors,
+applies per-claim disclosure rules (full value, predicate, or redacted), and can issue
+credentials in SD-JWT VC format signed with EdDSA keys.
+It renders claim results as CCCEV (Core Criterion and Core Evidence Vocabulary) JSON-LD
+when the caller requests `application/ld+json; profile="cccev"`.
+The verification receipt it produces is not an eligibility decision.
+{/* TODO[evidence]: registry-witness README does not use the phrase "eligibility decision";
+     evidence-verification.md in registry-relay is the primary non-goals source;
+     confirm equivalent non-goal language in registry-witness README before removing this note. */}
+
+### Registry Atlas
+
+Explore what a registry publishes (catalog, schemas, policies, evidence offerings) in your
+browser, and check whether it actually emits what it claims to emit, before you write
+integration code.
+`registry-atlas` is a browser single-page application (React 19, TypeScript, Vite) with a
+Node.js/Express fetch proxy.
+
+**Owns:** browser UI for published catalogue and registry discovery artifacts;
+local fetch proxy for inspected metadata endpoints;
+strict capability queries over accepted machine terms;
+semantic asset discovery fixtures and envelopes.
+
+**Does not own:** registry runtime APIs; natural-language inference in v0.1 capability discovery;
+persistent token storage in browser or proxy logs.
+
+The capability discovery engine uses a strict matching model:
+no fuzzy matching, synonym expansion, or AI inference.
+It returns candidate answer routes backed by machine-verifiable evidence in metadata
+or explicit reviewed mappings.
+Bearer tokens entered in the UI are session-only and are not written to browser storage or server logs.
+
+### Registry Lab
+
+Run the registry runtime services together on your laptop in one `docker compose up`, with
+synthetic fixtures and a narrated walk-through.
+`registry-lab` is a Compose-based runnable demo that wires three Relay instances, three Witness
+instances, a static metadata publisher, and a demo client into a single topology.
+Atlas is run separately and is not in the compose topology at v0.1.
+
+**Owns:** end-to-end local topology for Relay, Witness, the static metadata publisher, and
+demo-client fixtures; demo scripts, smoke checks, generated local credentials, and narrated
+client flow; acceptance rehearsal after rename waves land.
+
+**Does not own:** production deployment guidance; normative API or metadata contracts;
+real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
+
+## Why the split exists
+
+Each project can be operated, validated, and audited independently:
+
+- Portable metadata can be validated with `registry-manifest-cli validate` without running a gateway.
+- Runtime source bindings, authorization, and audit stay inside Registry Relay.
+- Claim evaluation and credential issuance stay in Registry Witness, which can be operated and audited separately.
+- Browser inspection tools read published outputs without becoming a source of truth.
+- Registry Lab proves flows locally without becoming production guidance.
+
+## What Registry Legend owns
+
+Registry Legend is the explanatory layer.
+It owns cross-project orientation, the standards register, contract indexes, generated API reference entry points, and historical migration context.
+Implementation details belong in the owning repositories.
+
+## Next
+
+- [Quickstart](../quickstart/)
+- [Project map](../../map/)
+- [Architecture overview](../../explanation/architecture/)
+- [Standards register](../../reference/standards/)

@@ -1,0 +1,32 @@
+config:
+  default: true
+  MD013: false
+  MD024:
+    siblings_only: true
+  # MD037 misreads MDX expression comments ({/* ... */}) as emphasis markers.
+  # Evidence-gap TODOs use this MDX form per docs/style-guide.md.
+  MD037: false
+  MD029:
+    style: "ordered"
+  MD060:
+    style: "padded"
+  MD033:
+    allowed_elements:
+      - img
+      - a
+      - figure
+      - title
+      - desc
+      - ProjectMap
+      - OpenApiSourcesTable
+      - ContractsTable
+      - StandardsTable
+      - LegendList
+globs:
+  - "**/*.{md,mdx}"
+ignores:
+  - "node_modules/**"
+  - "dist/**"
+  - "src/data/generated/**"
+  - ".research/**"
+  - "docs/**"
