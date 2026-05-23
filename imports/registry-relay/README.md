@@ -225,7 +225,7 @@ uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
   --header "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY"
 ```
 
-The recipe uses `uv` to run `pyshacl` and the local smoke profile at `tests/fixtures/shacl/dcat-ap-catalog-smoke.ttl`. Pass stricter national or EU DCAT-AP shapes directly to the script when they are available:
+The recipe uses `uv` to run `pyshacl` and the local smoke profile at `scripts/shacl/dcat-ap-catalog-smoke.ttl`. Pass stricter national or EU DCAT-AP shapes directly to the script when they are available:
 
 ```sh
 uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \

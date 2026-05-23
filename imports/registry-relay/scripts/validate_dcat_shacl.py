@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SHACL_DIR = REPO_ROOT / "tests" / "fixtures" / "shacl"
+SHACL_DIR = REPO_ROOT / "scripts" / "shacl"
 DEFAULT_SHAPES = [
     str(SHACL_DIR / "dcat-ap-catalog-smoke.ttl"),
     str(SHACL_DIR / "bregdcat-ap-catalog-smoke.ttl"),
