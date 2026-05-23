@@ -19,10 +19,10 @@ base64 = { version = "0.22" }
 clap = { version = "4", features = ["derive", "env"] }
 registry-witness-core = { version = "0.1.0", path = "crates/registry-witness-core" }
 registry-witness-server = { version = "0.1.0", path = "crates/registry-witness-server", default-features = false }
-cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", tag = "cel-mapper-core-v0.1.1" }
+cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "32679bb78c969b8f33129113e31465dbe54b0ea0" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_yml = { version = "0.0.12" }
@@ -30,7 +30,7 @@ sha2 = { version = "0.10" }
 subtle = { version = "2" }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
-tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "net", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "net", "fs", "time"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.6", features = ["trace", "request-id", "cors"] }
 tracing = { version = "0.1" }

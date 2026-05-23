@@ -2,7 +2,8 @@
 
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1-bookworm AS builder
+# Keep the tag for humans and the digest for reproducible pulls.
+FROM rust:1-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
 
 WORKDIR /workspace
 COPY . .
@@ -12,15 +13,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked -p registry-witness-bin \
     && cp /workspace/target/release/registry-witness /usr/local/bin/registry-witness
 
-FROM debian:bookworm-slim AS runtime
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:bd2899c12b335c827750ccf2359879eab09c09b206023dcebea408947d54127c AS runtime
 
 COPY --from=builder /usr/local/bin/registry-witness /usr/local/bin/registry-witness
 
-USER nobody:nogroup
 EXPOSE 8080
 
-ENTRYPOINT ["registry-witness"]
+ENTRYPOINT ["/usr/local/bin/registry-witness"]

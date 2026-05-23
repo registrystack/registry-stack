@@ -1,0 +1,59 @@
+[graph]
+all-features = false
+no-default-features = false
+targets = []
+
+[output]
+feature-depth = 1
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "jsonwebtoken pulls rsa support transitively; Registry Witness issues and validates EdDSA/Ed25519 only. Revisit when upstream ships a patched rsa path." },
+    { id = "RUSTSEC-2023-0089", reason = "Transitive through cel-mapper-core's phonenumber/postcard chain. Track cel-mapper-core dependency updates." },
+    { id = "RUSTSEC-2025-0068", reason = "Existing direct YAML loader dependency; replacing it is outside this supply-chain/CI slice and should be handled as an application dependency follow-up." },
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+exceptions = []
+
+[licenses.private]
+ignore = true
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = [
+    { crate = "hyper-tls", reason = "Use reqwest with rustls-tls to avoid native TLS/OpenSSL in production builds." },
+    { crate = "native-tls", reason = "Use reqwest with rustls-tls to avoid native TLS/OpenSSL in production builds." },
+    { crate = "openssl", reason = "Use reqwest with rustls-tls to avoid native TLS/OpenSSL in production builds." },
+    { crate = "openssl-sys", reason = "Use reqwest with rustls-tls to avoid native TLS/OpenSSL in production builds." },
+    { crate = "tokio-native-tls", reason = "Use reqwest with rustls-tls to avoid native TLS/OpenSSL in production builds." },
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/PublicSchema/cel-mapping"]
