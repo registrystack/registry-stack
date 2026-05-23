@@ -267,9 +267,9 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
         .and_then(Path::parent)
         .expect("apps directory");
     for config_path in [
-        "registry_relay/demo/decentralized/config/evidence/civil-evidence-server.yaml",
-        "registry_relay/demo/decentralized/config/evidence/social-protection-evidence-server.yaml",
-        "registry_relay/demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
+        "registry-relay/demo/decentralized/config/evidence/civil-evidence-server.yaml",
+        "registry-relay/demo/decentralized/config/evidence/social-protection-evidence-server.yaml",
+        "registry-relay/demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
     ] {
         let raw = std::fs::read_to_string(root.join(config_path)).expect("config is readable");
         let config: StandaloneRegistryWitnessConfig =
@@ -297,10 +297,5 @@ fn set_demo_env() {
             std::env::set_var(key, "demo-token");
         }
         std::env::set_var("REGISTRY_WITNESS_ISSUER_JWK", DEMO_ISSUER_JWK);
-        // The external registry_relay demo configs (loaded by
-        // decentralized_demo_evidence_configs_load_validate_and_build_router)
-        // still reference EVIDENCE_SERVER_ISSUER_JWK. Set it here until
-        // Phase 4 updates those files to the new name.
-        std::env::set_var("EVIDENCE_SERVER_ISSUER_JWK", DEMO_ISSUER_JWK);
     }
 }
