@@ -75,20 +75,20 @@ The committed `.env.example` contains inert placeholder values only.
 | Metadata client token (civil) | `CIVIL_METADATA_CLIENT_RAW` / `CIVIL_METADATA_CLIENT_HASH` | Smoke checks (`/health`, `/ready`, `/openapi.json`, `/metadata/*` on civil Relay) |
 | Metadata client token (social) | `SOCIAL_METADATA_CLIENT_RAW` / `SOCIAL_METADATA_CLIENT_HASH` | Smoke checks on social protection Relay |
 | Metadata client token (health) | `HEALTH_METADATA_CLIENT_RAW` / `HEALTH_METADATA_CLIENT_HASH` | Smoke checks on health Relay |
-| Evidence source token (civil) | `CIVIL_RELAY_EVIDENCE_SOURCE_TOKEN` (or similar) | `civil-witness` when fetching civil facts from `civil-registry-relay` |
-| Evidence source token (social) | `SOCIAL_RELAY_EVIDENCE_SOURCE_TOKEN` (or similar) | `social-protection-witness` when fetching social facts |
-| Evidence source token (health) | `HEALTH_RELAY_EVIDENCE_SOURCE_TOKEN` (or similar) | `shared-eligibility-witness` health source reads |
-| Evidence-only token | `*_EVIDENCE_ONLY_*` pattern | Scope denial proof: has evidence scope, no row or aggregate scope |
+| Evidence source token (civil) | `CIVIL_EVIDENCE_SOURCE_RAW` | `civil-witness` when fetching civil facts from `civil-registry-relay` ([`config/witness/civil-witness.yaml` L29](https://github.com/jeremi/registry-lab/blob/main/config/witness/civil-witness.yaml#L29)) |
+| Evidence source token (social) | `SOCIAL_EVIDENCE_SOURCE_RAW` | `social-protection-witness` when fetching social facts ([`config/witness/social-protection-witness.yaml` L29](https://github.com/jeremi/registry-lab/blob/main/config/witness/social-protection-witness.yaml#L29)) |
+| Evidence source token (civil, shared) | `SHARED_CIVIL_EVIDENCE_SOURCE_RAW` | `shared-eligibility-witness` civil source reads ([`config/witness/shared-eligibility-witness.yaml` L33](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L33)) |
+| Evidence source token (social, shared) | `SHARED_SOCIAL_EVIDENCE_SOURCE_RAW` | `shared-eligibility-witness` social source reads ([`config/witness/shared-eligibility-witness.yaml` L36](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L36)) |
+| Evidence source token (health, shared) | `SHARED_HEALTH_EVIDENCE_SOURCE_RAW` | `shared-eligibility-witness` health source reads ([`config/witness/shared-eligibility-witness.yaml` L39](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L39)) |
+| Evidence-only token (civil) | `CIVIL_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
+| Evidence-only token (social) | `SOCIAL_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
+| Evidence-only token (health) | `HEALTH_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
 | Row-reader token (social) | `SOCIAL_ROW_READER_RAW` | Protected row read in scenario 2 and scope denial checks |
 | Aggregate-reader token (social) | `SOCIAL_AGGREGATE_READER_RAW` | Aggregate consultation in scenario 2 and scope denial checks |
 | Witness client bearer (civil) | `CIVIL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `civil-witness` |
 | Witness client bearer (social) | `SOCIAL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `social-protection-witness` |
 | Witness client bearer (shared) | `SHARED_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `shared-eligibility-witness` |
-| Issuer JWK (per Witness) | `*_ISSUER_JWK` pattern | SD-JWT VC signing; embedded in Witness config at startup |
-
-{/* TODO[evidence]: exact env var names for evidence source tokens and issuer JWKs are inferred from
-     .env.example and README patterns; verify against config/witness/*.yaml and .env.example before
-     removing these (or similar) markers. */}
+| Issuer JWK (all Witnesses) | `REGISTRY_WITNESS_ISSUER_JWK` | SD-JWT VC signing key; all three Witness configs use `issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK` ([`config/witness/civil-witness.yaml` L43](https://github.com/jeremi/registry-lab/blob/main/config/witness/civil-witness.yaml#L43)) |
 
 Relay configs reference only `*_HASH` env vars (SHA-256 fingerprints of the raw tokens).
 Witness configs reference `token_env` names that map to `*_RAW` or `*_BEARER` env vars.

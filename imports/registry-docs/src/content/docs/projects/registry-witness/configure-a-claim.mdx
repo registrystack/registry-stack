@@ -55,10 +55,14 @@ evidence:
       token_env: MY_REGISTRY_SOURCE_TOKEN
 ```
 
-The connector kind defaults to `registry_data_api` when no `dci` block is present.
-{/* TODO[evidence]: SourceConnectionConfig at config.rs:336 always includes a dci field with
-     defaults; confirm that absence of explicit dci config causes the RegistryDataApi connector
-     to be used by examining standalone.rs read_remote_registry_data_api_one path selection. */}
+The `source_connections` entry declares a base URL and token variable.
+The connector kind is set per binding, not per connection: each `source_bindings` entry carries
+an explicit `connector` field (`registry_data_api` or `dci`) that determines which HTTP client
+path the runtime uses
+([standalone.rs:140](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/standalone.rs#L140)).
+A connection without a `dci` block still carries DCI defaults
+([config.rs:336](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs#L336));
+those defaults are only used when a binding sets `connector: dci`.
 
 **SP DCI connector:**
 
@@ -300,10 +304,10 @@ curl -s -X POST \
 ```
 
 A `200` response with a `claim_results` array confirms that evaluation reached the rule stage.
-If the source registry is unreachable, the response includes a source error rather than a claim
-value; the HTTP status is still `200` with an `error` field in the result.
-{/* TODO[evidence]: confirm that source fetch failures produce a 200 with an error field rather
-     than a 5xx; check runtime.rs evaluate_claim error handling at reviewed commit b4128a3. */}
+If the source registry is unreachable, the runtime raises `SourceUnavailable`, which the API
+returns as a `503 Service Unavailable` response with an `application/problem+json` body
+([api.rs:723](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs#L723)).
+The `code` field in the body is `source.unavailable`.
 
 To verify CCCEV rendering:
 

@@ -139,10 +139,9 @@ The demo client:
 
 What `shared-eligibility-witness` does:
 Registry Witness fans out to all three Relay services using the per-source tokens
-(`SHARED_RELAY_CIVIL_SOURCE_TOKEN`, `SHARED_RELAY_SOCIAL_SOURCE_TOKEN`,
-`SHARED_RELAY_HEALTH_SOURCE_TOKEN`).
-{/* TODO[evidence]: these token env var names are inferred from .env.example patterns;
-     verify exact names against config/witness/shared-eligibility-witness.yaml before removing this note. */}
+`SHARED_CIVIL_EVIDENCE_SOURCE_RAW`, `SHARED_SOCIAL_EVIDENCE_SOURCE_RAW`, and
+`SHARED_HEALTH_EVIDENCE_SOURCE_RAW`
+([`config/witness/shared-eligibility-witness.yaml` L33-L39](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L33-L39)).
 The result carries `source_count >= 2` when at least two sources contributed evidence.
 
 **What to inspect:**

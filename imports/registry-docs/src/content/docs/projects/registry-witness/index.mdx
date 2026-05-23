@@ -72,9 +72,16 @@ A claim definition carries:
 - `credential_profiles`: which credential profiles may issue a credential from this claim.
 - `cccev`: optional Core Criterion and Core Evidence Vocabulary (CCCEV) annotation
   (for example, `requirement_type: InformationRequirement`).
-- `oots`: optional Once-Only Technical System configuration. Not yet active in v0.
-  {/* TODO[evidence]: oots field is present in config.rs:299, but no OOTS integration code found
-       at reviewed commit b4128a3. Mark as "not yet active" until an OOTS connector lands. */}
+- `oots`: optional Once-Only Technical System (OOTS) annotation
+  ([config.rs:618](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs#L618)).
+  Fields include `enabled`, `requirement` (an IRI), `reference_framework`,
+  `evidence_type_classification`, `evidence_type_list`, `languages`, and
+  `authentication_level_of_assurance`.
+  When `oots.enabled` is true, the claim summary API publishes the block and the CCCEV renderer
+  uses `oots.requirement` as the `cccev:supportsRequirement` IRI
+  ([runtime.rs:941](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs#L941)).
+  There is no dedicated OOTS transport or external OOTS endpoint at this version; the fields
+  serve as metadata annotations only.
 
 The demo config at
 [demo/config/registry-witness.yaml](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml)
@@ -95,9 +102,11 @@ Registry Witness supports four rule types, declared in `RuleConfig`
   CEL evaluation is provided by `cel-mapper-core`, pinned to the
   `cel-mapper-core-v0.1.1` tag in `PublicSchema/cel-mapping`.
 - `plugin`: declares an external plugin name.
-  The variant exists in the enum but has no implementation at the reviewed commit.
-  {/* TODO[evidence]: RuleConfig::Plugin at config.rs:454 has no corresponding evaluator branch
-       in runtime.rs. Confirmed gap at commit b4128a3. */}
+  The variant exists in the enum
+  ([config.rs:454](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs#L454))
+  but the evaluator returns `OperationUnsupported` (HTTP 501) for any claim that uses it
+  ([runtime.rs:521](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs#L521)).
+  Plugin rules cannot be evaluated at this version.
 
 The runtime evaluator is in
 [`crates/registry-witness-server/src/runtime.rs`](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs).

@@ -70,9 +70,10 @@ If Atlas cannot infer the profile, select one manually from the profile dropdown
 
 ### 4. Run discovery
 
-Press **Discover** (or the equivalent button in the current UI).
-{/* TODO[evidence]: UI button label not confirmed from source; App.tsx:94-115 shows entry
-     mechanisms but the exact button label is not captured in reviewed code. */}
+Press **Discover**.
+The button label comes from
+[`src/App.tsx`](https://github.com/jeremi/registry-atlas/blob/main/src/App.tsx#L478),
+where the submit button renders the text `Discover`.
 
 The proxy fetches the catalog document and follows links to retrieve every artifact it finds:
 SHACL shapes, JSON Schema files, ODRL policy documents, OpenAPI descriptions, and OGC API
@@ -181,10 +182,12 @@ After completing the steps, confirm:
 - The Evidence tab shows the `DiscoveryReport` JSON with a non-zero `asset_count`.
 
 For the Registry Relay all-standards demo, the expected summary is 168 assets across 29 artifacts,
-broken down into `api_description`, `catalog`, `class`, `data_service`, `dataset`,
-`distribution`, and `policy` kinds.
-{/* TODO[evidence]: expected counts sourced from HOW_TO_TEST_V0_1.md; confirm against current
-     all_standards demo fixture before marking current. */}
+broken down as follows: 1 `api_description`, 3 `catalog`, 22 `class`, 44 `data_service`,
+27 `dataset`, 44 `distribution`, and 27 `policy`.
+These counts are verified against the bundled fixture at
+[`fixtures/system-capability/registry-relay-all-standards.report.json`](https://github.com/jeremi/registry-atlas/blob/main/fixtures/system-capability/registry-relay-all-standards.report.json)
+and match the expected values documented in
+[`HOW_TO_TEST_V0_1.md`](https://github.com/jeremi/registry-atlas/blob/main/HOW_TO_TEST_V0_1.md#L128-L149).
 
 ## Troubleshooting
 

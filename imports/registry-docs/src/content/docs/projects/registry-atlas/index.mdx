@@ -103,9 +103,13 @@ discarded when the browser session ends.
 Registry Atlas does not write bearer tokens to `localStorage`, `sessionStorage`, IndexedDB,
 or proxy logs.
 Callers must re-supply tokens in each browser session.
-{/* TODO[evidence]: README.md line 31-32 states tokens are never written to browser storage or
-     server logs; server/index.mjs line 246-247 covers same-origin-only forwarding;
-     no server-side logging of the Authorization header found in reviewed commit. */}
+The token lives only in React component state for the lifetime of the browser tab: see
+[`src/App.tsx`](https://github.com/jeremi/registry-atlas/blob/main/src/App.tsx#L285)
+for the `useState("")` declaration.
+The proxy reads the token from the `x-atlas-bearer` request header and forwards it as
+`Authorization: Bearer` to the upstream target; no logging of that header occurs anywhere
+in the server: see
+[`server/index.mjs`](https://github.com/jeremi/registry-atlas/blob/main/server/index.mjs#L208-L219).
 
 ## The strict capability discovery engine
 

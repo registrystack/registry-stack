@@ -64,9 +64,9 @@ Inside the compose network, services reach each other via DNS names (for example
 Witness containers do not mount source data files directly.
 Registry Witness reads registry facts over HTTP from the Relay services.
 
-Registry Relay images are built with the `spdci-api-standards,standards-cel-mapping` feature flags,
+Registry Relay images are built with the `spdci-api-standards,standards-cel-mapping` feature flags
+([`Dockerfile.registry-relay` L13](https://github.com/jeremi/registry-lab/blob/main/Dockerfile.registry-relay#L13)),
 so SP DCI (Social Protection Digital Convergence Initiative) source routes are present in the demo.
-{/* TODO[evidence]: feature flag list is from the README; verify against Dockerfile.registry-relay build args. */}
 
 ## Fixtures and generated credentials
 
