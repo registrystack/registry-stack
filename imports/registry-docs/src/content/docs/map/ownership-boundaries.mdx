@@ -1,6 +1,6 @@
 ---
 title: Ownership boundaries
-description: What each registry family project explicitly does not own, grounded in source evidence.
+description: Which project owns which responsibility, and which questions belong to which repo.
 status: current
 owner: registry-legend
 source_repos:
@@ -15,8 +15,7 @@ locale: en
 standards_referenced: []
 ---
 
-Use these boundaries when writing docs, filing issues, or assigning implementation work.
-Each section lists what the project does not own and cites the evidence.
+Use this page when you're not sure which project answers a particular question, or when you're integrating against the family and need to know which project owns which contract. The "owns / does not own" detail for every project lives here; other pages link in rather than repeat it.
 
 ## Quick reference
 
@@ -37,9 +36,9 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 
 **Does not own:**
 
-- Registry Relay runtime data access. The `registry-manifest-core` README states it must not depend on Registry Relay, DataFusion, Postgres, Axum, auth, audit, observability, secret handling, or `utoipa`. (Evidence: `registry-manifest` README lines 88–92, commit 77125ec.)
-- Auth, audit, observability, or secret handling. These are intentionally excluded from the manifest workspace so the library can be used without running any runtime service. (Evidence: `registry-manifest` README lines 88–92.)
-- Production source configuration. Source paths, table IDs, scopes, cache paths, and backend runtime details belong in Registry Relay configuration, not in portable manifests. (Evidence: `contracts.yaml`, `registry-manifest.metadata-yaml` consumer note.)
+- Registry Relay runtime data access. Manifest doesn't serve HTTP, doesn't talk to databases, doesn't run inside a gateway. {/* Evidence: registry-manifest README lines 88-92, commit 77125ec. */}
+- Auth, audit, observability, or secret handling. These are intentionally excluded so the library can be used without running any runtime service. {/* Evidence: registry-manifest README lines 88-92. */}
+- Production source configuration. Source paths, table IDs, scopes, cache paths, and backend runtime details belong in Registry Relay configuration, not in portable manifests. {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
 
 No HTTP serving, no database queries, no authorization scoping. The manifest compiles and renders only.
 
@@ -47,45 +46,44 @@ No HTTP serving, no database queries, no authorization scoping. The manifest com
 
 Registry Relay exposes protected read-only APIs over registry sources. It does not own:
 
-- Record provisioning or writes. The README explicitly states write operations are out of scope for v1. (Evidence: `registry-relay` README line 14, commit aec4394.)
-- Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are owned by Registry Manifest. Registry Relay may serve compiled artifacts over HTTP and scope them for callers, but the schema is defined and versioned in `registry-manifest`. (Evidence: `registry-manifest` README lines 88–92; `registry-relay` evidence packet, metadata publication section.)
-- Standalone claim service internals owned by Registry Witness. Registry Relay can declare evidence offerings and route clients to a Registry Witness endpoint, but claim evaluation, disclosure policy, and credential issuance run in Registry Witness. (Evidence: `registry-relay` evidence packet, evidence offering verification section.)
-- Storage table IDs or arbitrary SQL in public APIs. Public route paths use dataset and entity identifiers; internal table names and query shapes are configuration internals. (Evidence: `projects.yaml`, `registry-relay` does_not_own; `registry-relay` evidence packet configuration surface.)
+- Record provisioning or writes. The README explicitly states write operations are out of scope for v1. {/* Evidence: registry-relay README line 14, commit aec4394. */}
+- Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are owned by Registry Manifest. Registry Relay may serve compiled artifacts over HTTP and scope them for callers, but the schema is defined and versioned in Registry Manifest. {/* Evidence: registry-manifest README lines 88-92; registry-relay evidence packet, metadata publication section. */}
+- Standalone claim service internals owned by Registry Witness. Registry Relay can declare evidence offerings and route clients to a Registry Witness endpoint, but claim evaluation, disclosure policy, and credential issuance run in Registry Witness. {/* Evidence: registry-relay evidence packet, evidence offering verification section. */}
+- Storage table IDs or arbitrary SQL in public APIs. Public route paths use dataset and entity identifiers; internal table names and query shapes are configuration internals. {/* Evidence: projects.yaml, registry-relay does_not_own; registry-relay evidence packet configuration surface. */}
 
-Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized systems only. (Evidence: `registry-relay` README line 10.)
+Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized systems only. {/* Evidence: registry-relay README line 10. */}
 
 ## Registry Witness
 
 Registry Witness evaluates claims and issues SD-JWT VC credentials. It does not own:
 
-- Registry Relay source code or runtime internals. Registry Witness calls Registry Relay over HTTP using a source connector; it does not import or link Registry Relay libraries. (Evidence: `registry-witness` README lines 5–9, commit b4128a3.)
-- Portable metadata renderers owned by Registry Manifest. Registry Witness does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. (Evidence: `registry-witness` evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references".)
+- Registry Relay source code or runtime internals. Registry Witness calls Registry Relay over HTTP using a source connector; it does not import or link Registry Relay libraries. {/* Evidence: registry-witness README lines 5-9, commit b4128a3. */}
+- Portable metadata renderers owned by Registry Manifest. Registry Witness does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. {/* Evidence: registry-witness evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
 - Browser inspection workflows owned by Registry Atlas. Inspecting published discovery artifacts, parsing DCAT catalogs, and running capability queries are Atlas responsibilities.
 
-Registry Witness credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present in the issued credential. (Evidence: `registry-witness` evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT".)
+Registry Witness credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present in the issued credential. {/* Evidence: registry-witness evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT". */}
 
 ## Registry Atlas
 
 Registry Atlas is a browser workbench for inspecting published discovery artifacts. It does not own:
 
 - Registry runtime APIs. Atlas inspects artifacts that are already published; it does not own the APIs that serve them.
-- Natural-language inference in v0.1 capability discovery. The V0.1 capability matcher is strict: no fuzzy matching, synonym expansion, or AI inference. Every match requires exact label, IRI, or field name correspondence after documented canonicalization. Natural-language query assist is explicitly deferred. (Evidence: `registry-atlas` SYSTEM_CAPABILITY_DISCOVERY_SPEC.md lines 84–88, commit e4092a1.)
-- Persistent token storage in browser or proxy logs. Bearer tokens are session-only and are never written to browser storage or server logs. (Evidence: `registry-atlas` README lines 31–32.)
+- Natural-language inference in v0.1 capability discovery. The v0.1 capability matcher is strict: no fuzzy matching, synonym expansion, or AI inference. Every match requires exact label, IRI, or field name correspondence after documented canonicalization. Natural-language query assist is explicitly deferred. {/* Evidence: registry-atlas SYSTEM_CAPABILITY_DISCOVERY_SPEC.md lines 84-88, commit e4092a1. */}
+- Persistent token storage in browser or proxy logs. Bearer tokens are session-only and are never written to browser storage or server logs. {/* Evidence: registry-atlas README lines 31-32. */}
 
-Atlas-derived hypotheses such as `candidate_route` and gap flags are not standards predicates and must not be published back into metadata catalogs as if they were source-verified claims. (Evidence: `registry-atlas` STANDARDS_ASSUMPTIONS.md lines 21–36.)
+Atlas-derived hypotheses such as `candidate_route` and gap flags are not standards predicates and must not be published back into metadata catalogs as if they were source-verified claims. {/* Evidence: registry-atlas STANDARDS_ASSUMPTIONS.md lines 21-36. */}
 
 ## Registry Lab
 
 Registry Lab is a compose-based local demo. It does not own:
 
-- Production deployment guidance. The demo uses CSV, XLSX, and Parquet fixtures and demo-grade credentials. It is not a reference for production configuration. (Evidence: `registry-lab` README, explicit non-goals section, commit aaa6f80.)
-- Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry Witness; metadata contracts are owned by Registry Manifest. (Evidence: `projects.yaml`, `registry-lab` does_not_own.)
-- Real product integrations. The services simulate civil, social protection, and health registry patterns but are not real integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems. (Evidence: `registry-lab` README, explicit non-goals section.)
+- Production deployment guidance. The demo uses CSV, XLSX, and Parquet fixtures and demo-grade credentials. It is not a reference for production configuration. {/* Evidence: registry-lab README, explicit non-goals section, commit aaa6f80. */}
+- Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry Witness; metadata contracts are owned by Registry Manifest. {/* Evidence: projects.yaml, registry-lab does_not_own. */}
+- Real product integrations. The services simulate civil, social protection, and health registry patterns but are not real integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems. {/* Evidence: registry-lab README, explicit non-goals section. */}
 
 ## Documentation rule
 
-Put detailed setup, configuration, and command references in the owning repo.
-Put cross-project orientation, standards evidence, and contract indexes in Registry Legend.
+Put detailed setup, configuration, and command references in the owning repo. Put cross-project orientation, standards evidence, and contract indexes in Registry Legend.
 
 When a page needs both, Registry Legend summarizes the decision and links to the owning source.
 
@@ -98,12 +96,13 @@ When a page needs both, Registry Legend summarizes the decision and links to the
     - Changed doc_type from reference to explanation: the page now contains contextual prose and
       boundary rationale, not a generated contract table. A reference page would be appropriate
       only if the content were generated from a data file.
-    - Added per-project sections as instructed, each grounded in projects.yaml does_not_own
-      lists and reinforced with evidence packet citations.
+    - Per-project sections grounded in projects.yaml does_not_own lists, reinforced with evidence
+      packet citations (moved into MDX comments so they survive in source for contributors but
+      don't render to readers).
     - source_repos updated: replaced `registry_relay` and `decentralized-evidence-demo`
       with `registry-relay` and `registry-lab`.
     - Kept the quick-reference table from the original page (7 rows, hand-written, within limits).
-    - No TODO[evidence] flags required: all non-ownership claims are directly traceable to
-      evidence packets with file:line citations at the commit reviewed on 2026-05-23.
-    - Removed the old "Documentation Rule" paragraph that stood alone; moved it to a section
-      at the bottom after the per-project sections for cleaner navigation flow. */}
+    - Reframed lead 2026-05-23: addresses readers ("you're not sure which project...") rather
+      than internal docs/issues/implementation framing. This page is now the single canonical
+      home for ownership detail since "owns / does not own" framing has been stripped from the
+      gateway pages. */}

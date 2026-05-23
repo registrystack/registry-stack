@@ -15,6 +15,8 @@ locale: en
 standards_referenced: []
 ---
 
+This is a maintenance record. If you're an integrator using the current project names (Registry Relay, Registry Witness, etc.), you can ignore the legacy column.
+
 Five registry projects were renamed on 2026-05-23 from a mix of snake_case, kebab-case,
 and three competing root metaphors (registry, evidence, dataspace) to a single Docker-style
 `registry-` family.
@@ -49,13 +51,15 @@ Phase 1 (registry-manifest), Phase 2 (registry-atlas), Phase 3 (registry-witness
 Phase 4 (registry-relay), Phase 5 (registry-lab).
 
 Machine contracts that rename alongside project labels include:
-schema versions (`registry-metadata/v1` to `registry-manifest/v1`),
-JSON-LD CURIE prefix (`registry_metadata:` to `registry_manifest:`),
-canonical IRI (to `https://jeremi.github.io/registry-manifest/ns#`),
-access kind enum value (`evidence-server` to `registry-witness`),
-media type (`application/vnd.evidence-server.claim-result+json` to
-`application/vnd.registry-witness.claim-result+json`),
-JWT audience default, Cargo feature names, and project-labeled env vars.
+
+- **Schema version**: `registry-metadata/v1` to `registry-manifest/v1`
+- **JSON-LD CURIE prefix**: `registry_metadata:` to `registry_manifest:`
+- **Canonical IRI**: updated to `https://jeremi.github.io/registry-manifest/ns#`
+- **Access kind enum value**: `evidence-server` to `registry-witness`
+- **Media type**: `application/vnd.evidence-server.claim-result+json` to `application/vnd.registry-witness.claim-result+json`
+- **JWT audience default**: updated to match the new service name
+- **Cargo feature names**: updated in each crate
+- **Project-labeled env vars**: updated across all repos
 
 API route prefixes (`/evidence/...`, `/metadata/...`) and domain-flow env vars
 (`CIVIL_EVIDENCE_*`, `SOCIAL_PROTECTION_EVIDENCE_*`) are intentionally preserved

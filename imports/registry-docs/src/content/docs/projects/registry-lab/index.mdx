@@ -11,40 +11,29 @@ locale: en
 standards_referenced: []
 ---
 
+Use this when you want to see the registry stack actually run end-to-end on your laptop in one command.
+
 Registry Lab is a Docker Compose demo for the registry family.
 It wires three Registry Relay instances, three Registry Witness instances,
 a static metadata publisher, and a narrated demo client into a single topology
 you can run on a laptop, with no production credentials and no remote services.
-Atlas is run separately and is not in the compose topology at v0.1.
 
-The goal is not a production deployment guide.
 The goal is to let a developer, reviewer, or integrator observe every layer of the stack
 interacting end-to-end on local data before writing any integration code.
+Use Lab when you want to see the full stack interact locally; for production deployment guidance,
+look at each project's own docs.
 
-## What Lab owns
+## Quickstart
 
-Registry Lab owns:
+```sh
+git clone --recurse-submodules https://github.com/jeremi/registry-lab
+cd registry-lab
+scripts/release-check.sh
+# Open output/ to inspect the demo artifacts
+```
 
-- The compose topology file ([`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml)) and both Dockerfiles.
-- Synthetic fixture generation ([`scripts/generate-fixtures.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-fixtures.py)).
-- Local credential generation ([`scripts/generate-demo-secrets.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-demo-secrets.py)).
-- Static metadata publication ([`scripts/publish-static-metadata.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/publish-static-metadata.sh)).
-- The smoke check suite ([`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)).
-- The narrated demo client ([`scripts/demo-flow.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/demo-flow.py)).
-- The release wrapper ([`scripts/release-check.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/release-check.sh)).
-- Relay and Witness configuration files under [`config/`](https://github.com/jeremi/registry-lab/blob/main/config/).
-- The portable metadata manifest at [`config/static-metadata/metadata.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/static-metadata/metadata.yaml).
-- Acceptance rehearsal after rename waves land.
-
-## What Lab does not own
-
-Registry Lab does not own:
-
-- Production deployment guidance. The fixtures use CSV, XLSX, and Parquet with synthetic data.
-  They are not representative of production scale or security requirements.
-- Normative API or metadata contracts. Those belong to Registry Relay, Registry Witness, and Registry Manifest.
-- Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other external systems.
-  The three domain areas (civil, social protection, health) simulate those patterns without any live data exchange.
+`release-check.sh` runs fixture generation, credential generation, static metadata publication,
+compose build, compose up, smoke checks, demo client, and compose down in one pass.
 
 ## Compose topology
 
@@ -64,9 +53,7 @@ Inside the compose network, services reach each other via DNS names (for example
 Witness containers do not mount source data files directly.
 Registry Witness reads registry facts over HTTP from the Relay services.
 
-Registry Relay images are built with the `spdci-api-standards,standards-cel-mapping` feature flags
-([`Dockerfile.registry-relay` L13](https://github.com/jeremi/registry-lab/blob/main/Dockerfile.registry-relay#L13)),
-so SP DCI (Social Protection Digital Convergence Initiative) source routes are present in the demo.
+The Lab Relay images include the SP DCI and CEL-mapping feature flags so demo claims work out of the box.
 
 ## Fixtures and generated credentials
 
@@ -82,9 +69,7 @@ It produces three fixture files under `data/`:
 - `data/health/health_registry.parquet`: active, suspended, pending-renewal, and partially-serviceable facilities.
 
 Timestamps are deterministic (2026-01-01).
-The generator validates key coverage before writing: it checks that a successful subject,
-failed predicates, deceased-member cases, cross-source subjects, and health-linked support cases
-are all present.
+The fixture generator validates that every demo scenario has representative data before writing.
 The `data/` directory is gitignored; only the `.gitignore` marker is committed.
 
 ### Generated local credentials
@@ -92,8 +77,6 @@ The `data/` directory is gitignored; only the `.gitignore` marker is committed.
 [`scripts/generate-demo-secrets.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-demo-secrets.py)
 is a direct-executable Python script (not wrapped by `uv run`).
 It writes a `.env` file (gitignored) with local demo credentials.
-Relay configurations reference only the `*_HASH` env vars (SHA-256 fingerprints).
-Witness configurations reference `token_env` names.
 No raw token is committed to the repository.
 
 The `.env.example` file in the repository root contains inert placeholder values only.
@@ -108,7 +91,6 @@ The `static-metadata/` directory is gitignored except for its `.gitignore`.
 The `static-metadata-publisher` service then serves that bundle at `127.0.0.1:4331`.
 No authentication is required for the static publisher endpoints.
 The static bundle is generated from the portable metadata config, not scraped from a running Relay.
-It does not include source paths, table identifiers, scopes, cache paths, or backend runtime details.
 
 ## Smoke checks
 
@@ -125,8 +107,6 @@ and credential-bound evaluation returning `application/dc+sd-jwt`.
 
 All smoke requests carry the correlation ID `decentralized-demo-correlation-001` by default,
 overridable via the `DEMO_CORRELATION_ID` environment variable.
-That string is an intentionally stable protocol identifier; it is not renamed when the repository moves
-from `decentralized-evidence-demo` to `registry-lab`.
 
 ## Narrated demo client
 
@@ -159,15 +139,6 @@ The demo client is started with a profile flag so it does not start alongside th
 ```sh
 docker compose -f compose.yaml --profile client run --rm demo-client
 ```
-
-## Rename note
-
-The repository directory was renamed from `decentralized-evidence-demo` to `registry-lab`.
-Some internal identifiers (correlation IDs, static manifest IDs, data-purpose URIs, script docstrings)
-still reference the old name because they are intentionally stable protocol values baked into
-credentials, log correlation, and spec URLs.
-On `current` documentation pages, the product label is `Registry Lab` and the repo slug is `registry-lab`.
-The old names appear only in historical pages or `rename_status` fields, never in prose on current pages.
 
 ## v0 status and caveats
 

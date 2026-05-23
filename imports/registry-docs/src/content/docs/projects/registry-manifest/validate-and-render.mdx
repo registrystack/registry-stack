@@ -27,6 +27,9 @@ individual rendered artifacts, or produce a complete static publication bundle f
 - You are preparing a static metadata bundle to serve alongside a Registry Relay deployment
   or as a standalone hosted artifact.
 
+The validator collects all errors across every validation pass before reporting, so a single
+run surfaces every problem in the file. You don't need to fix one error at a time and re-run.
+
 This how-to does not cover profile fixture validation.
 For that, see the [profile fixtures how-to](../profile-fixtures/).
 
@@ -66,8 +69,6 @@ metadata manifest valid: profiles/example-civil-registration/fixtures/metadata.y
 ```
 
 On failure, all validation errors are printed together.
-The validator does not stop at the first error; it collects errors across all passes so you can
-fix every problem in one edit cycle.
 
 Validation checks include:
 
@@ -92,6 +93,17 @@ cargo run -p registry-manifest-cli -- render \
   --format catalog
 ```
 
+Render base DCAT JSON-LD:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format dcat
+```
+
+To render the BRegDCAT-AP profile variant via `--format dcat`, pass `--profile bregdcat-ap`.
+Alternatively, use the `--format bregdcat-ap` shorthand:
+
 Render BRegDCAT-AP 2.00 JSON-LD:
 
 ```sh
@@ -108,14 +120,16 @@ cargo run -p registry-manifest-cli -- render \
   --format shacl
 ```
 
-Render a JSON Schema Draft 2020-12 for a specific dataset and entity:
+Render a JSON Schema Draft 2020-12 for a specific dataset and entity.
+The civil-registration fixture has dataset `vital-events` with entities `person` and
+`vital_event`. Substitute accordingly for your manifest:
 
 ```sh
 cargo run -p registry-manifest-cli -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format json-schema \
-  --dataset <dataset-id> \
-  --entity <entity-name>
+  --dataset vital-events \
+  --entity person
 ```
 
 Render OGC API Records item bodies:
@@ -134,13 +148,13 @@ cargo run -p registry-manifest-cli -- render \
   --format policies
 ```
 
-Render a per-dataset ODRL policy document:
+Render a per-dataset ODRL policy document (substitute your dataset ID for `vital-events`):
 
 ```sh
 cargo run -p registry-manifest-cli -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format policy \
-  --dataset <dataset-id>
+  --dataset vital-events
 ```
 
 Render evidence offerings:
@@ -151,7 +165,8 @@ cargo run -p registry-manifest-cli -- render \
   --format evidence-offerings
 ```
 
-Render a single evidence offering by ID:
+Render a single evidence offering by ID (substitute the offering ID defined in your manifest's
+`evidence_offerings` list):
 
 ```sh
 cargo run -p registry-manifest-cli -- render \

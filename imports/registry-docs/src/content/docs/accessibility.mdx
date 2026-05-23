@@ -13,13 +13,11 @@ standards_referenced: []
 Registry Legend targets WCAG 2.1 Level AA conformance
 as its accessibility baseline for the v0 launch.
 This page records the commitments, keyboard navigation guarantee, and alt-text policy.
-The design decisions that back these commitments are in
-[`design-registry-legend.md`](https://github.com/jeremi/registry-legend/blob/main/design-registry-legend.md).
 
 ## WCAG target
 
 The site targets WCAG 2.1 Level AA.
-All text meets AA contrast ratios against their backgrounds.
+All text meets AA contrast ratios against their backgrounds (calculated values; not yet verified by a third-party audit tool).
 Blue France `#000091` on white `#ffffff` passes AA for normal text.
 Blue France on the active-sidebar tint `#eeeefd` also passes AA for normal text.
 Status text uses ink `#161616` on white, well above the AA threshold.
@@ -31,7 +29,7 @@ Status text uses ink `#161616` on white, well above the AA threshold.
 ## Keyboard navigation
 
 The site is keyboard-navigable end to end.
-A skip-link is present on the implemented version to bypass repeated navigation.
+A skip-link is present to bypass repeated navigation.
 Focus rings are 2 px Blue France with 2 px offset, square corners.
 Browser focus defaults are not suppressed.
 
@@ -60,3 +58,7 @@ The placeholder text is not a substitute for a label.
   The commitments above reflect design intent and in-progress implementation.
 - French routes are not enabled in v0.
   When French content is added, translated `alt` text and landmark labels will be required.
+
+## Design reference
+
+The design decisions that back these commitments are in [`design-registry-legend.md`](https://github.com/jeremi/registry-legend/blob/main/design-registry-legend.md).

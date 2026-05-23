@@ -16,7 +16,7 @@ standards_referenced:
 ---
 
 Use this page when you want to check that a manifest conforms to a named profile's requirements,
-or when you are authoring a new profile descriptor and need to run the full fixture suite.
+or when you are authoring a new domain profile and need to run the fixture suite against your descriptor.
 
 ## When to use this
 
@@ -35,19 +35,15 @@ See the [validate-and-render how-to](../validate-and-render/).
 
 A profile fixture is a pair of files in a `profiles/<profile-id>/` directory:
 
-- `profile.yaml`: the profile descriptor, carrying schema version
-  `registry-manifest-profile/v1`. It declares required concept IRIs, required identifiers,
-  codelist expectations, cardinality expectations per entity field, runtime-only keys that must
-  not appear in a portable manifest, and a list of fixture paths to validate.
-- `fixtures/metadata.yaml`: a portable manifest that the validator checks against the profile
-  descriptor.
+- `profile.yaml`: the profile descriptor (schema version `registry-manifest-profile/v1`). It
+  declares required concept IRIs, required identifiers, codelist expectations, cardinality
+  expectations per entity field, runtime-only keys that must not appear in a portable manifest,
+  and a list of fixture paths to validate.
+- `fixtures/metadata.yaml`: a portable manifest (schema version `registry-manifest/v1`) that
+  the validator checks against the profile descriptor.
 
-The profile descriptor is separate from the manifest schema.
-The manifest schema version (`registry-manifest/v1`) governs the manifest file.
-The profile descriptor schema version (`registry-manifest-profile/v1`) governs the
-descriptor file.
-[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
-(line 293) enforces both.
+The two schema versions govern different files: `registry-manifest/v1` governs the manifest;
+`registry-manifest-profile/v1` governs the descriptor. The CLI enforces both.
 
 The four example profiles in the repository are non-normative examples.
 They are not authoritative profiles for OpenCRVS, OpenSPP, OpenIMIS, or SP DCI until reviewed
@@ -79,6 +75,20 @@ List the available profiles:
 
 ```sh
 ls profiles/
+```
+
+Expected output (subdirectories that contain a `profile.yaml` are active profiles; others are
+placeholders):
+
+```text
+example-benefits-sync/
+example-civil-registration/
+example-person-schema/
+example-social-benefits/
+opencrvs/
+openimis/
+openspp/
+spdci/
 ```
 
 Each subdirectory that contains a `profile.yaml` is a profile entry.
@@ -125,16 +135,16 @@ Common failure types:
   a required code value.
 - **Cardinality mismatch**: the field appears too few or too many times for the entity.
 - **Runtime-only key present**: the fixture manifest contains a key that must not appear in a
-  portable manifest (for example, `source`, `table`, `scope`, or `url_env`).
+  portable manifest (a manifest that carries only static metadata and no deployment-specific
+  bindings). Examples: `source`, `table`, `scope`, `url_env`.
   Remove the key; it belongs in Relay configuration, not in a portable fixture.
 
-The full list of disallowed runtime keys is defined in
-[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
-(lines 520 to 535).
+The authoritative list of disallowed runtime keys is in the [reference page](../reference/#runtime-only-keys).
 
-### 5. Add a new profile (optional)
+### 5. Add a new profile
 
-To create a new profile:
+If you are authoring a new domain profile (for example, adapting Registry Manifest to a new
+program area or official standard), follow these steps to create and validate it:
 
 1. Create a directory under `profiles/<your-profile-id>/`.
 2. Write `profile.yaml` with `schema_version: registry-manifest-profile/v1`.
@@ -165,8 +175,7 @@ To confirm the test suite also covers all four example profiles, run:
 cargo test -p registry-manifest-core validates_profile_fixtures
 ```
 
-This test ([`tests/metadata_core.rs:60`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/tests/metadata_core.rs))
-asserts that all four example profile fixtures pass manifest validation.
+This test asserts that all four example profile fixtures pass manifest validation.
 
 ## Troubleshooting
 

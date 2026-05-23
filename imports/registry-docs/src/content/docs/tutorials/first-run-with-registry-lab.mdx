@@ -29,6 +29,8 @@ a static metadata publisher, and a narrated demo client into a single topology y
 
 Run the following commands in order from the `registry-lab` checkout root.
 
+Step 1 uses `uv run` because `generate-fixtures.py` declares inline PEP 723 dependencies. Step 2 is a stdlib-only Python script; later steps are plain shell or Docker commands.
+
 1. Generate synthetic fixture data for civil, social protection, and health registries:
 
     ```sh
@@ -41,7 +43,7 @@ Run the following commands in order from the `registry-lab` checkout root.
     scripts/generate-demo-secrets.py
     ```
 
-3. Publish the static metadata bundle:
+3. Publish the static metadata bundle (requires Step 1 to have completed, so the fixture data is present):
 
     ```sh
     scripts/publish-static-metadata.sh
@@ -52,6 +54,8 @@ Run the following commands in order from the `registry-lab` checkout root.
     ```sh
     docker compose -f compose.yaml build
     ```
+
+    Steps 4-5 (image build) can take several minutes on first run. Don't abort if it appears to pause.
 
 5. Start all background services:
 
@@ -112,7 +116,7 @@ All requests use the correlation ID `decentralized-demo-correlation-001` by defa
 ## Verify
 
 Run `scripts/smoke.sh` as the primary verification command.
-A passing smoke run means all services are reachable and all authorization checks behave as configured.
+A passing smoke run means all 30+ authorization and endpoint checks pass.
 
 To manually spot-check the static metadata publisher:
 
@@ -133,9 +137,4 @@ docker compose -f compose.yaml down -v
 The `-v` flag removes the named volumes `civil-registry-cache`, `social-protection-registry-cache`,
 and `health-registry-cache`.
 
-## Stable identifiers
-
-The strings `decentralized-demo-correlation-001` (default correlation ID) and
-`decentralized-demo-static-publication` (static metadata manifest ID) are intentionally stable protocol
-and log-correlation values. They are not renamed when the directory moves from
-`decentralized-evidence-demo` to `registry-lab`.
+{/* Stable identifiers note: decentralized-demo-correlation-001 (correlation ID) and decentralized-demo-static-publication (manifest ID) are intentionally stable protocol and log-correlation values baked into credentials and spec URLs. They are not renamed when the directory moves from decentralized-evidence-demo to registry-lab. */}

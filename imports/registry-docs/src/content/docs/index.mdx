@@ -1,6 +1,6 @@
 ---
 title: The registry family
-description: Registry Legend is the documentation site for five repositories with disjoint responsibilities.
+description: Documentation for five projects that help you publish, consult, and verify protected registry data.
 status: current
 owner: registry-legend
 source_repos:
@@ -17,16 +17,36 @@ standards_referenced: []
 
 import LegendList from '../../components/LegendList.astro';
 
-Registry Legend is the documentation site for five repositories with disjoint responsibilities.
-Read it to find what each project owns, the standards it touches, and the contracts integrators can build against.
+This site documents the registry family: five projects, each with a clear job, that together let you publish, consult, and verify protected registry data.
 
-## Legend
+## Who this is for
+
+You're probably here for one of three reasons:
+
+- You're implementing a DPI service that needs to expose protected registry data to authorized systems.
+- You're reviewing a registry, checking what it publishes and which standards it touches.
+- You're evaluating these tools before building an integration against them.
+
+If none of those fit, the [project map](./map/) is a good place to browse.
+
+## Where to start
+
+Pick the entry point that matches what you want to do:
+
+- **Want to see it run?** Start with the [Registry Lab tutorial](./tutorials/first-run-with-registry-lab/). One `docker compose up`, end-to-end demo.
+- **Want to query a registry over HTTP?** Start with [Registry Relay](./projects/registry-relay/). It's the protected consultation gateway.
+- **Need to evaluate eligibility claims and issue credentials?** Start with [Registry Witness](./projects/registry-witness/).
+- **Reviewing what a registry publishes?** Start with [Registry Atlas](./projects/registry-atlas/) for browser inspection, or the [standards register](./reference/standards/) for the per-standard stance.
+- **Modeling registry metadata before any runtime exists?** Start with [Registry Manifest](./projects/registry-manifest/).
+- **New to the whole thing?** Read [what is the registry family](./start/what-is-the-registry-family/) first.
+
+## The five projects
 
 <LegendList />
 
-## Next
+## Reference and decisions
 
-- [What is the registry family](./start/what-is-the-registry-family/)
-- [Architecture overview](./explanation/architecture/)
-- [Standards register](./reference/standards/)
-- [Registry Lab tutorial](./tutorials/first-run-with-registry-lab/)
+- [Project map](./map/): which project owns which question.
+- [Architecture overview](./explanation/architecture/): how the pieces fit together.
+- [Standards register](./reference/standards/): every standard the family touches, with its claim level.
+- [Contracts index](./reference/contracts/): machine contracts by project.

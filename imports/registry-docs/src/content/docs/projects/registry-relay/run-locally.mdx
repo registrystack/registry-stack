@@ -57,6 +57,8 @@ mkdir -p data
 cp fixtures/example_social_registry.xlsx data/social_registry.xlsx
 ```
 
+The bundled fixture is a synthetic social registry with about 20 individual records
+you can page through.
 [Source: README run-locally section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/README.md)
 
 ### 3. Generate API-key fingerprints
@@ -69,18 +71,12 @@ fingerprint of the raw key.
 Generate three keys for the three principals in the example config:
 
 ```sh
-generate_key() {
-  local raw
-  raw="$(openssl rand -base64 32)"
-  printf '%s\n' "$raw"
-  printf 'sha256:%s\n' "$(printf '%s' "$raw" | shasum -a 256 | awk '{print $1}')"
-}
-
-# Run once per key and note the raw key (first line) and fingerprint (second line):
-generate_key   # program_system
-generate_key   # statistics_office
-generate_key   # verification_service
+# Run once per key; first line = raw key, second line = SHA-256 fingerprint:
+openssl rand -base64 32 | tee /dev/stderr | shasum -a 256 | awk '{print "sha256:" $1}'
 ```
+
+Run the command three times (once for `program_system`, `statistics_office`, and
+`verification_service`).
 
 Store the raw keys somewhere you can retrieve them for curl calls.
 Export the fingerprints as environment variables:
@@ -96,8 +92,11 @@ Replace each `<64 lowercase hex chars>` with the fingerprint output from `genera
 ### 4. Start the server
 
 ```sh
-just run
+just run 2>relay.log
 ```
+
+Running with `2>relay.log` separates audit records (stdout) from operational logs
+(stderr) in your terminal, so the JSON audit stream isn't mixed with startup messages.
 
 `just run` starts the binary with `config/example.yaml` as the default config.
 Registry Relay binds the data-plane listener on `0.0.0.0:8080` as set in
@@ -115,20 +114,16 @@ Or set the `REGISTRY_RELAY_CONFIG` environment variable instead of using the fla
 Operational logs go to stderr.
 Audit records go to stdout (as configured by `audit.sink: stdout` in the example config).
 
-### 5. Wait for readiness
+### 5. Confirm readiness
 
-In a second terminal, poll the readiness probe:
+In a second terminal, check the readiness probe:
 
 ```sh
-until curl -sf http://127.0.0.1:8080/ready; do
-  printf 'waiting for readiness...\n'
-  sleep 1
-done
-printf 'Registry Relay is ready\n'
+curl -i http://127.0.0.1:8080/ready
 ```
 
-`/health` is a liveness probe (always returns 200 when the process is up).
-`/ready` returns 200 only after all configured sources have ingested successfully.
+`/ready` returns `200` only after all configured sources have ingested successfully.
+`/health` is a liveness probe and returns `200` as long as the process is running.
 [Source: docs/ops.md probes section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
 
 ## Verification
@@ -197,6 +192,25 @@ curl -si http://127.0.0.1:8080/datasets/social_registry/individual
 
 Registry Relay returns `401` with a Problem Details body whose `code` is
 `auth.missing_credential`.
+
+## If you prefer Docker
+
+Build the image and run it with the same example config and fixture:
+
+```sh
+docker build -t registry-relay:local .
+docker run --rm -p 8080:8080 \
+  -e PROGRAM_SYSTEM_API_KEY_HASH \
+  -e STATS_OFFICE_API_KEY_HASH \
+  -e VERIFICATION_SERVICE_API_KEY_HASH \
+  -v "$PWD/config/example.yaml:/etc/registry-relay/config.yaml:ro" \
+  -v "$PWD/fixtures:/var/lib/registry-relay/data:ro" \
+  registry-relay:local
+```
+
+The container exposes port `8080` and reads config from `/etc/registry-relay/config.yaml`
+by default.
+[Source: README container image section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/README.md)
 
 ## Troubleshooting
 

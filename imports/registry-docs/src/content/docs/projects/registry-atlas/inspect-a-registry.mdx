@@ -71,9 +71,6 @@ If Atlas cannot infer the profile, select one manually from the profile dropdown
 ### 4. Run discovery
 
 Press **Discover**.
-The button label comes from
-[`src/App.tsx`](https://github.com/jeremi/registry-atlas/blob/main/src/App.tsx#L478),
-where the submit button renders the text `Discover`.
 
 The proxy fetches the catalog document and follows links to retrieve every artifact it finds:
 SHACL shapes, JSON Schema files, ODRL policy documents, OpenAPI descriptions, and OGC API
@@ -130,10 +127,8 @@ The capability query panel accepts one or more **information needs**.
 Each need requires at least one accepted term: a label, an IRI, or a field name that the strict
 matcher is allowed to compare against discovered metadata.
 
-The engine matches terms only after documented canonicalization:
-whitespace trimming, Unicode normalization, and case folding for labels.
-It does not expand synonyms, apply fuzzy matching, or consult a language model.
-Use exact terms from the registry's published metadata, not natural-language descriptions.
+Use exact terms from the registry's metadata; the engine does not guess.
+See the [Registry Atlas reference](../reference/) for the full canonicalization rules.
 
 For example, to check whether the registry publishes farmer registration status:
 
@@ -151,11 +146,13 @@ Each candidate route includes:
 - Gaps (for example, `LegalBasisUnknown`, `AuthorityUnknown`, `FreshnessUnknown`).
 - Review flags that indicate where human or governance review is recommended.
 
-A candidate route is not an authorization grant and is not a guarantee of access.
-It is a discovery result backed by machine-verifiable evidence from the registry's published
-metadata.
-The full contract for how candidate routes are produced is in
-[`SYSTEM_CAPABILITY_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SYSTEM_CAPABILITY_DISCOVERY_SPEC.md).
+Candidate routes point you to where data might be, with evidence for why.
+Authorization and legal access checks are outside Atlas's scope.
+
+Once you have a candidate route, copy the access endpoint URL from the route detail and make
+a test call directly against the registry (with whatever authorization your integration holds).
+The gaps listed on the route (for example, `LegalBasisUnknown`) tell you what you still need
+to confirm before putting the route into production code.
 
 ### 9. Inspect raw evidence
 
@@ -167,9 +164,7 @@ The comparison view lets you separate:
 - `publisher` view: registry-specific metadata that Atlas found but did not map to a standard term.
 - `diff` view: side-by-side comparison of the two.
 
-The raw report is the portable evidence contract.
-You can copy it, save it as a file, and pass it to the `semantic-asset-discovery-cli` for
-offline analysis or to the capability query CLI.
+You can copy the raw report JSON and use it with the CLI for offline analysis.
 
 ## Verification
 

@@ -75,13 +75,15 @@ The demo client:
 3. Optionally sends the same request with `Accept: application/dc+sd-jwt` to receive
    a Selective Disclosure JWT Verifiable Credential (SD-JWT VC) signed with the issuer JWK.
 
-What `civil-witness` does:
-Registry Witness reads civil registry facts over HTTP from `civil-registry-relay`
-using the `CIVIL_RELAY_EVIDENCE_SOURCE_TOKEN`.
+What you'll see / What this proves for your integration:
+The Witness fetches facts from the Relay on your behalf, using a configured bearer token.
 The civil Relay does not write any result back.
-Registry Witness applies the configured disclosure profile (predicate) and returns
-a Core Criterion and Core Evidence Vocabulary (CCCEV) JSON-LD body when the caller requests
-`application/ld+json; profile="cccev"`.
+The Witness applies the configured disclosure profile (predicate) and returns
+a structured JSON-LD credential body that calling systems can parse for the claim result.
+CCCEV stands for Core Criterion and Core Evidence Vocabulary.
+
+**What to take away:** predicate disclosure lets you confirm a fact (born in a registered district,
+caregiver present) without exposing the underlying registry row to the caller.
 
 **What to inspect:**
 
@@ -109,10 +111,13 @@ The demo client:
 4. Writes a household-benefit-decision artifact locally based on the aggregate result.
    Registry Relay has no write-back path; the artifact exists only in `output/`.
 
-What `social-protection-registry-relay` does:
-Registry Relay enforces scope at the route level.
-The row-reader and aggregate-reader credentials have distinct scopes and cannot substitute for each other.
-All reads are protected; the Relay does not expose any route without a valid credential.
+What you'll see / What this proves for your integration:
+Scope enforcement is route-level. The row-reader and aggregate-reader credentials have distinct scopes
+and cannot substitute for each other. All reads are protected; the Relay does not expose any route
+without a valid credential.
+
+**What to take away:** you can issue purpose-scoped tokens so that a benefit-decision system
+can read aggregate bands but cannot reach individual household rows.
 
 **What to inspect:**
 
@@ -137,12 +142,13 @@ The demo client:
 3. Sends `POST /claims/evaluate` to `shared-eligibility-witness` with a cross-authority claim
    that requires evidence from civil, social protection, and health registries.
 
-What `shared-eligibility-witness` does:
-Registry Witness fans out to all three Relay services using the per-source tokens
-`SHARED_CIVIL_EVIDENCE_SOURCE_RAW`, `SHARED_SOCIAL_EVIDENCE_SOURCE_RAW`, and
-`SHARED_HEALTH_EVIDENCE_SOURCE_RAW`
-([`config/witness/shared-eligibility-witness.yaml` L33-L39](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L33-L39)).
+What you'll see / What this proves for your integration:
+The Witness fans out to all three Relay services using per-source bearer tokens configured in
+[`config/witness/shared-eligibility-witness.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml).
 The result carries `source_count >= 2` when at least two sources contributed evidence.
+
+**What to take away:** a single Witness can aggregate evidence across independently operated registries
+and report how many authorities contributed, without merging or exposing the underlying rows.
 
 **What to inspect:**
 

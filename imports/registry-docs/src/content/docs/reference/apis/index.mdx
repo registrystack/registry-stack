@@ -16,10 +16,10 @@ standards_referenced:
 
 import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
 
+Use this section to browse the HTTP API for Registry Relay or Registry Witness. Each page is built from a pinned OpenAPI artifact owned by the project it describes.
+
 Registry Legend publishes generated API reference pages using Redoc.
-Each page is built from a pinned OpenAPI artifact owned by the project it describes.
-Narrative docs in the explanation and how-to sections cover workflows, auth patterns, and
-privacy boundaries. Do not duplicate endpoint reference content in narrative pages.
+{/* Do not duplicate endpoint reference content in narrative pages. */}
 
 ## Pinned sources
 
@@ -39,7 +39,7 @@ The table is generated from `src/data/openapi-sources.yaml`.
 
 [Registry Relay](../../../projects/registry-relay/) exposes its OpenAPI document through an auth-gated runtime route (`GET /openapi.json`).
 The v0 artifact is a pinned civil demo snapshot.
-Replace it with a release-grade artifact when Registry Relay has a documented standalone export path.
+The current artifact covers the civil demo topology. For other configurations, regenerate from a running instance.
 
 [Registry Witness](../../../projects/registry-witness/) generates its OpenAPI document via a subcommand:
 

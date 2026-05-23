@@ -24,8 +24,7 @@ existing OpenID Connect / OAuth 2.0 (OIDC/OAuth2) Identity Provider (IdP).
 Use OIDC mode when callers already hold JWTs issued by a central IdP and you need to
 integrate Registry Relay into that trust fabric.
 
-A given deployment runs in exactly one mode.
-Mixed-mode operation is not supported.
+A given deployment runs in exactly one mode; mixed-mode operation is not supported.
 [Source: docs/configuration.md OIDC section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
 
 ## Prerequisites
@@ -102,22 +101,14 @@ Live keyring reload is not supported in v0.
 | --- | --- |
 | `metadata` | Catalog, dataset summaries, entity schema, and OpenAPI visibility for that dataset |
 | `rows` | Entity collection, single-record, and relationship reads |
-| `evidence_verification` | Verification through declared evidence offerings |
+| `evidence_verification` | Submit claims for identity verification against configured evidence offerings |
 | `aggregate` | Aggregate discovery and configured aggregate execution |
 | `admin` | Admin listener operations (reload, metrics) |
 
 [Source: docs/api.md scopes table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
 
-### Audit fields for API-key auth
-
-For API-key requests, each audit record contains:
-
-- `auth_mode: "api_key"`
-- `principal_id`: the `id` field from the matching `auth.api_keys[]` entry
-  (for example, `"intake_service"`).
-- `scopes_used`: the scopes checked for this particular request.
-
-[Source: src/audit/mod.rs AuditRecord struct.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+{/* Audit fields for API-key auth (auth_mode, principal_id, scopes_used) are documented
+    in the audit record shape table on the reference page. */}
 
 ## Part 2: OIDC resource-server auth
 
@@ -165,10 +156,8 @@ A complete drop-in OIDC config targeting a local Zitadel IdP is available at
 If the IdP issues tokens with role names that differ from Registry Relay's
 `<dataset_id>:<level>` scope format, use `scope_map` to rename them before the
 scope check.
-The `scope_claim` field names the JWT claim to read (defaults to `scope`).
-The claim value may be a space-separated string (RFC 8693 / RFC 9068), a JSON
-array of strings, or a JSON object whose keys are the scope names (Zitadel's
-`urn:zitadel:iam:org:project:roles` format): all three shapes are accepted.
+Registry Relay accepts scopes as a space-separated string, a JSON array, or an object
+whose keys are scope names (Zitadel format); `scope_claim` names the JWT field to read.
 [Source: docs/configuration.md scope_claim and scope_map.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
 
 **3. Restart with the OIDC config.**
@@ -191,16 +180,12 @@ curl -si \
   http://127.0.0.1:8080/metadata/catalog
 ```
 
-### Audit fields for OIDC auth
+For OIDC testing against a local IdP, the bundled Zitadel compose stack in
+`scripts/mint-zitadel-token.sh` and `config/example.oidc.yaml` is the fastest path to
+a working end-to-end setup.
 
-For OIDC requests, each audit record contains:
-
-- `auth_mode: "oidc"`
-- `principal_id`: the `sub` claim from the verified JWT (or `client_id`/`azp` as
-  fallback).
-- `scopes_used`: the Relay scopes checked for this request, after `scope_map` renaming.
-
-[Source: src/audit/mod.rs AuditRecord struct; docs/configuration.md resource-server semantics.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+{/* Audit fields for OIDC auth (auth_mode, principal_id, scopes_used) are documented
+    in the audit record shape table on the reference page. */}
 
 ## Verification
 
@@ -276,8 +261,8 @@ Add the scope to the key's `scopes` list (API-key mode) or to the token's claims
 The old fingerprint remains active until the process is restarted with the new config.
 [Source: docs/ops.md key rotation section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
 
-**OIDC: `401 auth.jwks_unavailable`:** The JWKS endpoint is unreachable.
-Registry Relay cannot verify any token in this state and returns `503`.
+**OIDC: `503 auth.jwks_unavailable`:** The JWKS endpoint is unreachable.
+Registry Relay cannot verify any token in this state.
 Check IdP availability and network policy.
 
 **Granular OIDC failure codes** are documented in the

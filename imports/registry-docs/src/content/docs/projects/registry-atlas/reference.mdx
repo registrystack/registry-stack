@@ -16,9 +16,10 @@ standards_referenced:
   - odrl
 ---
 
-Hand-maintained reference for Registry Atlas v0.1.
-Source of truth: [`registry-atlas`](https://github.com/jeremi/registry-atlas) at commit
-`e4092a176f04fb315d28099acb056e0a91b73d3c`.
+Look up capability discovery terms, asset schema, proxy settings, token handling rules,
+fixture paths, build commands, and CLI entry points for Registry Atlas v0.1.
+This reference is hand-maintained against the `registry-atlas` source; check the repository
+README if a detail looks stale.
 
 ## Capability discovery accepted match inputs
 
@@ -35,8 +36,8 @@ and the test fixture
 | `Term::Field(s)` | `SchemaProperty.property_name`, `SchemaProperty.property_path`, `ShaclProperty.path`, equivalent property evidence | Whitespace trim only | Must not match arbitrary description text |
 | `Term::ReviewedMapping { mapping_set_id, mapping_id }` | Explicit reviewed mapping set entry | None; mapping is pre-resolved | Every match using a reviewed mapping exposes the mapping set id and version in its evidence |
 
-Canonicalization MUST NOT include stemming, fuzzy edit distance, semantic similarity, or
-unreviewed synonym expansion.
+The engine never applies stemming, fuzzy edit distance, semantic similarity, or unreviewed
+synonym expansion.
 See [`SYSTEM_CAPABILITY_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SYSTEM_CAPABILITY_DISCOVERY_SPEC.md)
 for the full normative contract.
 
@@ -51,6 +52,8 @@ for the full normative contract.
 | `question` | Human-facing wording only. The strict matcher never searches this field. |
 
 ## Asset envelope schema
+
+This is the JSON you get when you export from the Evidence tab or run the CLI harvest command.
 
 A `DiscoveryRunEnvelope` wraps a `DiscoveryReport` with host-side fetch state.
 Key fields at the envelope top level, sourced from
@@ -158,6 +161,30 @@ and confirmed by reviewing `server/index.mjs`.
 | `fixtures/reports/semantic-package-report.json` | `DiscoveryReport` | Semantic package profile fixture report |
 | `fixtures/semantic-asset-discovery/` | Per-standard fixture directories | Subdirectories for `breg-dcat-ap`, `dcat-ap`, `json-schema`, `ogc-features`, `ogc-records`, `openapi`, `prof`, `publicschema-package`, `registry-relay-standards`, `semic-shacl-turtle` |
 
+## CLI quick reference
+
+The workspace ships two CLI entry points you can run with `cargo`.
+
+**Harvest a registry and produce a `DiscoveryRunEnvelope`:**
+
+```bash
+cargo run -p semantic-asset-discovery-cli
+```
+
+**Run a capability query against an existing envelope:**
+
+```bash
+cargo run -p system-capability-discovery --bin system-capability-query -- \
+  --envelope fixtures/system-capability/registry-relay-all-standards.envelope.json \
+  --need-all disability_status label "Disabled Person" \
+  --need-all disability_status field disability_status \
+  --pretty
+```
+
+Both commands accept `--help` for the full option list.
+Full worked examples are in
+[`HOW_TO_TEST_V0_1.md`](https://github.com/jeremi/registry-atlas/blob/main/HOW_TO_TEST_V0_1.md).
+
 ## Build and dev commands
 
 Sourced from
@@ -175,5 +202,5 @@ Sourced from
 | `pnpm check:release` | Run Rust tests, lint, tests, build, and semantic checks (full release gate) |
 | `pnpm check:rust` | Run Rust tests via `cargo test` |
 | `pnpm check:semantic` | Run semantic discovery validation checks |
-| `pnpm build:wasm` | Compile `semantic-asset-discovery` WASM from Rust via `wasm-pack` |
+| `pnpm build:wasm` | Compile `semantic-asset-discovery-wasm` from Rust via `wasm-pack` |
 | `pnpm canonicalize:system-fixtures` | Normalize capability discovery fixture files |

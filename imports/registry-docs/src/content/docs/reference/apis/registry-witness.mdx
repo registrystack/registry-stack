@@ -36,9 +36,9 @@ cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.
 
 ## API surface
 
-Registry Witness is a standalone Rust workspace (Axum, Tokio) for claim evaluation, disclosure policy,
+Registry Witness is a standalone Rust workspace for claim evaluation, disclosure policy,
 credential issuance, and audit.
-It is decoupled from [Registry Relay](../../../projects/registry-relay/) by design: Registry Witness does not import or link Registry Relay code.
+Registry Witness runs independently; it does not require Registry Relay to be running.
 
 The OpenAPI document is titled "Registry Witness API" at version `0.1.0`.
 All routes are defined in `crates/registry-witness-server/src/api.rs` and require authentication.
@@ -57,7 +57,7 @@ There are ten HTTP routes:
 | POST | `/evidence/render` | Render evidence in a requested format |
 | POST | `/credentials/issue` | Issue a credential from an evaluation result |
 
-Default bind address: `127.0.0.1:4255` (from the demo config).
+Default bind: `127.0.0.1:8081`. The standalone demo config (`demo/config/registry-witness.yaml`) overrides this to `127.0.0.1:4255`. The Registry Lab topology overrides it to `0.0.0.0:8080` inside the container (mapped to host ports 4321-4323).
 
 ## Auth modes
 
@@ -66,10 +66,29 @@ Registry Witness supports two credential types per runtime instance, checked in 
 **API key**: The client sends the token in `x-api-key: <token>`.
 The server performs a constant-time comparison against values loaded from environment variables at startup.
 
+```sh
+curl -H "x-api-key: <your-key>" http://localhost:8081/claims
+```
+
 **Bearer token**: The client sends `Authorization: Bearer <token>`.
 The server strips the `Bearer` prefix and performs a constant-time comparison.
 
-Both types are configured in `auth.api_keys` and `auth.bearer_tokens` respectively.
+```sh
+curl -H "Authorization: Bearer <your-token>" http://localhost:8081/claims
+```
+
+Both types are configured in `auth.api_keys` and `auth.bearer_tokens` in the Witness config file. Example:
+
+```yaml
+auth:
+  api_keys:
+    - token: "${WITNESS_API_KEY}"
+      scopes: ["civil:evaluate"]
+  bearer_tokens:
+    - token: "${WITNESS_BEARER_TOKEN}"
+      scopes: ["civil:evaluate", "civil:issue"]
+```
+
 Each credential carries a `scopes` list.
 Per-claim scope requirements are enforced before evaluation proceeds.
 
@@ -118,7 +137,7 @@ The renderer in `crates/registry-witness-server/src/runtime.rs` produces:
 - CCCEV properties: `cccev:isProvidedBy`, `cccev:supportsRequirement`, `cccev:supportsValue`,
   `cccev:validityPeriod`, and `cccev:isConformantTo`.
 
-Profile conformance against CCCEV 2.00 is not claimed.
+Profile conformance against CCCEV 2.00 is not claimed. You can consume the rendered output as CCCEV-shaped JSON-LD: parse the `@graph` for `cccev:Evidence` nodes and read the listed properties to reconstruct what criteria a subject satisfies.
 
 ## Source connectors
 
@@ -144,9 +163,11 @@ but no implementation is present at the reviewed commit.
 **Proof-of-possession binding.** `did:jwk` is the only supported holder binding method.
 Other DID methods are not supported.
 
-**Audit events.** Every evaluated request emits a `EvidenceAuditEvent` to a configured sink (stdout
-or file) in JSONL format. Audit write failures surface as request errors, not as transparent log
-entries.
+**Audit events.** Every evaluated request emits a `EvidenceAuditEvent` to a configured sink (stdout or file) in JSONL format.
+
+:::caution
+Audit write failures surface as request errors, not as transparent log entries. If your audit sink is unavailable, callers will receive errors. Monitor the audit sink as part of your operational runbook.
+:::
 
 **Admin operations.** Registry Witness does not expose an admin route for live reload.
 Key and configuration changes require a service restart.

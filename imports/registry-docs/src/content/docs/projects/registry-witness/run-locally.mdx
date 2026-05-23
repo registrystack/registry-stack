@@ -56,7 +56,6 @@ cd registry-witness
 Registry Witness starts fail-closed: no route is served unless at least one API key or bearer
 token is configured.
 All credential values are loaded from environment variables named in the YAML config.
-([config.rs:153](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
 
 ```sh
 export REGISTRY_WITNESS_API_KEY=dev-registry-witness-api-key
@@ -67,16 +66,13 @@ export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN=dev-source-token
 For credential issuance, you also need an Ed25519 OKP JWK.
 The variable name is set by `credential_profiles.<id>.issuer_key_env` in the config.
 The demo config uses `REGISTRY_WITNESS_ISSUER_JWK`.
-A development-only key (never use in production):
+
+A development-only key (never use in production) is hardcoded in the
+[`sd_jwt.rs` tests](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/sd_jwt.rs):
 
 ```sh
-export REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"<private-key-bytes>","x":"<public-key-bytes>","alg":"EdDSA"}'
+export REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}'
 ```
-
-Replace `<private-key-bytes>` and `<public-key-bytes>` with real base64url-encoded values.
-The
-[sd_jwt.rs tests](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/sd_jwt.rs)
-include a hardcoded test key you can use for local development.
 
 ### 3. Start the service
 
@@ -90,7 +86,7 @@ The default bind address when no config specifies one is `127.0.0.1:8081`
 ([config.rs:143](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
 
 You will see tracing output on startup.
-The service is ready when you see a line indicating the Axum listener has bound.
+The service is ready when you see a line containing `registry witness listening` followed by the bind address.
 
 ### 4. Confirm the OpenAPI document
 
@@ -131,7 +127,6 @@ curl -s -H "x-api-key: dev-registry-witness-api-key" \
 ```
 
 This document describes the service identity, supported claim IDs, and output formats.
-([openapi.rs:31](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs))
 
 ## Verification
 
@@ -176,4 +171,3 @@ The [configure a claim](../configure-a-claim/) page covers source connector setu
 **`REGISTRY_WITNESS_ISSUER_JWK` parse error.**
 The JWK must be a valid OKP Ed25519 key with both `d` (private) and `x` (public) components
 present and base64url-encoded without padding.
-([sd_jwt.rs:49](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/sd_jwt.rs))

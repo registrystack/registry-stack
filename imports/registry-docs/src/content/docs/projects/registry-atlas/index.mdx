@@ -26,13 +26,19 @@ Atlas does not run queries against live person-level data.
 It does not make authorization decisions.
 It is a discovery and review tool, not a data access gateway.
 
+A typical workflow: you paste the registry's metadata URL into Atlas, run discovery, browse
+the schemas and policies in the Registry tab, then open the Capabilities tab to check whether
+the registry's published metadata actually supports the information need you want to query.
+If it does, the candidate routes give you the endpoint URL and evidence to take into your
+integration code.
+
 ## What Atlas is made of
 
 `registry-atlas` is a browser single-page application (SPA) built with React 19, TypeScript,
 and Vite.
 A companion Node.js/Express server runs alongside the SPA as a same-origin fetch proxy.
-The semantic analysis engine is compiled to WebAssembly (WASM) from three Rust crates:
-`semantic-asset-discovery-core`, `semantic-asset-discovery`, and `system-capability-discovery`.
+The heavy analysis runs in your browser via WebAssembly; the Node/Express server is just a
+same-origin fetch proxy that lets you point the workspace at any URL.
 
 The SPA and proxy are separate processes.
 In development, `pnpm dev` starts both concurrently:
@@ -98,18 +104,11 @@ Error responses use `application/problem+json` with machine-readable codes
 ## Bearer token handling
 
 Atlas accepts an optional bearer token in the session URL entry field.
+Tokens you enter live in memory for the tab lifetime; they are not written to browser storage
+or to server logs.
 The token is forwarded as an `Authorization: Bearer` header in the proxy request and is
-discarded when the browser session ends.
-Registry Atlas does not write bearer tokens to `localStorage`, `sessionStorage`, IndexedDB,
-or proxy logs.
-Callers must re-supply tokens in each browser session.
-The token lives only in React component state for the lifetime of the browser tab: see
-[`src/App.tsx`](https://github.com/jeremi/registry-atlas/blob/main/src/App.tsx#L285)
-for the `useState("")` declaration.
-The proxy reads the token from the `x-atlas-bearer` request header and forwards it as
-`Authorization: Bearer` to the upstream target; no logging of that header occurs anywhere
-in the server: see
-[`server/index.mjs`](https://github.com/jeremi/registry-atlas/blob/main/server/index.mjs#L208-L219).
+discarded when the browser tab closes.
+You must re-enter the token in each new browser session.
 
 ## The strict capability discovery engine
 
@@ -132,18 +131,14 @@ The engine is strict in v0.1.
   compact IRI expansion) is applied before comparison.
   Stemming, edit distance, and semantic similarity are not applied.
 
-The input is a `CapabilityQuery` carrying named `InformationNeed` objects.
-Each need lists accepted `Term` values (label, IRI, or field name) or references to reviewed
-mapping sets.
-The engine does not interpret free-form text.
+You type the terms describing what you're looking for; Atlas checks whether the registry's
+published metadata contains them, and only matches exact terms (no fuzzy or AI inference).
 
 The output is a set of **candidate answer routes**, not authority claims.
 A candidate route includes confidence, an access endpoint URL, evidence references, gaps
 (for example, `LegalBasisUnknown`, `AuthorityUnknown`, `FreshnessUnknown`), and review flags.
-A candidate route does not mean the route is authoritative, that the caller is authorized,
-or that the legal basis is sufficient.
-These stronger claims require reviewed mappings, human governance state, or first-class parser
-support that is not yet implemented in v0.1.
+Candidate routes point you to where data might be, with evidence for why.
+Authorization and legal access checks are outside Atlas's scope.
 
 The full normative contract for the capability discovery engine is in
 [`SYSTEM_CAPABILITY_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SYSTEM_CAPABILITY_DISCOVERY_SPEC.md).
@@ -158,30 +153,16 @@ The key fixture files are:
 - [`fixtures/system-capability/registry-relay-all-standards.report.json`](https://github.com/jeremi/registry-atlas/blob/main/fixtures/system-capability/registry-relay-all-standards.report.json):
   a `DiscoveryReport` with all known asset kinds represented.
 
-A `DiscoveryRunEnvelope` wraps a `DiscoveryReport` with host-side fetch state:
-the fetch summary (artifact count, asset count, failed artifact count), rejected fetch URLs,
-and per-artifact fetch metadata.
-A `DiscoveryReport` alone is the portable evidence contract that can be consumed without any
-host state.
+You can export the raw report JSON from the Evidence tab and use it with the CLI for offline
+analysis.
+The full schema is in the [Registry Atlas reference](./reference/).
 
-## What Atlas owns and does not own
+## When to use Atlas vs. Relay or Witness
 
-Registry Atlas owns:
-
-- The browser UI for published catalog and registry discovery artifacts.
-- The local fetch proxy for inspected metadata endpoints.
-- Strict capability queries over accepted machine terms.
-- Semantic asset discovery fixtures and envelopes.
-
-Registry Atlas does not own:
-
-- Registry runtime APIs (those belong to Registry Relay and Registry Witness).
-- Natural-language inference in v0.1 capability discovery (not yet supported).
-- Persistent token storage in browser or proxy logs (explicit non-goal by design).
-
-This boundary is recorded in
-[`src/data/projects.yaml`](https://github.com/jeremi/registry-legend/blob/main/src/data/projects.yaml)
-in this repository.
+Use Atlas when you want to inspect what a registry publishes before you write integration code.
+For live queries against person-level data or runtime API calls, use
+[Registry Relay](../../projects/registry-relay/) or
+[Registry Witness](../../projects/registry-witness/) directly.
 
 ## Relationship to Registry Lab
 

@@ -43,7 +43,6 @@ Use this page when you are:
 
 Source connections are declared once under `evidence.source_connections` and referenced by
 any number of claims.
-([config.rs:245](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
 
 **Registry Data API connector:**
 
@@ -58,11 +57,12 @@ evidence:
 The `source_connections` entry declares a base URL and token variable.
 The connector kind is set per binding, not per connection: each `source_bindings` entry carries
 an explicit `connector` field (`registry_data_api` or `dci`) that determines which HTTP client
-path the runtime uses
-([standalone.rs:140](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/standalone.rs#L140)).
-A connection without a `dci` block still carries DCI defaults
-([config.rs:336](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs#L336));
-those defaults are only used when a binding sets `connector: dci`.
+path the runtime uses.
+
+:::note
+A connection without a `dci` block still carries DCI defaults. Those defaults are only
+used when a binding on that connection sets `connector: dci`.
+:::
 
 **SP DCI connector:**
 
@@ -80,8 +80,6 @@ evidence:
           birth_date: /birth_date
 ```
 
-([demo/config/registry-witness.yaml:33](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml))
-
 Set the environment variable before starting or restarting the service:
 
 ```sh
@@ -93,7 +91,6 @@ export MY_REGISTRY_SOURCE_TOKEN=<source-bearer-token>
 Add an entry to `evidence.claims`.
 The minimum required fields are `id`, `title`, `version`, `subject_type`, `rule`, and at
 least one entry in `source_bindings` if the rule reads from a source.
-([config.rs:274](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
 
 ```yaml
 evidence:
@@ -149,7 +146,6 @@ Key fields explained:
 ### 3. Choose a disclosure policy
 
 Three disclosure modes are available.
-([model.rs:13](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs))
 
 **Full value (`value`):** The evaluated value is returned to the caller.
 Use for claims where the caller is entitled to the raw data.
@@ -188,13 +184,11 @@ disclosure:
 The `downgrade` field controls what happens when a caller requests a mode not in `allowed`:
 `deny` (default) returns an error; `default` falls back to `disclosure.default`;
 `redacted` forces the result to `Redacted`.
-([config.rs:524](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
 
 ### 4. Add a CEL-derived claim (optional)
 
 A CEL claim composes results from one or more upstream claims without re-fetching source data.
 Declare `depends_on` to ensure the upstream claims are evaluated first.
-([config.rs:449](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
 
 ```yaml
 - id: my-derived-claim
@@ -226,13 +220,11 @@ Declare `depends_on` to ensure the upstream claims are evaluated first.
 
 CEL bindings under `bindings.claims` map a local variable name to a claim ID.
 The expression receives the claim result under `claims.<binding_name>.value`.
-([demo/config/registry-witness.yaml:159](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml))
 
 ### 5. Add a credential profile (optional)
 
 To enable `/credentials/issue` for your claim, declare a credential profile and reference it
 from the claim.
-([config.rs:558](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
 
 ```yaml
 evidence:
@@ -281,8 +273,8 @@ The config validator runs before the listener binds.
 cargo run -p registry-witness-bin -- --config <your-config>.yaml
 ```
 
-A startup error such as `MissingSourceConnection` means a `source_bindings.connection` value
-does not match any key in `source_connections`.
+If the process exits immediately, check the tracing output for a startup error.
+See [Troubleshooting](#troubleshooting) for the full list of startup and runtime errors.
 
 ## Verification
 
@@ -304,10 +296,28 @@ curl -s -X POST \
 ```
 
 A `200` response with a `claim_results` array confirms that evaluation reached the rule stage.
-If the source registry is unreachable, the runtime raises `SourceUnavailable`, which the API
-returns as a `503 Service Unavailable` response with an `application/problem+json` body
-([api.rs:723](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs#L723)).
-The `code` field in the body is `source.unavailable`.
+If the source registry is unreachable, the API returns `503 Service Unavailable` with an
+`application/problem+json` body. The `code` field in the body is `source.unavailable`.
+
+A successful response looks like:
+
+```json
+{
+  "subject": { "id": "<test-id>" },
+  "claim_results": [
+    {
+      "claim_id": "my-claim",
+      "outcome": "satisfied",
+      "disclosure": "value",
+      "value": "1998-04-12",
+      "evidence_summary": {
+        "source": "my_source",
+        "rows_read": 1
+      }
+    }
+  ]
+}
+```
 
 To verify CCCEV rendering:
 

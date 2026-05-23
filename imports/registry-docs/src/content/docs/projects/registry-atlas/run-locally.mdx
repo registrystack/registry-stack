@@ -24,12 +24,12 @@ Use these steps when you want to:
 
 ## Prerequisites
 
-- Node.js 22 or later.
-  The required version is declared in the
-  [`package.json`](https://github.com/jeremi/registry-atlas/blob/main/package.json)
-  `engines` field.
-- `pnpm` (any recent version).
-  If you manage Node with `mise`, `pnpm` is available after `mise install`.
+- Node.js 22 or later and `pnpm` installed.
+  If you use `mise`, `mise install` covers both.
+- Rust toolchain (`cargo` on PATH).
+  The first `pnpm dev` compiles Rust components to WebAssembly; without Rust installed you
+  will get a `cargo not found` error.
+  Install Rust from [rustup.rs](https://rustup.rs/).
 - Optional: a running Registry Relay instance if you want to inspect live metadata.
   The [Registry Lab tutorial](../../../tutorials/first-run-with-registry-lab/) describes how to
   start the demo compose topology, which includes a Relay instance.
@@ -51,8 +51,7 @@ pnpm install
 ```
 
 This installs Node dependencies and prepares the Rust WASM build prerequisites.
-The WASM crates (`semantic-asset-discovery`, `system-capability-discovery`) are compiled
-during the next step.
+The `semantic-asset-discovery-wasm` crate is compiled during the next step.
 
 ### 3. Start the development server
 
@@ -67,8 +66,9 @@ concurrently:
 - The Express fetch proxy on `http://127.0.0.1:3717`.
 
 Both processes must be running for Atlas to function.
-The initial WASM compile takes longer than subsequent runs because `wasm-pack` downloads
-the toolchain on first use.
+The first run compiles `semantic-asset-discovery-wasm` from Rust; expect several minutes on
+a cold machine.
+Subsequent runs use the Rust incremental cache and finish much faster.
 
 If you want the proxy alone (for example, to drive it from another tool), run:
 
@@ -87,6 +87,19 @@ Expected output:
 ```json
 {"ok": true, "status": "ok"}
 ```
+
+## Production build
+
+`pnpm dev` is for local development.
+If you need a static production build (for example, to serve Atlas from a web server without
+running the Vite dev server), run:
+
+```sh
+pnpm build
+```
+
+This type-checks, compiles WASM, and emits a production bundle into `dist/`.
+Serve `dist/` from any static file server alongside the proxy (`pnpm server`).
 
 ## Verification
 

@@ -33,12 +33,11 @@ standards_referenced:
 
 import StandardsTable from '../../../components/StandardsTable.astro';
 
-This register is the source of truth for standards claims in Registry Legend.
-The registry family does not claim to be a new standard.
-Each project implements specific surfaces around existing standards and declares that use with
-an explicit claim level.
-
+Use this register to understand what standards each project in the registry family references and at what level of conformance.
 The table is generated from `src/data/standards.yaml`.
+
+The registry family does not claim to be a new standard.
+Each project implements specific surfaces around existing standards and declares that use with an explicit claim level.
 
 ## Claim levels
 
@@ -51,9 +50,14 @@ Six levels are used, in descending strength:
 - `inspired_by` means the standard influenced design without any compatibility claim.
 - `compares_against` means the standard is discussed to explain boundaries or alternatives.
 
-A claim is only as strong as its evidence.
-When evidence is a README sentence, the claim is at most `aligns_with`.
-When evidence is a test, fixture, or generated artifact, the claim can reach `emits` or `implements`.
+**What these levels mean for integrators:**
+
+- If a standard is marked `emits`, you can parse that project's output as conformant to that standard. Fixtures and generated artifacts back the claim.
+- If it's marked `aligns_with`, the project uses the vocabulary and intent of the standard but does not guarantee strict conformance. Don't write a validator against the spec without checking the surface notes.
+- `implements` means a normative requirement is met; you can rely on the API shape it describes.
+- `inspired_by` or `compares_against`: design context only, no interoperability claim.
+
+{/* A claim is only as strong as its evidence. When evidence is a README sentence, the claim is at most aligns_with. When evidence is a test, fixture, or generated artifact, the claim can reach emits or implements. A standard appears in the register only when it has all five required fields: standard, status, used_by, claim_level, and evidence. */}
 
 ## Column guide
 

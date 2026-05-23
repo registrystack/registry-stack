@@ -29,7 +29,7 @@ Evidence source: [Registry Relay](../../../projects/registry-relay/) commit `aec
 
 ## API surface
 
-Registry Relay is a Rust async HTTP service (Axum framework) that turns sensitive government
+Registry Relay is a Rust async HTTP service that turns sensitive government
 tabular files and database tables into protected, read-only, domain-oriented consultation APIs.
 The OpenAPI document covers the routes registered in `src/server.rs`.
 
@@ -83,13 +83,29 @@ The API groups into six domains:
 Registry Relay supports exactly one auth mode per runtime instance, configured in `auth`:
 
 **API key** (default for v1): The client sends a bearer token in `Authorization: Bearer <key>` or `X-Api-Key: <key>`.
-The server validates against a SHA-256 fingerprint stored in an environment variable, not in the config file.
 Scopes per key control access: `<dataset_id>:metadata`, `<dataset_id>:aggregate`, `<dataset_id>:rows`,
 `<dataset_id>:evidence_verification`, and `admin`.
+
+```sh
+# Bearer header
+curl -H "Authorization: Bearer <your-key>" http://localhost:4311/datasets
+
+# X-Api-Key header
+curl -H "X-Api-Key: <your-key>" http://localhost:4311/datasets
+```
+
+:::note
+The server validates API keys against a SHA-256 fingerprint stored in an environment variable, not in the config file. The raw key never appears in config.
+:::
 
 **OIDC / OAuth2**: The client sends a bearer JWT in `Authorization: Bearer <token>`.
 The server validates against an external identity provider JWKS, resolved from a discovery URL or explicit URL.
 No tokens are minted by Relay.
+
+```sh
+# OIDC bearer JWT
+curl -H "Authorization: Bearer <your-jwt>" http://localhost:4311/datasets
+```
 
 Health and readiness endpoints are unauthenticated.
 Metadata routes enforce dataset-level scopes.
@@ -109,8 +125,7 @@ enabled.
 {/* The VC-JWT Accept variant is documented in the relay README:301–311 and lives in `src/provenance/` (per .research/registry-relay.md, "issues: Compact JWS-wrapped VCs for responses when provenance enabled and client sends `Accept: application/vc+jwt`"). It is NOT present in the pinned civil-demo OpenAPI artifact; that is an artifact-snapshot lag, not a missing feature. The "Artifact snapshot" caveat below applies. */}
 
 **Admin routes.** `POST /admin/reload`, `POST /admin/datasets/{dataset_id}/tables/{table_id}/reload`,
-and `GET /metrics` are mounted on a separate admin listener (`server.admin_bind`, default
-`127.0.0.1:8081`) and require `admin` scope. They do not appear in the public OpenAPI document.
+and `GET /metrics` are mounted on a separate admin listener (`server.admin_bind`). The admin listener is optional: it is not enabled unless `admin_bind` is configured. Example value: `127.0.0.1:8081`. Admin routes require `admin` scope and do not appear in the public OpenAPI document.
 
 **Artifact snapshot.** The current artifact is a pinned civil demo snapshot, not a release-grade
 export. Some configurations (OIDC auth, SP DCI adapter, OGC API Records) may not be reflected.
@@ -120,4 +135,4 @@ Regenerate from `GET /openapi.json` on a running Relay instance configured with 
 inserts, updates) are explicitly out of scope.
 
 **No stream ingestion.** File and database sources are batch (snapshot or table scan). There is no
-Kafka, pub/sub, or event-streaming backend.
+Kafka, pub/sub, or event-streaming backend. If your data pipeline is event-driven, Registry Relay reads snapshots on startup or reload, not from a stream.
