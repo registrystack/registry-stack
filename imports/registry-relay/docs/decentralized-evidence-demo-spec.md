@@ -312,7 +312,7 @@ Implementation preference:
 - Python standard library, following the existing narrated demo style.
 - Reuse the existing demo helpers where practical:
   `demo/scripts/generate_demo_keys.py` for hashed key generation patterns and
-  `demo/scripts/evidence_server_demo.py` for narrated HTTP flow patterns.
+  `demo/scripts/registry_witness_demo.py` for narrated HTTP flow patterns.
 - Do not duplicate key hashing logic when it can be imported or factored into a
   small shared helper.
 
@@ -392,7 +392,7 @@ registry-relay/
 Add Evidence Server container support in the sibling repository:
 
 ```text
-evidence-server/
+registry-witness/
   Dockerfile
   .dockerignore
 ```
@@ -417,7 +417,7 @@ existing runtime base-image pattern instead of adding a floating ad hoc image.
 `compose.yaml` must:
 
 - build `registry-relay:demo` from `Dockerfile.demo`;
-- build `evidence-server:demo` from `../../../evidence-server`;
+- build `registry-witness:demo` from `../../../registry-witness`;
 - run `static-metadata-publisher` from the generated static metadata directory;
 - support linux/amd64 and linux/arm64 without a `platform:` pin;
 - expose stable localhost ports for manual inspection;
@@ -992,7 +992,7 @@ Deliver:
 
 Validation:
 
-- `cargo test -p evidence-server --test decentralized_cross_source_cel --all-features`;
+- `cargo test -p registry-witness-server --test decentralized_cross_source_cel --all-features`;
 - each Evidence Server lists claims;
 - each Evidence Server evaluates at least one claim;
 - shared Evidence Server calls at least two Relay sources using distinct source
@@ -1072,7 +1072,7 @@ The smoke script must print the exact failing check name before exiting.
 The demo is done when all of the following are true:
 
 - `docker compose -f demo/decentralized/compose.yaml build` succeeds from
-  `registry_relay`.
+  `registry-relay`.
 - `docker compose -f demo/decentralized/compose.yaml up -d` starts all seven
   runtime services.
 - `demo/decentralized/scripts/smoke.sh` exits zero and checks the contract
@@ -1132,12 +1132,12 @@ The demo is done when all of the following are true:
 - no OIDC service is required for the core demo.
 - docs explain that the functional domains simulate product categories but are
   not real OpenCRVS, OpenSPP, DHIS2, OpenIMIS, or other product integrations.
-- `cargo test --test decentralized_demo_configs_load --features spdci-api-standards,standards-cel-mapping` passes in `registry_relay`.
-- `cargo test --test demo_configs_load --features spdci-api-standards,standards-cel-mapping` passes in `registry_relay`.
-- `cargo test -p evidence-server --test decentralized_cross_source_cel --all-features` passes in `evidence-server`.
-- `cargo test -p evidence-server --all-features` passes in `evidence-server`.
-- `cargo fmt --all -- --check` passes in `registry_relay`.
-- `cargo fmt --all -- --check` passes in `evidence-server`.
+- `cargo test --test decentralized_demo_configs_load --features spdci-api-standards,standards-cel-mapping` passes in `registry-relay`.
+- `cargo test --test demo_configs_load --features spdci-api-standards,standards-cel-mapping` passes in `registry-relay`.
+- `cargo test -p registry-witness-server --test decentralized_cross_source_cel --all-features` passes in `registry-witness`.
+- `cargo test -p registry-witness-server --all-features` passes in `registry-witness`.
+- `cargo fmt --all -- --check` passes in `registry-relay`.
+- `cargo fmt --all -- --check` passes in `registry-witness`.
 - `git diff --check` passes in both repositories.
 
 ## Verification Commands
@@ -1145,7 +1145,7 @@ The demo is done when all of the following are true:
 Expected local verification:
 
 ```bash
-cd /Users/jeremi/Projects/204-programs-delivery-commons/apps/registry_relay
+cd /Users/jeremi/Projects/204-programs-delivery-commons/apps/registry-relay
 cargo fmt --all -- --check
 cargo test --test decentralized_demo_configs_load --features spdci-api-standards,standards-cel-mapping
 cargo test --test demo_configs_load --features spdci-api-standards,standards-cel-mapping
@@ -1157,10 +1157,10 @@ git diff --check
 ```
 
 ```bash
-cd /Users/jeremi/Projects/204-programs-delivery-commons/apps/evidence-server
+cd /Users/jeremi/Projects/204-programs-delivery-commons/apps/registry-witness
 cargo fmt --all -- --check
-cargo test -p evidence-server --test decentralized_cross_source_cel --all-features
-cargo test -p evidence-server --all-features
+cargo test -p registry-witness-server --test decentralized_cross_source_cel --all-features
+cargo test -p registry-witness-server --all-features
 cargo build --workspace --all-features
 git diff --check
 ```
