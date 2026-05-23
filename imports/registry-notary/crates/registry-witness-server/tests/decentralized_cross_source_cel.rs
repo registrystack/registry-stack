@@ -15,7 +15,7 @@ use registry_witness_core::StandaloneRegistryWitnessConfig;
 use registry_witness_server::standalone_router;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const DEMO_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
@@ -261,15 +261,16 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
     let _guard = common::issuer_jwk_guard();
 
     set_demo_env();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .expect("apps directory");
+    let Some(root) = registry_relay_source_dir() else {
+        eprintln!(
+            "skipping registry-relay decentralized demo config check; set REGISTRY_RELAY_SOURCE_DIR or check out registry-relay as a sibling"
+        );
+        return;
+    };
     for config_path in [
-        "registry-relay/demo/decentralized/config/evidence/civil-evidence-server.yaml",
-        "registry-relay/demo/decentralized/config/evidence/social-protection-evidence-server.yaml",
-        "registry-relay/demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
+        "demo/decentralized/config/evidence/civil-evidence-server.yaml",
+        "demo/decentralized/config/evidence/social-protection-evidence-server.yaml",
+        "demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
     ] {
         let raw = std::fs::read_to_string(root.join(config_path)).expect("config is readable");
         let config: StandaloneRegistryWitnessConfig =
@@ -277,6 +278,26 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
         config.validate().expect("config validates");
         let _ = standalone_router(config).expect("config builds standalone router");
     }
+}
+
+fn registry_relay_source_dir() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("REGISTRY_RELAY_SOURCE_DIR") {
+        let path = PathBuf::from(path);
+        if path.join("demo/decentralized/config/evidence").is_dir() {
+            return Some(path);
+        }
+    }
+
+    let sibling = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(|apps| apps.join("registry-relay"))?;
+
+    sibling
+        .join("demo/decentralized/config/evidence")
+        .is_dir()
+        .then_some(sibling)
 }
 
 fn set_demo_env() {
