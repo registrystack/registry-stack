@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_metadata_core::{
+use registry_manifest_core::{
     compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
     render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
     render_entity_shacl, render_ogc_records_items, render_policy_collection, render_shacl,
@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 fn as_needed_update_frequency_maps_to_eu_as_needed_iri() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: as-needed-freq
   base_url: https://data.example.test
@@ -78,12 +78,12 @@ fn validation_reports_manifest_errors() {
     manifest
         .catalog
         .application_profiles
-        .push(registry_metadata_core::ApplicationProfile {
+        .push(registry_manifest_core::ApplicationProfile {
             id: "not-supported".to_string(),
             version: "1".to_string(),
         });
     manifest.datasets[0].entities[0].relationships.push(
-        registry_metadata_core::RelationshipManifest {
+        registry_manifest_core::RelationshipManifest {
             name: "bad_relationship".to_string(),
             target_entity: Some("vital_event".to_string()),
             target: None,
@@ -131,7 +131,7 @@ fn validation_rejects_duplicate_entities() {
 fn validation_rejects_duplicate_evidence_offering_ids_globally() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: duplicate-offerings
   base_url: https://data.example.test
@@ -206,7 +206,7 @@ datasets:
 fn validation_rejects_blank_issuing_authority_country() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: blank-country
   base_url: https://data.example.test
@@ -262,7 +262,7 @@ datasets:
 fn validation_allows_portable_evidence_access_kinds() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: portable-access-kind
   base_url: https://data.example.test
@@ -309,7 +309,7 @@ datasets:
 fn evidence_server_offerings_publish_endpoint_metadata() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: evidence-discovery
   base_url: https://registry.example.test
@@ -368,25 +368,25 @@ datasets:
         .find(|node| node["dcterms:identifier"] == "smallholder_evidence_service")
         .expect("offering node exists");
     assert_eq!(
-        offering["registry_metadata:evidenceService"]["dcat:endpointURL"],
+        offering["registry_manifest:evidenceService"]["dcat:endpointURL"],
         json!("https://evidence.example.test")
     );
 
     // Blocker 3: servesEntity IRI must not contain more than one '#' (RFC 3986 §3.5).
     // The base IRI is "#dataset-farmers" which already has '#'; appending "#entity-farmer"
     // creates an invalid double-fragment IRI. The separator must switch to '-' instead.
-    let serves_entity = offering["registry_metadata:servesEntity"]
+    let serves_entity = offering["registry_manifest:servesEntity"]
         .as_str()
-        .expect("registry_metadata:servesEntity is a string");
+        .expect("registry_manifest:servesEntity is a string");
     let fragment_count = serves_entity.chars().filter(|&c| c == '#').count();
     assert_eq!(
         fragment_count,
         1,
-        "registry_metadata:servesEntity must contain exactly one '#' per RFC 3986 §3.5; got: {serves_entity}"
+        "registry_manifest:servesEntity must contain exactly one '#' per RFC 3986 §3.5; got: {serves_entity}"
     );
     assert!(
         serves_entity.contains("entity-farmer"),
-        "registry_metadata:servesEntity must still reference the entity name; got: {serves_entity}"
+        "registry_manifest:servesEntity must still reference the entity name; got: {serves_entity}"
     );
 }
 
@@ -394,21 +394,21 @@ datasets:
 fn policy_manifest_validates_and_renders_odrl_offer() {
     let mut manifest = fixture("example-civil-registration");
     manifest.catalog.participant_id = Some("did:web:civil-registration.example.gov".to_string());
-    manifest.datasets[0].policy = Some(registry_metadata_core::DatasetPolicyManifest {
+    manifest.datasets[0].policy = Some(registry_manifest_core::DatasetPolicyManifest {
         uid: Some("https://civil-registration.example.gov/datasets/vital-events#offer".to_string()),
         assigner: Some("did:web:civil-registration.example.gov".to_string()),
         profile: vec![
             "https://civil-registration.example.gov/odrl/profile/data-sharing".to_string(),
         ],
-        permissions: vec![registry_metadata_core::PolicyRuleManifest {
+        permissions: vec![registry_manifest_core::PolicyRuleManifest {
             action: "odrl:use".to_string(),
             target: None,
             assignee: None,
             constraints: vec![
-                registry_metadata_core::PolicyConstraintManifest {
+                registry_manifest_core::PolicyConstraintManifest {
                     left_operand: "odrl:purpose".to_string(),
                     operator: "odrl:isA".to_string(),
-                    right_operand: registry_metadata_core::PolicyOperandValue {
+                    right_operand: registry_manifest_core::PolicyOperandValue {
                         iri: Some(
                             "https://civil-registration.example.gov/purpose/service-delivery"
                                 .to_string(),
@@ -418,10 +418,10 @@ fn policy_manifest_validates_and_renders_odrl_offer() {
                     unit: None,
                     datatype: None,
                 },
-                registry_metadata_core::PolicyConstraintManifest {
+                registry_manifest_core::PolicyConstraintManifest {
                     left_operand: "odrl:count".to_string(),
                     operator: "odrl:lteq".to_string(),
-                    right_operand: registry_metadata_core::PolicyOperandValue {
+                    right_operand: registry_manifest_core::PolicyOperandValue {
                         iri: None,
                         value: Some("10".to_string()),
                     },
@@ -429,14 +429,14 @@ fn policy_manifest_validates_and_renders_odrl_offer() {
                     datatype: None,
                 },
             ],
-            duties: vec![registry_metadata_core::PolicyDutyManifest {
+            duties: vec![registry_manifest_core::PolicyDutyManifest {
                 action: "odrl:attribute".to_string(),
                 target: None,
                 assignee: None,
                 constraints: Vec::new(),
             }],
         }],
-        prohibitions: vec![registry_metadata_core::PolicyRuleManifest {
+        prohibitions: vec![registry_manifest_core::PolicyRuleManifest {
             action: "odrl:sell".to_string(),
             target: None,
             assignee: None,
@@ -541,25 +541,25 @@ fn policy_documents_are_dataset_scoped_json_ld() {
 #[test]
 fn policy_validation_rejects_ambiguous_or_textual_terms() {
     let mut manifest = fixture("example-civil-registration");
-    manifest.datasets[0].policy = Some(registry_metadata_core::DatasetPolicyManifest {
+    manifest.datasets[0].policy = Some(registry_manifest_core::DatasetPolicyManifest {
         uid: Some("ftp://example.gov/policy".to_string()),
         assigner: Some("did:web:civil-registration.example.gov".to_string()),
         profile: Vec::new(),
-        permissions: vec![registry_metadata_core::PolicyRuleManifest {
+        permissions: vec![registry_manifest_core::PolicyRuleManifest {
             action: "use".to_string(),
             target: None,
             assignee: None,
-            constraints: vec![registry_metadata_core::PolicyConstraintManifest {
+            constraints: vec![registry_manifest_core::PolicyConstraintManifest {
                 left_operand: "odrl:purpose".to_string(),
                 operator: "odrl:isA".to_string(),
-                right_operand: registry_metadata_core::PolicyOperandValue {
+                right_operand: registry_manifest_core::PolicyOperandValue {
                     iri: None,
                     value: Some("service delivery".to_string()),
                 },
                 unit: None,
                 datatype: None,
             }],
-            duties: vec![registry_metadata_core::PolicyDutyManifest {
+            duties: vec![registry_manifest_core::PolicyDutyManifest {
                 action: "attribute".to_string(),
                 target: None,
                 assignee: None,
@@ -567,7 +567,7 @@ fn policy_validation_rejects_ambiguous_or_textual_terms() {
             }],
         }],
         prohibitions: Vec::new(),
-        obligations: vec![registry_metadata_core::PolicyDutyManifest {
+        obligations: vec![registry_manifest_core::PolicyDutyManifest {
             action: "odrl:reviewPolicy".to_string(),
             target: None,
             assignee: None,
@@ -699,10 +699,10 @@ fn breg_dcat_emits_standard_public_service_evidence_without_source_truth_claims(
     let mut manifest = fixture("example-civil-registration");
     manifest.datasets[0].applicable_legislation =
         vec!["http://data.europa.eu/eli/reg/2024/1/oj".to_string()];
-    manifest.datasets[0].public_services = vec![registry_metadata_core::PublicServiceManifest {
+    manifest.datasets[0].public_services = vec![registry_manifest_core::PublicServiceManifest {
         id: Some("civil-registration-service".to_string()),
-        title: registry_metadata_core::LocalizedText::Plain("Civil registration".to_string()),
-        description: Some(registry_metadata_core::LocalizedText::Plain(
+        title: registry_manifest_core::LocalizedText::Plain("Civil registration".to_string()),
+        description: Some(registry_manifest_core::LocalizedText::Plain(
             "Public service producing civil registration data".to_string(),
         )),
     }];
@@ -727,7 +727,7 @@ fn breg_dcat_emits_standard_public_service_evidence_without_source_truth_claims(
     assert_eq!(service["dcterms:title"], json!("Civil registration"));
     assert_eq!(service["cpsv:produces"], json!("#dataset-vital-events"));
     assert!(
-        service["registry_metadata:sourceOfTruth"].is_null(),
+        service["registry_manifest:sourceOfTruth"].is_null(),
         "Registry Relay publishes standard CPSV evidence, not an authority verdict"
     );
 }
@@ -812,7 +812,7 @@ fn breg_dcat_preserves_active_adms_status() {
 fn breg_dcat_omits_empty_cccev_predicates_on_requirements() {
     let manifest: MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: minimal-requirement
   base_url: https://data.example.test
@@ -881,7 +881,7 @@ const EXAMPLE_CIVIL_REGISTRATION_FIXTURE: &str =
     include_str!("../../../profiles/example-civil-registration/fixtures/metadata.yaml");
 
 const EXAMPLE_SOCIAL_BENEFITS_FIXTURE: &str = r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: example-social-benefits
   base_url: https://social-protection.example.gov
@@ -932,7 +932,7 @@ codelists:
 "#;
 
 const EXAMPLE_PERSON_SCHEMA_FIXTURE: &str = r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: example-person-schema
   base_url: https://person-schema.example.gov
@@ -964,7 +964,7 @@ codelists: []
 "#;
 
 const EXAMPLE_BENEFITS_SYNC_FIXTURE: &str = r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: example-benefits-sync
   base_url: https://dci.example.gov

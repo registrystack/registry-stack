@@ -71,17 +71,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-metadata-cli"
+name = "registry-manifest-cli"
 version = "0.1.1"
 dependencies = [
- "registry-metadata-core",
+ "registry-manifest-core",
  "serde",
  "serde_json",
  "serde_yml",
 ]
 
 [[package]]
-name = "registry-metadata-core"
+name = "registry-manifest-core"
 version = "0.1.1"
 dependencies = [
  "serde",

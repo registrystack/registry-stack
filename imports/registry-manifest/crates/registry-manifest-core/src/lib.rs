@@ -854,7 +854,7 @@ impl ValidationError {
 
 pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataError> {
     let mut errors = Vec::new();
-    if manifest.schema_version != "registry-metadata/v1" {
+    if manifest.schema_version != "registry-manifest/v1" {
         return Err(MetadataError::VersionUnsupported);
     }
     validate_id(&manifest.catalog.id, "catalog.id", &mut errors);
@@ -3041,14 +3041,14 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
     for offering in compiled.evidence_offerings() {
         let mut node = json!({
             "@id": offering.iri,
-            "@type": "registry_metadata:EvidenceOffering",
+            "@type": "registry_manifest:EvidenceOffering",
             "dcterms:identifier": offering.id,
             "dcterms:title": offering.title,
             "dcterms:description": offering.description,
-            "registry_metadata:evidenceType": iri_object(&offering.evidence_type_iri),
-            "registry_metadata:issuingAuthority": issuing_authority_node(&offering.issuing_authority),
-            "registry_metadata:accessKind": offering.access.kind,
-            "registry_metadata:servesEntity": serves_entity_iri(&dataset_url_from_id(&offering.dataset_id), &offering.entity),
+            "registry_manifest:evidenceType": iri_object(&offering.evidence_type_iri),
+            "registry_manifest:issuingAuthority": issuing_authority_node(&offering.issuing_authority),
+            "registry_manifest:accessKind": offering.access.kind,
+            "registry_manifest:servesEntity": serves_entity_iri(&dataset_url_from_id(&offering.dataset_id), &offering.entity),
         });
         if let Some(endpoint_url) = offering.access.endpoint_url.as_deref() {
             let mut service = json!({
@@ -3061,7 +3061,7 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             if let Some(conforms_to) = offering.access.conforms_to.as_deref() {
                 service["dcterms:conformsTo"] = json!(conforms_to);
             }
-            node["registry_metadata:evidenceService"] = service;
+            node["registry_manifest:evidenceService"] = service;
         }
         nodes.push(node);
     }
@@ -3137,7 +3137,7 @@ fn issuing_authority_node(authority: &CompiledIssuingAuthority) -> Value {
         node["@id"] = json!(iri);
     }
     if let Some(country) = authority.country.as_deref() {
-        node["registry_metadata:country"] = json!(country);
+        node["registry_manifest:country"] = json!(country);
     }
     node
 }
@@ -3166,7 +3166,7 @@ fn entity_shape(
         "dcterms:identifier": format!("{}:{}", dataset.dataset_id, entity.name),
         "sh:name": entity.name,
         "sh:nodeKind": "sh:IRI",
-        "registry_metadata:primaryKey": entity.primary_key,
+        "registry_manifest:primaryKey": entity.primary_key,
         "sh:property": properties,
     })
 }
@@ -3235,8 +3235,8 @@ fn relationship_shape(
         }),
         "sh:name": relationship.name,
         "sh:nodeKind": "sh:IRI",
-        "registry_metadata:relationshipKind": relationship.cardinality,
-        "registry_metadata:targetEntity": relationship.target,
+        "registry_manifest:relationshipKind": relationship.cardinality,
+        "registry_manifest:targetEntity": relationship.target,
         "sh:class": target_class,
     });
     if relationship.cardinality == "zero_or_one" || relationship.cardinality == "one" {
@@ -3503,7 +3503,7 @@ fn expand_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<Stri
             "dcat" => Some("http://www.w3.org/ns/dcat#"),
             "dcterms" => Some("http://purl.org/dc/terms/"),
             "odrl" => Some("http://www.w3.org/ns/odrl/2/"),
-            "registry_metadata" => Some("https://registry-metadata.dev/ns#"),
+            "registry_manifest" => Some("https://jeremi.github.io/registry-manifest/ns#"),
             "registry_relay" => Some("https://registry-relay.dev/ns#"),
             _ => None,
         })?;
@@ -3712,7 +3712,7 @@ fn jsonld_context() -> Value {
         "odrl": "http://www.w3.org/ns/odrl/2/",
         "sh": "http://www.w3.org/ns/shacl#",
         "skos": "http://www.w3.org/2004/02/skos/core#",
-        "registry_metadata": "https://registry-metadata.dev/ns#",
+        "registry_manifest": "https://jeremi.github.io/registry-manifest/ns#",
         "xsd": "http://www.w3.org/2001/XMLSchema#",
         "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },
@@ -3807,10 +3807,10 @@ fn jsonld_context_with_evidence_terms() -> Value {
             "cccev:isDerivedFrom",
             "cccev:isSpecifiedIn",
             "cccev:specifiesEvidenceType",
-            "registry_metadata:evidenceType",
-            "registry_metadata:evidenceService",
-            "registry_metadata:issuingAuthority",
-            "registry_metadata:servesEntity",
+            "registry_manifest:evidenceType",
+            "registry_manifest:evidenceService",
+            "registry_manifest:issuingAuthority",
+            "registry_manifest:servesEntity",
         ] {
             object.insert(term.to_string(), json!({ "@type": "@id" }));
         }

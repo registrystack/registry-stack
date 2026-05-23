@@ -28,13 +28,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test core
-        run: cargo test -p registry-metadata-core
+        run: cargo test -p registry-manifest-core
 
       - name: Test CLI
-        run: cargo test -p registry-metadata-cli
+        run: cargo test -p registry-manifest-cli
 
       - name: Validate profile fixtures
-        run: cargo run -p registry-metadata-cli -- validate-profiles profiles
+        run: cargo run -p registry-manifest-cli -- validate-profiles profiles
 
       - name: Build
         run: cargo build --workspace --all-targets

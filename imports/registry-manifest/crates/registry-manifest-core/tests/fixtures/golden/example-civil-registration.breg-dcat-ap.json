@@ -96,7 +96,7 @@
     "rdfs:seeAlso": {
       "@type": "@id"
     },
-    "registry_metadata": "https://registry-metadata.dev/ns#",
+    "registry_manifest": "https://jeremi.github.io/registry-manifest/ns#",
     "sh": "http://www.w3.org/ns/shacl#",
     "sh:class": {
       "@type": "@id"
@@ -323,7 +323,7 @@
       "@type": "sh:NodeShape",
       "dcterms:identifier": "vital-events:person",
       "dcterms:isPartOf": "#dataset-vital-events",
-      "registry_metadata:primaryKey": "person_id",
+      "registry_manifest:primaryKey": "person_id",
       "sh:name": "person",
       "sh:nodeKind": "sh:IRI",
       "sh:property": [
@@ -366,7 +366,7 @@
       "@type": "sh:NodeShape",
       "dcterms:identifier": "vital-events:vital_event",
       "dcterms:isPartOf": "#dataset-vital-events",
-      "registry_metadata:primaryKey": "event_id",
+      "registry_manifest:primaryKey": "event_id",
       "sh:name": "vital_event",
       "sh:nodeKind": "sh:IRI",
       "sh:property": [

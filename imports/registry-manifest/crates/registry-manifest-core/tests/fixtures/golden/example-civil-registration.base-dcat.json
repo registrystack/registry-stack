@@ -96,7 +96,7 @@
     "rdfs:seeAlso": {
       "@type": "@id"
     },
-    "registry_metadata": "https://registry-metadata.dev/ns#",
+    "registry_manifest": "https://jeremi.github.io/registry-manifest/ns#",
     "sh": "http://www.w3.org/ns/shacl#",
     "sh:class": {
       "@type": "@id"

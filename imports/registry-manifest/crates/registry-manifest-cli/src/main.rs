@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use registry_metadata_core::{
+use registry_manifest_core::{
     compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
     render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
     render_evidence_offering, render_evidence_offerings, render_ogc_records_items,
@@ -27,7 +27,7 @@ fn run() -> Result<(), String> {
         Some("validate") => {
             let path = args.get(1).ok_or_else(usage)?;
             let manifest = load_manifest(path)?;
-            registry_metadata_core::validate_manifest(&manifest).map_err(format_metadata_error)?;
+            registry_manifest_core::validate_manifest(&manifest).map_err(format_metadata_error)?;
             println!("metadata manifest valid: {path}");
             Ok(())
         }
@@ -201,7 +201,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         })
         .collect::<Vec<_>>();
     let index = serde_json::json!({
-        "schema_version": "registry-metadata-index/v1",
+        "schema_version": "registry-manifest-index/v1",
         "manifest": "/metadata/metadata.yaml",
         "catalog": "/metadata/catalog.json",
         "evidence_offerings": "/metadata/evidence-offerings.json",
@@ -290,7 +290,7 @@ fn validate_profile_descriptor(
     descriptor: &ProfileDescriptor,
     errors: &mut Vec<String>,
 ) {
-    if descriptor.schema_version != "registry-metadata-profile/v1" {
+    if descriptor.schema_version != "registry-manifest-profile/v1" {
         errors.push(format!(
             "{}: metadata.profile.version_unsupported",
             path.display()
@@ -369,7 +369,7 @@ fn validate_profile_fixture(
             return;
         }
     };
-    if let Err(error) = registry_metadata_core::validate_manifest(&manifest) {
+    if let Err(error) = registry_manifest_core::validate_manifest(&manifest) {
         errors.push(format!(
             "{}: {}",
             fixture_path.display(),
@@ -483,7 +483,7 @@ fn load_manifest(path: impl AsRef<Path>) -> Result<MetadataManifest, String> {
     serde_yml::from_str(&raw).map_err(|error| format!("metadata.manifest.parse_failed: {error}"))
 }
 
-fn manifest_entities(manifest: &MetadataManifest) -> Vec<&registry_metadata_core::EntityManifest> {
+fn manifest_entities(manifest: &MetadataManifest) -> Vec<&registry_manifest_core::EntityManifest> {
     manifest
         .datasets
         .iter()
@@ -638,7 +638,7 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
 }
 
 fn ensure_dcat_profile_available(
-    compiled: &registry_metadata_core::CompiledMetadata,
+    compiled: &registry_manifest_core::CompiledMetadata,
     profile: &str,
 ) -> Result<(), String> {
     if matches!(profile, "dcat" | "dcat-ap") {
@@ -672,5 +672,5 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: registry-metadata validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|shacl|json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--offering <id>] | publish <metadata.yaml> --out <dir>".to_string()
+    "usage: registry-manifest validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|shacl|json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--offering <id>] | publish <metadata.yaml> --out <dir>".to_string()
 }

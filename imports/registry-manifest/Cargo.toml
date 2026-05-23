@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "crates/registry-metadata-core",
-    "crates/registry-metadata-cli",
+    "crates/registry-manifest-core",
+    "crates/registry-manifest-cli",
 ]
 resolver = "2"
 
@@ -9,8 +9,8 @@ resolver = "2"
 version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
-description = "Portable metadata contracts, validators, and renderers for registry catalogs."
-repository = "https://github.com/jeremi/registry-metadata"
+description = "Portable manifest contracts, validators, and renderers for registry catalogs."
+repository = "https://github.com/jeremi/registry-manifest"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -2,7 +2,7 @@
 
 ## 0.1.0
 
-- Cut Registry Metadata into an independent Cargo workspace with `registry-metadata-core` and `registry-metadata-cli`.
+- Cut Registry Manifest into an independent Cargo workspace with `registry-manifest-core` and `registry-manifest-cli`.
 - Added portable metadata validation, renderer tests, CLI tests, profile fixture validation, and static publication commands.
 - Added repository bootstrap files: Apache-2.0 license, security policy, CODEOWNERS, Dependabot, and GitHub Actions CI.
 

@@ -1,5 +1,5 @@
 [package]
-name = "registry-metadata-core"
+name = "registry-manifest-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,10 +7,12 @@ description.workspace = true
 repository.workspace = true
 publish = false
 
+[[bin]]
+name = "registry-manifest"
+path = "src/main.rs"
+
 [dependencies]
+registry-manifest-core = { version = "0.1.1", path = "../registry-manifest-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
-thiserror = { version = "2" }
-
-[dev-dependencies]
 serde_yml = { version = "0.0.12" }

@@ -6,7 +6,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_registry-metadata")
+    env!("CARGO_BIN_EXE_registry-manifest")
 }
 
 fn workspace_root() -> PathBuf {
@@ -22,7 +22,7 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("registry-metadata-{name}-{nonce}"));
+    let path = std::env::temp_dir().join(format!("registry-manifest-{name}-{nonce}"));
     fs::create_dir_all(&path).expect("temp dir");
     path
 }
@@ -80,7 +80,7 @@ fn validate_reports_stable_manifest_error_codes() {
     fs::write(
         &unsupported,
         r#"
-schema_version: registry-metadata/v0
+schema_version: registry-manifest/v0
 catalog:
   id: demo
   base_url: https://metadata.example.test/
@@ -103,7 +103,7 @@ datasets: []
     fs::write(
         &invalid,
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: demo
   base_url: metadata.example.test
@@ -148,7 +148,7 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
     let index: serde_json::Value =
         serde_json::from_slice(&fs::read(out.join("index.json")).expect("index reads"))
             .expect("index json");
-    assert_eq!(index["schema_version"], "registry-metadata-index/v1");
+    assert_eq!(index["schema_version"], "registry-manifest-index/v1");
     assert_eq!(index["dcat_profiles"], serde_json::json!([]));
     assert_eq!(index["evidence_offering_documents"], serde_json::json!([]));
     assert_eq!(
@@ -168,7 +168,7 @@ fn render_outputs_evidence_offerings_and_policy_artifacts() {
     fs::write(
         &manifest,
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: evidence-and-policy
   base_url: https://metadata.example.test
@@ -300,7 +300,7 @@ fn validate_profiles_allows_empty_unsupported_mappings() {
     fs::write(
         profile_dir.join("profile.yaml"),
         r#"
-schema_version: registry-metadata-profile/v1
+schema_version: registry-manifest-profile/v1
 profile:
   id: empty-unsupported
   version: "1"
@@ -317,7 +317,7 @@ fixtures:
     fs::write(
         fixtures_dir.join("metadata.yaml"),
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: empty-unsupported
   base_url: https://metadata.example.test
