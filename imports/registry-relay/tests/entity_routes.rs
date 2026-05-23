@@ -1132,23 +1132,6 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
     assert_eq!(body["code"], "pagination.cursor_invalidated");
 }
 
-#[tokio::test]
-async fn legacy_verify_route_is_removed() {
-    let server = server_with_query().await;
-
-    for url in [
-        "/datasets/social_registry/individual/verify",
-        "/datasets/social_registry/individual/verify?individual_id=p-1",
-        "/datasets/social_registry/individual/verify?id=p-1&extra=1",
-        "/datasets/social_registry/individual/verify?id.in=p-1,p-2",
-    ] {
-        let resp = server
-            .get(url)
-            .add_header("data-purpose", "https://data.example.test/purposes/testing")
-            .await;
-        resp.assert_status(StatusCode::NOT_FOUND);
-    }
-}
 
 #[tokio::test]
 async fn verify_only_principal_cannot_read_rows_or_schema() {
@@ -1647,29 +1630,6 @@ async fn evidence_verification_enforces_ruleset_specific_scope() {
     assert_eq!(body["decision"], "match");
 }
 
-#[tokio::test]
-async fn legacy_claim_verification_routes_are_removed() {
-    let server = server_with_query().await;
-
-    for url in [
-        "/datasets/social_registry/individual/claim-verification-rulesets",
-        "/datasets/social_registry/individual/claim-verification-rulesets/exact-name",
-    ] {
-        let resp = server.get(url).await;
-        resp.assert_status(StatusCode::NOT_FOUND);
-    }
-
-    let post = server
-        .post("/datasets/social_registry/individual/claim-verifications")
-        .add_header("data-purpose", "https://data.example.test/purposes/testing")
-        .json(&serde_json::json!({
-            "claims": {
-                "given_name": "Ben"
-            }
-        }))
-        .await;
-    post.assert_status(StatusCode::NOT_FOUND);
-}
 
 #[tokio::test]
 async fn evidence_verification_subject_targeting_requires_targeted_scope() {

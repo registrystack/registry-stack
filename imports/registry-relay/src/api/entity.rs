@@ -13,7 +13,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Extension, Router};
 use hmac::{Mac, SimpleHmac};
 use serde::{Deserialize, Serialize};
@@ -126,22 +126,6 @@ where
 {
     Router::new()
         .route("/datasets/{dataset_id}/{entity}/schema", get(entity_schema))
-        .route(
-            "/datasets/{dataset_id}/{entity}/verify",
-            get(legacy_removed),
-        )
-        .route(
-            "/datasets/{dataset_id}/{entity}/claim-verifications",
-            post(legacy_removed),
-        )
-        .route(
-            "/datasets/{dataset_id}/{entity}/claim-verification-rulesets",
-            get(legacy_removed),
-        )
-        .route(
-            "/datasets/{dataset_id}/{entity}/claim-verification-rulesets/{ruleset}",
-            get(legacy_removed),
-        )
         .route("/datasets/{dataset_id}/{entity}", get(entity_collection))
         .route(
             "/datasets/{dataset_id}/{entity}/{id}/{relationship}",
@@ -150,24 +134,6 @@ where
         .route("/datasets/{dataset_id}/{entity}/{id}", get(entity_record))
 }
 
-async fn legacy_removed() -> Response {
-    let mut response = (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "type": "https://data.example.gov/problems/entity/route_removed",
-            "title": "Route removed",
-            "status": StatusCode::NOT_FOUND.as_u16(),
-            "detail": "This verification route has been removed. Use evidence-offering discovery and verification instead.",
-            "code": "entity.route_removed",
-        })),
-    )
-        .into_response();
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/problem+json"),
-    );
-    response
-}
 
 #[derive(Debug, Deserialize)]
 struct EntityPath {

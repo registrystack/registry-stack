@@ -401,56 +401,6 @@ fn audit_record_for(sink: &InMemorySink, path: &str) -> Value {
 const INDIVIDUAL_RECORD_AUDIT_PATH: &str = "/datasets/social_registry/individual/{id}";
 
 // ---------------------------------------------------------------------------
-// Removed legacy /verify route
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn legacy_verify_path_is_removed_without_accept_header() {
-    let harness = build_entity_harness("PROVENANCE_ISSUANCE_VERIFY_PLAIN_JWK");
-    let resp = harness
-        .server
-        .get("/datasets/social_registry/individual/verify?id=ind-1")
-        .await;
-    resp.assert_status(StatusCode::NOT_FOUND);
-    let body: Value = resp.json();
-    assert_eq!(body["code"], "entity.route_removed");
-}
-
-#[tokio::test]
-async fn legacy_verify_path_does_not_issue_signed_vc_when_accept_opts_in() {
-    let harness = build_entity_harness("PROVENANCE_ISSUANCE_VERIFY_VC_JWK");
-    let resp = harness
-        .server
-        .get("/datasets/social_registry/individual/verify?id=ind-1")
-        .add_header("accept", "application/vc+jwt")
-        .await;
-    resp.assert_status(StatusCode::NOT_FOUND);
-    assert_ne!(
-        resp.header("content-type").to_str().unwrap_or(""),
-        "application/vc+jwt"
-    );
-    let body: Value = resp.json();
-    assert_eq!(body["code"], "entity.route_removed");
-}
-
-#[tokio::test]
-async fn legacy_verify_path_does_not_emit_provenance_audit_block() {
-    let harness = build_entity_harness("PROVENANCE_ISSUANCE_VERIFY_NO_AUDIT_JWK");
-    let _resp = harness
-        .server
-        .get("/datasets/social_registry/individual/verify?id=ind-1")
-        .await;
-    let record = audit_record_for(
-        &harness.audit_sink,
-        "/datasets/social_registry/individual/verify",
-    );
-    assert!(
-        record.get("provenance").is_none(),
-        "plain JSON path must not surface a provenance audit block; got {record}"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // /datasets/{dataset_id}/{entity}/{id}
 // ---------------------------------------------------------------------------
 
