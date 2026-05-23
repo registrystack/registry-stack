@@ -52,6 +52,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Install cargo-nextest
+        # Pinned to 0.9.136 so CI matches the version contributors install
+        # via `cargo install cargo-nextest --locked`. The installer is
+        # hosted by the nextest project; the binary is pre-built.
+        run: |
+          curl -LsSf https://get.nexte.st/0.9.136/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -62,15 +69,20 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test -j 2
+        run: cargo nextest run --build-jobs 2
 
       - name: Run all-features tests
-        run: cargo test --all-features -j 2
+        run: cargo nextest run --all-features --build-jobs 2
+
+      - name: Run doctests
+        # nextest does not execute doctests; this step keeps doctest
+        # coverage alive in case any are added later.
+        run: cargo test --all-features --doc
 
       - name: Export sample DCAT-AP catalog
         env:
           REGISTRY_RELAY_EXPORT_DCAT_AP_PATH: target/dcat-ap/catalog.dcat-ap.jsonld
-        run: cargo test --test catalog_entity export_generated_dcat_ap_catalog_when_path_is_set
+        run: cargo nextest run --test catalog_entity export_generated_dcat_ap_catalog_when_path_is_set
 
       - name: Validate sample DCAT-AP catalog with local SHACL smoke profile
         run: |
@@ -123,10 +135,15 @@ jobs:
         with:
           key: postgres-integration
 
+      - name: Install cargo-nextest
+        # Pinned to 0.9.136; see build-and-test job for rationale.
+        run: |
+          curl -LsSf https://get.nexte.st/0.9.136/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+
       - name: Run Postgres datasource integration tests
         env:
           DATA_GATE_POSTGRES_TEST_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-        run: cargo test --test postgres_snapshot -- --ignored --nocapture
+        run: cargo nextest run --test postgres_snapshot --run-ignored=ignored-only --no-capture
 
   # ── Container image build ────────────────────────────────────────────────
   docker-build:
