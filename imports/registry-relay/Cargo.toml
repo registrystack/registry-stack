@@ -137,7 +137,7 @@ rand_core = { version = "0.6", features = ["std"] }
 toml = { version = "1.1" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI only smoke-checks `cargo bench --no-run`.
-criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 
 [[bench]]
 name = "auth_bench"
