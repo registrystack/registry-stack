@@ -19,3 +19,10 @@ updates:
       github-actions:
         patterns:
           - "*"
+  # Track base-image digest bumps so the Dockerfiles' pinned SHA tags
+  # do not silently age out of upstream security updates.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

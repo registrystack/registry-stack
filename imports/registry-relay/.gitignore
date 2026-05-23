@@ -31,6 +31,9 @@ demo/output/
 # Claude Code local state (worktrees, scratch)
 .claude/
 
+# Local security-review scratch directory
+/.security-review/
+
 # Runtime dataset caches
 cache/
 

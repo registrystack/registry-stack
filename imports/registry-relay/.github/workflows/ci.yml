@@ -18,6 +18,11 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
 
+# Default the GITHUB_TOKEN granted to each job to read-only on contents.
+# Individual jobs can widen this when they truly need write access.
+permissions:
+  contents: read
+
 # Third-party actions are pinned to major version tags.
 # Maintainers review tag movements; SHA pins are equivalent but harder to audit.
 # dtolnay/rust-toolchain and Swatinem/rust-cache are well-maintained
