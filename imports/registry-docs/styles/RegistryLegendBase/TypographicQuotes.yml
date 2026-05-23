@@ -1,0 +1,13 @@
+extends: existence
+message: "Use straight quotes and apostrophes instead of typographic quotes."
+level: error
+nonword: true
+tokens:
+  - '“'
+  - '”'
+  - '‘'
+  - '’'
+  - '«'
+  - '»'
+  - '‹'
+  - '›'

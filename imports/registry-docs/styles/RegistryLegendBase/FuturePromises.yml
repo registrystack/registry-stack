@@ -1,0 +1,8 @@
+extends: existence
+message: "Avoid promising future capability with '%s'. State current behavior, use 'not yet supported', or link to the issue."
+level: warning
+ignorecase: true
+tokens:
+  - '\b(?:should|will)\s+(?:soon|eventually|later)\b'
+  - '\b(?:should|will)\s+be\s+(?:available|supported|added|implemented|released|enabled|included)\b'
+  - '\b(?:should|will)\s+(?:support|implement|release|enable)\s+(?:this|that|these|those|the|a|an)\b'

@@ -1,0 +1,7 @@
+extends: existence
+message: "Use 'you' for reader actions and the project name for system behavior instead of first-person project voice."
+level: warning
+ignorecase: false
+tokens:
+  - '\b[Ww]e\b'
+  - '\b[Oo]ur(?:s)?\b'

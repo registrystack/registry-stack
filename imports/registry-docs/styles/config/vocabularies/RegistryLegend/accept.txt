@@ -1,0 +1,32 @@
+# Project names and technical terms that Vale should treat as intentional.
+Astro
+CCCEV
+Codex
+DCAT
+GitHub
+GitLab
+MDX
+OGC API Records
+OpenAPI
+Redoc
+Redocly
+Registry Atlas
+Registry Lab
+Registry Legend
+Registry Manifest
+Registry Relay
+Registry Witness
+SHACL
+SD-JWT VC
+Starlight
+TypeScript
+Vale
+frontmatter
+llms\.txt
+registry-atlas
+registry family
+registry-lab
+registry-manifest
+registry-relay
+registry-witness
+standards\.yaml

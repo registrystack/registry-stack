@@ -1,0 +1,9 @@
+extends: existence
+message: "Do not use 'here' or 'click here' as link text. Use the linked page's title."
+level: warning
+ignorecase: true
+nonword: true
+tokens:
+  - '\[here\]\('
+  - '\[click here\]\('
+  - '\[this page\]\('

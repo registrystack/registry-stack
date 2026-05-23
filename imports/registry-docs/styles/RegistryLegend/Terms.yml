@@ -1,0 +1,10 @@
+extends: existence
+message: "Use the current Registry Legend project labels unless this is marked historical."
+level: warning
+ignorecase: false
+tokens:
+  - decentralized evidence demo
+  - Evidence Server
+  - registry_relay
+  - dataspace-atlas
+  - registry-metadata
