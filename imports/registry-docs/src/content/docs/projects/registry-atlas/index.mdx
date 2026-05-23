@@ -1,0 +1,208 @@
+---
+title: Registry Atlas overview
+description: Explains what Registry Atlas is, its inspection model for catalog and discovery artifacts, the strict capability discovery engine, and its relationship to the rest of the registry family.
+status: draft
+owner: registry-atlas
+source_repos:
+  - registry-atlas
+last_reviewed: "2026-05-23"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - odrl
+---
+
+Registry Atlas is a browser workbench for inspecting what a registry publishes before you write
+integration code.
+It fetches and parses the catalog, schemas, policies, and evidence offerings a registry exposes
+at its metadata endpoints, shows you the discovered assets, and lets you run strict capability
+queries to check whether the registry actually emits what it claims to emit.
+
+Atlas does not run queries against live person-level data.
+It does not make authorization decisions.
+It is a discovery and review tool, not a data access gateway.
+
+## What Atlas is made of
+
+`registry-atlas` is a browser single-page application (SPA) built with React 19, TypeScript,
+and Vite.
+A companion Node.js/Express server runs alongside the SPA as a same-origin fetch proxy.
+The semantic analysis engine is compiled to WebAssembly (WASM) from three Rust crates:
+`semantic-asset-discovery-core`, `semantic-asset-discovery`, and `system-capability-discovery`.
+
+The SPA and proxy are separate processes.
+In development, `pnpm dev` starts both concurrently:
+the Vite dev server on port `5177` and the Express proxy on port `3717`.
+See [`package.json`](https://github.com/jeremi/registry-atlas/blob/main/package.json) for
+the full script list.
+
+## The inspection model
+
+When you point Atlas at a registry metadata endpoint (a Data Catalog Vocabulary (DCAT) catalog
+URL), Atlas performs discovery in layers:
+
+1. The fetch proxy downloads the catalog document and each linked artifact it finds
+   (distributions, SHACL shapes, JSON Schema files, ODRL policies, OGC API Records landing pages,
+   OpenAPI descriptions).
+2. The Rust-compiled WASM core classifies each fetched artifact into a `SemanticAsset` kind:
+   `catalog`, `dataset`, `distribution`, `data_service`, `json_schema`, `shacl`, `policy`,
+   `open_api`, `api_description`, `class`, or `metadata_index`.
+3. The results are assembled into a `DiscoveryReport`, the portable evidence contract the
+   capability discovery layer consumes.
+
+The UI presents the discovered material across four workspace tabs:
+
+- **Overview**: discovery summary, recognized profiles, validation status, and gaps.
+- **Registry**: searchable list of discovered datasets, services, distributions, and catalogs.
+- **Capabilities**: strict capability query interface.
+- **Evidence**: raw `DiscoveryReport` JSON, artifact tree, and a comparison view that separates
+  core-recognized metadata from publisher-specific metadata.
+
+The comparison view offers three modes: `core` (only DCAT-standard recognized fields),
+`publisher` (registry-specific extensions), and `diff` (side-by-side).
+
+## The fetch proxy
+
+The proxy runs at `http://127.0.0.1:3717` and exposes a single endpoint:
+
+```text
+GET /api/proxy?url=<target-url>
+```
+
+The proxy is not a general-purpose relay.
+It enforces a set of protective rules documented in
+[`server/index.mjs`](https://github.com/jeremi/registry-atlas/blob/main/server/index.mjs):
+
+- Only `http://` and `https://` scheme URLs are accepted.
+  `data:`, `file:`, and `ftp:` URLs are rejected.
+- Private-network targets (RFC 1918 ranges, loopback, link-local, and IPv6 ULAs) are blocked
+  in production mode unless `ATLAS_PROXY_ALLOW_LOCAL=1` is set.
+  This behavior is controlled by `NODE_ENV` and the `ATLAS_PROXY_ALLOW_LOCAL` environment variable.
+- Embedded credentials are stripped from the target URL before the upstream request is made.
+- The response content type must be in the allowed set:
+  `application/json`, `application/ld+json`, `application/schema+json`,
+  `application/vnd.oai.openapi+json`, `application/yaml`, `text/*`, and related types.
+- Response size is capped at 2 MB by default (configurable via `ATLAS_PROXY_MAX_BYTES`).
+- Redirects are followed up to three hops by default (configurable via `ATLAS_PROXY_REDIRECT_LIMIT`).
+- Upstream requests time out after 8 seconds by default (configurable via `ATLAS_PROXY_TIMEOUT_MS`).
+- DNS lookup is pinned before the HTTP request to prevent time-of-check/time-of-use race conditions.
+
+Error responses use `application/problem+json` with machine-readable codes
+(`invalid_url`, `dns_lookup_failed`, `private_network_blocked`, `upstream_timeout`,
+`response_too_large`, `content_type_blocked`).
+
+## Bearer token handling
+
+Atlas accepts an optional bearer token in the session URL entry field.
+The token is forwarded as an `Authorization: Bearer` header in the proxy request and is
+discarded when the browser session ends.
+Registry Atlas does not write bearer tokens to `localStorage`, `sessionStorage`, IndexedDB,
+or proxy logs.
+Callers must re-supply tokens in each browser session.
+{/* TODO[evidence]: README.md line 31-32 states tokens are never written to browser storage or
+     server logs; server/index.mjs line 246-247 covers same-origin-only forwarding;
+     no server-side logging of the Authorization header found in reviewed commit. */}
+
+## The strict capability discovery engine
+
+The capability discovery engine answers questions such as:
+
+```text
+Where can I find if someone is registered as a farmer?
+What route would a properly authorized system use to access that answer?
+What evidence supports the match, and what is still missing?
+```
+
+The engine is strict in v0.1.
+"Strict" means:
+
+- No fuzzy matching, synonym expansion, approximate semantic ranking, or hidden query rewriting.
+- No embeddings, language models, ontology reasoners, or large search infrastructure.
+- Every match is backed by machine-verifiable evidence: exact label match, exact IRI match,
+  or an explicit reviewed mapping.
+- Documented canonicalization (whitespace trim, Unicode normalization, case fold for labels,
+  compact IRI expansion) is applied before comparison.
+  Stemming, edit distance, and semantic similarity are not applied.
+
+The input is a `CapabilityQuery` carrying named `InformationNeed` objects.
+Each need lists accepted `Term` values (label, IRI, or field name) or references to reviewed
+mapping sets.
+The engine does not interpret free-form text.
+
+The output is a set of **candidate answer routes**, not authority claims.
+A candidate route includes confidence, an access endpoint URL, evidence references, gaps
+(for example, `LegalBasisUnknown`, `AuthorityUnknown`, `FreshnessUnknown`), and review flags.
+A candidate route does not mean the route is authoritative, that the caller is authorized,
+or that the legal basis is sufficient.
+These stronger claims require reviewed mappings, human governance state, or first-class parser
+support that is not yet implemented in v0.1.
+
+The full normative contract for the capability discovery engine is in
+[`SYSTEM_CAPABILITY_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SYSTEM_CAPABILITY_DISCOVERY_SPEC.md).
+
+## Semantic asset discovery and fixtures
+
+Registry Atlas ships bundled fixtures for offline use and as validated test inputs.
+The key fixture files are:
+
+- [`src/fixtures/registry-relay-system-capability.envelope.json`](https://github.com/jeremi/registry-atlas/blob/main/src/fixtures/registry-relay-system-capability.envelope.json):
+  a `DiscoveryRunEnvelope` produced by a live harvest of the Registry Relay all-standards demo.
+- [`fixtures/system-capability/registry-relay-all-standards.report.json`](https://github.com/jeremi/registry-atlas/blob/main/fixtures/system-capability/registry-relay-all-standards.report.json):
+  a `DiscoveryReport` with all known asset kinds represented.
+
+A `DiscoveryRunEnvelope` wraps a `DiscoveryReport` with host-side fetch state:
+the fetch summary (artifact count, asset count, failed artifact count), rejected fetch URLs,
+and per-artifact fetch metadata.
+A `DiscoveryReport` alone is the portable evidence contract that can be consumed without any
+host state.
+
+## What Atlas owns and does not own
+
+Registry Atlas owns:
+
+- The browser UI for published catalog and registry discovery artifacts.
+- The local fetch proxy for inspected metadata endpoints.
+- Strict capability queries over accepted machine terms.
+- Semantic asset discovery fixtures and envelopes.
+
+Registry Atlas does not own:
+
+- Registry runtime APIs (those belong to Registry Relay and Registry Witness).
+- Natural-language inference in v0.1 capability discovery (not yet supported).
+- Persistent token storage in browser or proxy logs (explicit non-goal by design).
+
+This boundary is recorded in
+[`src/data/projects.yaml`](https://github.com/jeremi/registry-legend/blob/main/src/data/projects.yaml)
+in this repository.
+
+## Relationship to Registry Lab
+
+Registry Lab runs Registry Relay, Registry Witness, the static metadata publisher, and a demo
+client together in a single `docker compose up`.
+Atlas is not included in the Registry Lab compose topology at v0.1.
+To use Atlas with the Registry Lab demo, start Atlas separately with `pnpm dev` and point its
+URL field at the Relay metadata endpoint that the compose topology exposes.
+
+## Status and v0.1 caveats
+
+Registry Atlas is at v0.1.
+Several capabilities described in
+[`SYSTEM_CAPABILITY_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SYSTEM_CAPABILITY_DISCOVERY_SPEC.md)
+are not yet supported:
+
+- The query assist layer (natural-language search, synonym suggestion, embedding-based ranking)
+  is deferred to a later optional layer.
+- Reviewed mappings are defined in the spec but no ingestion interface or UI exists in v0.1.
+- The governance workflow for reviewed capability assertions is not yet implemented.
+- Field-level discovery lineage (multi-hop link visualization) is not yet surfaced in the UI.
+- Refresh indicators showing when data was last fetched are not yet present in the UI.
+
+## Next
+
+- [Run Atlas locally](./run-locally/)
+- [Inspect a registry](./inspect-a-registry/)
+- [Registry Atlas reference](./reference/)

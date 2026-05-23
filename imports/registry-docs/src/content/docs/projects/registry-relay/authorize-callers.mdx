@@ -1,0 +1,285 @@
+---
+title: Authorize callers to Registry Relay
+description: How to configure API-key auth and OIDC resource-server auth, assign scopes, and verify that requests without credentials are rejected.
+status: draft
+owner: registry-relay
+source_repos:
+  - registry-relay
+last_reviewed: "2026-05-23"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - openapi
+---
+
+Registry Relay runs in exactly one auth mode at a time.
+This page covers both supported modes: API-key auth and OIDC resource-server auth.
+Use it when you need to configure callers for a new deployment or rotate credentials
+in an existing one.
+
+## When to use this
+
+Use API-key mode when you control both sides of the integration and do not have an
+existing OpenID Connect / OAuth 2.0 (OIDC/OAuth2) Identity Provider (IdP).
+Use OIDC mode when callers already hold JWTs issued by a central IdP and you need to
+integrate Registry Relay into that trust fabric.
+
+A given deployment runs in exactly one mode.
+Mixed-mode operation is not supported.
+[Source: docs/configuration.md OIDC section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+## Prerequisites
+
+- A running or buildable Registry Relay instance (see
+  [Run Registry Relay locally](../run-locally/) for setup).
+- Access to the runtime config file (`config.yaml`).
+- Access to the deployment secret store where environment variables are set.
+- For OIDC mode: a configured OIDC/OAuth2 IdP with a machine client (service account)
+  that can perform client credentials grants.
+
+## Part 1: API-key auth
+
+### How it works
+
+Each API key has three parts: a stable `id`, an environment variable name (`hash_env`)
+that holds the SHA-256 fingerprint of the raw key, and a list of `scopes`.
+
+Registry Relay loads fingerprints from environment variables at startup.
+It hashes any presented raw key with SHA-256 and compares against the loaded
+fingerprints.
+The raw key is never stored in YAML or logged.
+[Source: docs/configuration.md API keys section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+When both `Authorization: Bearer` and `X-Api-Key` are present, `Authorization` wins.
+[Source: docs/api.md authentication section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+### Steps
+
+**1. Generate a raw key and its fingerprint.**
+
+```sh
+RAW_KEY="$(openssl rand -base64 32)"
+FINGERPRINT="sha256:$(printf '%s' "$RAW_KEY" | shasum -a 256 | awk '{print $1}')"
+printf 'raw key:     %s\n' "$RAW_KEY"
+printf 'fingerprint: %s\n' "$FINGERPRINT"
+```
+
+Give the raw key only to the authorized caller.
+Store the fingerprint in your deployment secret store under a descriptive name,
+for example `INTAKE_SERVICE_API_KEY_HASH`.
+
+**2. Add the key to the config.**
+
+```yaml
+auth:
+  mode: api_key
+  api_keys:
+    - id: intake_service
+      hash_env: INTAKE_SERVICE_API_KEY_HASH
+      scopes:
+        - social_registry:metadata
+        - social_registry:rows
+```
+
+`hash_env` is the environment variable name, not the value.
+The value in that variable must start with `sha256:` followed by 64 lowercase hex characters.
+[Source: docs/configuration.md API keys section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+**3. Export the fingerprint environment variable and restart.**
+
+```sh
+export INTAKE_SERVICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
+just run
+```
+
+Keyring changes take effect only after a process restart.
+Live keyring reload is not supported in v0.
+[Source: docs/ops.md key provisioning section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
+
+**4. Assign the narrowest scope that lets the caller do its job.**
+
+| Scope suffix | Allows |
+| --- | --- |
+| `metadata` | Catalog, dataset summaries, entity schema, and OpenAPI visibility for that dataset |
+| `rows` | Entity collection, single-record, and relationship reads |
+| `evidence_verification` | Verification through declared evidence offerings |
+| `aggregate` | Aggregate discovery and configured aggregate execution |
+| `admin` | Admin listener operations (reload, metrics) |
+
+[Source: docs/api.md scopes table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+### Audit fields for API-key auth
+
+For API-key requests, each audit record contains:
+
+- `auth_mode: "api_key"`
+- `principal_id`: the `id` field from the matching `auth.api_keys[]` entry
+  (for example, `"intake_service"`).
+- `scopes_used`: the scopes checked for this particular request.
+
+[Source: src/audit/mod.rs AuditRecord struct.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+
+## Part 2: OIDC resource-server auth
+
+### How it works
+
+In OIDC mode, callers send a bearer JWT.
+Registry Relay validates it against the configured IdP's JWKS:
+it checks standard claims (`iss`, `aud`, `exp`, optional `nbf`), looks up the signing
+key by `kid`, and verifies the signature.
+The `principal_id` is taken from the token's `sub` claim (preferred), then `client_id`,
+then `azp`.
+[Source: docs/api.md OIDC bearer JWT section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+### Steps
+
+**1. Configure the OIDC block.**
+
+```yaml
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://idp.example.gov
+    audience:
+      - registry-relay
+    discovery_url: https://idp.example.gov/.well-known/openid-configuration
+    algorithms:
+      - RS256
+    jwks_cache_ttl: 10m
+    leeway: 60s
+    scope_claim: scope
+    scope_map:
+      "role:social-registry-reader": "social_registry:rows"
+      "role:social-registry-metadata": "social_registry:metadata"
+```
+
+Supply exactly one of `discovery_url` or `jwks_url`.
+Configs that supply both or neither are rejected at startup.
+[Source: docs/configuration.md OIDC field table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+A complete drop-in OIDC config targeting a local Zitadel IdP is available at
+[`config/example.oidc.yaml`](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/config/example.oidc.yaml).
+
+**2. Map IdP roles to Relay scopes with `scope_map`.**
+
+If the IdP issues tokens with role names that differ from Registry Relay's
+`<dataset_id>:<level>` scope format, use `scope_map` to rename them before the
+scope check.
+The `scope_claim` field names the JWT claim to read (defaults to `scope`).
+The claim value may be a space-separated string (RFC 8693 / RFC 9068), a JSON
+array of strings, or a JSON object whose keys are the scope names (Zitadel's
+`urn:zitadel:iam:org:project:roles` format): all three shapes are accepted.
+[Source: docs/configuration.md scope_claim and scope_map.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+**3. Restart with the OIDC config.**
+
+```sh
+./target/release/registry-relay --config config/example.oidc.yaml
+```
+
+`discovery_url` triggers a single discovery fetch at startup to resolve `jwks_uri`.
+A failure here aborts the process so you see the IdP wiring problem immediately.
+[Source: docs/configuration.md discovery vs explicit JWKS.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+**4. Mint a token from the IdP and call a protected endpoint.**
+
+```sh
+TOKEN="$(./scripts/mint-zitadel-token.sh)"   # or your IdP's equivalent
+
+curl -si \
+  -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/metadata/catalog
+```
+
+### Audit fields for OIDC auth
+
+For OIDC requests, each audit record contains:
+
+- `auth_mode: "oidc"`
+- `principal_id`: the `sub` claim from the verified JWT (or `client_id`/`azp` as
+  fallback).
+- `scopes_used`: the Relay scopes checked for this request, after `scope_map` renaming.
+
+[Source: src/audit/mod.rs AuditRecord struct; docs/configuration.md resource-server semantics.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+
+## Verification
+
+### Confirm a protected route returns data with a valid credential
+
+API-key example:
+
+```sh
+curl -si \
+  -H "Authorization: Bearer $INTAKE_SERVICE_API_KEY" \
+  http://127.0.0.1:8080/datasets/social_registry/individual
+```
+
+Expect `200` with a JSON body.
+
+### Confirm a request without credentials is rejected
+
+```sh
+curl -si http://127.0.0.1:8080/datasets/social_registry/individual
+```
+
+Expect `401` with a Problem Details body:
+
+```json
+{
+  "type": "https://data.example.gov/problems/auth/missing_credential",
+  "title": "Missing credential",
+  "status": 401,
+  "code": "auth.missing_credential"
+}
+```
+
+[Source: docs/api.md problem details section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+### Confirm a key without the required scope is rejected
+
+The `statistics_office` key has only `metadata` and `aggregate` scopes.
+Calling a rows endpoint with it must return `403`:
+
+```sh
+curl -si \
+  -H "Authorization: Bearer $STATS_OFFICE_API_KEY" \
+  http://127.0.0.1:8080/datasets/social_registry/individual
+```
+
+Expect `403` with `code: "auth.scope_denied"` and `detail` naming the required scope.
+
+## Troubleshooting
+
+**`401 auth.missing_credential`:** The request has no `Authorization` header and no
+`X-Api-Key` header.
+Add one.
+
+**`401 auth.malformed_credential`:** The `Authorization` header is present but the
+scheme is wrong or the bearer token is empty or unparseable.
+Confirm the header value is `Bearer <token>` with a space.
+
+**`401 auth.token_expired`:** The JWT `exp` claim is in the past (after the configured
+`leeway`).
+Mint a fresh token.
+
+**`401 auth.kid_unknown`:** The JWT's `kid` header is absent from the JWKS even after
+one refresh.
+Confirm the IdP is publishing the key and that `discovery_url` or `jwks_url` points
+to the correct endpoint.
+
+**`403 auth.scope_denied`:** The credential is valid but the principal does not have
+the scope required by the endpoint.
+Add the scope to the key's `scopes` list (API-key mode) or to the token's claims via
+`scope_map` (OIDC mode), then restart.
+
+**`401` after rotating an API key:** Keyring changes require a process restart.
+The old fingerprint remains active until the process is restarted with the new config.
+[Source: docs/ops.md key rotation section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
+
+**OIDC: `401 auth.jwks_unavailable`:** The JWKS endpoint is unreachable.
+Registry Relay cannot verify any token in this state and returns `503`.
+Check IdP availability and network policy.
+
+**Granular OIDC failure codes** are documented in the
+[auth failure-code table](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+in `docs/configuration.md`.

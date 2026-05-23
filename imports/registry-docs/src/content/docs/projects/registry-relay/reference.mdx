@@ -1,0 +1,274 @@
+---
+title: Registry Relay reference
+description: Config schema keys, source binding types, metadata routes, auth modes, and audit record shape for Registry Relay v0.1.0.
+status: draft
+owner: registry-relay
+source_repos:
+  - registry-relay
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - odrl
+  - ogc-api-records
+  - sp-dci
+  - openapi
+  - w3c-did
+---
+
+Hand-maintained reference for Registry Relay v0.1.0, reviewed against commit
+[aec4394](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/README.md)
+on 2026-05-23.
+Authoritative sources are the upstream files linked from each section.
+
+## Config schema: top-level keys
+
+The config file is a single YAML document.
+Unknown fields are rejected for most blocks.
+[Source: docs/configuration.md root shape.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+| Key | Type | Required | Purpose | Evidence |
+| --- | --- | --- | --- | --- |
+| `server` | object | yes | HTTP listener addresses, CORS, cache dir, timeouts | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `catalog` | object | yes | Catalog title, base URL, publisher, `participant_id` | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `auth` | object | yes | Auth mode (`api_key` or `oidc`) and credentials | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `datasets` | array | yes | Dataset and entity configurations | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `audit` | object | yes | Audit sink (`stdout`, `file`, `syslog`) and format | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `metadata` | object | no | Path to a portable `metadata.yaml` manifest (split config) | [docs/metadata.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md) |
+| `vocabularies` | object | no | Custom vocabulary prefix mappings (compact IRIs) | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `claim_verification` | object | no | HMAC binding key for submitted claim hashing | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `evidence_verification` | object | no | Per-principal, per-offering rate-limit settings | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `provenance` | object | no | Opt-in signed Verifiable Credential issuer config | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| `standards` | object | no | Feature-gated standards adapters (SP DCI, PublicSchema) | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+
+### Selected `server` fields
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `server.bind` | `0.0.0.0:8080` | Public data-plane listener |
+| `server.admin_bind` | none | Optional private admin listener (reload, metrics) |
+| `server.cache_dir` | `./cache` | Writable cache for normalized Parquet and ingest state |
+| `server.max_source_file_bytes` | 256 MiB | Maximum bytes for any single source file or Postgres snapshot |
+| `server.xlsx_max_file_bytes` | 256 MiB | Maximum bytes for XLSX files specifically |
+| `server.request_timeout` | 30s | Per-request timeout |
+| `server.cors.allowed_origins` | empty (deny) | Explicit allowed CORS origins |
+| `server.trust_proxy.enabled` | `false` | Whether to resolve client IP from `X-Forwarded-For` |
+
+## Source binding types
+
+All source bindings are table-level.
+Table IDs are private and never appear in public API paths.
+[Source: docs/configuration.md sources section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+### File sources (CSV, XLSX, Parquet)
+
+Set `source.type: file` and provide `source.path`.
+
+| Format | `format` key | Key options | Notes |
+| --- | --- | --- | --- |
+| CSV | `format.csv` | `header_row` | `header_row: 1` when the first row contains column names |
+| XLSX | `format.xlsx` | `sheet`, `header_row`, `data_range` | Use `data_range` when the worksheet has surrounding notes |
+| Parquet | omit `format` | n/a | Loader infers from `.parquet` extension; loaded via DataFusion |
+
+Supported materialization: `snapshot` only.
+Supported refresh modes: `mtime`, `interval`, `manual`.
+
+### PostgreSQL sources
+
+Set `source.type: postgres`.
+Credentials are loaded from the environment variable named by `source.connection_env`.
+[Source: docs/configuration.md PostgreSQL sources section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+| Config key | Purpose |
+| --- | --- |
+| `source.connection_env` | Env var name holding the PostgreSQL connection string |
+| `source.table.schema` | Database schema name (for structured table sources) |
+| `source.table.name` | Database table name |
+| `source.query` | Single `SELECT` or `WITH` statement (snapshot only; no semicolons; no caller input interpolated) |
+| `source.change_token_sql` | SQL returning a change token for `mtime` refresh (snapshot only) |
+| `source.connect_timeout` | Default 5s |
+| `source.query_timeout` | Default 30s |
+| `source.live_max_connections` | Default 8 (live mode only) |
+
+Supported materilizations: `snapshot` (table or query) and `live` (structured table
+only).
+`live` is not supported for `query` sources.
+
+### Datasource capability matrix
+
+| Source | Materialization | Filters | Projection | Strong validators |
+| --- | --- | --- | --- | --- |
+| `file` | `snapshot` | gateway-side | gateway-side | yes |
+| `postgres` table or query | `snapshot` | gateway-side | gateway-side | yes |
+| `postgres` table | `live` | gateway-side | Postgres column pushdown (filter-free scans only) | no |
+
+[Source: docs/configuration.md datasource capability matrix table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+## `metadata/*` route inventory
+
+All `/metadata/*` routes require the caller's `<dataset_id>:metadata` scope.
+They expose caller-scoped views filtered by the authenticated principal's metadata
+scopes.
+They do not grant row, aggregate, evidence-verification, or admin access.
+Standard expansions used in this table: Data Catalog Vocabulary (DCAT), BRegDCAT-AP
+(SEMIC Business Register DCAT Application Profile), Shapes Constraint Language (SHACL),
+Open Digital Rights Language (ODRL), and OGC API Records (Open Geospatial Consortium
+API specification for records).
+[Source: docs/metadata.md relay endpoints section; docs/api.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
+
+| Path | Output format | Standard | Notes |
+| --- | --- | --- | --- |
+| `GET /metadata` | JSON | n/a | Landing page; links to other metadata routes |
+| `GET /metadata/catalog` | JSON | n/a | Full catalog JSON |
+| `GET /metadata/dcat` | JSON-LD (`application/ld+json`) | DCAT 3 | Base DCAT catalog with distributions and data services |
+| `GET /metadata/dcat/bregdcat-ap` | JSON-LD | BRegDCAT-AP 2.00 | Includes CPSV public service nodes, ADMS status, publisher type, spatial coverage |
+| `GET /metadata/shacl` | JSON-LD | SHACL Core | Node shapes for entity validation |
+| `GET /metadata/policies` | JSON-LD | ODRL | ODRL Offer documents for datasets visible to the caller |
+| `GET /metadata/profiles` | JSON | n/a | Application profile listing |
+| `GET /metadata/profiles/{profile}` | JSON | n/a | One application profile |
+| `GET /metadata/datasets` | JSON | n/a | Dataset listing |
+| `GET /metadata/datasets/{dataset_id}` | JSON | n/a | One dataset metadata |
+| `GET /metadata/datasets/{dataset_id}/policy` | JSON-LD | ODRL | Dataset-scoped ODRL Offer |
+| `GET /metadata/datasets/{dataset_id}/entities` | JSON | n/a | Entity listing for one dataset |
+| `GET /metadata/datasets/{dataset_id}/entities/{entity}` | JSON | n/a | One entity metadata |
+| `GET /metadata/datasets/{dataset_id}/entities/{entity}/schema` | JSON | JSON Schema Draft 2020-12 | Entity schema (caller-scoped) |
+| `GET /metadata/datasets/{dataset_id}/entities/{entity}/shacl` | JSON-LD | SHACL Core | Entity SHACL node shape |
+| `GET /metadata/schema/{dataset_id}/{entity}/schema.json` | JSON | JSON Schema Draft 2020-12 | Alternate entity schema path |
+| `GET /metadata/ogc/records` | JSON | OGC API Records | Dataset catalog records (metadata-only; feature: `ogcapi-records`) |
+| `GET /metadata/ogc/records/{record_id}` | JSON | OGC API Records | One catalog record |
+| `GET /metadata/evidence-offerings` | JSON | n/a | List of evidence offerings |
+| `GET /metadata/evidence-offerings/{offering_id}` | JSON | n/a | One evidence offering |
+
+[Source: docs/api.md auth-gated routes; docs/metadata.md relay endpoints.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+## Auth modes
+
+Registry Relay supports two modes: API key and OpenID Connect / OAuth 2.0 (OIDC)
+resource-server.
+Exactly one mode is active per deployment.
+
+| Mode | Config value | Client sends | Token source | Principal ID |
+| --- | --- | --- | --- | --- |
+| API key | `auth.mode: api_key` | `Authorization: Bearer <key>` or `X-Api-Key: <key>` | Operator-generated; SHA-256 fingerprint in env var | `auth.api_keys[].id` value |
+| OIDC resource server | `auth.mode: oidc` | `Authorization: Bearer <jwt>` | External IdP (client credentials or other grant) | JWT `sub` (preferred), then `client_id`, then `azp` |
+
+[Source: docs/api.md authentication section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+### OIDC key fields
+
+| Field | Purpose |
+| --- | --- |
+| `auth.oidc.issuer` | Compared verbatim against JWT `iss` claim |
+| `auth.oidc.audience` | One or more accepted `aud` values |
+| `auth.oidc.discovery_url` | OIDC discovery document; exactly one of `discovery_url` or `jwks_url` must be set |
+| `auth.oidc.jwks_url` | Explicit JWKS endpoint |
+| `auth.oidc.algorithms` | Accepted signature algorithms (`RS256`, `ES256`, `EdDSA`; HS* and `none` are absent) |
+| `auth.oidc.jwks_cache_ttl` | Steady-state JWKS cache TTL (default 10m) |
+| `auth.oidc.leeway` | Clock skew tolerance on `exp` and `nbf` (bounded at 5 minutes) |
+| `auth.oidc.scope_claim` | JWT claim to read scopes from (default `scope`) |
+| `auth.oidc.scope_map` | Rename IdP role names to `<dataset_id>:<level>` Relay scopes |
+| `auth.oidc.allowed_clients` | Optional allowlist matched against `azp`/`client_id` |
+| `auth.oidc.token_types` | Accepted JOSE `typ` header values (default `JWT`, `at+jwt`) |
+
+### OIDC granular failure codes
+
+| Code | HTTP | Meaning |
+| --- | --- | --- |
+| `auth.missing_credential` | 401 | No `Authorization` header |
+| `auth.malformed_credential` | 401 | Wrong scheme, empty bearer, or unparseable JWT structure |
+| `auth.token_expired` | 401 | `exp` claim is in the past (after `leeway`) |
+| `auth.token_not_yet_valid` | 401 | `nbf` claim is in the future (after `leeway`) |
+| `auth.token_signature_invalid` | 401 | JWKS key found but signature did not verify |
+| `auth.issuer_mismatch` | 401 | `iss` claim does not match `oidc.issuer` |
+| `auth.audience_mismatch` | 401 | `aud` claim does not intersect `oidc.audience` |
+| `auth.kid_unknown` | 401 | Header `kid` is absent from the JWKS even after one refresh |
+| `auth.algorithm_not_allowed` | 401 | Header `alg` is not in the configured allowlist |
+| `auth.client_not_allowed` | 403 | `azp`/`client_id` is not in `allowed_clients` |
+| `auth.invalid_credential` | 401 | JWT decode failure not covered by a more specific variant |
+| `auth.jwks_unavailable` | 503 | JWKS fetch failed; the relay cannot verify any token |
+
+[Source: docs/configuration.md granular failure codes table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+## Audit record shape
+
+Each completed request produces one JSONL record.
+Records are emitted to the configured sink (stdout, file, or syslog).
+Audit records are separate from operational logs.
+[Source: src/audit/mod.rs AuditRecord struct.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `ts` | string | ISO-8601 UTC with millisecond precision, trailing `Z` |
+| `request_id` | string | ULID (26 chars Crockford Base32); identical to `X-Request-Id` response header |
+| `principal_id` | string or null | Stable caller identifier; null only when auth failed before identification |
+| `auth_mode` | string or null | `"api_key"` or `"oidc"`; null paired with null `principal_id` |
+| `remote_addr` | string | Client IP (post-proxy when trust policy resolves) |
+| `method` | string | HTTP method |
+| `path` | string | Path only; query string is in `query_params` |
+| `endpoint_kind` | string | Bucketed family: `health`, `ready`, `catalog`, `dataset`, `schema`, `rows`, `aggregate`, `aggregate_list`, `evidence_verification`, `verify`, `admin`, `openapi`, `other` |
+| `dataset_id` | string or null | Resolved from path |
+| `entity_name` | string or null | Resolved from path |
+| `table_id` | string or null | Backing table when known |
+| `relationship` | string or null | Relationship traversed by a nested entity request |
+| `aggregate_id` | string or null | Set on aggregate requests |
+| `offering_id` | string or null | Evidence offering ID for verification requests |
+| `verification_id` | string or null | Correlation ID for verification requests |
+| `verification_decision` | string or null | Evidence-verification outcome when an endpoint produced one |
+| `claim_hash` | string or null | HMAC binding of submitted claims; never raw claims |
+| `evidence_hash` | string or null | HMAC binding of evidence metadata; never raw evidence |
+| `scopes_used` | array of strings | Scopes actually checked for this request |
+| `query_params` | object | Redacted parameter inventory: names and operators, never values |
+| `purpose` | string or null | Verbatim `Data-Purpose` header value |
+| `status_code` | integer | HTTP status returned |
+| `row_count` | integer or null | Rows on row reads; group count on aggregates |
+| `suppressed_groups` | integer or null | Groups removed or masked by disclosure control |
+| `duration_ms` | integer | Server-side handling time in milliseconds |
+| `error_code` | string or null | Stable taxonomy code on 4xx/5xx; null on 2xx/3xx |
+| `provenance` | object or null | Present when the response carried a signed VC; absent for plain JSON |
+
+When `audit.chain: true` is set, each record is wrapped with additional fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `prev_hash` | string | SHA-256 of the previous envelope's JSON content |
+| `record_hash` | string | SHA-256 of this envelope's JSON content |
+
+[Source: src/audit/mod.rs AuditEnvelope and ChainingSink.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `REGISTRY_RELAY_CONFIG` | Config file path (overridden by `--config` flag) |
+| `REGISTRY_RELAY_LOG_FORMAT` | `text` or `json`/`jsonl` for stderr operational logs |
+| `RUST_LOG` | Tracing filter level (defaults to `info`) |
+| `<auth.api_keys[].hash_env>` | `sha256:<64 hex>` fingerprint of one API key |
+| `<source.connection_env>` | PostgreSQL connection string for a database source |
+| `CLAIM_VERIFICATION_BINDING_KEY` | HMAC key for claim hashing; format `hex:<64+ hex chars>` |
+| `<provenance.issuer.signer.jwk_env>` | JSON-encoded private JWK for VC signing (provenance feature) |
+
+[Source: .research/registry-relay.md environment variables section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+
+## Split metadata startup error codes
+
+When `metadata.manifest_path` is set, startup validates the manifest and all runtime
+bindings.
+Failures produce stable log codes.
+[Source: docs/metadata.md validation table; docs/api.md startup codes.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
+
+| Code | Meaning |
+| --- | --- |
+| `metadata.manifest.file_not_found` | Configured manifest cannot be read |
+| `metadata.manifest.parse_failed` | Manifest YAML did not deserialize |
+| `metadata.manifest.version_unsupported` | `schema_version` is not supported |
+| `metadata.manifest.validation_failed` | Manifest failed semantic validation |
+| `runtime.binding.dataset_missing` | Runtime dataset is absent from compiled metadata |
+| `runtime.binding.entity_missing` | Runtime entity is absent from compiled metadata |
+| `runtime.binding.table_missing` | Runtime entity points at an unknown runtime table |
+| `runtime.binding.field_missing` | Runtime field or claim binding is absent from compiled metadata |
+| `runtime.binding.filter_missing` | Runtime filter binding is absent from compiled metadata |
+| `runtime.binding.relationship_missing` | Runtime relationship binding is absent from compiled metadata |

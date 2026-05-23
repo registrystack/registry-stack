@@ -1,0 +1,152 @@
+---
+title: Registry Manifest reference
+description: Reference tables for registry-manifest-cli subcommands, manifest top-level keys, and publish output artifacts.
+status: draft
+owner: registry-manifest
+source_repos:
+  - registry-manifest
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - ogc-api-records
+  - odrl
+---
+
+This page is hand-maintained from
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+and
+[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
+as of 2026-05-23.
+Review against source when either crate changes.
+
+## CLI subcommands
+
+Source:
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+
+| Subcommand | Signature | What it does |
+| --- | --- | --- |
+| `validate` | `validate <metadata.yaml>` | Parses and validates a manifest. Prints `"metadata manifest valid: <path>"` on success. Exits non-zero and prints all errors on failure. |
+| `render` | `render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--offering <id>]` | Compiles the manifest and writes one renderer's output to stdout. |
+| `publish` | `publish <metadata.yaml> --out <dir>` | Compiles the manifest, runs all renderers, writes the full artifact tree to `<dir>`, and writes `index.json`. |
+| `validate-profiles` | `validate-profiles [profiles-dir]` | Scans `profiles-dir` for `profile.yaml` descriptors, validates descriptor schema, and validates all referenced fixture manifests. |
+
+### Render format values
+
+The `--format` flag on `render` accepts:
+
+| Format value | Required flags | Output |
+| --- | --- | --- |
+| `catalog` | None | Catalog JSON |
+| `evidence-offerings` | None | All evidence offerings JSON |
+| `evidence-offering` | `--offering <id>` | Single evidence offering JSON |
+| `policies` | None | ODRL policy collection JSON-LD |
+| `policy` | `--dataset <id>` | Per-dataset ODRL policy document JSON-LD |
+| `dcat` | `--profile <id>` optional | Base DCAT JSON-LD, or profile variant if `--profile` is given |
+| `bregdcat-ap` | None | BRegDCAT-AP 2.00 JSON-LD |
+| `shacl` | None | SHACL node shapes JSON-LD |
+| `json-schema` | `--dataset <id>` and `--entity <name>` | JSON Schema Draft 2020-12 |
+| `ogc-records` | None | OGC API Records item bodies JSON |
+
+Profile IDs for `--profile` on `dcat`: `"dcat"` and `"dcat-ap"` render base DCAT;
+`"bregdcat-ap"` renders BRegDCAT-AP.
+
+## Manifest top-level keys
+
+Schema version enforced: `registry-manifest/v1`.
+Source:
+[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
+(line 19 for `MetadataManifest`).
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `schema_version` | string | Yes | Must equal `"registry-manifest/v1"`. |
+| `catalog` | `CatalogManifest` | Yes | Catalog title, publisher, base URL, application profiles list, standards versions. |
+| `datasets` | list of `DatasetManifest` | Yes | One entry per dataset. |
+| `requirements` | list of `RequirementManifest` | No | CCCEV-aligned requirement definitions. |
+| `evidence_types` | list of `EvidenceTypeManifest` | No | Evidence type definitions. |
+| `codelists` | list of `CodelistManifest` | No | Enumerated value schemes with concept URIs. |
+
+### CatalogManifest keys
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `title` | string | Yes | Human-readable catalog title. |
+| `publisher` | string | Yes | Publisher name. |
+| `base_url` | string | Yes | HTTP URL used as the base for all relative artifact references. |
+| `application_profiles` | list of strings | No | Profile IDs the catalog declares support for (for example, `"bregdcat-ap"`). |
+| `standards` | `StandardsManifest` | No | Declares DCAT, SHACL, and JSON Schema versions in use. |
+
+### DatasetManifest keys (selected)
+
+| Key | Description |
+| --- | --- |
+| `id` | Dataset identifier string (alphanumeric and dashes). Must be unique. |
+| `title` | Human-readable dataset title. |
+| `entities` | List of `EntityManifest` entries describing domain resources and their fields. |
+| `policies` | List of `DatasetPolicyManifest` entries describing ODRL access policies. |
+| `evidence_offerings` | List of `EvidenceOfferingManifest` entries. |
+| `codelists` | List of codelist IDs referenced by this dataset's fields. |
+
+Runtime-only keys (`source`, `table`, `scope`, `url`, `url_env`, `file_path`, `query`,
+`required_filters`, `rows_scope`, `bindings`, `capabilities`, `column`, `visibility`) must not
+appear in a portable manifest.
+Their presence causes `validate-profiles` to fail.
+
+## Schema versions
+
+| Artifact | Schema version string |
+| --- | --- |
+| Metadata manifest | `registry-manifest/v1` |
+| Profile descriptor | `registry-manifest-profile/v1` |
+| Publish index (`index.json`) | `registry-manifest-index/v1` |
+
+## Publish output artifacts
+
+Source:
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+(lines 97 to 221).
+
+All paths are relative to the `--out` directory.
+
+| Artifact path | Format | Source renderer |
+| --- | --- | --- |
+| `metadata.yaml` | YAML | Copy of input manifest |
+| `catalog.json` | JSON | `render_catalog()` |
+| `dcat.jsonld` | JSON-LD | `render_base_dcat()` |
+| `dcat.<profile-id>.jsonld` | JSON-LD | `render_dcat_profile()` per application profile |
+| `shacl.jsonld` | JSON-LD | `render_shacl()` |
+| `evidence-offerings.json` | JSON | `render_evidence_offerings()` |
+| `evidence-offerings/<offering-id>.json` | JSON | `render_evidence_offering()` per offering |
+| `policies.jsonld` | JSON-LD | `render_policy_collection()` |
+| `policies/<dataset-id>.jsonld` | JSON-LD | `render_dataset_policy_document()` per dataset |
+| `schema/<dataset-id>/<entity-name>/schema.json` | JSON Schema Draft 2020-12 | `render_entity_schema_draft_2020_12()` per entity |
+| `profiles/<profile-id>.json` | JSON | Compiled profile structure |
+| `index.json` | JSON | Bundle manifest index (schema version `registry-manifest-index/v1`) |
+
+The `index.json` structure contains the schema version, paths to all artifacts, and an array
+of document entries each with their URL list.
+(Source:
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+lines 203 to 217.)
+
+## Golden fixture coverage
+
+The test suite in
+[`crates/registry-manifest-core/tests/metadata_core.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/tests/metadata_core.rs)
+asserts exact output for the following renderer and profile combinations.
+These golden files live under `crates/registry-manifest-core/tests/fixtures/golden/`.
+
+| Golden file | Renderer | Profile |
+| --- | --- | --- |
+| `example-civil-registration.catalog.json` | `render_catalog()` | `example-civil-registration` |
+| `example-civil-registration.base-dcat.json` | `render_base_dcat()` | `example-civil-registration` |
+| `example-civil-registration.breg-dcat-ap.json` | `render_breg_dcat_ap()` | `example-civil-registration` |
+| `example-civil-registration.shacl.json` | `render_shacl()` | `example-civil-registration` |
+| `example-social-benefits.enrollment.schema.json` | `render_entity_schema_draft_2020_12()` | `example-social-benefits` |
+| `example-benefits-sync.ogc-records-items.json` | `render_ogc_records_items()` | `example-benefits-sync` |

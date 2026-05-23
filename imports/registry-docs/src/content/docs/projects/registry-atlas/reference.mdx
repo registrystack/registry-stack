@@ -1,0 +1,179 @@
+---
+title: Registry Atlas reference
+description: Hand-maintained reference for Registry Atlas capability discovery terms, asset envelope schema, proxy model, token handling, fixture layout, and build commands as of 2026-05-23.
+status: draft
+owner: registry-atlas
+source_repos:
+  - registry-atlas
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - odrl
+---
+
+Hand-maintained reference for Registry Atlas v0.1.
+Source of truth: [`registry-atlas`](https://github.com/jeremi/registry-atlas) at commit
+`e4092a176f04fb315d28099acb056e0a91b73d3c`.
+
+## Capability discovery accepted match inputs
+
+The strict matcher accepts the following `Term` kinds in a `CapabilityQuery`.
+Evidence for these semantics is in
+[`crates/system-capability-discovery/src/matcher.rs`](https://github.com/jeremi/registry-atlas/blob/main/crates/system-capability-discovery/src/matcher.rs)
+and the test fixture
+[`crates/system-capability-discovery/tests/strict_matcher.rs`](https://github.com/jeremi/registry-atlas/blob/main/crates/system-capability-discovery/tests/strict_matcher.rs).
+
+| Term kind | Matched against | Canonicalization applied | Notes |
+| --- | --- | --- | --- |
+| `Term::Label(s)` | Asset label text, `dcterms:title`, `skos:prefLabel`, field label properties | Whitespace trim, Unicode normalization, case fold | Matches label text in discovered metadata assets |
+| `Term::Iri(s)` | `@type`, `conformsTo`, property IRIs, schema `$id` | Compact IRI expansion from known prefix map | Must match a known prefix or full absolute IRI |
+| `Term::Field(s)` | `SchemaProperty.property_name`, `SchemaProperty.property_path`, `ShaclProperty.path`, equivalent property evidence | Whitespace trim only | Must not match arbitrary description text |
+| `Term::ReviewedMapping { mapping_set_id, mapping_id }` | Explicit reviewed mapping set entry | None; mapping is pre-resolved | Every match using a reviewed mapping exposes the mapping set id and version in its evidence |
+
+Canonicalization MUST NOT include stemming, fuzzy edit distance, semantic similarity, or
+unreviewed synonym expansion.
+See [`SYSTEM_CAPABILITY_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SYSTEM_CAPABILITY_DISCOVERY_SPEC.md)
+for the full normative contract.
+
+### Need field roles
+
+| Field | Role in matching |
+| --- | --- |
+| `requires_any` | Required information terms. At least one term must match for the need to produce a `CapabilityMatch`. |
+| `requires_all` | Conjunctive terms. Every term must match the same candidate asset or route. Use when a field name alone is too generic. |
+| `about_any` | Subject or population context. Improves ordering and evidence explanation. Cannot produce a match by itself. |
+| `purpose` | Program or use context. Can match policy or purpose evidence. Cannot produce a match by itself. |
+| `question` | Human-facing wording only. The strict matcher never searches this field. |
+
+## Asset envelope schema
+
+A `DiscoveryRunEnvelope` wraps a `DiscoveryReport` with host-side fetch state.
+Key fields at the envelope top level, sourced from
+[`fixtures/system-capability/registry-relay-all-standards.envelope.json`](https://github.com/jeremi/registry-atlas/blob/main/fixtures/system-capability/registry-relay-all-standards.envelope.json):
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `report` | `DiscoveryReport` | The portable evidence contract. Contains `summary`, `assets`, and `artifacts`. |
+| `report.summary.artifact_count` | integer | Total artifacts fetched (including failed). |
+| `report.summary.asset_count` | integer | Total semantic assets extracted from all artifacts. |
+| `report.summary.failed_artifact_count` | integer | Artifacts that could not be fetched or parsed. |
+| `report.summary.unsupported_artifact_count` | integer | Artifacts fetched but not recognized as a supported kind. |
+| `report.summary.parse_error_count` | integer | Artifacts that parsed partially with errors. |
+| `report.assets` | array | Array of `SemanticAsset` objects. Each has `kind`, `id`, `label`, and `links`. |
+| `report.artifacts` | array | Array of `FetchedArtifact` objects. Each has `url`, `status`, `media_type`, `body_bytes`, `hash`. |
+
+A `DiscoveryReport` without an envelope is the portable evidence contract.
+Pass it to the capability query CLI or to `semantic-asset-discovery-cli validate-report`.
+
+### Recognized semantic asset kinds
+
+| Kind | Source format | Notes |
+| --- | --- | --- |
+| `catalog` | Generic catalog container | n/a |
+| `dcat_catalog` | DCAT Catalogue JSON-LD | `dcat:Catalog` class |
+| `dataset` | DCAT Dataset | `dcat:Dataset` class |
+| `distribution` | DCAT Distribution | `dcat:Distribution` class |
+| `data_service` | DCAT DataService | `dcat:DataService` class |
+| `json_schema` | JSON Schema Draft 2020-12 | `application/schema+json` |
+| `shacl` | SHACL shapes graph | RDF Turtle or JSON-LD |
+| `policy` | ODRL policy document | `odrl:hasPolicy`, `application/ld+json` |
+| `open_api` | OpenAPI 3.x specification | `application/vnd.oai.openapi+json` |
+| `api_description` | OGC API Records or other API description | Landing page JSON |
+| `class` | RDF class definitions (RDFS, OWL, SKOS) | n/a |
+| `metadata_index` | OGC API Records metadata landing page | n/a |
+
+## Proxy allowed-host model
+
+The proxy's host-blocking behavior is documented in
+[`server/index.mjs`](https://github.com/jeremi/registry-atlas/blob/main/server/index.mjs).
+
+| Rule | Default | Override |
+| --- | --- | --- |
+| Private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) | Blocked in production | `ATLAS_PROXY_ALLOW_LOCAL=1` |
+| Loopback (127.0.0.0/8) | Blocked in production | `ATLAS_PROXY_ALLOW_LOCAL=1` |
+| Link-local (169.254.0.0/16) | Blocked in production | `ATLAS_PROXY_ALLOW_LOCAL=1` |
+| IPv6 ULA (fc00::/7) | Blocked in production | `ATLAS_PROXY_ALLOW_LOCAL=1` |
+| IPv6 link-local (fe80::/10) | Blocked in production | `ATLAS_PROXY_ALLOW_LOCAL=1` |
+| `data:`, `file:`, `ftp:` schemes | Always blocked | None |
+| Embedded credentials in URL | Stripped before upstream request | None |
+
+"Production mode" means `NODE_ENV=production` AND `ATLAS_PROXY_ALLOW_LOCAL` is not `"1"`.
+`pnpm dev` does not set `NODE_ENV=production`, so local targets are reachable by default.
+
+### Proxy environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3717` | Proxy listen port |
+| `NODE_ENV` | Unset (treated as non-production) | When `production`, private-network targets are blocked unless `ATLAS_PROXY_ALLOW_LOCAL=1` |
+| `ATLAS_PROXY_ALLOW_LOCAL` | Unset | Set to `"1"` to allow private-network targets in production mode |
+| `ATLAS_PROXY_MAX_BYTES` | `2097152` (2 MB) | Maximum upstream response size in bytes |
+| `ATLAS_PROXY_TIMEOUT_MS` | `8000` | Upstream request timeout in milliseconds |
+| `ATLAS_PROXY_REDIRECT_LIMIT` | `3` | Maximum HTTP redirect chain length |
+
+### Proxy error codes
+
+Error responses use `Content-Type: application/problem+json`.
+
+| Code | Meaning |
+| --- | --- |
+| `invalid_url` | Target URL failed parsing or uses a non-HTTP/S scheme |
+| `dns_lookup_failed` | DNS resolution failed for target host |
+| `private_network_blocked` | Target resolved to a private or loopback address in production mode |
+| `upstream_timeout` | Upstream request exceeded `ATLAS_PROXY_TIMEOUT_MS` |
+| `response_too_large` | Response exceeded `ATLAS_PROXY_MAX_BYTES` |
+| `content_type_blocked` | Response content type is not in the allowed set |
+
+## Session token handling rules
+
+These rules apply to bearer tokens entered in the Atlas UI.
+They are stated explicitly in
+[`README.md`](https://github.com/jeremi/registry-atlas/blob/main/README.md)
+and confirmed by reviewing `server/index.mjs`.
+
+1. Tokens are accepted only in the session URL entry field.
+2. The token is forwarded to the proxy as an `Authorization: Bearer <token>` header.
+3. The proxy forwards the token in upstream requests only on same-origin redirects.
+4. The token is held in React component state for the duration of the browser session only.
+5. The token is never written to `localStorage`, `sessionStorage`, or IndexedDB.
+6. The proxy does not log the `Authorization` header.
+7. The token is discarded when the browser tab closes or the page is refreshed.
+8. No mechanism for token refresh, credential expiry, or persistence across browser restarts
+   is implemented in v0.1.
+
+## Fixture file layout
+
+| Path | Kind | Description |
+| --- | --- | --- |
+| `src/fixtures/registry-relay-dcat-ap.jsonld` | DCAT catalog JSON-LD | Bundled offline demo catalog; loaded by the curated demo fixtures selector in the UI |
+| `src/fixtures/registry-relay-system-capability.envelope.json` | `DiscoveryRunEnvelope` | Full envelope with fetch summary, rejected fetches, and the nested `DiscoveryReport` for the Registry Relay all-standards demo |
+| `fixtures/system-capability/registry-relay-all-standards.report.json` | `DiscoveryReport` | Extracted report with all asset kinds represented; used by Rust tests |
+| `fixtures/system-capability/registry-relay-all-standards.envelope.json` | `DiscoveryRunEnvelope` | Full envelope for the all-standards demo; used by CLI and Rust tests |
+| `fixtures/reports/dcat-ap-report.json` | `DiscoveryReport` | DCAT-AP profile fixture report |
+| `fixtures/reports/semantic-package-report.json` | `DiscoveryReport` | Semantic package profile fixture report |
+| `fixtures/semantic-asset-discovery/` | Per-standard fixture directories | Subdirectories for `breg-dcat-ap`, `dcat-ap`, `json-schema`, `ogc-features`, `ogc-records`, `openapi`, `prof`, `publicschema-package`, `registry-relay-standards`, `semic-shacl-turtle` |
+
+## Build and dev commands
+
+Sourced from
+[`package.json`](https://github.com/jeremi/registry-atlas/blob/main/package.json).
+
+| Command | Description |
+| --- | --- |
+| `pnpm install` | Install Node dependencies |
+| `pnpm dev` | Build WASM, start Vite dev server (`http://127.0.0.1:5177`) and Express proxy (`http://127.0.0.1:3717`) concurrently |
+| `pnpm server` | Start Express proxy only |
+| `pnpm build` | TypeScript type-check, Vite production build, WASM compile |
+| `pnpm test` | Run Vitest tests |
+| `pnpm lint` | Run ESLint |
+| `pnpm check` | Run lint, tests, and production build (use before review) |
+| `pnpm check:release` | Run Rust tests, lint, tests, build, and semantic checks (full release gate) |
+| `pnpm check:rust` | Run Rust tests via `cargo test` |
+| `pnpm check:semantic` | Run semantic discovery validation checks |
+| `pnpm build:wasm` | Compile `semantic-asset-discovery` WASM from Rust via `wasm-pack` |
+| `pnpm canonicalize:system-fixtures` | Normalize capability discovery fixture files |

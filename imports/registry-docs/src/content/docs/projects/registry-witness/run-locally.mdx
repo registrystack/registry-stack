@@ -1,0 +1,180 @@
+---
+title: Run Registry Witness locally
+description: How to start a Registry Witness instance on your laptop and confirm the service responds to a claims evaluation request.
+status: draft
+owner: registry-witness
+source_repos:
+  - registry-witness
+last_reviewed: "2026-05-23"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - openapi
+---
+
+Use this page when you want to confirm that Registry Witness starts, authenticates callers,
+and responds to API requests before connecting it to a source registry.
+The steps below start the service with the demo config and use `curl` to probe the claims list.
+Full claim evaluation requires a source registry at the configured `base_url`; the
+[configure a claim](../configure-a-claim/) page covers that step.
+
+## When to use this
+
+Use this page when you are:
+
+- Verifying a local build before wiring Registry Witness to a source connector.
+- Exploring the API surface without a full Registry Lab topology.
+- Confirming that a new issuer key loads and the JWKS endpoint responds.
+
+For an end-to-end topology with source registries and a demo client, use
+[Registry Lab](../../registry-lab/).
+{/* TODO[evidence]: registry-lab docs page link will resolve once registry-lab pages are written. */}
+
+## Prerequisites
+
+- Rust toolchain (stable) installed and `cargo` on your `PATH`.
+  The workspace has been tested with the edition in
+  [Cargo.toml](https://github.com/jeremi/registry-witness/blob/main/Cargo.toml).
+- `curl` available on your `PATH`.
+- A shell that reads environment variables (any POSIX shell).
+
+You do not need a running Registry Relay instance to start the service.
+Claim evaluation against the demo config will fail to fetch source data when no source registry
+is running, but all other routes respond normally.
+
+## Steps
+
+### 1. Clone the repository
+
+```sh
+git clone https://github.com/jeremi/registry-witness.git
+cd registry-witness
+```
+
+### 2. Set required environment variables
+
+Registry Witness starts fail-closed: no route is served unless at least one API key or bearer
+token is configured.
+All credential values are loaded from environment variables named in the YAML config.
+([config.rs:153](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs))
+
+```sh
+export REGISTRY_WITNESS_API_KEY=dev-registry-witness-api-key
+export REGISTRY_WITNESS_BEARER_TOKEN=dev-registry-witness-bearer-token
+export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN=dev-source-token
+```
+
+For credential issuance, you also need an Ed25519 OKP JWK.
+The variable name is set by `credential_profiles.<id>.issuer_key_env` in the config.
+The demo config uses `REGISTRY_WITNESS_ISSUER_JWK`.
+A development-only key (never use in production):
+
+```sh
+export REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"<private-key-bytes>","x":"<public-key-bytes>","alg":"EdDSA"}'
+```
+
+Replace `<private-key-bytes>` and `<public-key-bytes>` with real base64url-encoded values.
+The
+[sd_jwt.rs tests](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/sd_jwt.rs)
+include a hardcoded test key you can use for local development.
+
+### 3. Start the service
+
+```sh
+cargo run -p registry-witness-bin -- --config demo/config/registry-witness.yaml
+```
+
+The demo config binds to `127.0.0.1:4255`
+([demo/config/registry-witness.yaml:7](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml)).
+The default bind address when no config specifies one is `127.0.0.1:8081`
+([config.rs:143](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+
+You will see tracing output on startup.
+The service is ready when you see a line indicating the Axum listener has bound.
+
+### 4. Confirm the OpenAPI document
+
+```sh
+curl -s -H "x-api-key: dev-registry-witness-api-key" \
+  http://127.0.0.1:4255/openapi.json | head -c 200
+```
+
+A `200` response with a JSON body beginning `{"openapi":"3.1.0",...}` confirms the service is
+running and authenticating correctly.
+
+### 5. List available claims
+
+```sh
+curl -s -H "x-api-key: dev-registry-witness-api-key" \
+  http://127.0.0.1:4255/claims
+```
+
+The response is a JSON array of claim definitions visible to your credentials.
+The demo config defines three claims: `date-of-birth`, `farmed-land-size`, and
+`farmer-under-4ha`.
+
+### 6. Fetch the issuer JWKS
+
+```sh
+curl -s -H "x-api-key: dev-registry-witness-api-key" \
+  http://127.0.0.1:4255/.well-known/evidence/jwks.json
+```
+
+A `200` response confirms that the issuer JWK loaded from the environment variable is valid
+and that the public key is exported correctly.
+
+### 7. Inspect the service capabilities document
+
+```sh
+curl -s -H "x-api-key: dev-registry-witness-api-key" \
+  http://127.0.0.1:4255/.well-known/evidence-service
+```
+
+This document describes the service identity, supported claim IDs, and output formats.
+([openapi.rs:31](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs))
+
+## Verification
+
+The service is working correctly when:
+
+1. `GET /openapi.json` returns `200` with a JSON body.
+2. `GET /claims` returns `200` with a JSON array containing at least one claim.
+3. `GET /.well-known/evidence/jwks.json` returns `200` with a `keys` array.
+4. Any request without a valid `x-api-key` or `Authorization: Bearer` header returns `401`.
+
+To generate the full OpenAPI document to a file (useful for Redocly or Swagger UI):
+
+```sh
+cargo run -p registry-witness-bin -- openapi > target/registry-witness.openapi.json
+```
+
+([README](https://github.com/jeremi/registry-witness/blob/main/README.md))
+
+## Troubleshooting
+
+**Service exits immediately on startup.**
+The config validator runs before the HTTP listener binds.
+Check the tracing output for a `EvidenceConfigError` message.
+Common causes: `evidence.enabled` is not `true`; no API key or bearer token is configured;
+a source binding references a connection name that does not exist in `source_connections`.
+
+**`401 Unauthorized` on every request.**
+Confirm the environment variable name in your shell matches `token_env` in the YAML config.
+The demo config expects `REGISTRY_WITNESS_API_KEY` and `REGISTRY_WITNESS_BEARER_TOKEN`.
+
+**`GET /claims` returns an empty array.**
+The demo config scopes claims to `civil_registry:evidence_verification` and
+`farmer_registry:evidence_verification`.
+Confirm that the credential configured in `auth.api_keys` or `auth.bearer_tokens` carries
+those scopes.
+
+**Claim evaluation returns an error about source connection.**
+Claim evaluation contacts the source registry at the URL in `source_connections.<id>.base_url`.
+If no source registry is running, you will receive a source fetch error.
+The [configure a claim](../configure-a-claim/) page covers source connector setup.
+
+**`REGISTRY_WITNESS_ISSUER_JWK` parse error.**
+The JWK must be a valid OKP Ed25519 key with both `d` (private) and `x` (public) components
+present and base64url-encoded without padding.
+([sd_jwt.rs:49](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/sd_jwt.rs))

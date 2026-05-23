@@ -1,0 +1,184 @@
+---
+title: Registry Manifest overview
+description: Explains what Registry Manifest is, the metadata-manifest model, its compiled form, the renderers it ships, and how it relates to Registry Relay.
+status: draft
+owner: registry-manifest
+source_repos:
+  - registry-manifest
+last_reviewed: "2026-05-23"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - ogc-api-records
+  - odrl
+  - json-ld
+---
+
+Registry Manifest is a portable Rust workspace that lets you describe a registry once in YAML
+and derive every standards-facing metadata artifact other systems need to find, understand, and
+connect to it, without standing up a runtime.
+It owns the metadata manifest model, its compiled form, validation logic, vocabulary prefix
+expansion, and a set of pure renderers.
+No HTTP server, no database driver, no authentication layer belongs here.
+
+## The metadata-manifest model
+
+A metadata manifest is a single YAML file that carries the schema version string
+`registry-manifest/v1` at its root.
+[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
+defines the full type hierarchy.
+The top-level struct is `MetadataManifest`, which contains:
+
+- `CatalogManifest`: catalog title, publisher, base URL, application profiles, and standards versions in use.
+- `DatasetManifest`: one entry per dataset, each carrying entities, policies, evidence offerings, codelists, and ODRL (Open Digital Rights Language) terms.
+- `EntityManifest`: structural schema for a domain resource, including fields, identifiers, relationships, and vocabulary concept IRIs.
+- `EvidenceOfferingManifest`: description of a verification capability and the access path a client uses to reach it.
+- `DatasetPolicyManifest` / `PolicyRuleManifest` / `PolicyDutyManifest` / `PolicyConstraintManifest`: dataset-scoped ODRL policy terms.
+- `RequirementManifest` / `EvidenceTypeManifest`: Core Criterion and Core Evidence Vocabulary (CCCEV)-aligned requirement and evidence type definitions.
+- `CodelistManifest`: enumerated value schemes with concept URIs.
+
+A manifest must not contain Registry Relay runtime bindings such as source file paths, table
+names, database scopes, or backend credentials.
+Runtime bindings live in Relay configuration; the manifest is portable and Relay-independent.
+
+## Compilation and validation
+
+`validate_manifest()` in `registry-manifest-core`
+([lib.rs:855](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs))
+performs multi-pass validation before any rendering occurs:
+
+1. Confirms `schema_version == "registry-manifest/v1"`.
+2. Validates catalog fields: HTTP base URL, title, publisher, and supported application profiles list.
+3. Validates requirement and evidence-type reference integrity.
+4. Validates per-dataset entities, fields, relationships, identifiers, codelists, cardinality strings, and ODRL policy terms.
+5. Validates evidence-offering reference checks.
+
+Validation is pure Rust with no external schema runtime (no JSON Schema validator, no SHACL
+processor).
+All errors are collected and returned together as a structured `MetadataError` so a single run
+surfaces every problem in the file.
+
+Compilation expands vocabulary prefixes (for example, `person:Person.identifier` becomes a full
+IRI) and resolves codelist concept references before any renderer runs.
+
+## Renderers
+
+Registry Manifest ships pure renderer functions in `registry-manifest-core`.
+Each renderer takes a compiled manifest and returns a serialized document.
+No renderer makes network calls or reads files beyond the manifest input.
+
+| Renderer function | Output format | Evidence |
+| --- | --- | --- |
+| `render_catalog()` | Catalog JSON | [lib.rs:1102](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_base_dcat()` | Data Catalog Vocabulary (DCAT) JSON-LD | [lib.rs:1142](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_breg_dcat_ap()` | BRegDCAT-AP 2.00 JSON-LD (extends base DCAT; adds CPSV public service nodes) | [lib.rs:1165](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_shacl()` | Shapes Constraint Language (SHACL) node shapes JSON-LD | [lib.rs:1520](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_entity_schema_draft_2020_12()` | JSON Schema Draft 2020-12 | [lib.rs:1544](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_ogc_records_items()` | OGC API Records (Open Geospatial Consortium API specification for records) item bodies JSON | [lib.rs:1554](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_policy_collection()` | ODRL policy collection JSON-LD | [lib.rs:1212](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_dataset_policy_document()` | Per-dataset ODRL policy document JSON-LD | [lib.rs:1225](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_evidence_offerings()` | Evidence offerings collection JSON | [lib.rs:1130](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+| `render_evidence_offering()` | Single evidence offering JSON | [lib.rs:1136](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) |
+
+`render_dcat_profile()` ([lib.rs:1514](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs))
+dispatches to either the base DCAT or BRegDCAT-AP renderer based on a profile ID string:
+`"dcat"` and `"dcat-ap"` render base DCAT; `"bregdcat-ap"` renders the BRegDCAT-AP variant.
+
+Renderers that are not yet implemented: GovStack DR BB, SP DCI, and standalone PROV-O.
+CCCEV structure is present in the requirement and evidence models but is not a standalone render
+target; Registry Witness owns CCCEV rendering.
+
+## What Registry Manifest owns and what it does not
+
+Registry Manifest owns:
+
+- The metadata manifest model and compiled metadata model.
+- Pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, SHACL, JSON Schema,
+  OGC API Records, ODRL policies, and evidence offerings.
+- CLI validation, static publication, and profile fixture validation.
+
+Registry Manifest does not own:
+
+- Registry Relay runtime data access.
+- Auth, audit, observability, DataFusion, Postgres, Axum, or secret handling.
+- Production source configuration.
+
+This boundary is explicit in the
+[README](https://github.com/jeremi/registry-manifest/blob/main/README.md):
+`registry-manifest-core` must not depend on Registry Relay, Axum, DataFusion, Postgres, auth,
+audit, observability, runtime row access, secret handling, `utoipa`, or `clap`.
+
+## Relationship to Registry Relay
+
+Registry Relay reuses the renderers from `registry-manifest-core` to serve metadata at runtime
+over its `/metadata/*` routes.
+When a caller hits a Relay metadata endpoint, the same `render_base_dcat()`, `render_shacl()`,
+and `render_policy_collection()` functions that Registry Manifest's CLI calls are what produce
+the response.
+Relay adds HTTP serving, caller scoping, authorization, and audit on top of those renderers.
+It does not fork or duplicate the rendering logic.
+
+This means a static publication bundle produced by `registry-manifest-cli publish` and a live
+Relay metadata response at `/metadata/dcat` should contain structurally equivalent artifacts
+for the same manifest input.
+
+## The CLI surface
+
+`registry-manifest-cli`
+([crates/registry-manifest-cli/src/main.rs](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs))
+exposes four subcommands:
+
+- `validate`: parse and validate a manifest file. Exits non-zero on any validation error.
+- `render`: compile a manifest and write one renderer's output to stdout. Accepts `--format`,
+  `--profile`, `--dataset`, `--entity`, and `--offering` selectors.
+- `publish`: compile a manifest, run all renderers, write every artifact to an output directory,
+  and generate an `index.json` manifest of the bundle.
+- `validate-profiles`: scan a `profiles/` directory for profile descriptors, validate their
+  schema, and validate all referenced fixture manifests.
+
+The [validate-and-render how-to](./validate-and-render/) covers the `validate`, `render`, and
+`publish` subcommands in steps.
+The [profile fixtures how-to](./profile-fixtures/) covers `validate-profiles`.
+
+## Profile fixtures
+
+The `profiles/` directory contains non-normative profile descriptors and fixture manifests.
+A profile descriptor (schema version `registry-manifest-profile/v1`) declares:
+
+- Required and optional concept IRIs a conforming manifest must reference.
+- Required identifiers and codelists with expected code values.
+- Cardinality expectations per entity field.
+- Runtime-only keys that must not appear in a portable fixture manifest.
+
+Four example profiles ship in the repository: `example-civil-registration`,
+`example-social-benefits`, `example-person-schema`, and `example-benefits-sync`.
+These are examples until reviewed against official OpenCRVS, OpenSPP, OpenIMIS, SP DCI, or
+maintainer-provided artifacts.
+{/* TODO[evidence]: profiles/opencrvs, profiles/openimis, profiles/openspp, profiles/spdci
+     directories exist but no profile.yaml or fixtures found at reviewed commit; confirm
+     whether these are placeholders before marking as current. */}
+
+## Status and v0 caveats
+
+Registry Manifest is at v0.1.
+The manifest schema version `registry-manifest/v1` is enforced in code, but the schema itself
+may still change between v0 releases.
+Profile fixtures in `profiles/` are non-normative examples.
+The static publication bundle format (including `index.json` schema version
+`registry-manifest-index/v1`) is not yet a stable contract.
+
+The test suite includes golden-fixture assertions that lock renderer output for the four example
+profiles.
+See
+[`crates/registry-manifest-core/tests/metadata_core.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/tests/metadata_core.rs)
+for the full set.
+
+## Next
+
+- [Validate and render a manifest](./validate-and-render/)
+- [Profile fixtures](./profile-fixtures/)
+- [Registry Manifest reference](./reference/)

@@ -1,0 +1,132 @@
+---
+title: Registry Lab reference
+description: Hand-maintained inventory of Registry Lab compose services, fixture files, smoke-check scripts, generated credentials, and static metadata publisher endpoints as of 2026-05-23.
+status: draft
+owner: registry-lab
+source_repos:
+  - registry-lab
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Hand-maintained reference for Registry Lab as of commit `aaa6f8057a11`.
+Verify against the source files linked per table before treating any row as authoritative.
+
+## Compose service inventory
+
+Source: [`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml).
+
+| Service | Image / build | Role | Host port | Source link |
+| --- | --- | --- | --- | --- |
+| `civil-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for civil domain; serves CSV-backed civil registry data | 4311 | [`compose.yaml` L35](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `social-protection-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for social protection domain; serves XLSX-backed data | 4312 | [`compose.yaml` L45](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `health-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for health domain; serves Parquet-backed data | 4313 | [`compose.yaml` L55](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `civil-witness` | `registry-witness:demo` (local build) | Registry Witness for civil claims; reads civil facts from `civil-registry-relay` over HTTP | 4321 | [`compose.yaml` L65](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `social-protection-witness` | `registry-witness:demo` (local build) | Registry Witness for social protection claims; reads social facts from `social-protection-registry-relay` over HTTP | 4322 | [`compose.yaml` L74](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `shared-eligibility-witness` | `registry-witness:demo` (local build) | Registry Witness for cross-authority claims spanning civil, social, and health registries | 4323 | [`compose.yaml` L82](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `static-metadata-publisher` | `python:3.12.3-slim-bookworm` (pulled) | Python HTTP server serving the portable metadata static bundle at `/srv/static` | 4331 | [`compose.yaml` L89](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| `demo-client` | `python:3.12.3-slim-bookworm` (pulled) | Narrated demo client (one-shot, `--profile client` only); runs `scripts/demo-flow.py` | None | [`compose.yaml` L98](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+
+All Relay and Witness services use `env_file: .env`, `RUST_LOG: info`, and `restart: unless-stopped`.
+Relay services have a healthcheck (`registry-relay --help`, 30 s interval, 10 s timeout, 3 retries).
+Witness services have no healthcheck in the compose file.
+Inside the compose network, services reach each other via DNS names on port 8080.
+
+Named cache volumes: `civil-registry-cache`, `social-protection-registry-cache`, `health-registry-cache`.
+
+## Fixture file layout
+
+Source: [`scripts/generate-fixtures.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-fixtures.py).
+Run with `uv run scripts/generate-fixtures.py` from the repo root.
+Output lands under `data/`. The directory is gitignored; only `data/.gitignore` is committed.
+
+| File | Format | Domain | Contents |
+| --- | --- | --- | --- |
+| `data/civil/civil_registry.csv` | CSV | Civil | Children, caregivers, living adults, and deceased adults across five districts |
+| `data/social-protection/social_protection_registry.xlsx` | XLSX | Social protection | Households, household members, and enrollments with active, inactive, suspended, and review-required cases |
+| `data/health/health_registry.parquet` | Parquet | Health | Active, suspended, pending-renewal, and partially-serviceable facilities |
+
+All timestamps are deterministic (2026-01-01).
+The generator validates that a successful subject, failed predicates, deceased-member cases,
+cross-source subjects, and health-linked support cases are all present before writing.
+
+## Smoke-check scripts
+
+| Script | What it checks | Source link |
+| --- | --- | --- |
+| `scripts/smoke.sh` | ~30 checks: health/ready on all Relays, discovery on all Witnesses, OpenAPI on all services, evidence-offering endpoints, authorization scope denial (403 `auth.scope_denied`), positive row-read and aggregate-read on social Relay, claim evaluation on civil/social/shared witnesses, cross-authority `source_count >= 2`, credential-bound SD-JWT VC evaluation, demo-client artifact presence, audit event log entries | [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh) |
+| `scripts/release-check.sh` | Full release wrapper: fixture generation, secret generation, static metadata publication, compose build, compose up, smoke run, demo client run, compose down with `-v` | [`scripts/release-check.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/release-check.sh) |
+
+Run `scripts/smoke.sh` after `docker compose -f compose.yaml up -d` to confirm the topology is healthy.
+All smoke requests use the correlation ID `decentralized-demo-correlation-001`
+(overridable via `DEMO_CORRELATION_ID`).
+
+## Generated local credentials
+
+Source: [`scripts/generate-demo-secrets.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-demo-secrets.py).
+Run directly as an executable (`scripts/generate-demo-secrets.py`).
+Output is written to `.env` (gitignored).
+The committed `.env.example` contains inert placeholder values only.
+
+| Credential class | Env var pattern | Used by |
+| --- | --- | --- |
+| Metadata client token (civil) | `CIVIL_METADATA_CLIENT_RAW` / `CIVIL_METADATA_CLIENT_HASH` | Smoke checks (`/health`, `/ready`, `/openapi.json`, `/metadata/*` on civil Relay) |
+| Metadata client token (social) | `SOCIAL_METADATA_CLIENT_RAW` / `SOCIAL_METADATA_CLIENT_HASH` | Smoke checks on social protection Relay |
+| Metadata client token (health) | `HEALTH_METADATA_CLIENT_RAW` / `HEALTH_METADATA_CLIENT_HASH` | Smoke checks on health Relay |
+| Evidence source token (civil) | `CIVIL_RELAY_EVIDENCE_SOURCE_TOKEN` (or similar) | `civil-witness` when fetching civil facts from `civil-registry-relay` |
+| Evidence source token (social) | `SOCIAL_RELAY_EVIDENCE_SOURCE_TOKEN` (or similar) | `social-protection-witness` when fetching social facts |
+| Evidence source token (health) | `HEALTH_RELAY_EVIDENCE_SOURCE_TOKEN` (or similar) | `shared-eligibility-witness` health source reads |
+| Evidence-only token | `*_EVIDENCE_ONLY_*` pattern | Scope denial proof: has evidence scope, no row or aggregate scope |
+| Row-reader token (social) | `SOCIAL_ROW_READER_RAW` | Protected row read in scenario 2 and scope denial checks |
+| Aggregate-reader token (social) | `SOCIAL_AGGREGATE_READER_RAW` | Aggregate consultation in scenario 2 and scope denial checks |
+| Witness client bearer (civil) | `CIVIL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `civil-witness` |
+| Witness client bearer (social) | `SOCIAL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `social-protection-witness` |
+| Witness client bearer (shared) | `SHARED_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `shared-eligibility-witness` |
+| Issuer JWK (per Witness) | `*_ISSUER_JWK` pattern | SD-JWT VC signing; embedded in Witness config at startup |
+
+{/* TODO[evidence]: exact env var names for evidence source tokens and issuer JWKs are inferred from
+     .env.example and README patterns; verify against config/witness/*.yaml and .env.example before
+     removing these (or similar) markers. */}
+
+Relay configs reference only `*_HASH` env vars (SHA-256 fingerprints of the raw tokens).
+Witness configs reference `token_env` names that map to `*_RAW` or `*_BEARER` env vars.
+No raw token is committed to the repository.
+
+## Static metadata publisher endpoints
+
+Source: [`scripts/publish-static-metadata.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/publish-static-metadata.sh),
+manifest at [`config/static-metadata/metadata.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/static-metadata/metadata.yaml),
+served by `static-metadata-publisher` at `127.0.0.1:4331`.
+No authentication is required for any of these endpoints.
+
+| Path | Content | Format |
+| --- | --- | --- |
+| `/metadata/index.json` | Static publication index listing all produced artifacts | JSON |
+| `/metadata/catalog.json` | DCAT (Data Catalog Vocabulary) catalog for the demo registry | JSON |
+| `/metadata/evidence-offerings.json` | Evidence offering descriptors pointing to Witness services | JSON |
+| `/metadata/policies.jsonld` | ODRL (Open Digital Rights Language) policy documents | JSON-LD |
+
+The bundle is produced by `registry-manifest-cli publish` from the portable manifest.
+It does not include any Relay runtime details (source paths, table identifiers, scopes, cache paths).
+The static manifest identifier `decentralized-demo-static-publication` is an intentionally stable
+value set in `config/static-metadata/metadata.yaml` and is not renamed when the repository moves
+to `registry-lab`.
+
+## Configuration files
+
+Source: [`config/`](https://github.com/jeremi/registry-lab/blob/main/config/).
+
+| File | Configures |
+| --- | --- |
+| `config/relay/civil-registry-relay.yaml` | Civil Relay: source binding to `data/civil/civil_registry.csv`, scope definitions, entity routes |
+| `config/relay/social-protection-registry-relay.yaml` | Social protection Relay: source binding to `data/social-protection/social_protection_registry.xlsx`, separate row and aggregate scopes |
+| `config/relay/health-registry-relay.yaml` | Health Relay: source binding to `data/health/health_registry.parquet`, entity routes |
+| `config/relay/civil-registry-relay.metadata.yaml` | Portable metadata for the civil Relay (separate from runtime binding) |
+| `config/relay/social-protection-registry-relay.metadata.yaml` | Portable metadata for the social protection Relay |
+| `config/relay/health-registry-relay.metadata.yaml` | Portable metadata for the health Relay |
+| `config/witness/civil-witness.yaml` | Civil Witness: claim definitions, source connector URL, disclosure policy |
+| `config/witness/social-protection-witness.yaml` | Social protection Witness: claim definitions, source connector URL, disclosure policy |
+| `config/witness/shared-eligibility-witness.yaml` | Shared eligibility Witness: cross-authority claim definitions, multiple source connectors |
+| `config/static-metadata/metadata.yaml` | Portable metadata manifest (`registry-manifest/v1`) used by the static publisher |

@@ -1,0 +1,186 @@
+---
+title: Registry Lab overview
+description: Registry Lab is the Docker Compose demo for the registry family, wiring three Relay instances, three Witness instances, a static metadata publisher, and a narrated demo client into a single topology you can run on a laptop.
+status: draft
+owner: registry-lab
+source_repos:
+  - registry-lab
+last_reviewed: "2026-05-23"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Registry Lab is a Docker Compose demo for the registry family.
+It wires three Registry Relay instances, three Registry Witness instances,
+a static metadata publisher, and a narrated demo client into a single topology
+you can run on a laptop, with no production credentials and no remote services.
+Atlas is run separately and is not in the compose topology at v0.1.
+
+The goal is not a production deployment guide.
+The goal is to let a developer, reviewer, or integrator observe every layer of the stack
+interacting end-to-end on local data before writing any integration code.
+
+## What Lab owns
+
+Registry Lab owns:
+
+- The compose topology file ([`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml)) and both Dockerfiles.
+- Synthetic fixture generation ([`scripts/generate-fixtures.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-fixtures.py)).
+- Local credential generation ([`scripts/generate-demo-secrets.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-demo-secrets.py)).
+- Static metadata publication ([`scripts/publish-static-metadata.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/publish-static-metadata.sh)).
+- The smoke check suite ([`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)).
+- The narrated demo client ([`scripts/demo-flow.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/demo-flow.py)).
+- The release wrapper ([`scripts/release-check.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/release-check.sh)).
+- Relay and Witness configuration files under [`config/`](https://github.com/jeremi/registry-lab/blob/main/config/).
+- The portable metadata manifest at [`config/static-metadata/metadata.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/static-metadata/metadata.yaml).
+- Acceptance rehearsal after rename waves land.
+
+## What Lab does not own
+
+Registry Lab does not own:
+
+- Production deployment guidance. The fixtures use CSV, XLSX, and Parquet with synthetic data.
+  They are not representative of production scale or security requirements.
+- Normative API or metadata contracts. Those belong to Registry Relay, Registry Witness, and Registry Manifest.
+- Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other external systems.
+  The three domain areas (civil, social protection, health) simulate those patterns without any live data exchange.
+
+## Compose topology
+
+The compose file
+([`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml))
+defines eight services across three domain areas.
+Three are Relay instances; three are Witness instances; one is the static metadata publisher;
+one is the narrated demo client (started on demand only, via `--profile client`).
+
+All Relay and Witness images are built locally from the `registry-relay:demo` and `registry-witness:demo`
+images using the submodule sources under `vendor/`.
+The static metadata publisher and demo client both use the public `python:3.12.3-slim-bookworm` image.
+
+Host-to-container port assignments are fixed in `compose.yaml`.
+Inside the compose network, services reach each other via DNS names (for example,
+`http://civil-registry-relay:8080`).
+Witness containers do not mount source data files directly.
+Registry Witness reads registry facts over HTTP from the Relay services.
+
+Registry Relay images are built with the `spdci-api-standards,standards-cel-mapping` feature flags,
+so SP DCI (Social Protection Digital Convergence Initiative) source routes are present in the demo.
+{/* TODO[evidence]: feature flag list is from the README; verify against Dockerfile.registry-relay build args. */}
+
+## Fixtures and generated credentials
+
+### Synthetic fixtures
+
+[`scripts/generate-fixtures.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-fixtures.py)
+is a Python PEP 723 inline-dependency script (run with `uv run`).
+It produces three fixture files under `data/`:
+
+- `data/civil/civil_registry.csv`: children, caregivers, living adults, and deceased adults across five districts.
+- `data/social-protection/social_protection_registry.xlsx`: households, household members, and enrollments
+  with active, inactive, suspended, and review-required cases.
+- `data/health/health_registry.parquet`: active, suspended, pending-renewal, and partially-serviceable facilities.
+
+Timestamps are deterministic (2026-01-01).
+The generator validates key coverage before writing: it checks that a successful subject,
+failed predicates, deceased-member cases, cross-source subjects, and health-linked support cases
+are all present.
+The `data/` directory is gitignored; only the `.gitignore` marker is committed.
+
+### Generated local credentials
+
+[`scripts/generate-demo-secrets.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/generate-demo-secrets.py)
+is a direct-executable Python script (not wrapped by `uv run`).
+It writes a `.env` file (gitignored) with local demo credentials.
+Relay configurations reference only the `*_HASH` env vars (SHA-256 fingerprints).
+Witness configurations reference `token_env` names.
+No raw token is committed to the repository.
+
+The `.env.example` file in the repository root contains inert placeholder values only.
+
+## Static metadata publisher
+
+[`scripts/publish-static-metadata.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/publish-static-metadata.sh)
+reads the portable manifest at `config/static-metadata/metadata.yaml` and
+invokes the Registry Manifest CLI to publish a static bundle into `static-metadata/metadata/`.
+The `static-metadata/` directory is gitignored except for its `.gitignore`.
+
+The `static-metadata-publisher` service then serves that bundle at `127.0.0.1:4331`.
+No authentication is required for the static publisher endpoints.
+The static bundle is generated from the portable metadata config, not scraped from a running Relay.
+It does not include source paths, table identifiers, scopes, cache paths, or backend runtime details.
+
+## Smoke checks
+
+[`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)
+runs approximately 30 checks against the live compose topology.
+The checks cover health and readiness on all three Relay instances,
+discovery endpoints on all three Witness instances,
+OpenAPI endpoints on every service,
+authorization scope denial responses (403 with `auth.scope_denied`),
+positive row-read and aggregate-read responses on the social protection Relay,
+claim evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility witnesses,
+a cross-authority result with `source_count >= 2` on the shared eligibility witness,
+and credential-bound evaluation returning `application/dc+sd-jwt`.
+
+All smoke requests carry the correlation ID `decentralized-demo-correlation-001` by default,
+overridable via the `DEMO_CORRELATION_ID` environment variable.
+That string is an intentionally stable protocol identifier; it is not renamed when the repository moves
+from `decentralized-evidence-demo` to `registry-lab`.
+
+## Narrated demo client
+
+[`scripts/demo-flow.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/demo-flow.py)
+runs three end-to-end scenarios in sequence.
+
+**Scenario 1: Birth registration to child support.**
+Registry Witness (civil) verifies civil facts and issues a demo-grade credential
+with predicate disclosure. The raw civil registry rows are not exposed to the caller.
+
+**Scenario 2: Household benefit review from registry data.**
+The client performs a protected Relay row read on the social protection Relay,
+then an aggregate consultation (household eligibility band aggregates).
+It writes a household-benefit-decision artifact locally without writing back to Relay.
+Scope binding is demonstrated: the row-reader credential cannot call the aggregate endpoint,
+and the aggregate-reader credential cannot call the row endpoint.
+
+**Scenario 3: Cross-authority conditional support.**
+Static metadata discovery leads the client to `shared-eligibility-witness`.
+The witness claim depends on civil, social protection, and health authorities.
+The result carries `source_count >= 2`.
+
+All client requests are sent with the same correlation ID and saved as JSON artifacts
+to the `output/` directory (default `DEMO_OUTPUT_DIR`).
+The client uses a custom Ed25519 holder key for credential binding and requires `openssl`
+on the PATH for holder proof signing.
+
+The demo client is started with a profile flag so it does not start alongside the background services:
+
+```sh
+docker compose -f compose.yaml --profile client run --rm demo-client
+```
+
+## Rename note
+
+The repository directory was renamed from `decentralized-evidence-demo` to `registry-lab`.
+Some internal identifiers (correlation IDs, static manifest IDs, data-purpose URIs, script docstrings)
+still reference the old name because they are intentionally stable protocol values baked into
+credentials, log correlation, and spec URLs.
+On `current` documentation pages, the product label is `Registry Lab` and the repo slug is `registry-lab`.
+The old names appear only in historical pages or `rename_status` fields, never in prose on current pages.
+
+## v0 status and caveats
+
+Registry Lab is at v0.
+Fixture data covers only five districts and a maximum of approximately 100 rows per dataset;
+it is not representative of production scale.
+Witness services have no healthcheck in compose; only Relay services have the CLI-help healthcheck.
+Static metadata is not auto-regenerated on manifest changes; you must re-run
+`scripts/publish-static-metadata.sh` after modifying `config/static-metadata/metadata.yaml`.
+The demo client's `output/` directory is wiped on each run.
+
+## Next
+
+- [First run with Registry Lab](../../../tutorials/first-run-with-registry-lab/): start the topology from scratch on a clean checkout.
+- [Demo flow walkthrough](./demo-flow/): step through the three narrated scenarios once the topology is running.
+- [Registry Lab reference](./reference/): compose service inventory, fixture layout, smoke-check scripts, and credential types.

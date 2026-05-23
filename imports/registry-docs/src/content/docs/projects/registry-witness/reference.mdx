@@ -1,0 +1,224 @@
+---
+title: Registry Witness reference
+description: Hand-maintained reference for the Registry Witness claim config schema, HTTP routes, disclosure modes, source connector types, and audit event shape.
+status: draft
+owner: registry-witness
+source_repos:
+  - registry-witness
+last_reviewed: "2026-05-23"
+doc_type: reference
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - cccev
+  - json-ld
+  - openapi
+  - sp-dci
+  - w3c-did
+---
+
+Hand-maintained reference as of 2026-05-23, reviewed against commit
+[`b4128a3`](https://github.com/jeremi/registry-witness/commit/b4128a369c62ddb8e75dafb2e3834cd87f28d2d0).
+The authoritative source of truth is the upstream repo.
+The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`.
+([README](https://github.com/jeremi/registry-witness/blob/main/README.md))
+
+## HTTP routes
+
+All routes require authentication via `x-api-key` header or `Authorization: Bearer` header.
+([openapi.rs:8](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs),
+[api.rs:32](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs))
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/openapi.json` | Return the Registry Witness OpenAPI 3.1.0 document. |
+| `GET` | `/.well-known/evidence-service` | Return the service capabilities document. |
+| `GET` | `/.well-known/evidence/jwks.json` | Return the public issuer verification keys as a JWKS. |
+| `GET` | `/claims` | List claim definitions visible to the authenticated principal. |
+| `GET` | `/claims/{claim_id}` | Return one claim definition by ID. Returns `404` if not found. |
+| `GET` | `/formats` | List supported output format media types. |
+| `POST` | `/claims/evaluate` | Evaluate one or more claims for a single subject. |
+| `POST` | `/claims/batch-evaluate` | Evaluate one or more claims for multiple subjects inline. Accepts `Idempotency-Key` header. |
+| `POST` | `/evidence/render` | Render a stored evaluation in a requested format and disclosure level. |
+| `POST` | `/credentials/issue` | Issue an SD-JWT VC credential from a stored evaluation. |
+
+HTTP status codes used across routes:
+
+- `200`: success.
+- `400`: invalid request body or a disclosure widening attempt.
+- `401`: missing or invalid credential.
+- `403`: principal is not authorized for the requested claim, purpose, disclosure mode, or format.
+- `404`: claim ID or evaluation ID not found.
+
+## Claim config schema
+
+Fields of `ClaimDefinition`
+([config.rs:274](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+
+| Field | Required | Type | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `id` | Yes | string | None | Stable claim identifier. Must not be empty. |
+| `title` | Yes | string | None | Human-readable label. |
+| `version` | Yes | string | None | API version string (for example, `2026-05`). |
+| `subject_type` | Yes | string | None | Kind of entity (for example, `person`). |
+| `value.type` | No | string | `""` | Value type: `date`, `number`, `boolean`, or `string`. |
+| `value.unit` | No | string | None | Optional unit (for example, `hectare`). |
+| `inputs` | No | array | `[]` | Named parameters the caller must supply. Each has `name` and `type`. |
+| `depends_on` | No | array | `[]` | IDs of claims that must be evaluated before this one. Must form a DAG. |
+| `source_bindings` | No | map | `{}` | Map of binding name to `SourceBindingConfig`. Required if `rule` reads a source. |
+| `rule` | Yes | object | None | Evaluation rule. See [Rule types](#rule-types). |
+| `operations.evaluate.enabled` | No | bool | `true` | Whether `POST /claims/evaluate` is enabled for this claim. |
+| `operations.batch_evaluate.enabled` | No | bool | `false` | Whether `POST /claims/batch-evaluate` is enabled. |
+| `operations.batch_evaluate.max_subjects` | No | number | `100` | Per-claim subject limit for batch evaluation. |
+| `disclosure.default` | No | string | `redacted` | Default disclosure mode. |
+| `disclosure.allowed` | No | array | `["redacted"]` | Modes the caller may request. |
+| `disclosure.downgrade` | No | string | `deny` | Action when caller requests a disallowed mode. |
+| `formats` | No | array | `[]` | Allowed output media types. |
+| `credential_profiles` | No | array | `[]` | Credential profile IDs that may issue from this claim. |
+| `cccev.requirement_type` | No | string | None | CCCEV requirement type annotation for JSON-LD rendering. |
+| `oots.enabled` | No | bool | None | Once-Only Technical System config. Not yet active in v0. |
+
+## Rule types
+
+Declared in `RuleConfig`
+([config.rs:441](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+
+| Type | Required fields | Behavior |
+| --- | --- | --- |
+| `extract` | `source`, `field` | Reads `field` from the source binding named `source`. Returns the raw value. |
+| `exists` | `source` | Returns `true` if the source binding found at least one record, `false` otherwise. |
+| `cel` | `expression`, optionally `bindings` | Evaluates a CEL expression. `bindings.claims` maps variable names to upstream claim IDs. `bindings.vars` supplies static values. |
+| `plugin` | `plugin` | Declares an external plugin name. Not yet implemented at reviewed commit. |
+
+## Source binding config
+
+Fields of `SourceBindingConfig`
+([config.rs:321](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `connector` | Yes | `registry_data_api` or `dci`. |
+| `connection` | Yes | Key in `evidence.source_connections`. |
+| `required_scope` | No | Scope the authenticated principal must carry to use this binding. |
+| `dataset` | Yes | Logical dataset name passed to the source connector. |
+| `entity` | Yes | Logical entity name passed to the source connector. |
+| `lookup.input` | Yes | Name from `inputs` used as the lookup key value. |
+| `lookup.field` | Yes | Field name on the source entity to match against. |
+| `lookup.op` | No | Comparison operator. Default: `eq`. |
+| `lookup.cardinality` | No | Expected record count. Default: `one`. |
+| `fields.<name>.field` | Yes | Source field name to extract. |
+| `fields.<name>.type` | No | Expected type: `date`, `number`, `boolean`, `string`. |
+| `fields.<name>.unit` | No | Optional unit. |
+| `fields.<name>.required` | No | If `true`, evaluation fails when the field is absent. |
+
+## Source connector types
+
+([config.rs:399](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs),
+[standalone.rs:451](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/standalone.rs))
+
+| Kind | YAML value | Protocol | Request shape |
+| --- | --- | --- | --- |
+| Registry Data API | `registry_data_api` | HTTP POST to `{base_url}/{dataset}/{entity}` with query parameters. | Standard Registry Data API query body. |
+| SP DCI | `dci` | HTTP POST to `{base_url}{dci.search_path}`. | DCI `registry/sync/search`-shaped request body with `query_type` and subject ID. |
+
+SP DCI connector config fields under `source_connections.<id>.dci`
+([config.rs:345](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)):
+
+| Field | Default |
+| --- | --- |
+| `search_path` | `/registry/sync/search` |
+| `sender_id` | `registry-witness` |
+| `query_type` | `idtype-value` |
+| `records_path` | `/message/search_response/0/data/reg_records` |
+| `max_results` | `2` |
+| `registry_type` | None |
+| `record_type` | None |
+| `field_paths` | `{}` (map of local field name to JSON path in record) |
+
+## Disclosure policy modes
+
+([model.rs:13](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs))
+
+| Mode | YAML value | What the caller receives |
+| --- | --- | --- |
+| Full value | `value` | The evaluated claim value (date, number, boolean, or string). |
+| Predicate | `predicate` | Boolean satisfaction result only. The underlying value is not returned. |
+| Redacted | `redacted` | No value and no predicate. The result slot is present but carries no data. |
+
+Downgrade strategies (`disclosure.downgrade`):
+
+| Strategy | YAML value | Behavior when disallowed mode is requested |
+| --- | --- | --- |
+| Deny | `deny` | Returns `DisclosureNotAllowed` error. Default. |
+| Default | `default` | Falls back to `disclosure.default`. |
+| Redacted | `redacted` | Forces the result to `Redacted`. |
+
+## Output media types
+
+([model.rs:9](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs))
+
+| Media type | Format |
+| --- | --- |
+| `application/vnd.registry-witness.claim-result+json` | Native claim result JSON. |
+| `application/ld+json; profile="cccev"` | CCCEV-shaped JSON-LD evidence nodes. |
+| `application/dc+sd-jwt` | SD-JWT VC credential (only via `/credentials/issue`). |
+
+## Credential profile config
+
+Fields of `CredentialProfileConfig`
+([config.rs:558](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+
+| Field | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `format` | Yes | None | Must be `application/dc+sd-jwt`. |
+| `issuer` | Yes | None | Issuer DID (for example, `did:web:example.gov`). |
+| `issuer_key_env` | Yes | None | Name of the environment variable holding the Ed25519 OKP JWK. |
+| `issuer_kid` | No | None | Key ID to include in the credential header. |
+| `vct` | Yes | None | Verifiable Credential Type URI. |
+| `validity_seconds` | No | `7776000` (90 days) | Credential validity window. |
+| `holder_binding.mode` | No | None | Binding mode. Currently `did`. |
+| `holder_binding.proof_of_possession` | No | None | `required` enforces holder proof. Only `did:jwk` is supported when set to `required`. |
+| `holder_binding.allowed_did_methods` | No | `[]` | Permitted DID methods for holder binding. |
+| `allowed_claims` | No | `[]` | Claim IDs that this profile may issue. |
+| `disclosure.allowed` | No | None | Disclosure modes permitted in issued credentials. |
+
+## Audit event shape
+
+`EvidenceAuditEvent` fields
+([model.rs:263](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs)).
+Events are serialized as JSON Lines (JSONL) to `stdout` or a file.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `event_id` | string | Unique identifier for this audit record. |
+| `occurred_at` | string | RFC 3339 timestamp. |
+| `principal_id` | string | Identifier of the authenticated caller. |
+| `decision` | string | Outcome of the request. |
+| `method` | string | HTTP method. |
+| `path` | string | Request path. |
+| `status` | number | HTTP response status code. |
+| `verification_id` | string or null | Verification context identifier. May be omitted for redacted results. |
+| `claim_hash` | string or null | Hash of the evaluated claim set. May be omitted for redacted results. |
+| `row_count` | number or null | Number of source records read. |
+| `error_code` | string or null | Error code if the request failed. |
+
+## Top-level config sections
+
+`StandaloneRegistryWitnessConfig` top-level keys
+([config.rs:12](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+
+| Section | Key | Default | Notes |
+| --- | --- | --- | --- |
+| `server` | `bind` | `127.0.0.1:8081` | Bind address. Demo config uses `127.0.0.1:4255`. |
+| `auth` | `api_keys` | `[]` | Array of `{id, token_env, scopes}`. |
+| `auth` | `bearer_tokens` | `[]` | Array of `{id, token_env, scopes}`. |
+| `audit` | `sink` | `stdout` | `stdout` or `file`. |
+| `audit` | `path` | None | Required when `sink: file`. |
+| `evidence` | `enabled` | `false` | Must be `true`. Config validation fails otherwise. |
+| `evidence` | `service_id` | `registry-witness` | Service identity string in responses. |
+| `evidence` | `api_version` | `2026-05` | API version label. |
+| `evidence` | `api_base_url` | `/` | Base URL for self-links in the service document. |
+| `evidence` | `inline_batch_limit` | `100` | Global maximum subjects per batch request. |
+| `evidence` | `claims` | `[]` | Array of claim definitions. |
+| `evidence` | `credential_profiles` | `{}` | Map of profile ID to `CredentialProfileConfig`. |
+| `evidence` | `source_connections` | `{}` | Map of connection ID to `SourceConnectionConfig`. |

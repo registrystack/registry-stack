@@ -1,0 +1,235 @@
+---
+title: Validate and render a manifest
+description: How to validate a Registry Manifest metadata file, render individual artifacts, and produce a static publication bundle with registry-manifest-cli.
+status: draft
+owner: registry-manifest
+source_repos:
+  - registry-manifest
+last_reviewed: "2026-05-23"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - ogc-api-records
+  - odrl
+---
+
+Use this page when you have a `metadata.yaml` file and want to check it for errors, inspect
+individual rendered artifacts, or produce a complete static publication bundle for hosting.
+
+## When to use this
+
+- You edited a manifest and want to confirm it is structurally valid before committing.
+- You want to inspect the DCAT or BRegDCAT-AP output for a specific dataset.
+- You are preparing a static metadata bundle to serve alongside a Registry Relay deployment
+  or as a standalone hosted artifact.
+
+This how-to does not cover profile fixture validation.
+For that, see the [profile fixtures how-to](../profile-fixtures/).
+
+## Prerequisites
+
+- Rust toolchain installed (the workspace uses stable Rust).
+- The `registry-manifest` repository cloned locally.
+
+Build the CLI before running commands:
+
+```sh
+cargo build -p registry-manifest-cli
+```
+
+The commands in this page use `cargo run -p registry-manifest-cli --` as a prefix.
+If you have installed the binary directly, replace that prefix with `registry-manifest-cli`.
+
+The four example profile fixtures in the repository serve as ready-made manifest inputs.
+The commands in this how-to use
+[`profiles/example-civil-registration/fixtures/metadata.yaml`](https://github.com/jeremi/registry-manifest/blob/main/profiles/example-civil-registration/fixtures/metadata.yaml)
+as the example path.
+Substitute your own manifest path as needed.
+
+## Steps
+
+### 1. Validate the manifest
+
+```sh
+cargo run -p registry-manifest-cli -- validate \
+  profiles/example-civil-registration/fixtures/metadata.yaml
+```
+
+On success, the CLI prints:
+
+```text
+metadata manifest valid: profiles/example-civil-registration/fixtures/metadata.yaml
+```
+
+On failure, all validation errors are printed together.
+The validator does not stop at the first error; it collects errors across all passes so you can
+fix every problem in one edit cycle.
+
+Validation checks include:
+
+- `schema_version` equals `"registry-manifest/v1"`.
+- Catalog `base_url` is a valid HTTP URL.
+- Entity names match the required identifier pattern.
+- Cardinality strings are well-formed (`"0..1"`, `"1..n"`, `"1..1"`).
+- Codelist references resolve to defined codelists.
+- ODRL policy terms use recognized action and operator values.
+- Evidence offering references are internally consistent.
+
+### 2. Render a single artifact
+
+Use `render` to write one renderer's output to stdout.
+The `--format` flag selects the renderer.
+
+Render the catalog JSON:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format catalog
+```
+
+Render BRegDCAT-AP 2.00 JSON-LD:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format bregdcat-ap
+```
+
+Render SHACL (Shapes Constraint Language) node shapes:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format shacl
+```
+
+Render a JSON Schema Draft 2020-12 for a specific dataset and entity:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format json-schema \
+  --dataset <dataset-id> \
+  --entity <entity-name>
+```
+
+Render OGC API Records item bodies:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format ogc-records
+```
+
+Render the ODRL (Open Digital Rights Language) policy collection:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format policies
+```
+
+Render a per-dataset ODRL policy document:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format policy \
+  --dataset <dataset-id>
+```
+
+Render evidence offerings:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format evidence-offerings
+```
+
+Render a single evidence offering by ID:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format evidence-offering \
+  --offering <offering-id>
+```
+
+All `render` output goes to stdout.
+Redirect to a file when you want to inspect or diff it:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --format bregdcat-ap > /tmp/breg.jsonld
+```
+
+### 3. Publish a static bundle
+
+`publish` runs every renderer, writes all artifacts to a directory, and creates an
+`index.json` that lists every artifact with its relative path.
+
+```sh
+cargo run -p registry-manifest-cli -- publish \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --out target/metadata/public
+```
+
+The output directory will contain `catalog.json`, `dcat.jsonld`, `shacl.jsonld`, per-entity
+JSON Schema files, OGC Records output, evidence-offering files, and per-dataset policy
+documents.
+See the [reference page](../reference/) for the full artifact list.
+
+The `index.json` at the root of the output directory carries schema version
+`registry-manifest-index/v1` and links to every artifact.
+
+## Verification
+
+After `validate`, confirm the exit code is zero:
+
+```sh
+cargo run -p registry-manifest-cli -- validate \
+  profiles/example-civil-registration/fixtures/metadata.yaml
+echo "exit code: $?"
+```
+
+After `publish`, confirm the key artifacts are present:
+
+```sh
+ls target/metadata/public/catalog.json \
+   target/metadata/public/dcat.jsonld \
+   target/metadata/public/shacl.jsonld \
+   target/metadata/public/index.json
+```
+
+## Troubleshooting
+
+### "schema_version mismatch" or validation error on schema_version
+
+The manifest root must declare `schema_version: registry-manifest/v1`.
+Check the first line of your YAML.
+
+### Validation prints errors about cardinality strings
+
+Cardinality values must match the pattern `"0..1"`, `"1..1"`, or `"1..n"`.
+Check your `cardinality_expectations` blocks.
+
+### `--format json-schema` produces no output or errors
+
+The `json-schema` format requires both `--dataset <id>` and `--entity <name>`.
+Confirm both flags are present and match IDs defined in your manifest.
+
+### `--format policy` errors on dataset not found
+
+The `policy` format requires `--dataset <id>`.
+The ID must match a `DatasetManifest` entry in your manifest.
+
+### `publish` writes an empty or partial directory
+
+A validation failure inside `publish` aborts the run.
+Run `validate` first to confirm the manifest is clean before running `publish`.

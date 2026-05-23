@@ -54,6 +54,56 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Projects',
+          items: [
+            { label: 'All projects', slug: 'projects' },
+            {
+              label: 'Registry Manifest',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-manifest' },
+                { label: 'Validate and render', slug: 'projects/registry-manifest/validate-and-render' },
+                { label: 'Profile fixtures', slug: 'projects/registry-manifest/profile-fixtures' },
+                { label: 'Reference', slug: 'projects/registry-manifest/reference' },
+              ],
+            },
+            {
+              label: 'Registry Relay',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-relay' },
+                { label: 'Run locally', slug: 'projects/registry-relay/run-locally' },
+                { label: 'Authorize callers', slug: 'projects/registry-relay/authorize-callers' },
+                { label: 'Reference', slug: 'projects/registry-relay/reference' },
+              ],
+            },
+            {
+              label: 'Registry Witness',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-witness' },
+                { label: 'Run locally', slug: 'projects/registry-witness/run-locally' },
+                { label: 'Configure a claim', slug: 'projects/registry-witness/configure-a-claim' },
+                { label: 'Reference', slug: 'projects/registry-witness/reference' },
+              ],
+            },
+            {
+              label: 'Registry Atlas',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-atlas' },
+                { label: 'Run locally', slug: 'projects/registry-atlas/run-locally' },
+                { label: 'Inspect a registry', slug: 'projects/registry-atlas/inspect-a-registry' },
+                { label: 'Reference', slug: 'projects/registry-atlas/reference' },
+              ],
+            },
+            {
+              label: 'Registry Lab',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-lab' },
+                { label: 'Demo flow', slug: 'projects/registry-lab/demo-flow' },
+                { label: 'Reference', slug: 'projects/registry-lab/reference' },
+              ],
+            },
+          ],
+        },
+        {
           label: 'Explanation',
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
