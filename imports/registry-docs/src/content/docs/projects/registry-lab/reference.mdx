@@ -11,23 +11,24 @@ locale: en
 standards_referenced: []
 ---
 
-Hand-maintained reference for Registry Lab as of commit `aaa6f8057a11`.
-Verify against the source files linked per table before treating any row as authoritative.
+Use this page to look up port numbers, credential names, and script entry points when setting up or debugging the topology.
+
+This reference is hand-maintained; the source links in each table are the authoritative check.
 
 ## Compose service inventory
 
-Source: [`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml).
+Full Compose file: [`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml).
 
-| Service | Image / build | Role | Host port | Source link |
-| --- | --- | --- | --- | --- |
-| `civil-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for civil domain; serves CSV-backed civil registry data | 4311 | [`compose.yaml` L35](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `social-protection-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for social protection domain; serves XLSX-backed data | 4312 | [`compose.yaml` L45](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `health-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for health domain; serves Parquet-backed data | 4313 | [`compose.yaml` L55](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `civil-witness` | `registry-witness:demo` (local build) | Registry Witness for civil claims; reads civil facts from `civil-registry-relay` over HTTP | 4321 | [`compose.yaml` L65](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `social-protection-witness` | `registry-witness:demo` (local build) | Registry Witness for social protection claims; reads social facts from `social-protection-registry-relay` over HTTP | 4322 | [`compose.yaml` L74](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `shared-eligibility-witness` | `registry-witness:demo` (local build) | Registry Witness for cross-authority claims spanning civil, social, and health registries | 4323 | [`compose.yaml` L82](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `static-metadata-publisher` | `python:3.12.3-slim-bookworm` (pulled) | Python HTTP server serving the portable metadata static bundle at `/srv/static` | 4331 | [`compose.yaml` L89](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
-| `demo-client` | `python:3.12.3-slim-bookworm` (pulled) | Narrated demo client (one-shot, `--profile client` only); runs `scripts/demo-flow.py` | None | [`compose.yaml` L98](https://github.com/jeremi/registry-lab/blob/main/compose.yaml) |
+| Service | Image / build | Role | Host port |
+| --- | --- | --- | --- |
+| `civil-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for civil domain; serves CSV-backed civil registry data | 4311 |
+| `social-protection-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for social protection domain; serves XLSX-backed data | 4312 |
+| `health-registry-relay` | `registry-relay:demo` (local build) | Registry Relay for health domain; serves Parquet-backed data | 4313 |
+| `civil-witness` | `registry-witness:demo` (local build) | Registry Witness for civil claims; reads civil facts from `civil-registry-relay` over HTTP | 4321 |
+| `social-protection-witness` | `registry-witness:demo` (local build) | Registry Witness for social protection claims; reads social facts from `social-protection-registry-relay` over HTTP | 4322 |
+| `shared-eligibility-witness` | `registry-witness:demo` (local build) | Registry Witness for cross-authority claims spanning civil, social, and health registries | 4323 |
+| `static-metadata-publisher` | `python:3.12.3-slim-bookworm` (pulled) | Python HTTP server serving the portable metadata static bundle at `/srv/static` | 4331 |
+| `demo-client` | `python:3.12.3-slim-bookworm` (pulled) | Narrated demo client (one-shot, `--profile client` only); runs `scripts/demo-flow.py` | None |
 
 All Relay and Witness services use `env_file: .env`, `RUST_LOG: info`, and `restart: unless-stopped`.
 Relay services have a healthcheck (`registry-relay --help`, 30 s interval, 10 s timeout, 3 retries).
@@ -54,14 +55,33 @@ cross-source subjects, and health-linked support cases are all present before wr
 
 ## Smoke-check scripts
 
-| Script | What it checks | Source link |
-| --- | --- | --- |
-| `scripts/smoke.sh` | ~30 checks: health/ready on all Relays, discovery on all Witnesses, OpenAPI on all services, evidence-offering endpoints, authorization scope denial (403 `auth.scope_denied`), positive row-read and aggregate-read on social Relay, claim evaluation on civil/social/shared witnesses, cross-authority `source_count >= 2`, credential-bound SD-JWT VC evaluation, demo-client artifact presence, audit event log entries | [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh) |
-| `scripts/release-check.sh` | Full release wrapper: fixture generation, secret generation, static metadata publication, compose build, compose up, smoke run, demo client run, compose down with `-v` | [`scripts/release-check.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/release-check.sh) |
-
 Run `scripts/smoke.sh` after `docker compose -f compose.yaml up -d` to confirm the topology is healthy.
 All smoke requests use the correlation ID `decentralized-demo-correlation-001`
 (overridable via `DEMO_CORRELATION_ID`).
+
+### smoke.sh
+
+Source: [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)
+
+Approximately 30 checks:
+
+- Health and ready endpoints on all Relay services
+- Discovery endpoints on all Witness services
+- OpenAPI endpoints on all services
+- Evidence-offering endpoints
+- Authorization scope denial (403 `auth.scope_denied`)
+- Positive row-read and aggregate-read on social Relay
+- Claim evaluation on civil, social, and shared Witnesses
+- Cross-authority `source_count >= 2`
+- Credential-bound SD-JWT VC evaluation
+- Demo-client artifact presence
+- Audit event log entries
+
+### release-check.sh
+
+Source: [`scripts/release-check.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/release-check.sh)
+
+Full release wrapper that runs in sequence: fixture generation, secret generation, static metadata publication, compose build, compose up, smoke run, demo client run, and compose down with `-v`.
 
 ## Generated local credentials
 
@@ -90,9 +110,11 @@ The committed `.env.example` contains inert placeholder values only.
 | Witness client bearer (shared) | `SHARED_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `shared-eligibility-witness` |
 | Issuer JWK (all Witnesses) | `REGISTRY_WITNESS_ISSUER_JWK` | SD-JWT VC signing key; all three Witness configs use `issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK` ([`config/witness/civil-witness.yaml` L43](https://github.com/jeremi/registry-lab/blob/main/config/witness/civil-witness.yaml#L43)) |
 
+:::note[How credentials flow]
 Relay configs reference only `*_HASH` env vars (SHA-256 fingerprints of the raw tokens).
 Witness configs reference `token_env` names that map to `*_RAW` or `*_BEARER` env vars.
 No raw token is committed to the repository.
+:::
 
 ## Static metadata publisher endpoints
 

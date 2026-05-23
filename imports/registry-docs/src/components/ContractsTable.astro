@@ -2,33 +2,35 @@
 import contracts from '../data/generated/contracts.json';
 ---
 
-<div class="registry-table">
-  <table>
-    <thead>
-      <tr>
-        <th>Contract</th>
-        <th>Owner</th>
-        <th>Status</th>
-        <th>Surface</th>
-        <th>Source of truth</th>
-        <th>Consumer note</th>
-      </tr>
-    </thead>
-    <tbody>
-      {contracts.map((contract) => (
-        <tr>
-          <td>
-            <strong>{contract.name}</strong><br />
-            <code>{contract.id}</code>
-          </td>
-          <td>{contract.owner}</td>
-          <td><span class="status-chip">{contract.status}</span></td>
-          <td>{contract.surface}</td>
-          <td><a href={contract.source_of_truth.url}>{contract.source_of_truth.label}</a></td>
-          <td>{contract.consumer_note}</td>
-        </tr>
-      ))}
-    </tbody>
-  </table>
+<div class="contracts-list">
+  {contracts.map((contract) => (
+    <section class="contracts-card" id={contract.id}>
+      <header class="card-header">
+        <h3>{contract.name}</h3>
+        <div class="card-header-meta">
+          <code class="card-id">{contract.id}</code>
+          <span class="status-chip">{contract.status}</span>
+        </div>
+      </header>
+
+      <dl class="card-meta card-meta--inline">
+        <dt>Owner</dt>
+        <dd><span class="inline-chip">{contract.owner}</span></dd>
+        <dt>Source of truth</dt>
+        <dd>
+          <a href={contract.source_of_truth.url}>{contract.source_of_truth.label}</a>
+        </dd>
+      </dl>
+
+      <div class="card-body">
+        {contract.surface && (
+          <p><strong class="field-label">Surface</strong> {contract.surface}</p>
+        )}
+        {contract.consumer_note && (
+          <p><strong class="field-label">Consumer note</strong> {contract.consumer_note}</p>
+        )}
+      </div>
+    </section>
+  ))}
 </div>
 <p class="source-note">Generated from <code>src/data/contracts.yaml</code>.</p>

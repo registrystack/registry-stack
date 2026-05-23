@@ -17,6 +17,9 @@ config:
       - figure
       - title
       - desc
+      - dl
+      - dt
+      - dd
       - ProjectMap
       - OpenApiSourcesTable
       - ContractsTable

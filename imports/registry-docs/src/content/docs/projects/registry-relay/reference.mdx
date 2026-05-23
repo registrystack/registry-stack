@@ -20,37 +20,39 @@ standards_referenced:
   - w3c-did
 ---
 
-Hand-maintained reference for Registry Relay v0.1.0, reviewed against commit
-[aec4394](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/README.md)
-on 2026-05-23.
-Authoritative sources are the upstream files linked from each section.
+Use this page to look up config keys, source binding options, API routes, auth fields,
+audit record fields, environment variables, and startup error codes for Registry Relay v0.1.0.
+This reference is hand-maintained against the upstream source; check linked upstream files
+for the latest detail.
+
+Jump to: [Environment variables](#environment-variables) | [Auth failure codes](#oidc-granular-failure-codes) | [Startup error codes](#split-metadata-startup-error-codes)
 
 ## Config schema: top-level keys
 
 The config file is a single YAML document.
 Unknown fields are rejected for most blocks.
-[Source: docs/configuration.md root shape.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) (root shape; all keys below are documented there unless otherwise noted).
 
-| Key | Type | Required | Purpose | Evidence |
-| --- | --- | --- | --- | --- |
-| `server` | object | yes | HTTP listener addresses, CORS, cache dir, timeouts | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `catalog` | object | yes | Catalog title, base URL, publisher, `participant_id` | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `auth` | object | yes | Auth mode (`api_key` or `oidc`) and credentials | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `datasets` | array | yes | Dataset and entity configurations | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `audit` | object | yes | Audit sink (`stdout`, `file`, `syslog`) and format | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `metadata` | object | no | Path to a portable `metadata.yaml` manifest (split config) | [docs/metadata.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md) |
-| `vocabularies` | object | no | Custom vocabulary prefix mappings (compact IRIs) | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `claim_verification` | object | no | HMAC binding key for submitted claim hashing | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `evidence_verification` | object | no | Per-principal, per-offering rate-limit settings | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `provenance` | object | no | Opt-in signed Verifiable Credential issuer config | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
-| `standards` | object | no | Feature-gated standards adapters (SP DCI, PublicSchema) | [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) |
+| Key | Type | Required | Purpose |
+| --- | --- | --- | --- |
+| `server` | object | yes | HTTP listener addresses, CORS, cache dir, timeouts |
+| `catalog` | object | yes | Catalog title, base URL, publisher, `participant_id` |
+| `auth` | object | yes | Auth mode (`api_key` or `oidc`) and credentials |
+| `datasets` | array | yes | Dataset and entity configurations |
+| `audit` | object | yes | Audit sink (`stdout`, `file`, `syslog`) and format |
+| `metadata` | object | no | Path to a portable `metadata.yaml` manifest (split config); see [docs/metadata.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md) |
+| `vocabularies` | object | no | Custom vocabulary prefix mappings (compact IRIs) |
+| `claim_verification` | object | no | HMAC binding key for submitted claim hashing |
+| `evidence_verification` | object | no | Per-principal, per-offering rate-limit settings |
+| `provenance` | object | no | Opt-in signed Verifiable Credential issuer config |
+| `standards` | object | no | Feature-gated standards adapters (SP DCI, PublicSchema) |
 
 ### Selected `server` fields
 
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `server.bind` | `0.0.0.0:8080` | Public data-plane listener |
-| `server.admin_bind` | none | Optional private admin listener (reload, metrics) |
+| `server.admin_bind` | not set | Optional; not enabled unless configured. Example: `127.0.0.1:8081` |
 | `server.cache_dir` | `./cache` | Writable cache for normalized Parquet and ingest state |
 | `server.max_source_file_bytes` | 256 MiB | Maximum bytes for any single source file or Postgres snapshot |
 | `server.xlsx_max_file_bytes` | 256 MiB | Maximum bytes for XLSX files specifically |
@@ -94,7 +96,7 @@ Credentials are loaded from the environment variable named by `source.connection
 | `source.query_timeout` | Default 30s |
 | `source.live_max_connections` | Default 8 (live mode only) |
 
-Supported materilizations: `snapshot` (table or query) and `live` (structured table
+Supported materializations: `snapshot` (table or query) and `live` (structured table
 only).
 `live` is not supported for `query` sources.
 
@@ -114,11 +116,12 @@ All `/metadata/*` routes require the caller's `<dataset_id>:metadata` scope.
 They expose caller-scoped views filtered by the authenticated principal's metadata
 scopes.
 They do not grant row, aggregate, evidence-verification, or admin access.
-Standard expansions used in this table: Data Catalog Vocabulary (DCAT), BRegDCAT-AP
-(SEMIC Business Register DCAT Application Profile), Shapes Constraint Language (SHACL),
-Open Digital Rights Language (ODRL), and OGC API Records (Open Geospatial Consortium
-API specification for records).
 [Source: docs/metadata.md relay endpoints section; docs/api.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
+
+{/* Standard abbreviations used in the table: DCAT = Data Catalog Vocabulary,
+    BRegDCAT-AP = SEMIC Business Register DCAT Application Profile,
+    SHACL = Shapes Constraint Language, ODRL = Open Digital Rights Language,
+    OGC API Records = Open Geospatial Consortium API specification for records. */}
 
 | Path | Output format | Standard | Notes |
 | --- | --- | --- | --- |
@@ -150,13 +153,21 @@ API specification for records).
 Registry Relay supports two modes: API key and OpenID Connect / OAuth 2.0 (OIDC)
 resource-server.
 Exactly one mode is active per deployment.
-
-| Mode | Config value | Client sends | Token source | Principal ID |
-| --- | --- | --- | --- | --- |
-| API key | `auth.mode: api_key` | `Authorization: Bearer <key>` or `X-Api-Key: <key>` | Operator-generated; SHA-256 fingerprint in env var | `auth.api_keys[].id` value |
-| OIDC resource server | `auth.mode: oidc` | `Authorization: Bearer <jwt>` | External IdP (client credentials or other grant) | JWT `sub` (preferred), then `client_id`, then `azp` |
-
 [Source: docs/api.md authentication section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+
+### API key authentication
+
+- Config value: `auth.mode: api_key`
+- Client sends: `Authorization: Bearer <key>` or `X-Api-Key: <key>`
+- Token source: Operator-generated; SHA-256 fingerprint in env var
+- Principal ID: `auth.api_keys[].id` value
+
+### OIDC resource server
+
+- Config value: `auth.mode: oidc`
+- Client sends: `Authorization: Bearer <jwt>`
+- Token source: External IdP (client credentials or other grant)
+- Principal ID: JWT `sub` (preferred), then `client_id`, then `azp`
 
 ### OIDC key fields
 

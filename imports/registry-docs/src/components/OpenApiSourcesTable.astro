@@ -2,33 +2,31 @@
 import sources from '../data/generated/openapi-sources.json';
 ---
 
-<div class="registry-table">
-  <table>
-    <thead>
-      <tr>
-        <th>API</th>
-        <th>Owner</th>
-        <th>Status</th>
-        <th>Source</th>
-        <th>Pinned artifact</th>
-        <th>Redoc</th>
-      </tr>
-    </thead>
-    <tbody>
-      {sources.map((source) => (
-        <tr>
-          <td>
-            <strong>{source.name}</strong><br />
-            <code>{source.id}</code>
-          </td>
-          <td>{source.owner}</td>
-          <td><span class="status-chip">{source.status}</span></td>
-          <td>{source.source}</td>
-          <td><code>{source.artifact}</code></td>
-          <td><a href={source.redoc_path}>Open Redoc page</a></td>
-        </tr>
-      ))}
-    </tbody>
-  </table>
+<div class="openapi-sources-list">
+  {sources.map((source) => (
+    <section class="openapi-source" id={source.id}>
+      <header class="card-header">
+        <h3>{source.name}</h3>
+        <code class="card-id">{source.id}</code>
+      </header>
+
+      <dl class="card-meta">
+        <dt>Owner</dt>
+        <dd><span class="inline-chip">{source.owner}</span></dd>
+        <dt>Status</dt>
+        <dd>{source.status}</dd>
+        <dt>Source</dt>
+        <dd><code>{source.source}</code></dd>
+        <dt>Pinned artifact</dt>
+        <dd><code>{source.artifact}</code></dd>
+      </dl>
+
+      {source.redoc_path && (
+        <footer class="card-footer">
+          <a href={source.redoc_path} class="redoc-link">Open Redoc page</a>
+        </footer>
+      )}
+    </section>
+  ))}
 </div>
 <p class="source-note">Generated from <code>src/data/openapi-sources.yaml</code>.</p>

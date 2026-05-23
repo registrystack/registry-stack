@@ -17,24 +17,45 @@ standards_referenced:
   - odrl
 ---
 
-This page is hand-maintained from
-[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
-and
-[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
-as of 2026-05-23.
-Review against source when either crate changes.
+Use this page to look up CLI subcommand flags, manifest key definitions, publish output paths, and the runtime-only key list.
+Hand-maintained from the upstream repo; see per-section source links to verify.
 
 ## CLI subcommands
 
 Source:
 [`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
 
-| Subcommand | Signature | What it does |
-| --- | --- | --- |
-| `validate` | `validate <metadata.yaml>` | Parses and validates a manifest. Prints `"metadata manifest valid: <path>"` on success. Exits non-zero and prints all errors on failure. |
-| `render` | `render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--offering <id>]` | Compiles the manifest and writes one renderer's output to stdout. |
-| `publish` | `publish <metadata.yaml> --out <dir>` | Compiles the manifest, runs all renderers, writes the full artifact tree to `<dir>`, and writes `index.json`. |
-| `validate-profiles` | `validate-profiles [profiles-dir]` | Scans `profiles-dir` for `profile.yaml` descriptors, validates descriptor schema, and validates all referenced fixture manifests. |
+### `validate`
+
+Parses and validates a manifest. Prints `"metadata manifest valid: <path>"` on success. Exits non-zero and prints all errors on failure.
+
+```text
+validate <metadata.yaml>
+```
+
+### `render`
+
+Compiles the manifest and writes one renderer's output to stdout.
+
+```text
+render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--offering <id>]
+```
+
+### `publish`
+
+Compiles the manifest, runs all renderers, writes the full artifact tree to `<dir>`, and writes `index.json`.
+
+```text
+publish <metadata.yaml> --out <dir>
+```
+
+### `validate-profiles`
+
+Scans `profiles-dir` for `profile.yaml` descriptors, validates descriptor schema, and validates all referenced fixture manifests.
+
+```text
+validate-profiles [profiles-dir]
+```
 
 ### Render format values
 
@@ -47,14 +68,13 @@ The `--format` flag on `render` accepts:
 | `evidence-offering` | `--offering <id>` | Single evidence offering JSON |
 | `policies` | None | ODRL policy collection JSON-LD |
 | `policy` | `--dataset <id>` | Per-dataset ODRL policy document JSON-LD |
-| `dcat` | `--profile <id>` optional | Base DCAT JSON-LD, or profile variant if `--profile` is given |
-| `bregdcat-ap` | None | BRegDCAT-AP 2.00 JSON-LD |
+| `dcat` | `--profile <id>` optional | Base DCAT JSON-LD. With `--profile bregdcat-ap`, renders the BRegDCAT-AP 2.00 variant. `--profile dcat` and `--profile dcat-ap` also render base DCAT. |
+| `bregdcat-ap` | None | BRegDCAT-AP 2.00 JSON-LD (shorthand; equivalent to `--format dcat --profile bregdcat-ap`) |
 | `shacl` | None | SHACL node shapes JSON-LD |
 | `json-schema` | `--dataset <id>` and `--entity <name>` | JSON Schema Draft 2020-12 |
 | `ogc-records` | None | OGC API Records item bodies JSON |
 
-Profile IDs for `--profile` on `dcat`: `"dcat"` and `"dcat-ap"` render base DCAT;
-`"bregdcat-ap"` renders BRegDCAT-AP.
+Valid `--profile` values for `--format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP 2.00).
 
 ## Manifest top-level keys
 
@@ -82,7 +102,7 @@ Source:
 | `application_profiles` | list of strings | No | Profile IDs the catalog declares support for (for example, `"bregdcat-ap"`). |
 | `standards` | `StandardsManifest` | No | Declares DCAT, SHACL, and JSON Schema versions in use. |
 
-### DatasetManifest keys (selected)
+### DatasetManifest keys (common keys; see [source](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) for the full type definition)
 
 | Key | Description |
 | --- | --- |
@@ -93,18 +113,18 @@ Source:
 | `evidence_offerings` | List of `EvidenceOfferingManifest` entries. |
 | `codelists` | List of codelist IDs referenced by this dataset's fields. |
 
-Runtime-only keys (`source`, `table`, `scope`, `url`, `url_env`, `file_path`, `query`,
-`required_filters`, `rows_scope`, `bindings`, `capabilities`, `column`, `visibility`) must not
-appear in a portable manifest.
+### Runtime-only keys
+
+The following keys must not appear in a portable manifest.
 Their presence causes `validate-profiles` to fail.
+They belong in Registry Relay runtime configuration, not in a metadata manifest.
+
+`source`, `table`, `scope`, `url`, `url_env`, `file_path`, `query`, `required_filters`,
+`rows_scope`, `bindings`, `capabilities`, `column`, `visibility`
 
 ## Schema versions
 
-| Artifact | Schema version string |
-| --- | --- |
-| Metadata manifest | `registry-manifest/v1` |
-| Profile descriptor | `registry-manifest-profile/v1` |
-| Publish index (`index.json`) | `registry-manifest-index/v1` |
+The three schema version strings are: metadata manifest (`registry-manifest/v1`), profile descriptor (`registry-manifest-profile/v1`), and publish index (`registry-manifest-index/v1`).
 
 ## Publish output artifacts
 
@@ -131,9 +151,26 @@ All paths are relative to the `--out` directory.
 
 The `index.json` structure contains the schema version, paths to all artifacts, and an array
 of document entries each with their URL list.
-(Source:
+Source:
 [`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
-lines 203 to 217.)
+
+Minimal example shape:
+
+```json
+{
+  "schema_version": "registry-manifest-index/v1",
+  "documents": [
+    {
+      "urls": ["https://registry.example.gov/metadata/dcat"],
+      "path": "dcat.jsonld"
+    },
+    {
+      "urls": ["https://registry.example.gov/metadata/shacl"],
+      "path": "shacl.jsonld"
+    }
+  ]
+}
+```
 
 ## Golden fixture coverage
 
