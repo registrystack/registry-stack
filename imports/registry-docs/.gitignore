@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-check/
 .astro/
 .playwright-mcp/
 .DS_Store
