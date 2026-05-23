@@ -14,7 +14,6 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
 use crate::config::Config;
 use crate::entity::EntityRegistry;
@@ -543,17 +542,6 @@ fn visible_metadata_entity_ids(
     } else {
         Ok(entity_ids)
     }
-}
-
-#[allow(dead_code)]
-fn require_principal_scope(
-    principal: Option<Extension<Principal>>,
-    required: &str,
-) -> Result<(), Error> {
-    let Some(Extension(principal)) = principal else {
-        return Err(AuthError::MissingCredential.into());
-    };
-    require_scope(&principal, required)
 }
 
 fn json_response<T>(value: T, headers: &HeaderMap) -> Response
