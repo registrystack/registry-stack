@@ -41,7 +41,6 @@ export default defineConfig({
         {
           label: 'Start',
           items: [
-            { label: 'Introduction', slug: 'start' },
             { label: 'What is the registry family', slug: 'start/what-is-the-registry-family' },
             { label: 'Quickstart', slug: 'start/quickstart' },
           ],

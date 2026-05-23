@@ -50,25 +50,7 @@ The five projects:
 4. Registry Witness evaluates claims against configured HTTP sources (Registry Data API or SP DCI connectors). It renders results as `application/vnd.registry-witness.claim-result+json`, CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VCs (`application/dc+sd-jwt`).
 5. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them by artifact kind, and runs strict capability queries over the indexed metadata terms.
 
-## How responsibilities divide
-
-Registry Manifest stays portable. It validates metadata manifests and renders standards-facing artifacts. It doesn't serve HTTP, doesn't talk to databases, doesn't handle credentials, and doesn't do audit or observability. The static bundle it produces can be served from any host.
-
-Registry Relay is the protected gateway. It binds configured datasets and entities to local sources and exposes authorized read-only APIs. Runtime scopes, authentication (API key or OIDC), audit, reload commands, and backend source details live inside Relay. Relay also publishes metadata at runtime under `/metadata/*`, scoped to each caller's visibility, and exposes a DID document at `/.well-known/did.json` when provenance is enabled.
-
-Registry Witness is a separate service for claim evaluation. Relay may publish metadata that points to a Witness endpoint, but Witness owns claim configuration, source connectors, disclosure policy, audit events, and SD-JWT VC issuance. Witness does not import or link Relay code.
-
-Registry Atlas is the inspection workbench. It reads published DCAT catalogs, SHACL shapes, JSON Schemas, OpenAPI documents, and OGC API Records items through a fetch proxy. Its v0.1 capability discovery uses exact matches against machine terms only: no fuzzy matching, no AI inference.
-
-Registry Lab is the runnable demo. It composes Relay instances, Witness instances, a static metadata publisher, and a demo client into one topology. It is not production deployment guidance and does not define normative contracts.
-
-## Non-goals for v0
-
-- Registry Relay v1 doesn't provide a write or provisioning platform.
-- Registry Manifest doesn't become a service framework.
-- Registry Witness doesn't share code with Registry Relay.
-- Registry Atlas doesn't apply fuzzy matching, synonym expansion, or AI inference in v0.1 capability discovery.
-- Registry Lab doesn't define production deployment guidance and isn't a real integration with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
+For what each project does and does not own, see [ownership boundaries](../../map/ownership-boundaries/).
 
 ## Next
 
