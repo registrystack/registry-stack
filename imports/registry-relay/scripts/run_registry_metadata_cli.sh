@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 metadata_repo="${REGISTRY_METADATA_REPO:-"${repo_root}/../registry-metadata"}"
 git_url="${REGISTRY_METADATA_GIT_URL:-https://github.com/jeremi/registry-metadata}"
-git_tag="${REGISTRY_METADATA_GIT_TAG:-v0.1.0}"
+git_tag="${REGISTRY_METADATA_GIT_TAG:-v0.1.1}"
 export CARGO_NET_GIT_FETCH_WITH_CLI="${CARGO_NET_GIT_FETCH_WITH_CLI:-true}"
 
 if [[ -n "${REGISTRY_METADATA_CLI:-}" ]]; then
