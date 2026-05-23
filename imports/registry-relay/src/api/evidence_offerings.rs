@@ -11,7 +11,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::post;
 use axum::{Extension, Router};
-use registry_metadata_core as metadata_core;
+use registry_manifest_core as metadata_core;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;

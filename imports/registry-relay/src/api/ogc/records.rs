@@ -9,8 +9,8 @@ use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use registry_metadata_core as metadata_core;
-use registry_metadata_core::{CompiledDataset, CompiledMetadata};
+use registry_manifest_core as metadata_core;
+use registry_manifest_core::{CompiledDataset, CompiledMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

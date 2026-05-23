@@ -18,7 +18,7 @@ sys.path.insert(0, str(RELAY_ROOT / "demo/scripts"))
 
 from generate_demo_keys import (  # noqa: E402
     generate_claim_verification_binding_key,
-    generate_evidence_server_issuer_jwk,
+    generate_registry_witness_issuer_jwk,
     generate_raw_key,
 )
 
@@ -61,10 +61,10 @@ def env_line(key: str, value: str) -> str:
 
 
 def generate_env() -> dict[str, str]:
-    issuer_jwk = generate_evidence_server_issuer_jwk()
+    issuer_jwk = generate_registry_witness_issuer_jwk()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_claim_verification_binding_key(),
-        "EVIDENCE_SERVER_ISSUER_JWK": issuer_jwk,
+        "REGISTRY_WITNESS_ISSUER_JWK": issuer_jwk,
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
@@ -120,7 +120,7 @@ def main() -> int:
         summary = {
             "raw_token_variables": sorted(k for k in values if k.endswith(("_RAW", "_TOKEN", "_BEARER"))),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
-            "issuer_jwk": "EVIDENCE_SERVER_ISSUER_JWK",
+            "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
             "binding_key": "CLAIM_VERIFICATION_BINDING_KEY",
         }
         print(json.dumps(summary, indent=2, sort_keys=True))

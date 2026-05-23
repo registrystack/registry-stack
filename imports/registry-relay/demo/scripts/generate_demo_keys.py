@@ -50,7 +50,7 @@ BRUNO_VAR_MAP = {
 # (PERSONA_RAW) here so one rotation seeds both consumers.
 BRUNO_ENV_PATH = Path("bruno/registry-relay-demo/.env")
 
-FALLBACK_EVIDENCE_SERVER_ISSUER_JWK = {
+FALLBACK_REGISTRY_WITNESS_ISSUER_JWK = {
     "kty": "OKP",
     "crv": "Ed25519",
     "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
@@ -70,7 +70,7 @@ def generate_claim_verification_binding_key() -> str:
     return f"hex:{secrets.token_bytes(32).hex()}"
 
 
-def generate_evidence_server_issuer_jwk() -> str:
+def generate_registry_witness_issuer_jwk() -> str:
     """Return a private Ed25519 JWK for local SD-JWT VC issuance demos."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,7 +96,7 @@ def generate_evidence_server_issuer_jwk() -> str:
                 "alg": "EdDSA",
             }
     except Exception:
-        jwk = FALLBACK_EVIDENCE_SERVER_ISSUER_JWK
+        jwk = FALLBACK_REGISTRY_WITNESS_ISSUER_JWK
     return json.dumps(jwk, separators=(",", ":"))
 
 
@@ -155,7 +155,7 @@ def self_verify(pairs: list[tuple[str, str, str]]) -> None:
 def format_export_block(
     pairs: list[tuple[str, str, str]],
     claim_verification_binding_key: str,
-    evidence_server_issuer_jwk: str,
+    registry_witness_issuer_jwk: str,
 ) -> str:
     lines = []
     for persona, raw, fingerprint in pairs:
@@ -165,7 +165,7 @@ def format_export_block(
     lines.append(
         f"export CLAIM_VERIFICATION_BINDING_KEY='{claim_verification_binding_key}'"
     )
-    lines.append(f"export EVIDENCE_SERVER_ISSUER_JWK='{evidence_server_issuer_jwk}'")
+    lines.append(f"export REGISTRY_WITNESS_ISSUER_JWK='{registry_witness_issuer_jwk}'")
     return "\n".join(lines) + "\n"
 
 
@@ -212,13 +212,13 @@ def main() -> int:
         pairs = generate_pairs()
         self_verify(pairs)
         claim_verification_binding_key = generate_claim_verification_binding_key()
-        evidence_server_issuer_jwk = generate_evidence_server_issuer_jwk()
+        registry_witness_issuer_jwk = generate_registry_witness_issuer_jwk()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     export_block = format_export_block(
-        pairs, claim_verification_binding_key, evidence_server_issuer_jwk
+        pairs, claim_verification_binding_key, registry_witness_issuer_jwk
     )
     bruno_env_block = format_bruno_env_block(pairs)
 

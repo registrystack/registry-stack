@@ -16,10 +16,10 @@ fi
 rm -rf "${out_dir}"
 mkdir -p "${out_dir}"
 
-"${repo_root}/scripts/run_registry_metadata_cli.sh" publish "${manifest}" --out "${out_dir}"
+"${repo_root}/scripts/run_registry_manifest_cli.sh" publish "${manifest}" --out "${out_dir}"
 
 if [[ ! -f "${out_dir}/index.json" ]]; then
-  echo "registry-metadata publish did not produce ${out_dir}/index.json" >&2
+  echo "registry-manifest publish did not produce ${out_dir}/index.json" >&2
   exit 1
 fi
 

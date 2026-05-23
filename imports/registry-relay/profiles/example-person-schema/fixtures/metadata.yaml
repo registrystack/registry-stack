@@ -1,4 +1,4 @@
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: example-person-schema
   base_url: https://person-schema.example.gov

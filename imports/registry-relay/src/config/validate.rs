@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::claim_verification::{decode_binding_key, ClaimVerificationKeyError};
 use crate::error::{ConfigError, Error, RuntimeBindingError};
-use registry_metadata_core::CompiledMetadata;
+use registry_manifest_core::CompiledMetadata;
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -271,7 +271,7 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FieldMissing);
                 }
             }
-            if offering.access.kind == "evidence-server" {
+            if offering.access.kind == "registry-witness" {
                 continue;
             }
             if entity.access.evidence_verification_scope.trim().is_empty() {

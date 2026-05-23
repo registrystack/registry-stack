@@ -70,11 +70,11 @@ validate-catalog-semic-local catalog profile="bregdcatap.2_1_0":
 # Usage: just metadata-validate
 #        just metadata-validate profiles/example-benefits-sync/fixtures/metadata.yaml
 metadata-validate manifest="profiles/example-civil-registration/fixtures/metadata.yaml":
-    manifest_path="$(pwd)/{{manifest}}"; scripts/run_registry_metadata_cli.sh validate "$manifest_path"
+    manifest_path="$(pwd)/{{manifest}}"; scripts/run_registry_manifest_cli.sh validate "$manifest_path"
 
 # Validate all ecosystem profile descriptors and fixture manifests.
 metadata-validate-profiles:
-    profiles_path="$(pwd)/profiles"; scripts/run_registry_metadata_cli.sh validate-profiles "$profiles_path"
+    profiles_path="$(pwd)/profiles"; scripts/run_registry_manifest_cli.sh validate-profiles "$profiles_path"
 
 # Render one static metadata artifact from a manifest.
 # Usage: just metadata-render
@@ -82,13 +82,13 @@ metadata-validate-profiles:
 #        just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
 metadata-render manifest="profiles/example-civil-registration/fixtures/metadata.yaml" format="catalog" out="target/metadata/catalog.json" extra="":
     mkdir -p $(dirname {{out}})
-    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_metadata_cli.sh render "$manifest_path" --format {{format}} {{extra}} > "$out_path"
+    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_manifest_cli.sh render "$manifest_path" --format {{format}} {{extra}} > "$out_path"
 
 # Publish a static metadata bundle with index, catalog, DCAT, SHACL, and schemas.
 # Usage: just metadata-publish
 #        just metadata-publish profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
 metadata-publish manifest="profiles/example-civil-registration/fixtures/metadata.yaml" out="target/metadata/public":
-    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_metadata_cli.sh publish "$manifest_path" --out "$out_path"
+    manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_manifest_cli.sh publish "$manifest_path" --out "$out_path"
 
 # Check advisories only (alias for a quick security scan).
 audit:
@@ -125,9 +125,9 @@ demo-run config="demo/config/all_standards.yaml" features="":
     @if [ ! -f demo/.env.local ]; then uv run demo/scripts/generate_demo_keys.py --env-file; fi
     set -a; . demo/.env.local; set +a; demo_features="{{features}}"; if [ -z "$demo_features" ] && [ "{{config}}" = "demo/config/all_standards.yaml" ]; then demo_features="ogcapi-records,ogcapi-features,spdci-api-standards,standards-cel-mapping"; fi; if [ -n "$demo_features" ]; then cargo run --features "$demo_features" -- --config {{config}}; else cargo run -- --config {{config}}; fi
 
-# Start split source-registry and Evidence Server processes, run the narrated demo, then stop them.
-evidence-demo:
-    uv run demo/scripts/evidence_server_demo.py --start-server
+# Start split source-registry and Registry Witness processes, run the narrated demo, then stop them.
+witness-demo:
+    uv run demo/scripts/registry_witness_demo.py --start-server
 
 # Generate synthetic perf fixtures under perf/fixtures/generated/.
 # Usage: just perf-gen                       (default: all profiles)

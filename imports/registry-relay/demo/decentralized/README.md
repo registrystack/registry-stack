@@ -85,7 +85,7 @@ should reference only `token_env` names. No raw token should be committed.
 ## Static Metadata
 
 `scripts/publish-static-metadata.sh` wraps
-`scripts/run_registry_metadata_cli.sh publish` and publishes the portable
+`scripts/run_registry_manifest_cli.sh publish` and publishes the portable
 manifest at `config/static-metadata/metadata.yaml` into
 `static-metadata/metadata/`. The publisher serves it at paths such as:
 

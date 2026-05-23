@@ -14,7 +14,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
-use registry_metadata_core as metadata_core;
+use registry_manifest_core as metadata_core;
 use registry_relay::api::{
     aggregates_router, entity_router, evidence_offerings_router, metadata_router, CursorSigner,
     EvidenceVerificationLimiter,
@@ -63,7 +63,7 @@ fn principal(scopes: &[&str]) -> Principal {
 fn test_evidence_metadata() -> metadata_core::CompiledMetadata {
     let manifest: metadata_core::MetadataManifest = serde_yml::from_str(
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: test
   base_url: https://data.example.test
@@ -178,8 +178,8 @@ datasets:
         entity: individual
         lookup_keys: [given_name]
         access:
-          kind: evidence-server
-          conforms_to: registry_relay:evidence-server-v1
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
           endpoint_url: https://evidence.example.test
           discovery_url: https://evidence.example.test/.well-known/evidence-service
           ruleset: exact-name
@@ -1251,7 +1251,7 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
         .iter()
         .any(
             |offering| offering["id"] == "external_individual_name_evidence"
-                && offering["access"]["kind"] == "evidence-server"
+                && offering["access"]["kind"] == "registry-witness"
         ));
 
     let empty = server.get("/metadata/evidence-offerings?country=NO").await;

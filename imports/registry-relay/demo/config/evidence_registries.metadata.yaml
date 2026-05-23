@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# Portable metadata manifest for the focused Evidence Server demo.
+# Portable metadata manifest for the focused Registry Witness demo.
 
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
-  id: evidence-server-demo
+  id: registry-witness-demo
   base_url: http://127.0.0.1:4255
-  title: Evidence Server Demo
+  title: Registry Witness Demo
   publisher:
     name: Government Data Reuse Cell (Demo)
   standards:
@@ -96,8 +96,8 @@ datasets:
         lookup_keys:
           - national_id
         access:
-          kind: evidence-server
-          conforms_to: registry_relay:evidence-server-v1
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
           endpoint_url: http://127.0.0.1:4255
           discovery_url: http://127.0.0.1:4255/.well-known/evidence-service
           ruleset: farmer-under-4ha-v1
@@ -143,4 +143,4 @@ datasets:
             required: true
 vocabularies:
   spdci: https://schema.spdci.org/
-  evidence-server: https://registry-relay.dev/evidence-server/
+  registry-witness: https://registry-relay.dev/registry-witness/

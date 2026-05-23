@@ -40,7 +40,7 @@ evidence:
     civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:civil-evidence.demo.example
-      issuer_key_env: EVIDENCE_SERVER_ISSUER_JWK
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
       issuer_kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
       vct: https://demo.example/credentials/civil-status/v1
       validity_seconds: 86400
@@ -94,7 +94,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
@@ -135,7 +135,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
@@ -175,7 +175,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:

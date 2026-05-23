@@ -2,11 +2,11 @@
 //! Adapter from Relay runtime config to the portable metadata manifest.
 //!
 //! Runtime bindings remain in `Config` and `EntityRegistry`; this module
-//! projects only the standard-facing metadata into `registry-metadata-core`.
+//! projects only the standard-facing metadata into `registry-manifest-core`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use registry_metadata_core as core;
+use registry_manifest_core as core;
 
 use crate::config::{
     self, Config, DatasetConfig, EntityConfig, EntityFieldConfig, FieldConfig, RelationshipKind,
@@ -22,7 +22,7 @@ pub fn manifest_from_runtime(config: &Config, registry: &EntityRegistry) -> core
         .collect::<Vec<_>>();
 
     core::MetadataManifest {
-        schema_version: "registry-metadata/v1".to_string(),
+        schema_version: "registry-manifest/v1".to_string(),
         catalog: catalog_manifest(config),
         vocabularies: config.vocabularies.clone(),
         profiles: Vec::new(),
@@ -61,7 +61,7 @@ pub fn scoped_compiled_from_runtime(
         .collect::<Vec<_>>();
 
     core::compile_manifest(&core::MetadataManifest {
-        schema_version: "registry-metadata/v1".to_string(),
+        schema_version: "registry-manifest/v1".to_string(),
         catalog: catalog_manifest(config),
         vocabularies: config.vocabularies.clone(),
         profiles: Vec::new(),

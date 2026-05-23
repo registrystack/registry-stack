@@ -1383,7 +1383,7 @@ fn evidence_offering_schema() -> Value {
                 "type": "object",
                 "required": ["kind", "ruleset"],
                 "properties": {
-                    "kind": { "type": "string", "enum": ["registry-relay-verification", "evidence-server"] },
+                    "kind": { "type": "string", "enum": ["registry-relay-verification", "registry-witness"] },
                     "conforms_to": { "type": ["string", "null"], "format": "uri" },
                     "endpoint_url": { "type": ["string", "null"], "format": "uri" },
                     "discovery_url": { "type": ["string", "null"], "format": "uri" },
@@ -2919,7 +2919,7 @@ mod tests {
         );
         assert_eq!(
             schemas["EvidenceOffering"]["properties"]["access"]["properties"]["kind"]["enum"],
-            json!(["registry-relay-verification", "evidence-server"])
+            json!(["registry-relay-verification", "registry-witness"])
         );
     }
 

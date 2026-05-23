@@ -294,37 +294,37 @@ Operational logs stay on stderr as readable text during local demo runs. Set
 `REGISTRY_RELAY_LOG_FORMAT=json` when you want those logs as JSONL for
 collection or a redirected file.
 
-## Narrated Evidence Server demo
+## Narrated Registry Witness demo
 
-The focused Evidence Server demo is the clearest end-to-end story for the new
+The focused Registry Witness demo is the clearest end-to-end story for the new
 computed-evidence product. It runs two local processes: source registries on
-port `4256`, and a standalone Evidence Server on port `4255`. The Evidence
-Server calls the source registry DCI API to compute evidence, while the
+port `4256`, and a standalone Registry Witness on port `4255`. The Registry
+Witness calls the source registry DCI API to compute evidence, while the
 evidence client itself cannot read raw registry rows.
 
 ```bash
-just evidence-demo
+just witness-demo
 ```
 
 The runner starts the source registry with the `spdci-api-standards` feature for
-metadata and standards demos. The standalone Evidence Server reads source rows
+metadata and standards demos. The standalone Registry Witness reads source rows
 through DCI HTTP source connections pointed at the source relay's
 `/dci/{registry}/registry/sync/search` routes.
 
-For an OpenSPP-style deployment, use the same Evidence Server shape with the
+For an OpenSPP-style deployment, use the same Registry Witness shape with the
 OpenSPP DCI base URL, a `token_env`, `dci.search_path` such as
 `/api/v1/registry/sync/search`, and `dci.field_paths` that project the DCI
 response into the claim source fields. Then point a claim source binding at
 that connection with `connector: dci` and a deployment-specific
 `required_scope`. That keeps OpenSPP as the Social Registry or Disability
-Registry source, while the Evidence Server still owns claim computation,
+Registry source, while the Registry Witness still owns claim computation,
 disclosure, rendering, and credential issuance.
 
 The script exercises:
 
 - discovery from the source registry metadata catalog, including its
-  BRegDCAT-AP publication, to find the standalone Evidence Server endpoint;
-- Evidence Server discovery through `/.well-known/evidence-service`, `/claims`,
+  BRegDCAT-AP publication, to find the standalone Registry Witness endpoint;
+- Registry Witness discovery through `/.well-known/evidence-service`, `/claims`,
   and `/formats`;
 - value evidence from CRVS (`date-of-birth`) and the farmer registry
   (`farmed-land-size`);
@@ -336,18 +336,18 @@ The script exercises:
 - an explicit production-readiness gaps artifact so the demo does not imply
   production credential infrastructure.
 
-Full responses are written under `demo/output/evidence-server-demo/`; the
+Full responses are written under `demo/output/registry-witness-demo/`; the
 script clears that directory at startup so each run has a clean numbered
 artifact set. When `--start-server` is used, the demo uses
-`EVIDENCE_SERVER_ROOT` when set, a sibling `../evidence-server` checkout when
-available, or a tagged clone of `https://github.com/jeremi/evidence-server`
-under `target/evidence-server-demo/`. The source registry config is
+`REGISTRY_WITNESS_ROOT` when set, a sibling `../registry-witness` checkout when
+available, or a tagged clone of `https://github.com/jeremi/registry-witness`
+under `target/registry-witness-demo/`. The source registry config is
 `demo/config/evidence_registries.yaml`, the registry metadata manifest is
 `demo/config/evidence_registries.metadata.yaml`, and the synthetic source rows
 live under `demo/data/evidence_server/`. The source registry config does not
 declare evidence claims; it exposes source records through DCI registry routes.
 Its metadata manifest advertises an evidence offering that points to the
-Evidence Server endpoint. The standalone Evidence Server owns claim
+Registry Witness endpoint. The standalone Registry Witness owns claim
 definitions, rules, rendering, and credential issuance.
 
 The SD-JWT VC step is intentionally demo-grade: it uses a static demo issuer key

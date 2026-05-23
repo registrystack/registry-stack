@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use registry_metadata_core as metadata_core;
+use registry_manifest_core as metadata_core;
 use serde::Serialize;
 
 use crate::config::vocabularies;

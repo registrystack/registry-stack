@@ -1,4 +1,4 @@
-schema_version: registry-metadata-profile/v1
+schema_version: registry-manifest-profile/v1
 profile:
   id: example-person-schema
   version: "1"

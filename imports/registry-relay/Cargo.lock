@@ -4450,9 +4450,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "registry-metadata-core"
+name = "registry-manifest-core"
 version = "0.1.1"
-source = "git+https://github.com/jeremi/registry-metadata?tag=v0.1.1#480dcfbcf2fded7edf70c6bd9e0f86074bd23309"
+source = "git+https://github.com/jeremi/registry-manifest?tag=v0.1.2#77125ec04f50157749a257eab3661ef82e613ce3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4491,7 +4491,7 @@ dependencies = [
  "postgres-native-tls",
  "proptest",
  "rand_core 0.6.4",
- "registry-metadata-core",
+ "registry-manifest-core",
  "reqwest",
  "ryu",
  "serde",

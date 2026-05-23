@@ -10,7 +10,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use registry_metadata_core::{
+use registry_manifest_core::{
     self as metadata_core, CompiledMetadata, MetadataError as CoreMetadataError, MetadataManifest,
 };
 

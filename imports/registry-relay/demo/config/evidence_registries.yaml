@@ -66,7 +66,7 @@ standards:
 
 audit:
   sink: file
-  path: demo/var/evidence-server-audit.jsonl
+  path: demo/var/registry-witness-audit.jsonl
   format: jsonl
   rotate:
     max_size_mb: 10

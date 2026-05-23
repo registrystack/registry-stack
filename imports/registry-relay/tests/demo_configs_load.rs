@@ -16,7 +16,7 @@ use registry_relay::config::{self, AuditSinkConfig};
 use sha2::{Digest, Sha256};
 
 #[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
-use registry_metadata_core::render_base_dcat;
+use registry_manifest_core::render_base_dcat;
 #[cfg(all(feature = "spdci-api-standards", feature = "standards-cel-mapping"))]
 use serde_json::Value;
 

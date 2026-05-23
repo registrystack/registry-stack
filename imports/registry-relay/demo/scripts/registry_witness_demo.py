@@ -2,15 +2,15 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Narrated Evidence Server demo for a split local deployment.
+"""Narrated Registry Witness demo for a split local deployment.
 
 The demo starts two processes when requested: one registry-relay source registry
-API and one standalone Evidence Server. The Evidence Server computes evidence by
+API and one standalone Registry Witness. The Registry Witness computes evidence by
 calling the source registry through its DCI API, which is the product shape we
 want to show:
 
-1. discover the Evidence Server endpoint from source registry metadata;
-2. discover what the Evidence Server can compute;
+1. discover the Registry Witness endpoint from source registry metadata;
+2. discover what the Registry Witness can compute;
 3. show that the evidence client cannot read raw registry rows directly;
 4. compute value evidence from CRVS and farmer registries;
 5. compute a derived predicate without returning raw registry rows;
@@ -43,15 +43,15 @@ DEFAULT_BASE_URL = "http://127.0.0.1:4255"
 DEFAULT_REGISTRY_BASE_URL = "http://127.0.0.1:4256"
 RELAY_ROOT = Path(__file__).resolve().parents[2]
 APPS_ROOT = RELAY_ROOT.parent
-SIBLING_EVIDENCE_SERVER_ROOT = APPS_ROOT / "evidence-server"
-CLONED_EVIDENCE_SERVER_ROOT = RELAY_ROOT / "target/evidence-server-demo/evidence-server"
-EVIDENCE_SERVER_GIT_URL = "https://github.com/jeremi/evidence-server"
-EVIDENCE_SERVER_GIT_TAG = "v0.1.0"
+SIBLING_REGISTRY_WITNESS_ROOT = APPS_ROOT / "registry-witness"
+CLONED_REGISTRY_WITNESS_ROOT = RELAY_ROOT / "target/registry-witness-demo/registry-witness"
+REGISTRY_WITNESS_GIT_URL = "https://github.com/jeremi/registry-witness"
+REGISTRY_WITNESS_GIT_TAG = "v0.1.1"
 DEFAULT_REGISTRY_CONFIG = RELAY_ROOT / "demo/config/evidence_registries.yaml"
-DEFAULT_OUTPUT_DIR = RELAY_ROOT / "demo/output/evidence-server-demo"
+DEFAULT_OUTPUT_DIR = RELAY_ROOT / "demo/output/registry-witness-demo"
 DEFAULT_FEATURES = "spdci-api-standards"
 PURPOSE = "https://demo.example.gov/purpose/agricultural-subsidy-eligibility"
-CLAIM_RESULT_FORMAT = "application/vnd.evidence-server.claim-result+json"
+CLAIM_RESULT_FORMAT = "application/vnd.registry-witness.claim-result+json"
 CCCEV_FORMAT = 'application/ld+json; profile="cccev"'
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 
@@ -139,15 +139,15 @@ def demo_env(env_file: Path) -> tuple[dict[str, str], str, str]:
     env["CASEWORK_SYSTEM_HASH"] = values.get(
         "CASEWORK_SYSTEM_HASH", raw_key_hash(casework_raw)
     )
-    env["EVIDENCE_SERVER_ISSUER_JWK"] = values.get(
-        "EVIDENCE_SERVER_ISSUER_JWK",
+    env["REGISTRY_WITNESS_ISSUER_JWK"] = values.get(
+        "REGISTRY_WITNESS_ISSUER_JWK",
         json.dumps(DEMO_ISSUER_JWK, separators=(",", ":")),
     )
-    env["EVIDENCE_SERVER_API_KEY"] = values.get(
-        "EVIDENCE_SERVER_API_KEY", f"{verification_raw}-api"
+    env["REGISTRY_WITNESS_API_KEY"] = values.get(
+        "REGISTRY_WITNESS_API_KEY", f"{verification_raw}-api"
     )
-    env["EVIDENCE_SERVER_BEARER_TOKEN"] = values.get(
-        "EVIDENCE_SERVER_BEARER_TOKEN", verification_raw
+    env["REGISTRY_WITNESS_BEARER_TOKEN"] = values.get(
+        "REGISTRY_WITNESS_BEARER_TOKEN", verification_raw
     )
     env["EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN"] = casework_raw
     return env, verification_raw, casework_raw
@@ -206,25 +206,25 @@ def preflight() -> None:
         raise DemoError("openssl is required to sign the demo holder proof")
 
 
-def default_evidence_server_root() -> Path:
-    configured = os.environ.get("EVIDENCE_SERVER_ROOT")
+def default_registry_witness_root() -> Path:
+    configured = os.environ.get("REGISTRY_WITNESS_ROOT")
     if configured:
         return Path(configured)
-    if (SIBLING_EVIDENCE_SERVER_ROOT / "Cargo.toml").exists():
-        return SIBLING_EVIDENCE_SERVER_ROOT
-    return CLONED_EVIDENCE_SERVER_ROOT
+    if (SIBLING_REGISTRY_WITNESS_ROOT / "Cargo.toml").exists():
+        return SIBLING_REGISTRY_WITNESS_ROOT
+    return CLONED_REGISTRY_WITNESS_ROOT
 
 
-def ensure_evidence_server_root(root: Path, explicit: bool) -> Path:
+def ensure_registry_witness_root(root: Path, explicit: bool) -> Path:
     if (root / "Cargo.toml").exists():
         return root
     if explicit:
-        raise DemoError(f"Evidence Server checkout is missing Cargo.toml: {root}")
+        raise DemoError(f"Registry Witness checkout is missing Cargo.toml: {root}")
     if shutil.which("git") is None:
-        raise DemoError("git is required to clone the Evidence Server demo dependency")
+        raise DemoError("git is required to clone the Registry Witness demo dependency")
     root.parent.mkdir(parents=True, exist_ok=True)
     print(
-        f"Cloning Evidence Server {EVIDENCE_SERVER_GIT_TAG} into {root}",
+        f"Cloning Registry Witness {REGISTRY_WITNESS_GIT_TAG} into {root}",
         flush=True,
     )
     subprocess.run(
@@ -234,8 +234,8 @@ def ensure_evidence_server_root(root: Path, explicit: bool) -> Path:
             "--depth",
             "1",
             "--branch",
-            EVIDENCE_SERVER_GIT_TAG,
-            EVIDENCE_SERVER_GIT_URL,
+            REGISTRY_WITNESS_GIT_TAG,
+            REGISTRY_WITNESS_GIT_URL,
             str(root),
         ],
         check=True,
@@ -243,7 +243,7 @@ def ensure_evidence_server_root(root: Path, explicit: bool) -> Path:
     return root
 
 
-def prepare_evidence_server_runtime_dirs(root: Path) -> None:
+def prepare_registry_witness_runtime_dirs(root: Path) -> None:
     (root / "demo/var").mkdir(parents=True, exist_ok=True)
 
 
@@ -276,7 +276,7 @@ def start_server(
     features: str = "",
     package: str | None = None,
 ) -> subprocess.Popen[str]:
-    log_dir = RELAY_ROOT / "target/evidence-server-demo"
+    log_dir = RELAY_ROOT / "target/registry-witness-demo"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{name}.log"
     log = log_path.open("w", encoding="utf-8")
@@ -288,7 +288,7 @@ def start_server(
     command.extend(["--", "--config", str(config)])
     process_env = env.copy()
     process_env.setdefault(
-        "CARGO_TARGET_DIR", str(RELAY_ROOT / "target/evidence-server-demo-cargo" / name)
+        "CARGO_TARGET_DIR", str(RELAY_ROOT / "target/registry-witness-demo-cargo" / name)
     )
     process = subprocess.Popen(
         command,
@@ -586,12 +586,12 @@ def find_evidence_server_offering(catalog: dict[str, Any]) -> tuple[dict[str, An
 
 def print_demo_header(base_url: str, registry_base_url: str, output_dir: Path) -> None:
     print("\n" + line("="))
-    print("Evidence Server demo: computed evidence without raw registry disclosure")
+    print("Registry Witness demo: computed evidence without raw registry disclosure")
     print(line("="))
     print_wrapped(
         "Story",
-        "A relying party asks for evidence. It talks to the Evidence Server, not "
-        "directly to source registries. The Evidence Server calls CRVS and farmer "
+        "A relying party asks for evidence. It talks to the Registry Witness, not "
+        "directly to source registries. The Registry Witness calls CRVS and farmer "
         "registry APIs, applies configured rules, then returns only the requested "
         "evidence shape.",
     )
@@ -599,7 +599,7 @@ def print_demo_header(base_url: str, registry_base_url: str, output_dir: Path) -
     print("  Topology")
     print("    evidence client")
     print(f"      -> source registry metadata  {registry_base_url}")
-    print(f"      -> Evidence Server           discovered, demo default {base_url}")
+    print(f"      -> Registry Witness          discovered, demo default {base_url}")
     print(f"          -> source registry DCI   {registry_base_url}")
     print()
     print_kv("Purpose", PURPOSE)
@@ -651,26 +651,26 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     )
     print_step(
         step,
-        "Discover the Evidence Server from source registry metadata",
+        "Discover the Registry Witness from source registry metadata",
         actor="evidence client -> source registry metadata",
         request_line="GET /metadata/catalog and GET /metadata/dcat/bregdcat-ap",
         why=(
-            "A client may start from a known registry, not from a known Evidence "
-            "Server. The source registry advertises an evidence offering that "
-            "points to the Evidence Server endpoint, while the Evidence Server "
+            "A client may start from a known registry, not from a known Registry "
+            "Witness. The source registry advertises an evidence offering that "
+            "points to the Registry Witness endpoint, while the Registry Witness "
             "keeps the runtime rule and disclosure contract."
         ),
         observed=(
             f"Offering {offering['id']} advertises {discovered_base_url}. "
             "The DCAT-AP artifact carries the same discovery story for catalog "
-            "consumers; runtime calls still use explicit Evidence Server APIs."
+            "consumers; runtime calls still use explicit Registry Witness APIs."
         ),
         artifact=artifact,
     )
     if discovered_base_url != base_url:
         print_wrapped(
             "Note",
-            f"Using discovered Evidence Server URL {discovered_base_url} instead "
+            f"Using discovered Registry Witness URL {discovered_base_url} instead "
             f"of configured demo default {base_url}.",
         )
     base_url = discovered_base_url
@@ -685,8 +685,8 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     operations = ", ".join(service["operations"].keys())
     print_step(
         step,
-        "Discover the Evidence Server contract",
-        actor="evidence client -> Evidence Server",
+        "Discover the Registry Witness contract",
+        actor="evidence client -> Registry Witness",
         request_line="GET /.well-known/evidence-service",
         why=(
             "The client starts with capability discovery. It learns whether this "
@@ -709,7 +709,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "List configured claims",
-        actor="evidence client -> Evidence Server",
+        actor="evidence client -> Registry Witness",
         request_line="GET /claims",
         why=(
             "Claims are the product vocabulary. Source registries keep their own "
@@ -730,7 +730,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "List output formats",
-        actor="evidence client -> Evidence Server",
+        actor="evidence client -> Registry Witness",
         request_line="GET /formats",
         why=(
             "The same claim can be projected into multiple artifacts. "
@@ -759,8 +759,8 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
         request_line="GET /datasets/farmer_registry/farmer/FR-MEMBER-001",
         why=(
             "The relying party should not need broad row access to source "
-            "registries. This call intentionally tries to bypass the Evidence "
-            "Server."
+            "registries. This call intentionally tries to bypass the Registry "
+            "Witness."
         ),
         observed=(
             f"The source registry returned HTTP {raw_row.status}. The client can "
@@ -792,7 +792,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Compute value evidence",
-        actor="evidence client -> Evidence Server -> CRVS and farmer registry",
+        actor="evidence client -> Registry Witness -> CRVS and farmer registry",
         request_line="POST /claims/evaluate date-of-birth, farmed-land-size",
         why=(
             "Some consumers are allowed to receive a specific value, such as date "
@@ -827,7 +827,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Compute a derived predicate",
-        actor="evidence client -> Evidence Server -> farmer registry",
+        actor="evidence client -> Registry Witness -> farmer registry",
         request_line="POST /claims/evaluate farmer-under-4ha with disclosure=predicate",
         why=(
             "This is the core selective-disclosure case. The server checks the "
@@ -862,7 +862,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
             {
                 "Accept": CLAIM_RESULT_FORMAT,
                 "Data-Purpose": PURPOSE,
-                "Idempotency-Key": f"evidence-demo-batch-{run_id}",
+                "Idempotency-Key": f"witness-demo-batch-{run_id}",
             },
         ),
         200,
@@ -873,7 +873,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Evaluate a batch with partial failure",
-        actor="evidence client -> Evidence Server",
+        actor="evidence client -> Registry Witness",
         request_line="POST /claims/batch-evaluate farmer-under-4ha for three subjects",
         why=(
             "Batch evaluation is useful for casework queues. One missing subject "
@@ -908,7 +908,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Render the stored evaluation as CCCEV",
-        actor="evidence client -> Evidence Server",
+        actor="evidence client -> Registry Witness",
         request_line="POST /evidence/render with the prior evaluation_id",
         why=(
             "Evaluation and rendering are separate. The server does not recompute "
@@ -942,7 +942,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Bind the predicate for credential issuance",
-        actor="evidence client -> Evidence Server",
+        actor="evidence client -> Registry Witness",
         request_line="POST /claims/evaluate farmer-under-4ha with format=application/dc+sd-jwt",
         why=(
             "Credential issuance is bound to the original evaluation format. The "
@@ -990,7 +990,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Issue an SD-JWT VC",
-        actor="holder/evidence client -> Evidence Server",
+        actor="holder/evidence client -> Registry Witness",
         request_line="POST /credentials/issue with holder did:jwk proof",
         why=(
             "When evidence becomes a product artifact, the server can issue a "
@@ -1019,7 +1019,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print_step(
         step,
         "Publish issuer verification keys",
-        actor="verifier -> Evidence Server",
+        actor="verifier -> Registry Witness",
         request_line="GET /.well-known/evidence/jwks.json",
         why=(
             "Verifiers need public keys to validate issued credentials. The JWKS "
@@ -1054,7 +1054,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     print("What this demo proved")
     print(line("="))
     print("  1. Source registries stayed simple and source-owned.")
-    print("  2. The Evidence Server computed reusable claims over multiple registries.")
+    print("  2. The Registry Witness computed reusable claims over multiple registries.")
     print("  3. The client got least-disclosure evidence, not raw registry rows.")
     print("  4. The same claim was projected as JSON, CCCEV JSON-LD, and SD-JWT VC.")
     print("  5. v0 identity mapping is intentionally demo-grade: common_subject_id only.")
@@ -1067,19 +1067,19 @@ def main() -> int:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--registry-base-url", default=DEFAULT_REGISTRY_BASE_URL)
     parser.add_argument(
-        "--evidence-server-root",
+        "--registry-witness-root",
         default=None,
         help=(
-            "Evidence Server checkout used with --start-server; defaults to "
-            "EVIDENCE_SERVER_ROOT, ../evidence-server, or a tagged clone under target/"
+            "Registry Witness checkout used with --start-server; defaults to "
+            "REGISTRY_WITNESS_ROOT, ../registry-witness, or a tagged clone under target/"
         ),
     )
     parser.add_argument(
         "--config",
         default=None,
         help=(
-            "Evidence Server config path; defaults to "
-            "<evidence-server-root>/demo/config/evidence-server.yaml"
+            "Registry Witness config path; defaults to "
+            "<registry-witness-root>/demo/config/registry-witness.yaml"
         ),
     )
     parser.add_argument("--registry-config", default=str(DEFAULT_REGISTRY_CONFIG))
@@ -1091,14 +1091,14 @@ def main() -> int:
         help="registry-relay cargo features used when --start-server starts the source registry",
     )
     parser.add_argument(
-        "--evidence-features",
+        "--witness-features",
         default="",
-        help="Evidence Server cargo features used when --start-server starts the standalone server",
+        help="Registry Witness cargo features used when --start-server starts the standalone server",
     )
     parser.add_argument(
         "--start-server",
         action="store_true",
-        help="start split registry and evidence-server processes, then stop them when done",
+        help="start split registry and registry-witness processes, then stop them when done",
     )
     args = parser.parse_args()
 
@@ -1106,24 +1106,24 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     prepare_output_dir(output_dir)
     env, token, registry_token = demo_env(Path(args.env_file))
-    evidence_process: subprocess.Popen[str] | None = None
+    witness_process: subprocess.Popen[str] | None = None
     registry_process: subprocess.Popen[str] | None = None
     try:
-        explicit_evidence_root = args.evidence_server_root is not None
-        evidence_server_root = (
-            Path(args.evidence_server_root)
-            if explicit_evidence_root
-            else default_evidence_server_root()
+        explicit_witness_root = args.registry_witness_root is not None
+        registry_witness_root = (
+            Path(args.registry_witness_root)
+            if explicit_witness_root
+            else default_registry_witness_root()
         )
         if args.start_server:
-            evidence_server_root = ensure_evidence_server_root(
-                evidence_server_root, explicit_evidence_root
+            registry_witness_root = ensure_registry_witness_root(
+                registry_witness_root, explicit_witness_root
             )
-            prepare_evidence_server_runtime_dirs(evidence_server_root)
-        evidence_config = (
+            prepare_registry_witness_runtime_dirs(registry_witness_root)
+        witness_config = (
             Path(args.config)
             if args.config is not None
-            else evidence_server_root / "demo/config/evidence-server.yaml"
+            else registry_witness_root / "demo/config/registry-witness.yaml"
         )
         if args.start_server:
             registry_process = start_server(
@@ -1134,21 +1134,21 @@ def main() -> int:
                 features=args.features,
             )
             wait_for_registry_server(args.registry_base_url, registry_token, registry_process)
-            evidence_process = start_server(
-                evidence_config,
+            witness_process = start_server(
+                witness_config,
                 env,
-                "evidence-server",
-                cwd=evidence_server_root,
-                features=args.evidence_features,
-                package="evidence-server-bin",
+                "registry-witness",
+                cwd=registry_witness_root,
+                features=args.witness_features,
+                package="registry-witness-bin",
             )
-        wait_for_evidence_server(args.base_url, token, evidence_process)
+        wait_for_evidence_server(args.base_url, token, witness_process)
         run_demo(args.base_url, args.registry_base_url, token, output_dir)
     except (DemoError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:
-        stop_server(evidence_process)
+        stop_server(witness_process)
         stop_server(registry_process)
     return 0
 

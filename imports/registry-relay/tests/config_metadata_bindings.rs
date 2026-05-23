@@ -101,7 +101,7 @@ fn write_metadata_manifest(tmp: &TempDir, include_region: bool) {
         tmp.path().join("metadata.yaml"),
         format!(
             r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: split-demo
   base_url: https://metadata.example.test/
@@ -183,7 +183,7 @@ fn load_with_metadata_rejects_relationship_target_mismatch() {
     std::fs::write(
         tmp.path().join("metadata.yaml"),
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: split-demo
   base_url: https://metadata.example.test/
@@ -342,7 +342,7 @@ fn load_with_metadata_uses_metadata_manifest_error_codes() {
     std::fs::write(
         tmp.path().join("unsupported.metadata.yaml"),
         r#"
-schema_version: registry-metadata/v0
+schema_version: registry-manifest/v0
 catalog:
   id: split-demo
   base_url: https://metadata.example.test/

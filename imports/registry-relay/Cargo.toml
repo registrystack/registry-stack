@@ -76,7 +76,7 @@ jsonschema = { version = "0.18", optional = true }
 # deliberately before changing it.
 serde_yml = { version = "0.0.12" }
 humantime-serde = { version = "1" }
-registry-metadata-core = { version = "0.1.1", git = "https://github.com/jeremi/registry-metadata", tag = "v0.1.1" }
+registry-manifest-core = { version = "0.1.1", git = "https://github.com/jeremi/registry-manifest", tag = "v0.1.2" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 getrandom = { version = "0.4" }

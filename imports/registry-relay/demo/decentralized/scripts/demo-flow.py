@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 PURPOSE = "https://demo.example.gov/purpose/decentralized-evidence-demo"
-CLAIM_RESULT_FORMAT = "application/vnd.evidence-server.claim-result+json"
+CLAIM_RESULT_FORMAT = "application/vnd.registry-witness.claim-result+json"
 CCCEV_FORMAT = 'application/ld+json; profile="cccev"'
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 CORRELATION_ID = os.environ.get("DEMO_CORRELATION_ID", "decentralized-demo-correlation-001")

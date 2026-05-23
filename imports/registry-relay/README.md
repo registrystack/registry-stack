@@ -28,14 +28,14 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
   Registry Relay publication choices, and downstream interpretation boundaries.
 - [docs/evidence-verification.md](docs/evidence-verification.md): evidence verification guide, examples, privacy model, and signed receipts.
-- [evidence-server](https://github.com/jeremi/evidence-server): standalone Evidence Server
+- [registry-witness](https://github.com/jeremi/registry-witness): standalone Registry Witness
   workspace for registry-backed claim evaluation, rendering, and credential
   issuance.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
-- [registry-metadata-core](https://github.com/jeremi/registry-metadata/tree/main/crates/registry-metadata-core): portable metadata manifest model, validation, and renderers.
-- [registry-metadata-cli](https://github.com/jeremi/registry-metadata/tree/main/crates/registry-metadata-cli): local metadata validation, rendering, and static publish CLI.
+- [registry-manifest-core](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core): portable metadata manifest model, validation, and renderers.
+- [registry-manifest-cli](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-cli): local metadata validation, rendering, and static publish CLI.
 - [profiles/](profiles/): non-normative example profile descriptors and fixture metadata manifests.
 - [docs/performance-load-testing-spec.md](docs/performance-load-testing-spec.md): performance and load testing plan.
 - [perf/](perf/): k6 scenarios, synthetic fixture configs, and performance run helpers.
@@ -75,9 +75,9 @@ just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml 
 just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
 ```
 
-These recipes use an installed `registry-metadata` binary when present, a
-sibling `../registry-metadata` checkout during local development, or the
-published `registry-metadata` Git tag when running from a clean Relay clone.
+These recipes use an installed `registry-manifest` binary when present, a
+sibling `../registry-manifest` checkout during local development, or the
+published `registry-manifest` Git tag when running from a clean Relay clone.
 
 `metadata-publish` writes a static bundle with `index.json`, the original manifest, catalog JSON, base DCAT, BRegDCAT-AP, SHACL, and entity JSON Schemas. The bundle can be served as static files without starting Registry Relay.
 
@@ -204,8 +204,8 @@ GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 `POST /evidence-offerings/{offering_id}/verifications` is Relay-native and
 only executes offerings whose metadata declares
 `access.kind: registry-relay-verification`. Offerings with
-`access.kind: evidence-server` are discovery records; clients call the
-advertised Evidence Server endpoint directly.
+`access.kind: registry-witness` are discovery records; clients call the
+advertised Registry Witness endpoint directly.
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
 

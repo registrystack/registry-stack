@@ -631,7 +631,7 @@ fn dataset_offer(dataset: &DatasetMetadata, default_assigner: &str) -> Value {
 
 fn compiled_dataset_offer(
     dataset: &DatasetMetadata,
-    policy: &registry_metadata_core::CompiledDatasetPolicy,
+    policy: &registry_manifest_core::CompiledDatasetPolicy,
 ) -> Value {
     let uid = legacy_policy_dataset_iri(dataset, &policy.uid);
     let mut offer = json!({
@@ -672,7 +672,7 @@ fn default_policy_rule(assigner: &str, target: &str) -> Value {
 
 fn compiled_policy_rule(
     dataset: &DatasetMetadata,
-    rule: &registry_metadata_core::CompiledPolicyRule,
+    rule: &registry_manifest_core::CompiledPolicyRule,
     assigner: &str,
 ) -> Value {
     let target = legacy_policy_dataset_iri(dataset, &rule.target);
@@ -703,7 +703,7 @@ fn compiled_policy_rule(
 
 fn compiled_policy_duty(
     dataset: &DatasetMetadata,
-    duty: &registry_metadata_core::CompiledPolicyDuty,
+    duty: &registry_manifest_core::CompiledPolicyDuty,
 ) -> Value {
     let mut value = json!({
         "odrl:action": iri_object(&duty.action),
@@ -726,7 +726,7 @@ fn compiled_policy_duty(
 }
 
 fn compiled_policy_constraint(
-    constraint: &registry_metadata_core::CompiledPolicyConstraint,
+    constraint: &registry_manifest_core::CompiledPolicyConstraint,
 ) -> Value {
     let mut value = json!({
         "odrl:leftOperand": iri_object(&constraint.left_operand),
@@ -740,12 +740,12 @@ fn compiled_policy_constraint(
 }
 
 fn compiled_policy_operand(
-    operand: &registry_metadata_core::CompiledPolicyOperandValue,
+    operand: &registry_manifest_core::CompiledPolicyOperandValue,
     datatype: Option<&str>,
 ) -> Value {
     match operand {
-        registry_metadata_core::CompiledPolicyOperandValue::Iri(iri) => iri_object(iri),
-        registry_metadata_core::CompiledPolicyOperandValue::Literal(value) => {
+        registry_manifest_core::CompiledPolicyOperandValue::Iri(iri) => iri_object(iri),
+        registry_manifest_core::CompiledPolicyOperandValue::Literal(value) => {
             if let Some(datatype) = datatype {
                 json!({
                     "@value": value,

@@ -59,7 +59,7 @@ Evidence offerings may still declare standards-facing `endpoint_url` and
 ## Minimal Manifest
 
 ```yaml
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 
 catalog:
   id: example-civil-registration-demo

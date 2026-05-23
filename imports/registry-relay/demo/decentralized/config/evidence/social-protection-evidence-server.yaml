@@ -31,7 +31,7 @@ evidence:
     enrollment_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:social-protection-evidence.demo.example
-      issuer_key_env: EVIDENCE_SERVER_ISSUER_JWK
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
       issuer_kid: did:web:social-protection-evidence.demo.example#social-protection-evidence-demo-key-1
       vct: https://demo.example/credentials/program-enrollment/v1
       validity_seconds: 86400
@@ -85,7 +85,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - enrollment_sd_jwt
@@ -125,7 +125,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - enrollment_sd_jwt
@@ -159,7 +159,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.evidence-server.claim-result+json
+        - application/vnd.registry-witness.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - enrollment_sd_jwt

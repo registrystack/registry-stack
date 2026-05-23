@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: decentralized-social-protection-registry
   base_url: http://social-protection-registry-relay:8080
@@ -52,8 +52,8 @@ datasets:
         lookup_keys:
           - national_id
         access:
-          kind: evidence-server
-          conforms_to: registry_relay:evidence-server-v1
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
           endpoint_url: http://social-protection-evidence-server:8080
           discovery_url: http://social-protection-evidence-server:8080/.well-known/evidence-service
           ruleset: program-enrollment-status-v1

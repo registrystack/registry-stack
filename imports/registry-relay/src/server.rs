@@ -58,7 +58,7 @@ use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
-use registry_metadata_core::CompiledMetadata;
+use registry_manifest_core::CompiledMetadata;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{
@@ -214,8 +214,7 @@ fn build_app_with_provenance_metadata_and_metrics(
     // verification uses a configured stable HMAC key so audit hashes
     // survive process restarts.
     let cursor_signer = Arc::new(CursorSigner::new_random());
-    let claim_verification_hasher =
-        claim_verification_hasher_from_config(&config)?.map(Arc::new);
+    let claim_verification_hasher = claim_verification_hasher_from_config(&config)?.map(Arc::new);
     let evidence_verification_limiter = Arc::new(EvidenceVerificationLimiter::new(
         &config.evidence_verification.rate_limit,
     ));
@@ -283,10 +282,12 @@ pub fn build_app_with_entity_query(
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
 ) -> Result<Router, ConfigError> {
-    Ok(build_app_with_readiness(config, auth, audit_sink, readiness)?
-        .layer(Extension(aggregate_query))
-        .layer(Extension(query))
-        .layer(Extension(entity_registry)))
+    Ok(
+        build_app_with_readiness(config, auth, audit_sink, readiness)?
+            .layer(Extension(aggregate_query))
+            .layer(Extension(query))
+            .layer(Extension(entity_registry)),
+    )
 }
 
 /// Production assembly: readiness, entity/query state, and optional

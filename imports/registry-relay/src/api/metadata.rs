@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standard-facing metadata routes backed by `registry-metadata-core`.
+//! Standard-facing metadata routes backed by `registry-manifest-core`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use registry_metadata_core as metadata_core;
+use registry_manifest_core as metadata_core;
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};

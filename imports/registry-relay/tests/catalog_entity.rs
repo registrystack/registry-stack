@@ -1007,7 +1007,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         household["sh:targetClass"],
         "https://publicschema.org/concepts/Household"
     );
-    assert_eq!(household["registry_metadata:primaryKey"], "id");
+    assert_eq!(household["registry_manifest:primaryKey"], "id");
     assert!(household["sh:property"]
         .as_array()
         .expect("properties")
@@ -1023,7 +1023,7 @@ async fn dcat_ap_jsonld_embeds_entity_shacl_shapes() {
         .as_array()
         .expect("properties")
         .iter()
-        .any(|property| { property["registry_metadata:targetEntity"] == "individual" }));
+        .any(|property| { property["registry_manifest:targetEntity"] == "individual" }));
 }
 
 #[tokio::test]

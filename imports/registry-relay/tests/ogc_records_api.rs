@@ -140,7 +140,7 @@ fn write_split_metadata_manifest(tmp: &TempDir) {
     std::fs::write(
         tmp.path().join("metadata.yaml"),
         r#"
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: split-ogc
   base_url: https://metadata.example.test/

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Portable metadata manifest generated from public_works_projects.yaml.
 
-schema_version: registry-metadata/v1
+schema_version: registry-manifest/v1
 catalog:
   id: public-works-projects
   base_url: http://127.0.0.1:4242
