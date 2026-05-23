@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1-bookworm AS builder
+WORKDIR /workspace/registry-relay
+
+COPY --from=registry_relay_src Cargo.toml Cargo.lock ./
+COPY --from=registry_relay_src benches ./benches
+COPY --from=registry_relay_src resources ./resources
+COPY --from=registry_relay_src src ./src
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/workspace/registry-relay/target \
+    cargo build --release --locked --features spdci-api-standards,standards-cel-mapping && \
+    cp /workspace/registry-relay/target/release/registry-relay /usr/local/bin/registry-relay
+
+FROM debian:bookworm-slim AS runtime
+
+RUN groupadd --system --gid 10001 registry-relay && \
+    useradd --system --uid 10001 --gid registry-relay --home-dir /var/lib/registry-relay --shell /usr/sbin/nologin registry-relay && \
+    mkdir -p /etc/registry-relay /var/lib/registry-relay/cache /var/lib/registry-relay/data && \
+    chown -R registry-relay:registry-relay /var/lib/registry-relay && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/registry-relay /usr/local/bin/registry-relay
+COPY --from=registry_relay_src LICENSE /licenses/registry-relay/LICENSE
+
+USER registry-relay:registry-relay
+WORKDIR /var/lib/registry-relay
+
+ENV REGISTRY_RELAY_CONFIG=/etc/registry-relay/config.yaml
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/registry-relay"]
+CMD ["--config", "/etc/registry-relay/config.yaml"]

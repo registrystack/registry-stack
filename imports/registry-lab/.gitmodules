@@ -1,0 +1,6 @@
+[submodule "vendor/registry-relay"]
+	path = vendor/registry-relay
+	url = git@github.com:jeremi/registry-relay.git
+[submodule "vendor/registry-witness"]
+	path = vendor/registry-witness
+	url = git@github.com:jeremi/registry-witness.git

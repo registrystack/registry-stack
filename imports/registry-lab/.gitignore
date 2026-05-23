@@ -1,0 +1,8 @@
+.DS_Store
+.env
+__pycache__/
+*.py[cod]
+output/*
+!output/.gitignore
+static-metadata/*
+!static-metadata/.gitignore

@@ -1,0 +1,326 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  cache_dir: /var/lib/registry-relay/cache
+
+metadata:
+  manifest_path: social-protection-registry-relay.metadata.yaml
+
+catalog:
+  title: Social Protection Registry Relay (Decentralized Demo)
+  base_url: http://social-protection-registry-relay:8080
+  publisher: Social Protection Authority (Demo)
+  participant_id: did:web:social-protection.demo.example.gov
+
+vocabularies:
+  demo: https://demo.example.gov/vocab/
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: metadata_client
+      hash_env: SOCIAL_METADATA_CLIENT_HASH
+      scopes:
+        - social_protection_registry:metadata
+    - id: evidence_source
+      hash_env: SOCIAL_EVIDENCE_SOURCE_HASH
+      scopes:
+        - social_protection_registry:metadata
+        - social_protection_registry:rows
+        - social_protection_registry:evidence_verification
+    - id: evidence_only
+      hash_env: SOCIAL_EVIDENCE_ONLY_HASH
+      scopes:
+        - social_protection_registry:metadata
+        - social_protection_registry:evidence_verification
+    - id: row_reader
+      hash_env: SOCIAL_ROW_READER_HASH
+      scopes:
+        - social_protection_registry:metadata
+        - social_protection_registry:rows
+    - id: aggregate_reader
+      hash_env: SOCIAL_AGGREGATE_READER_HASH
+      scopes:
+        - social_protection_registry:metadata
+        - social_protection_registry:aggregate
+    - id: shared_evidence_source
+      hash_env: SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
+      scopes:
+        - social_protection_registry:metadata
+        - social_protection_registry:rows
+        - social_protection_registry:evidence_verification
+
+audit:
+  sink: stdout
+  format: jsonl
+
+datasets:
+  - id: social_protection_registry
+    title: Social Protection Registry
+    description: Synthetic households, persons, and enrollments for decentralized evidence demo flows.
+    owner: Social Protection Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    conforms_to:
+      - demo:SocialProtectionRegistry
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: households_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: Households
+              header_row: 1
+        primary_key: household_id
+        schema:
+          strict: true
+          fields:
+            - name: household_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: district
+              type: string
+              nullable: false
+            - name: poverty_score
+              type: number
+              nullable: false
+            - name: eligibility_band
+              type: string
+              nullable: false
+            - name: household_size
+              type: integer
+              nullable: false
+            - name: active_members
+              type: integer
+              nullable: false
+            - name: deceased_member_count
+              type: integer
+              nullable: false
+      - id: persons_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: Persons
+              header_row: 1
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: relationship
+              type: string
+              nullable: false
+            - name: age
+              type: integer
+              nullable: false
+            - name: alive
+              type: boolean
+              nullable: false
+            - name: disability_status
+              type: string
+              nullable: false
+      - id: enrollments_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/social-protection/social-protection.xlsx
+          format:
+            xlsx:
+              sheet: Enrollments
+              header_row: 1
+        primary_key: enrollment_id
+        schema:
+          strict: true
+          fields:
+            - name: enrollment_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: person_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: program_code
+              type: string
+              nullable: false
+            - name: status
+              type: string
+              nullable: false
+            - name: benefit_amount
+              type: number
+              nullable: false
+            - name: enrolled_on
+              type: date
+              nullable: false
+    entities:
+      - name: household
+        title: Household
+        description: Household enrolled or assessed for support.
+        table: households_table
+        concept_uri: demo:Household
+        fields:
+          - name: id
+            from: household_id
+          - name: national_id
+          - name: district
+          - name: poverty_score
+          - name: eligibility_band
+          - name: household_size
+          - name: active_members
+          - name: deceased_member_count
+        relationships:
+          - name: members
+            kind: has_many
+            target: person
+            foreign_key: household_id
+          - name: enrollments
+            kind: has_many
+            target: program_enrollment
+            foreign_key: household_id
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: national_id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: eligibility_band
+              ops: [eq, in]
+            - field: poverty_score
+              ops: [eq, gte, lte]
+        aggregates:
+          - id: households_by_eligibility_band
+            description: Household count by eligibility band.
+            group_by:
+              - eligibility_band
+            measures:
+              - name: household_count
+                function: count
+                column: id
+              - name: average_poverty_score
+                function: avg
+                column: poverty_score
+            disclosure_control:
+              min_group_size: 1
+              suppression: omit
+      - name: person
+        title: Person
+        description: Household member projection.
+        table: persons_table
+        concept_uri: demo:Person
+        fields:
+          - name: id
+            from: person_id
+          - name: household_id
+          - name: national_id
+          - name: relationship
+          - name: age
+          - name: alive
+          - name: disability_status
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: national_id
+              ops: [eq, in]
+            - field: alive
+              ops: [eq]
+      - name: program_enrollment
+        title: Program Enrollment
+        description: Program participation record for a household member.
+        table: enrollments_table
+        concept_uri: demo:ProgramEnrollment
+        fields:
+          - name: id
+            from: enrollment_id
+          - name: household_id
+          - name: person_id
+          - name: national_id
+          - name: program_code
+          - name: enrollment_status
+            from: status
+          - name: benefit_amount
+          - name: enrolled_on
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+          - name: person
+            kind: belongs_to
+            target: person
+            foreign_key: person_id
+        access:
+          metadata_scope: social_protection_registry:metadata
+          aggregate_scope: social_protection_registry:aggregate
+          read_scope: social_protection_registry:rows
+          evidence_verification_scope: social_protection_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: person_id
+              ops: [eq, in]
+            - field: national_id
+              ops: [eq, in]
+            - field: program_code
+              ops: [eq, in]
+            - field: enrollment_status
+              ops: [eq, in]

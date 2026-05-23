@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1-bookworm AS builder
+
+WORKDIR /workspace
+COPY --from=witness_src . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/workspace/target \
+    cargo build --release --locked -p registry-witness-bin \
+    && cp /workspace/target/release/registry-witness /usr/local/bin/registry-witness
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/registry-witness /usr/local/bin/registry-witness
+
+USER nobody:nogroup
+EXPOSE 8080
+
+ENTRYPOINT ["registry-witness"]
