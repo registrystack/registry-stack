@@ -426,14 +426,18 @@ async fn issue_credential(
     if evaluation.format != FORMAT_SD_JWT_VC {
         return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
     }
-    if !profile.allowed_claims.is_empty()
-        && !evaluation.claim_ids.iter().all(|claim| {
-            profile
-                .allowed_claims
-                .iter()
-                .any(|allowed| allowed == claim)
-        })
-    {
+    // Fail-closed: every evaluated claim must appear in the profile's
+    // allow-list. An empty `allowed_claims` therefore permits nothing rather
+    // than permitting everything. The config-load validator (see
+    // `EvidenceConfigError::EmptyAllowedClaims`) catches misconfiguration up
+    // front; this inversion is the type-level safety net for any code path
+    // that constructs an `EvidenceConfig` without going through validate().
+    if !evaluation.claim_ids.iter().all(|claim| {
+        profile
+            .allowed_claims
+            .iter()
+            .any(|allowed| allowed == claim)
+    }) {
         return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
     }
     if !profile.disclosure.allowed.is_empty()
@@ -630,7 +634,11 @@ fn validate_holder_proof_payload(
     }
     let expires_at =
         OffsetDateTime::from_unix_timestamp(exp).map_err(|_| EvidenceError::HolderProofRequired)?;
-    if exp > iat + 300 {
+    // The proof window must be a strictly positive interval bounded above by
+    // five minutes. Rejecting `exp <= iat` here means we do not depend on the
+    // JWT decoder's exp check ordering, and stops a backdated proof from
+    // ever reaching the replay-key path.
+    if exp <= iat || exp > iat + 300 {
         return Err(EvidenceError::HolderProofRequired);
     }
     Ok(HolderProofBinding {
@@ -1067,5 +1075,90 @@ mod tests {
         )
         .expect_err("proof with aud=\"registry-witness\" must be rejected when service_id differs");
         assert!(matches!(err, EvidenceError::HolderProofRequired));
+    }
+
+    fn windowed_proof_payload(holder_id: &str, aud: &str, iat: i64, exp: i64) -> Value {
+        json!({
+            "sub": holder_id,
+            "aud": aud,
+            "iat": iat,
+            "exp": exp,
+            "jti": "jti-window",
+            "evaluation_id": "eval-1",
+            "credential_profile": "profile-a",
+            "disclosure": "redacted",
+            "claims": ["claim-a"],
+        })
+    }
+
+    #[test]
+    fn holder_proof_exp_window_is_bounded_below_and_above() {
+        // The accepted lifetime is a strictly positive interval up to 300s.
+        // Anything outside that window must be rejected before reaching the
+        // replay-key path.
+        let holder_id = holder_did_jwk();
+        let service_id = "my.witness.example";
+        let request = issue_request();
+        let evaluation = evaluation_for_proof();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+
+        let proof_zero_window = sign_holder_proof(
+            &holder_id,
+            windowed_proof_payload(&holder_id, service_id, now, now),
+        );
+        let err = validate_holder_proof_payload(
+            &proof_zero_window,
+            &holder_id,
+            "profile-a",
+            &request,
+            &evaluation,
+            service_id,
+        )
+        .expect_err("exp == iat must be rejected");
+        assert!(matches!(err, EvidenceError::HolderProofRequired));
+
+        let proof_backdated = sign_holder_proof(
+            &holder_id,
+            windowed_proof_payload(&holder_id, service_id, now, now - 60),
+        );
+        let err = validate_holder_proof_payload(
+            &proof_backdated,
+            &holder_id,
+            "profile-a",
+            &request,
+            &evaluation,
+            service_id,
+        )
+        .expect_err("exp < iat must be rejected");
+        assert!(matches!(err, EvidenceError::HolderProofRequired));
+
+        let proof_over_ceiling = sign_holder_proof(
+            &holder_id,
+            windowed_proof_payload(&holder_id, service_id, now, now + 301),
+        );
+        let err = validate_holder_proof_payload(
+            &proof_over_ceiling,
+            &holder_id,
+            "profile-a",
+            &request,
+            &evaluation,
+            service_id,
+        )
+        .expect_err("exp > iat + 300 must be rejected");
+        assert!(matches!(err, EvidenceError::HolderProofRequired));
+
+        let proof_just_positive = sign_holder_proof(
+            &holder_id,
+            windowed_proof_payload(&holder_id, service_id, now, now + 1),
+        );
+        validate_holder_proof_payload(
+            &proof_just_positive,
+            &holder_id,
+            "profile-a",
+            &request,
+            &evaluation,
+            service_id,
+        )
+        .expect("exp = iat + 1 must be accepted");
     }
 }
