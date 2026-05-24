@@ -4540,10 +4540,10 @@ name = "registry-platform-audit"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "subtle",
  "thiserror 2.0.18",
  "time",
@@ -4556,7 +4556,7 @@ dependencies = [
 name = "registry-platform-authcommon"
 version = "0.1.0"
 dependencies = [
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "subtle",
  "thiserror 2.0.18",
  "zeroize",
@@ -4571,7 +4571,7 @@ dependencies = [
  "jsonwebtoken",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "subtle",
  "thiserror 2.0.18",
  "url",
@@ -4623,12 +4623,12 @@ name = "registry-platform-sdjwt"
 version = "0.1.0"
 dependencies = [
  "base64",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "jsonwebtoken",
  "registry-platform-crypto",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror 2.0.18",
  "ulid",
 ]
