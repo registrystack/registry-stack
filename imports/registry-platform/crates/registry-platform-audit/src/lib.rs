@@ -11,7 +11,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -795,8 +795,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn hmac_sha256_hex(secret: &[u8], bytes: &[u8]) -> String {
-    let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(secret).expect("HMAC-SHA256 accepts any key length");
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(secret)
+        .expect("HMAC-SHA256 accepts any key length");
     mac.update(bytes);
     let tag = mac.finalize().into_bytes();
     format!("{KEYED_HASH_PREFIX}{}", hex_lower(&tag))
