@@ -4537,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -4554,7 +4554,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sha2 0.11.0",
  "subtle",
@@ -4564,7 +4564,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -4580,7 +4580,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "http",
@@ -4594,7 +4594,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "reqwest",
@@ -4605,7 +4605,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -4620,7 +4620,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "getrandom 0.4.2",
