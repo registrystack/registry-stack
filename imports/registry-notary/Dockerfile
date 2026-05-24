@@ -12,7 +12,7 @@ COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
-    cargo build --release --locked -p registry-witness-bin \
+    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-witness-bin \
     && cp /workspace/target/release/registry-witness /usr/local/bin/registry-witness
 
 # Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
