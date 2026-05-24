@@ -5,7 +5,8 @@ status: current
 owner: registry-witness
 source_repos:
   - registry-witness
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -22,7 +23,7 @@ The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, what disclosure profiles the specification exposes, and what is not in scope.
 
-Evidence source: [Registry Witness](../../../projects/registry-witness/) commit `b4128a369c62ddb8e75dafb2e3834cd87f28d2d0`, reviewed 2026-05-23.
+Evidence source: [Registry Witness](../../../projects/registry-witness/) commit `412c162a85c9b99491a7a4c32704063628eb824a`, reviewed 2026-05-24.
 
 Generate or refresh the artifact:
 
@@ -40,12 +41,16 @@ Registry Witness is a standalone Rust workspace for claim evaluation, disclosure
 credential issuance, and audit.
 Registry Witness runs independently; it does not require Registry Relay to be running.
 
-The OpenAPI document is titled "Registry Witness API" at version `0.1.0`.
-All routes are defined in `crates/registry-witness-server/src/api.rs` and require authentication.
-There are ten HTTP routes:
+The pinned OpenAPI document is titled "Registry Witness API" at version `0.1.0`.
+The current workspace version is `0.2.0`; the OpenAPI info version has not yet caught up.
+Routes are defined in `crates/registry-witness-server/src/api.rs`.
+The generated OpenAPI artifact covers the protected API routes, while source also mounts public probe routes and a protected admin no-op route.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| GET | `/healthz` | Liveness probe, public |
+| GET | `/ready` | Readiness probe, public |
+| POST | `/admin/reload` | Admin-scoped no-op reload endpoint in the standalone router |
 | GET | `/openapi.json` | Fetch the OpenAPI document |
 | GET | `/.well-known/evidence-service` | Discover service capabilities and claim catalog |
 | GET | `/.well-known/evidence/jwks.json` | Fetch the issuer JWKS |
@@ -61,36 +66,43 @@ Default bind: `127.0.0.1:8081`. The standalone demo config (`demo/config/registr
 
 ## Auth modes
 
-Registry Witness supports two credential types per runtime instance, checked in order:
+Registry Witness supports either static credential mode or OIDC mode.
+
+In static mode, two credential lists are checked in order:
 
 **API key**: The client sends the token in `x-api-key: <token>`.
-The server performs a constant-time comparison against values loaded from environment variables at startup.
+The server fingerprints the presented token and compares it with `sha256:<64 hex>` values loaded from environment variables at startup.
 
 ```sh
 curl -H "x-api-key: <your-key>" http://localhost:8081/claims
 ```
 
 **Bearer token**: The client sends `Authorization: Bearer <token>`.
-The server strips the `Bearer` prefix and performs a constant-time comparison.
+The server parses the Bearer header with Registry Platform auth helpers, fingerprints the token, and performs a constant-time comparison.
 
 ```sh
 curl -H "Authorization: Bearer <your-token>" http://localhost:8081/claims
 ```
 
-Both types are configured in `auth.api_keys` and `auth.bearer_tokens` in the Witness config file. Example:
+Both static types are configured in `auth.api_keys` and `auth.bearer_tokens` in the Witness config file. Example:
 
 ```yaml
 auth:
+  mode: api_key
   api_keys:
-    - token: "${WITNESS_API_KEY}"
+    - id: verifier
+      hash_env: WITNESS_API_KEY_HASH
       scopes: ["civil:evaluate"]
   bearer_tokens:
-    - token: "${WITNESS_BEARER_TOKEN}"
+    - id: verifier
+      hash_env: WITNESS_BEARER_TOKEN_HASH
       scopes: ["civil:evaluate", "civil:issue"]
 ```
 
 Each credential carries a `scopes` list.
 Per-claim scope requirements are enforced before evaluation proceeds.
+
+In OIDC mode, `auth.mode: oidc` configures issuer, JWKS URI, audiences, accepted algorithms, scope mapping, and principal claim. Witness delegates token verification to Registry Platform OIDC primitives and still owns the scopes required by its claim routes.
 
 ## Disclosure profiles
 
@@ -119,6 +131,8 @@ The credential uses:
 - Key source: environment variable `REGISTRY_WITNESS_ISSUER_JWK` (OKP Ed25519 JWK with `d` and `x` components).
 - Selective disclosure: individual claim fields are wrapped in SD-JWT disclosures with SHA-256 digests.
 - Media type: `application/dc+sd-jwt`.
+
+Reusable issuance and holder-proof helpers come from Registry Platform. Witness owns the credential profile config, claim selection, and route workflow.
 
 The issuer public key is available at `GET /.well-known/evidence/jwks.json`.
 
@@ -163,11 +177,10 @@ but no implementation is present at the reviewed commit.
 **Proof-of-possession binding.** `did:jwk` is the only supported holder binding method.
 Other DID methods are not supported.
 
-**Audit events.** Every evaluated request emits a `EvidenceAuditEvent` to a configured sink (stdout or file) in JSONL format.
+**Audit events.** Every evaluated request emits an `EvidenceAuditEvent` wrapped in a Registry Platform audit envelope to a configured sink (`stdout`, `file`, or `jsonl`) in JSONL format.
 
 :::caution
 Audit write failures surface as request errors, not as transparent log entries. If your audit sink is unavailable, callers will receive errors. Monitor the audit sink as part of your operational runbook.
 :::
 
-**Admin operations.** Registry Witness does not expose an admin route for live reload.
-Key and configuration changes require a service restart.
+**Admin operations.** `POST /admin/reload` exists but returns a no-op response in the standalone router. Key and configuration changes still require a service restart.

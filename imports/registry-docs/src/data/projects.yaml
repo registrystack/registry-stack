@@ -1,3 +1,22 @@
+- id: registry-platform
+  name: Registry Platform
+  repo_path: ../registry-platform
+  target_repo_path: ../registry-platform
+  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Witness, and related registry services, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
+  owns:
+    - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.
+    - Cross-service crate APIs that must behave consistently in Relay, Witness, and future registry services.
+    - Shared Rust hygiene templates and supported integration-test fixtures.
+  does_not_own:
+    - Registry Relay runtime data access, entity routing, metadata publication, or scope policy semantics.
+    - Registry Witness claim configuration, evaluation rules, disclosure policy decisions, or service routes.
+    - Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration.
+  source_docs:
+    - label: README
+      url: https://github.com/jeremi/registry-platform
+    - label: Registry Platform crates
+      url: https://github.com/jeremi/registry-platform/tree/main/crates
+  rename_status: New shared workspace; not part of the 2026-05-23 rename wave.
 - id: registry-manifest
   name: Registry Manifest
   repo_path: ../registry-manifest
@@ -21,17 +40,18 @@
   name: Registry Relay
   repo_path: ../registry-relay
   target_repo_path: ../registry-relay
-  role: Read-only HTTP gateway that fronts a sensitive registry database. Exposes entity-shaped query routes with API-key or OIDC auth, audit logging, and DCAT-shaped metadata, without giving callers direct database or SQL access.
+  role: Read-only HTTP gateway that fronts a sensitive registry database. Exposes entity-shaped query routes, caller-scoped metadata, and evidence-offering verification while composing shared auth, OIDC, audit, HTTP security, crypto, and SD-JWT primitives from Registry Platform.
   owns:
     - Runtime configuration and source binding.
     - Entity-shaped Registry Data API routes.
-    - API key and OIDC resource-server authorization.
+    - Relay-specific API key and OIDC resource-server configuration, scope checks, and route enforcement.
     - Caller-scoped metadata publication.
     - Relay-native evidence offering verification.
   does_not_own:
     - Record provisioning or writes in v1.
     - Portable metadata schema ownership.
     - Standalone claim service internals owned by Registry Witness.
+    - Shared security and operational primitives owned by Registry Platform.
     - Storage table ids or arbitrary SQL in public APIs.
   source_docs:
     - label: README
@@ -45,16 +65,17 @@
   name: Registry Witness
   repo_path: ../registry-witness
   target_repo_path: ../registry-witness
-  role: Standalone service that evaluates eligibility claims against registry data and issues SD-JWT verifiable credentials with selective disclosure, so programs can attest a person qualifies without exposing the underlying records.
+  role: Standalone service that evaluates eligibility claims against registry data and issues SD-JWT verifiable credentials with selective disclosure, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.
   owns:
     - Claim configuration and evaluation.
-    - Disclosure policy and redacted audit events.
+    - Disclosure policy and redacted audit event semantics.
     - Registry Witness API routes.
-    - SD-JWT VC issuance primitives.
+    - Credential issuance workflow and claim-to-credential mapping.
     - HTTP source connectors for Registry Data API and SP DCI-style sources.
   does_not_own:
     - Registry Relay source code or runtime internals.
     - Portable metadata renderers owned by Registry Manifest.
+    - Shared security and operational primitives owned by Registry Platform.
     - Browser inspection workflows owned by Registry Atlas.
   source_docs:
     - label: README

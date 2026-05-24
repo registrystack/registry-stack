@@ -1,10 +1,11 @@
 ---
 title: What is the registry family
-description: Plain-language description of the five registry projects and what each one does.
+description: Plain-language description of the six registry projects and what each one does.
 status: current
 owner: registry-legend
 source_repos:
   - registry-relay
+  - registry-platform
   - registry-manifest
   - registry-witness
   - registry-atlas
@@ -21,9 +22,15 @@ standards_referenced:
   - odrl
 ---
 
-The registry family is five projects that help you publish, consult, and verify protected registry data: data that holds facts about people, households, businesses, or services and that authorized systems need to query without getting a copy of the underlying database.
+The registry family is six projects that help you publish, consult, verify, and operate protected registry data: data that holds facts about people, households, businesses, or services and that authorized systems need to query without getting a copy of the underlying database.
 
-## The five projects
+## The six projects
+
+### Registry Platform
+
+Keep shared security and operational behavior consistent across registry services.
+
+Registry Platform is a Rust crate workspace, not a running service. Relay and Witness consume it for auth helpers, OIDC verification, audit envelopes, HTTP security middleware, outbound HTTP policy, Ed25519 JWK and DID helpers, SD-JWT VC helpers, and test fixtures. Product-specific route behavior and policy decisions stay in the consuming services.
 
 ### Registry Manifest
 
@@ -35,7 +42,7 @@ Registry Manifest is a Rust library and CLI. You point it at a metadata manifest
 
 Let authorized systems query a registry over HTTP without giving them database access or write paths.
 
-Registry Relay is a config-driven Rust HTTP service. You bind it to CSV, XLSX, Parquet, or PostgreSQL sources, and it exposes them as protected, read-only, domain-oriented APIs. Routes are shaped by entities (`household`, `individual`, etc.), not by table names. Auth is API key or OIDC. Relay also publishes the same standards-facing artifacts Manifest renders, scoped to what each caller is allowed to see, at runtime under `/metadata/*`.
+Registry Relay is a config-driven Rust HTTP service. You bind it to CSV, XLSX, Parquet, or PostgreSQL sources, and it exposes them as protected, read-only, domain-oriented APIs. Routes are shaped by entities such as `household` or `individual`, not by table names. Auth is API key or OIDC, backed by Registry Platform primitives. Relay also publishes the same standards-facing artifacts Manifest renders, scoped to what each caller is allowed to see, at runtime under `/metadata/*`.
 
 Relay is a restricted consultation gateway, not an open-data portal and not a write platform.
 
@@ -43,9 +50,9 @@ Relay is a restricted consultation gateway, not an open-data portal and not a wr
 
 Prove a person qualifies for a program without sharing the records that prove it.
 
-Registry Witness is a standalone Rust HTTP service. It evaluates configured eligibility claims against registry data (fetched over HTTP from Registry Relay or an SP DCI source) and produces a verification receipt. It can issue that receipt as an SD-JWT VC credential with selective disclosure, so the caller learns only what each claim authorized.
+Registry Witness is a standalone Rust HTTP service. It evaluates configured eligibility claims against registry data (fetched over HTTP from Registry Relay or an SP DCI source) and produces a verification receipt. It can issue that receipt as an SD-JWT VC credential with selective disclosure, so the caller learns only what each claim authorized. Auth, audit envelopes, HTTP security, OIDC verification, and SD-JWT helper behavior are backed by Registry Platform primitives.
 
-Witness is independent: it doesn't import or link Registry Relay code. It renders claim results as CCCEV JSON-LD when the caller asks for `application/ld+json; profile="cccev"`.
+Witness is independent from Registry Relay application code: it doesn't import or link Relay libraries. Both services may depend on Registry Platform. Witness renders claim results as CCCEV JSON-LD when the caller asks for `application/ld+json; profile="cccev"`.
 
 Witness produces a verification receipt. Treating it as a programmatic eligibility decision is the caller's choice, not a guarantee Witness makes.
 
@@ -71,5 +78,5 @@ Lab is not production deployment guidance, and the demo isn't a real integration
 - [Standards register](../../reference/standards/): per-standard claim levels.
 
 {/* Contributor note: project definitions on this page are paraphrased from each repo's README,
-    cross-checked against src/data/projects.yaml on 2026-05-23. When updating, sync with
+    cross-checked against src/data/projects.yaml on 2026-05-24. When updating, sync with
     src/data/projects.yaml; do not link to its raw GitHub blob from reader-facing prose. */}

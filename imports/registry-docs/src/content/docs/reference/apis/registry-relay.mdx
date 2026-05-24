@@ -5,7 +5,8 @@ status: current
 owner: registry-relay
 source_repos:
   - registry-relay
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -25,7 +26,7 @@ The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, and what the specification does not cover.
 
-Evidence source: [Registry Relay](../../../projects/registry-relay/) commit `aec4394300c87e1f0e93b73580c9b12150552111`, reviewed 2026-05-23.
+Evidence source: [Registry Relay](../../../projects/registry-relay/) commit `03c23b77e01187b18d496d0fa3f7bc146446369a`, reviewed 2026-05-24.
 
 ## API surface
 
@@ -101,6 +102,7 @@ The server validates API keys against a SHA-256 fingerprint stored in an environ
 **OIDC / OAuth2**: The client sends a bearer JWT in `Authorization: Bearer <token>`.
 The server validates against an external identity provider JWKS, resolved from a discovery URL or explicit URL.
 No tokens are minted by Relay.
+Shared credential parsing, API-key fingerprinting, and OIDC verification primitives come from Registry Platform; Relay owns scope naming and route enforcement.
 
 ```sh
 # OIDC bearer JWT

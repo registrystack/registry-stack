@@ -5,6 +5,7 @@ status: current
 owner: registry-legend
 source_repos:
   - registry-relay
+  - registry-platform
   - registry-manifest
   - registry-witness
   - registry-atlas
@@ -79,7 +80,7 @@ Product names are always in English, including on future translated pages.
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
 
   <dt>registry family</dt>
-  <dd>The five related projects: <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-witness/">Registry Witness</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
+  <dd>The six related projects: <a href="../../projects/registry-platform/">Registry Platform</a>, <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-witness/">Registry Witness</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
 
   <dt>Registry Atlas</dt>
   <dd>Browser SPA with a Rust/WASM semantic analysis engine for inspecting published catalog and registry discovery artifacts. Repo slug: `registry-atlas`.</dd>
@@ -93,11 +94,14 @@ Product names are always in English, including on future translated pages.
   <dt>Registry Manifest</dt>
   <dd>Rust workspace for modeling, validating, and rendering standards-facing registry metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
 
+  <dt>Registry Platform</dt>
+  <dd>Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures. Repo slug: `registry-platform`.</dd>
+
   <dt>Registry Relay</dt>
   <dd>Config-driven Rust service that turns sensitive government tabular files and database tables into protected, read-only, domain-oriented consultation APIs. Repo slug: `registry-relay`.</dd>
 
   <dt>Registry Witness</dt>
-  <dd>Standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. Decoupled from Registry Relay by design. Repo slug: `registry-witness`.</dd>
+  <dd>Standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. Decoupled from Registry Relay application code by design, while sharing Registry Platform primitives. Repo slug: `registry-witness`.</dd>
 
   <dt>`registry-manifest/v1`</dt>
   <dd>Schema version string for portable metadata manifests.</dd>
@@ -120,7 +124,7 @@ Product names are always in English, including on future translated pages.
 
 ## Style notes
 
-- Product names (Registry Relay, Registry Manifest, Registry Witness, Registry Atlas, Registry Lab) are always title case.
-- Repo slugs (`registry-relay`, `registry-manifest`, `registry-witness`, `registry-atlas`, `registry-lab`) are always lowercase and monospace.
+- Product names (Registry Platform, Registry Relay, Registry Manifest, Registry Witness, Registry Atlas, Registry Lab) are always title case.
+- Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-witness`, `registry-atlas`, `registry-lab`) are always lowercase and monospace.
 - Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields. Do not use them in prose on current pages.
 - Spell out standards acronyms on first use per page. The glossary provides a reference but does not replace per-page first-use expansion.

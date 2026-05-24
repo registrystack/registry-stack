@@ -238,20 +238,26 @@
     "status": "used",
     "claim_level": "emits",
     "used_by": [
-      "registry-witness"
+      "registry-witness",
+      "registry-platform"
     ],
     "surfaces": [
       "credential issuance",
-      "selective disclosure contracts"
+      "selective disclosure contracts",
+      "shared SD-JWT VC issuance and holder-proof helpers"
     ],
     "evidence_docs": [
       {
         "label": "Registry Witness README",
         "url": "https://github.com/jeremi/registry-witness/blob/main/README.md"
+      },
+      {
+        "label": "Registry Platform SD-JWT crate",
+        "url": "https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-sdjwt"
       }
     ],
-    "last_checked": "2026-05-23",
-    "notes": "Witness owns SD-JWT VC issuance primitives."
+    "last_checked": "2026-05-24",
+    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Registry Witness owns the claim-to-credential workflow and service routes that use them."
   },
   {
     "id": "verifiable-credentials",
@@ -436,12 +442,14 @@
     "claim_level": "implements",
     "used_by": [
       "registry-relay",
-      "registry-witness"
+      "registry-witness",
+      "registry-platform"
     ],
     "surfaces": [
       "did:web document publication",
       "did:jwk parsing for credential subjects",
-      "issuer identifier handling"
+      "issuer identifier handling",
+      "shared DID validation and Ed25519 JWK helpers"
     ],
     "evidence_docs": [
       {
@@ -455,9 +463,13 @@
       {
         "label": "Registry Witness did:jwk handling",
         "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs"
+      },
+      {
+        "label": "Registry Platform crypto crate",
+        "url": "https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-crypto"
       }
     ],
-    "last_checked": "2026-05-23",
-    "notes": "Relay publishes a did:web document and Witness parses did:jwk values for credential subjects. The site does not claim conformance to the wider DID method registry beyond did:web and did:jwk."
+    "last_checked": "2026-05-24",
+    "notes": "Relay publishes a did:web document, Witness parses did:jwk values for credential subjects, and Platform owns shared DID and Ed25519 JWK helpers. The site does not claim conformance to the wider DID method registry beyond did:web and did:jwk."
   }
 ]

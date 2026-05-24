@@ -52,6 +52,13 @@ export default defineConfig({
             { label: 'Ownership & boundaries', slug: 'map/ownership-boundaries' },
             { label: 'All projects', slug: 'projects' },
             {
+              label: 'Registry Platform',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-platform' },
+                { label: 'Reference', slug: 'projects/registry-platform/reference' },
+              ],
+            },
+            {
               label: 'Registry Manifest',
               items: [
                 { label: 'Overview', slug: 'projects/registry-manifest' },

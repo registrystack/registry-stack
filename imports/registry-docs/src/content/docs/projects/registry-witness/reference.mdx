@@ -5,7 +5,8 @@ status: draft
 owner: registry-witness
 source_repos:
   - registry-witness
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -17,15 +18,18 @@ standards_referenced:
   - w3c-did
 ---
 
-Use this page to look up the Registry Witness config schema, HTTP routes, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`.
+Use this page to look up the Registry Witness config schema, HTTP routes, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`, but current operational probe and admin routes are documented from source because the generator does not yet include them.
 ([README](https://github.com/jeremi/registry-witness/blob/main/README.md))
 
 ## HTTP routes
 
-All routes require authentication via `x-api-key` header or `Authorization: Bearer` header.
+`/healthz` and `/ready` are public probe routes. Other routes require authentication through static API-key/bearer-token mode or OIDC mode.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/healthz` | Return the liveness probe. Public. |
+| `GET` | `/ready` | Return the readiness probe. Public. |
+| `POST` | `/admin/reload` | Admin-scoped no-op reload endpoint. Returns `reloaded: false` in the standalone router. |
 | `GET` | `/openapi.json` | Return the Registry Witness OpenAPI 3.1.0 document. |
 | `GET` | `/.well-known/evidence-service` | Return the service capabilities document. |
 | `GET` | `/.well-known/evidence/jwks.json` | Return the public issuer verification keys as a JWKS. |
@@ -192,7 +196,7 @@ Fields of `CredentialProfileConfig`.
 ## Audit event shape
 
 `EvidenceAuditEvent` fields.
-Events are serialized as JSON Lines (JSONL) to `stdout` or a file.
+Events are serialized as Registry Platform audit envelopes in JSON Lines (JSONL) to `stdout` or a file.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -220,15 +224,37 @@ Default bind: `127.0.0.1:8081`. The standalone demo config in `demo/config/regis
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `api_keys` | `[]` | Array of `{id, token_env, scopes}`. |
-| `bearer_tokens` | `[]` | Array of `{id, token_env, scopes}`. |
+| `mode` | `api_key` | `api_key` for static API key and bearer-token lists, or `oidc` for inbound bearer JWT verification. |
+| `api_keys` | `[]` | Static credentials array of `{id, hash_env, scopes}`. `hash_env` names an env var containing a `sha256:<64 hex>` fingerprint. |
+| `bearer_tokens` | `[]` | Static bearer credentials array of `{id, hash_env, scopes}`. |
+| `oidc` | None | Required when `mode: oidc`; see [OIDC auth config](#oidc-auth-config). |
+
+### OIDC auth config
+
+Fields under `auth.oidc`.
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `issuer` | None | Expected JWT `iss`. Required. |
+| `jwks_uri` | None | JWKS endpoint used by the platform OIDC verifier. Required. |
+| `audiences` | `[]` | Accepted JWT audiences. At least one is required. |
+| `allowed_clients` | `[]` | Optional allowed `azp`/client identifiers. |
+| `allowed_algorithms` | `["EdDSA"]` | Accepted JOSE algorithms. |
+| `allowed_typ` | `["JWT"]` | Accepted JOSE `typ` headers. |
+| `scope_claim` | `scope` | Claim used to extract scopes. |
+| `scope_separator` | space | Single-character scope separator. |
+| `scope_map` | `{}` | Optional mapping from incoming scopes to Witness scopes. |
+| `principal_claim` | `sub` | Claim used as the Witness principal ID. |
+| `leeway_seconds` | `60` | Clock skew tolerance. |
+| `allow_insecure_localhost` | `false` | Allows local insecure JWKS URLs for development. |
 
 ### `audit`
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `sink` | `stdout` | `stdout` or `file`. |
-| `path` | None | Required when `sink: file`. |
+| `sink` | `stdout` | `stdout`, `file`, or `jsonl`. |
+| `path` | None | Required when `sink: file` or `sink: jsonl`. |
+| `hash_secret_env` | None | Required. Names an env var containing deployment-specific audit hash secret material. |
 
 ### `evidence`
 

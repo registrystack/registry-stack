@@ -5,7 +5,8 @@ status: draft
 owner: registry-relay
 source_repos:
   - registry-relay
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -24,6 +25,7 @@ Registry Relay gives authorized systems a stable HTTP API for reading registry d
 (records, aggregates, metadata) without database access or raw SQL.
 
 The upstream source is [`registry-relay`](https://github.com/jeremi/registry-relay).
+Shared auth, audit, OIDC, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives come from [`registry-platform`](https://github.com/jeremi/registry-platform).
 
 ## The two-layer model
 
@@ -58,7 +60,7 @@ Stream ingestion (Kafka, pub/sub, event streaming) is not supported in v0.
 
 ## Auth model
 
-Registry Relay runs in exactly one auth mode at a time, configured at startup.
+Registry Relay runs in exactly one auth mode at a time, configured at startup. Relay owns the auth config shape, principal mapping, scopes, and route enforcement. Registry Platform owns reusable credential parsing, API-key fingerprinting, and OIDC token verification primitives.
 
 **API key mode** (`auth.mode: api_key`): the client sends a high-entropy bearer token
 in `Authorization: Bearer` or `X-Api-Key`.
@@ -99,8 +101,7 @@ Key fields in each record include:
   populated on evidence-verification requests.
 
 Supported audit sinks are `stdout`, `file` (with in-process rotation), and `syslog`.
-Setting `audit.chain: true` wraps records with `prev_hash` and `record_hash` fields for
-tamper evidence.
+Registry Platform audit envelopes wrap records with `prev_hash` and `record_hash` fields for tamper evidence.
 
 Audit records never contain raw API keys, raw query values for sensitive fields,
 or row-level data.

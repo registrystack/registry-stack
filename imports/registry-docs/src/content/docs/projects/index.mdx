@@ -1,10 +1,11 @@
 ---
 title: Projects
-description: Per-project documentation for the five registry family repositories.
+description: Per-project documentation for the six registry family repositories.
 status: draft
 owner: registry-legend
 source_repos:
   - registry-relay
+  - registry-platform
   - registry-manifest
   - registry-witness
   - registry-atlas
@@ -25,13 +26,14 @@ Every project page set follows the same shape: an overview (what it is and where
 it fits), one or more how-to pages (the tasks you actually do with it), and a
 reference page (the surfaces it exposes).
 
-## The five projects
+## The six projects
 
+- [Registry Platform](./registry-platform/): share security and operational primitives across Relay, Witness, and future registry services.
 - [Registry Manifest](./registry-manifest/): describe a registry once in YAML and render every standards-facing metadata artifact other systems need.
-- [Registry Relay](./registry-relay/): expose protected tabular sources as authorized, read-only entity APIs with audit logging.
-- [Registry Witness](./registry-witness/): evaluate eligibility claims against registry data and issue SD-JWT VC credentials with selective disclosure.
+- [Registry Relay](./registry-relay/): expose protected tabular sources as authorized, read-only entity APIs with caller-scoped metadata and platform-backed audit logging.
+- [Registry Witness](./registry-witness/): evaluate eligibility claims against registry data and issue SD-JWT VC credentials with platform-backed selective-disclosure helpers.
 - [Registry Atlas](./registry-atlas/): inspect what a registry publishes in your browser and check strict capability matches against the standards it claims to emit.
-- [Registry Lab](./registry-lab/): run the full registry stack locally on a laptop to see all five projects interacting before you write any integration code.
+- [Registry Lab](./registry-lab/): run the full registry stack locally on a laptop to see the runtime projects interacting before you write any integration code.
 
 ## Next
 

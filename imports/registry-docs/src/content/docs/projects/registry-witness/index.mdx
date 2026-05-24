@@ -5,7 +5,8 @@ status: draft
 owner: registry-witness
 source_repos:
   - registry-witness
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -19,7 +20,7 @@ standards_referenced:
 
 Prove a person qualifies for a program (eligibility, age, residency) without sharing the records that prove it. Registry Witness evaluates claims against your registry data and issues SD-JWT VC credentials with selective disclosure.
 
-Registry Witness is a standalone HTTP service. It is independently deployable and shares no library dependency with Registry Relay. A Relay instance may publish metadata that points to a Witness instance, but the two services remain decoupled. For questions about which service owns which concern, see [Ownership boundaries](../../map/ownership-boundaries/).
+Registry Witness is a standalone HTTP service. It is independently deployable and does not import or link Registry Relay application code. A Relay instance may publish metadata that points to a Witness instance, but the two services remain decoupled at the product boundary. Both services now share Registry Platform primitives for security and operational behavior. For questions about which service owns which concern, see [Ownership boundaries](../../map/ownership-boundaries/).
 
 The core promise is narrow: given a subject identifier, Registry Witness tells a caller whether that subject satisfies a configured rule, at whatever level of detail the disclosure policy permits. The verification receipt Registry Witness produces is not an eligibility decision. The issuing program, not Registry Witness, is responsible for converting a verified claim into an entitlement.
 
@@ -87,6 +88,7 @@ downgrade: deny`, which is fail-closed.
 Registry Witness issues credentials in
 [SD-JWT VC](https://datatracker.ietf.org/doc/draft-ietf-oauth-selective-disclosure-jwt/) format
 via `/credentials/issue`.
+Reusable SD-JWT signing and holder-proof checks come from Registry Platform; Witness owns the profile config, claim selection, disclosure decision, and API workflow.
 
 Key properties:
 
@@ -145,26 +147,27 @@ No source credentials appear in the YAML config file itself.
 ## Audit and redaction
 
 Every request that touches claim evaluation is authenticated and audited.
-Audit events are serialized as JSON Lines (JSONL).
+Audit events are serialized as platform audit envelopes in JSON Lines (JSONL).
 Fields: `event_id`, `occurred_at`, `principal_id`, `decision`, `method`, `path`, `status`,
 `verification_id`, `claim_hash`, `row_count`, `error_code`.
 `verification_id` and `claim_hash` are optional and may be omitted for redacted results.
 
-The audit sink is configurable as `stdout` (default) or `file`.
-When `sink: file`, `audit.path` must be set.
+The audit sink is configurable as `stdout` (default) or `file`/`jsonl`.
+When `sink: file` or `sink: jsonl`, `audit.path` must be set.
+`audit.hash_secret_env` is required so redacted audit identifiers use a deployment-specific secret.
 The demo config writes to `demo/var/registry-witness-audit.jsonl`.
 
 ## Status and v0 caveats
 
-Registry Witness is at version 0.1.0. It was renamed from `evidence-server`; the rename is documented in `docs/rename-2026-05-23/`.
+Registry Witness is at version 0.2.0. It was renamed from `evidence-server`; the rename is documented in `docs/rename-2026-05-23/`.
 
 Known limitations at this version:
 
 - The `Plugin` rule type is declared in config but not yet implemented.
 - Proof of possession for holder binding only supports `did:jwk`.
   Other DID methods in `allowed_did_methods` cause a startup validation error.
-- OIDC/JWKS discovery for inbound auth is not yet supported.
-  The binary authenticates callers with API keys and static bearer tokens only.
+- Inbound auth supports either static API-key/bearer-token mode or OIDC mode.
+  Both modes use shared Registry Platform primitives, but Witness still owns its config shape and scope enforcement.
 - The W3C Verifiable Credentials Data Model envelope is not used.
   Issued credentials are SD-JWT format directly, without a VC Data Model wrapper.
 

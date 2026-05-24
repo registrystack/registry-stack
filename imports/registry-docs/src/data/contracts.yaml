@@ -1,3 +1,12 @@
+- id: registry-platform.crate-apis
+  name: Registry Platform Crate APIs
+  owner: registry-platform
+  status: current-source
+  surface: Shared Rust crate APIs for auth helpers, OIDC verification, audit envelopes and sinks, HTTP security middleware, outbound HTTP policy, Ed25519 JWK and DID helpers, SD-JWT VC issuance, and testing fixtures.
+  source_of_truth:
+    label: Registry Platform crates
+    url: https://github.com/jeremi/registry-platform/tree/main/crates
+  consumer_note: Relay, Witness, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
 - id: registry-relay.openapi
   name: Registry Relay OpenAPI
   owner: registry-relay

@@ -1,89 +1,91 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 408" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 456" role="img"
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Manifest produces portable metadata contracts. Registry Relay binds those contracts to protected runtime data sources and serves entity and metadata APIs. Registry Witness evaluates claims against configured sources and issues credentials. Registry Atlas inspects the discovery artifacts that Relay and Witness publish. Registry Lab runs the runtime services together as a compose-based local demo.</desc>
+  <desc>Registry Platform provides shared primitives to Relay and Witness. Registry Manifest produces portable metadata contracts. Registry Relay binds those contracts to protected runtime data sources and serves entity and metadata APIs. Registry Witness evaluates claims against configured sources and issues credentials. Registry Atlas inspects published discovery artifacts. Registry Lab runs runtime services together as a compose-based local demo.</desc>
 
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
-    <text x="16" y="22">CONTRACTS</text>
-    <text x="240" y="22">RUNTIME</text>
-    <text x="464" y="22">CLIENT</text>
+    <text x="16" y="22">SHARED PRIMITIVES</text>
+    <text x="16" y="142">CONTRACTS</text>
+    <text x="240" y="142">RUNTIME</text>
+    <text x="464" y="142">CLIENT</text>
   </g>
   <g fill="#000091">
     <rect x="16" y="30" width="32" height="2"/>
-    <rect x="240" y="30" width="32" height="2"/>
-    <rect x="464" y="30" width="32" height="2"/>
+    <rect x="16" y="150" width="32" height="2"/>
+    <rect x="240" y="150" width="32" height="2"/>
+    <rect x="464" y="150" width="32" height="2"/>
   </g>
 
-  <text x="16" y="64" fill="#161616" font-size="14" font-weight="700">Registry Manifest</text>
+  <text x="16" y="64" fill="#161616" font-size="14" font-weight="700">Registry Platform</text>
   <text x="16" y="82" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-platform</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="16" y="112">Shared auth, OIDC, audit, HTTP, crypto,</text>
+    <text x="16" y="130">SD-JWT, outbound HTTP, and test crates.</text>
+  </g>
+
+  <g stroke="#000091" stroke-width="1" fill="none">
+    <line x1="208" y1="88" x2="236" y2="194"/>
+    <polyline points="230,190 236,194 231,198"/>
+    <line x1="208" y1="104" x2="236" y2="286"/>
+    <polyline points="230,282 236,286 231,290"/>
+  </g>
+
+  <text x="16" y="184" fill="#161616" font-size="14" font-weight="700">Registry Manifest</text>
+  <text x="16" y="202" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-manifest</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="16" y="112">Portable metadata</text>
-    <text x="16" y="130">contracts and</text>
-    <text x="16" y="148">renderers for DCAT,</text>
-    <text x="16" y="166">SHACL, JSON Schema,</text>
-    <text x="16" y="184">and OGC API Records.</text>
+    <text x="16" y="232">Portable metadata</text>
+    <text x="16" y="250">contracts and</text>
+    <text x="16" y="268">renderers for DCAT,</text>
+    <text x="16" y="286">SHACL, JSON Schema,</text>
+    <text x="16" y="304">and OGC API Records.</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="208" y1="112" x2="236" y2="112"/>
-    <polyline points="230,108 236,112 230,116"/>
-    <line x1="208" y1="248" x2="236" y2="248"/>
-    <polyline points="230,244 236,248 230,252"/>
+    <line x1="208" y1="232" x2="236" y2="232"/>
+    <polyline points="230,228 236,232 230,236"/>
   </g>
 
-  <text x="240" y="64" fill="#161616" font-size="14" font-weight="700">Registry Relay</text>
-  <text x="240" y="82" fill="#6a6a6a" font-size="11.5"
+  <text x="240" y="184" fill="#161616" font-size="14" font-weight="700">Registry Relay</text>
+  <text x="240" y="202" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-relay</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="112">Binds manifests to CSV,</text>
-    <text x="240" y="130">Parquet, and PostgreSQL</text>
-    <text x="240" y="148">sources. Serves protected</text>
-    <text x="240" y="166">entity and metadata APIs.</text>
+    <text x="240" y="232">Binds manifests to CSV,</text>
+    <text x="240" y="250">Parquet, and PostgreSQL</text>
+    <text x="240" y="268">sources. Serves protected</text>
+    <text x="240" y="286">entity and metadata APIs.</text>
   </g>
 
-  <text x="240" y="204" fill="#161616" font-size="14" font-weight="700">Registry Witness</text>
-  <text x="240" y="222" fill="#6a6a6a" font-size="11.5"
+  <text x="240" y="324" fill="#161616" font-size="14" font-weight="700">Registry Witness</text>
+  <text x="240" y="342" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-witness</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="252">Evaluates configured</text>
-    <text x="240" y="270">claims against HTTP</text>
-    <text x="240" y="288">sources. Issues SD-JWT</text>
-    <text x="240" y="306">VCs and CCCEV evidence.</text>
+    <text x="240" y="372">Evaluates configured</text>
+    <text x="240" y="390">claims against HTTP</text>
+    <text x="240" y="408">sources. Issues SD-JWT</text>
+    <text x="240" y="426">VCs and CCCEV evidence.</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="432" y1="112" x2="460" y2="112"/>
-    <polyline points="454,108 460,112 454,116"/>
-    <line x1="432" y1="248" x2="460" y2="248"/>
-    <polyline points="454,244 460,248 454,252"/>
+    <line x1="432" y1="232" x2="460" y2="232"/>
+    <polyline points="454,228 460,232 454,236"/>
+    <line x1="432" y1="372" x2="460" y2="372"/>
+    <polyline points="454,368 460,372 454,376"/>
   </g>
 
-  <text x="464" y="64" fill="#161616" font-size="14" font-weight="700">Registry Atlas</text>
-  <text x="464" y="82" fill="#6a6a6a" font-size="11.5"
+  <text x="464" y="184" fill="#161616" font-size="14" font-weight="700">Registry Atlas</text>
+  <text x="464" y="202" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-atlas</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="464" y="112">Browser workbench</text>
-    <text x="464" y="130">that fetches Relay</text>
-    <text x="464" y="148">metadata and runs</text>
-    <text x="464" y="166">strict capability</text>
-    <text x="464" y="184">queries over machine</text>
-    <text x="464" y="202">terms.</text>
-
-    <text x="464" y="248">Also inspects</text>
-    <text x="464" y="266">evidence and</text>
-    <text x="464" y="284">credentials emitted</text>
-    <text x="464" y="302">by Witness.</text>
+    <text x="464" y="232">Browser workbench</text>
+    <text x="464" y="250">for published catalog,</text>
+    <text x="464" y="268">schema, API, evidence,</text>
+    <text x="464" y="286">and credential artifacts.</text>
   </g>
 
-  <line x1="0" y1="344" x2="720" y2="344" stroke="#e5e5e5" stroke-width="1"/>
-
-  <text x="16" y="368" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">DEMO</text>
-  <rect x="16" y="376" width="32" height="2" fill="#000091"/>
-
-  <text x="64" y="368" fill="#161616" font-size="14" font-weight="700">Registry Lab</text>
-  <text x="166" y="368" fill="#6a6a6a" font-size="11.5"
-        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-lab</text>
-  <text x="64" y="396" fill="#3a3a3a" font-size="12.5">Runs Manifest output, Relay, Witness, and Atlas together as a compose-based local demo.</text>
+  <line x1="0" y1="438" x2="720" y2="438" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="464" y="426" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">DEMO: REGISTRY LAB</text>
+  <text x="590" y="426" fill="#3a3a3a" font-size="12.5">Compose demo of the runtime family.</text>
 </svg>

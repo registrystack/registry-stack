@@ -5,6 +5,7 @@ status: draft
 owner: registry-relay
 source_repos:
   - registry-relay
+  - registry-platform
 last_reviewed: "2026-05-23"
 doc_type: how-to
 locale: en
@@ -13,7 +14,7 @@ standards_referenced:
 ---
 
 Registry Relay runs in exactly one auth mode at a time.
-This page covers both supported modes: API-key auth and OIDC resource-server auth.
+This page covers both supported modes: API-key auth and OIDC resource-server auth. Relay owns the auth config shape, scope semantics, and route enforcement; shared parsing, fingerprinting, and OIDC verification helpers come from Registry Platform.
 Use it when you need to configure callers for a new deployment or rotate credentials
 in an existing one.
 

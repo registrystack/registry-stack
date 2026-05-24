@@ -5,7 +5,8 @@ status: draft
 owner: registry-witness
 source_repos:
   - registry-witness
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -38,13 +39,13 @@ cd registry-witness
 
 ### 2. Set required environment variables
 
-Registry Witness starts fail-closed: no route is served unless at least one API key or bearer
-token is configured.
-All credential values are loaded from environment variables named in the YAML config.
+Registry Witness starts fail-closed: no protected route is served unless static credentials or OIDC auth are configured.
+The demo config uses static credentials. It stores API-key and bearer-token fingerprints in environment variables named by `hash_env`, plus a separate audit hash secret.
 
 ```sh
-export REGISTRY_WITNESS_API_KEY=dev-registry-witness-api-key
-export REGISTRY_WITNESS_BEARER_TOKEN=dev-registry-witness-bearer-token
+export REGISTRY_WITNESS_API_KEY_HASH=sha256:ca2b7917b5d2bdc05d445ce8d50c3adad19ac355d6d40ede18b1f341d7c6e546
+export REGISTRY_WITNESS_BEARER_TOKEN_HASH=sha256:f2721a9dae064d1fdbc74cae1fb1baf26fac01b8aac160ae5acab97c35667d7f
+export REGISTRY_WITNESS_AUDIT_HASH_SECRET=dev-registry-witness-audit-hash-secret
 export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN=dev-source-token
 ```
 
@@ -136,11 +137,12 @@ cargo run -p registry-witness-bin -- openapi > target/registry-witness.openapi.j
 The config validator runs before the HTTP listener binds.
 Check the tracing output for a `EvidenceConfigError` message.
 Common causes: `evidence.enabled` is not `true`; no API key or bearer token is configured;
-a source binding references a connection name that does not exist in `source_connections`.
+a source binding references a connection name that does not exist in `source_connections`;
+or `audit.hash_secret_env` is missing.
 
 **`401 Unauthorized` on every request.**
-Confirm the environment variable name in your shell matches `token_env` in the YAML config.
-The demo config expects `REGISTRY_WITNESS_API_KEY` and `REGISTRY_WITNESS_BEARER_TOKEN`.
+Confirm the raw token you send matches the fingerprint stored in the environment variable named by `hash_env` in the YAML config.
+The demo config expects `REGISTRY_WITNESS_API_KEY_HASH` and `REGISTRY_WITNESS_BEARER_TOKEN_HASH`.
 
 **`GET /claims` returns an empty array.**
 The demo config scopes claims to `civil_registry:evidence_verification` and

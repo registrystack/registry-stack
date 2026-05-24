@@ -5,7 +5,8 @@ status: draft
 owner: registry-relay
 source_repos:
   - registry-relay
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-24"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -23,7 +24,7 @@ standards_referenced:
 Use this page to look up config keys, source binding options, API routes, auth fields,
 audit record fields, environment variables, and startup error codes for Registry Relay v0.1.0.
 This reference is hand-maintained against the upstream source; check linked upstream files
-for the latest detail.
+for the latest detail. Relay owns the config schema and route behavior, while shared auth, audit, OIDC, HTTP security, outbound HTTP, crypto, and SD-JWT primitives live in Registry Platform.
 
 Jump to: [Environment variables](#environment-variables) | [Auth failure codes](#oidc-granular-failure-codes) | [Startup error codes](#split-metadata-startup-error-codes)
 
@@ -209,7 +210,7 @@ Exactly one mode is active per deployment.
 Each completed request produces one JSONL record.
 Records are emitted to the configured sink (stdout, file, or syslog).
 Audit records are separate from operational logs.
-[Source: src/audit/mod.rs AuditRecord struct.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+[Source: Relay `src/audit/mod.rs` AuditRecord struct plus Registry Platform audit envelopes.](https://github.com/jeremi/registry-relay/blob/main/src/audit/mod.rs)
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -241,14 +242,14 @@ Audit records are separate from operational logs.
 | `error_code` | string or null | Stable taxonomy code on 4xx/5xx; null on 2xx/3xx |
 | `provenance` | object or null | Present when the response carried a signed VC; absent for plain JSON |
 
-When `audit.chain: true` is set, each record is wrapped with additional fields:
+Each audit record is wrapped in a Registry Platform audit envelope with additional fields:
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `prev_hash` | string | SHA-256 of the previous envelope's JSON content |
 | `record_hash` | string | SHA-256 of this envelope's JSON content |
 
-[Source: src/audit/mod.rs AuditEnvelope and ChainingSink.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/src/audit/mod.rs)
+[Source: Relay audit pipeline and Registry Platform audit envelope support.](https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-audit)
 
 ## Environment variables
 

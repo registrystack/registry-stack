@@ -4,6 +4,7 @@ description: The fastest route through the registry family docs for integrators,
 status: current
 owner: registry-legend
 source_repos:
+  - registry-platform
   - registry-relay
   - registry-manifest
   - registry-witness
@@ -20,6 +21,10 @@ Pick the path that matches what you're trying to do.
 ## If you want to query a registry over HTTP
 
 Start with [Registry Relay](../../projects/registry-relay/). Relay is the protected consultation gateway: it turns CSV, XLSX, Parquet, and PostgreSQL sources into authorized read-only APIs over entity routes like `household` or `individual`. Read its docs first, then check the [contracts index](../../reference/contracts/) for the specific API shapes you'll integrate against.
+
+## If you're changing shared security or operational primitives
+
+Start with [Registry Platform](../../projects/registry-platform/). Platform owns the reusable Rust crates for auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures used by Relay and Witness.
 
 ## If you want to see the family running
 
