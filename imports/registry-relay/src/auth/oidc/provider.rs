@@ -286,6 +286,7 @@ fn extract_bearer(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
     Ok(Zeroizing::new(token.to_string()))
 }
 
+#[allow(unreachable_patterns)]
 fn map_platform_error(err: &PlatformOidcError, token: &str) -> AuthError {
     match err {
         PlatformOidcError::Transport(_)
@@ -307,6 +308,7 @@ fn map_platform_error(err: &PlatformOidcError, token: &str) -> AuthError {
         PlatformOidcError::SignatureInvalid => AuthError::TokenSignatureInvalid,
         PlatformOidcError::ClientNotAllowed => AuthError::ClientNotAllowed,
         PlatformOidcError::InvalidToken => classify_invalid_token(token),
+        _ => AuthError::MalformedCredential,
     }
 }
 

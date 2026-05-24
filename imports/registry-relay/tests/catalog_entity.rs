@@ -1265,6 +1265,78 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
 }
 
+#[tokio::test]
+async fn openapi_json_includes_catalog_response_examples_for_redoc() {
+    let resp = server().get("/openapi.json").await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+
+    let response_example = |path: &str, method: &str, media_type: &str| -> Value {
+        let examples = body["paths"][path][method]["responses"]["200"]["content"][media_type]
+            ["examples"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{path} {method} {media_type} missing examples"));
+        let first = examples
+            .values()
+            .next()
+            .unwrap_or_else(|| panic!("{path} {method} {media_type} examples empty"));
+        first["value"].clone()
+    };
+
+    for (path, method, media_type) in [
+        ("/metadata", "get", "application/json"),
+        ("/metadata/catalog", "get", "application/json"),
+        ("/metadata/datasets", "get", "application/json"),
+        ("/metadata/datasets/{dataset_id}", "get", "application/json"),
+        ("/metadata/evidence-offerings", "get", "application/json"),
+        (
+            "/metadata/evidence-offerings/{offering_id}",
+            "get",
+            "application/json",
+        ),
+        (
+            "/evidence-offerings/{offering_id}/verifications",
+            "post",
+            "application/json",
+        ),
+        ("/metadata/dcat", "get", "application/ld+json"),
+        ("/metadata/dcat/bregdcat-ap", "get", "application/ld+json"),
+        ("/metadata/policies", "get", "application/ld+json"),
+        (
+            "/metadata/datasets/{dataset_id}/policy",
+            "get",
+            "application/ld+json",
+        ),
+        ("/datasets", "get", "application/json"),
+        ("/datasets/social_registry", "get", "application/json"),
+    ] {
+        let value = response_example(path, method, media_type);
+        assert!(
+            value.as_object().is_some_and(|object| !object.is_empty()),
+            "{path} {method} should carry a concrete response example, got {value:?}"
+        );
+    }
+
+    assert_eq!(
+        response_example("/datasets", "get", "application/json")["data"][0]["dataset_id"],
+        "social_registry"
+    );
+    assert_eq!(
+        response_example("/metadata/dcat/bregdcat-ap", "get", "application/ld+json")
+            ["dcat:dataset"][0]["dcterms:title"],
+        "Social Registry"
+    );
+    assert_eq!(
+        response_example(
+            "/metadata/evidence-offerings/{offering_id}",
+            "get",
+            "application/json"
+        )["id"],
+        "benefits_person_evidence"
+    );
+}
+
 #[cfg(feature = "ogcapi-features")]
 #[tokio::test]
 async fn openapi_json_includes_ogc_api_features_surface_when_feature_enabled() {

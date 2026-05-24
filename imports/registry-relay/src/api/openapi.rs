@@ -156,6 +156,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "get",
         "Lists canonical metadata publication links and embeds the scoped metadata catalog.",
     );
+    set_json_response_example(
+        &mut paths,
+        "/metadata",
+        "get",
+        "200",
+        "metadata_landing",
+        "Metadata landing page with scoped catalog links.",
+        metadata_landing_example(catalog),
+    );
     tag(&mut paths, "/metadata", "get", TAG_CATALOG);
 
     insert_json_path(
@@ -178,6 +187,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "Returns the canonical route-neutral metadata catalog for datasets and entities visible \
          to the calling principal.",
     );
+    set_json_response_example(
+        &mut paths,
+        "/metadata/catalog",
+        "get",
+        "200",
+        "metadata_catalog",
+        "Scoped portable metadata catalog.",
+        portable_catalog_example(catalog),
+    );
     tag(&mut paths, "/metadata/catalog", "get", TAG_CATALOG);
 
     insert_json_path(
@@ -198,6 +216,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "/metadata/evidence-offerings",
         "get",
         "Returns evidence offerings visible to the caller. Evidence offerings describe the requirement, evidence type, issuing authority, dataset/entity binding, and access route.",
+    );
+    set_json_response_example(
+        &mut paths,
+        "/metadata/evidence-offerings",
+        "get",
+        "200",
+        "evidence_offerings",
+        "Evidence offering discovery list.",
+        evidence_offering_list_example(),
     );
     tag(
         &mut paths,
@@ -230,6 +257,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "get",
         "Returns one visible evidence offering. Unknown, hidden, and unauthorized offerings return `offering.not_found`.",
     );
+    set_json_response_example(
+        &mut paths,
+        "/metadata/evidence-offerings/{offering_id}",
+        "get",
+        "200",
+        "evidence_offering",
+        "Evidence offering discovery record.",
+        evidence_offering_example(),
+    );
     tag(
         &mut paths,
         "/metadata/evidence-offerings/{offering_id}",
@@ -240,6 +276,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     paths.insert(
         "/evidence-offerings/{offering_id}/verifications".to_string(),
         evidence_verification_path_item(),
+    );
+    set_json_response_example(
+        &mut paths,
+        "/evidence-offerings/{offering_id}/verifications",
+        "post",
+        "200",
+        "verification_match",
+        "Completed registry-backed evidence verification.",
+        evidence_verification_response_example(),
     );
     tag(
         &mut paths,
@@ -257,6 +302,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "Base DCAT JSON-LD catalog",
         ),
     );
+    set_response_example(
+        &mut paths,
+        "/metadata/dcat",
+        "get",
+        ResponseExampleContent::new("200", "application/ld+json"),
+        "base_dcat",
+        "Base DCAT JSON-LD catalog.",
+        base_dcat_example(catalog),
+    );
     tag(&mut paths, "/metadata/dcat", "get", TAG_CATALOG);
 
     paths.insert(
@@ -267,6 +321,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "Returns the visible metadata catalog as a BRegDCAT-AP JSON-LD document.",
             "BRegDCAT-AP JSON-LD catalog",
         ),
+    );
+    set_response_example(
+        &mut paths,
+        "/metadata/dcat/bregdcat-ap",
+        "get",
+        ResponseExampleContent::new("200", "application/ld+json"),
+        "bregdcat_ap",
+        "BRegDCAT-AP JSON-LD catalog with embedded SHACL shape.",
+        breg_dcat_example(catalog),
     );
     tag(&mut paths, "/metadata/dcat/bregdcat-ap", "get", TAG_CATALOG);
 
@@ -279,7 +342,91 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "ODRL JSON-LD policy collection",
         ),
     );
+    set_response_example(
+        &mut paths,
+        "/metadata/policies",
+        "get",
+        ResponseExampleContent::new("200", "application/ld+json"),
+        "policy_collection",
+        "Dataset ODRL policy collection.",
+        policy_collection_example(catalog),
+    );
     tag(&mut paths, "/metadata/policies", "get", TAG_CATALOG);
+
+    insert_json_path(
+        &mut paths,
+        "/metadata/datasets",
+        "get",
+        "List metadata datasets",
+        "MetadataDatasetList",
+    );
+    set_op_id(
+        &mut paths,
+        "/metadata/datasets",
+        "get",
+        "list_metadata_datasets",
+    );
+    set_description(
+        &mut paths,
+        "/metadata/datasets",
+        "get",
+        "Lists portable metadata datasets visible to the calling principal.",
+    );
+    set_json_response_example(
+        &mut paths,
+        "/metadata/datasets",
+        "get",
+        "200",
+        "metadata_datasets",
+        "Portable metadata dataset list.",
+        metadata_dataset_list_example(catalog),
+    );
+    tag(&mut paths, "/metadata/datasets", "get", TAG_CATALOG);
+
+    paths.insert(
+        "/metadata/datasets/{dataset_id}".to_string(),
+        path_item_with_params(
+            "get",
+            "Metadata dataset",
+            "MetadataDataset",
+            vec![path_parameter("dataset_id", "Dataset identifier")],
+        ),
+    );
+    set_op_id(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}",
+        "get",
+        "get_metadata_dataset",
+    );
+    set_description(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}",
+        "get",
+        "Returns one visible portable metadata dataset with entity field metadata.",
+    );
+    set_json_response_example(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}",
+        "get",
+        "200",
+        "metadata_dataset",
+        "Portable metadata dataset record.",
+        first_dataset(catalog)
+            .map(|dataset| metadata_dataset_example(catalog, dataset))
+            .unwrap_or_else(|| json!({})),
+    );
+    add_response_404(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}",
+        "get",
+        "Dataset not found or not visible to the caller.",
+    );
+    tag(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}",
+        "get",
+        TAG_CATALOG,
+    );
 
     paths.insert(
         "/metadata/datasets/{dataset_id}/policy".to_string(),
@@ -290,6 +437,17 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             "ODRL JSON-LD dataset policy",
             vec![path_parameter("dataset_id", "Dataset identifier")],
         ),
+    );
+    set_response_example(
+        &mut paths,
+        "/metadata/datasets/{dataset_id}/policy",
+        "get",
+        ResponseExampleContent::new("200", "application/ld+json"),
+        "dataset_policy",
+        "One dataset ODRL policy document.",
+        first_dataset(catalog)
+            .map(|dataset| dataset_policy_example(catalog, dataset))
+            .unwrap_or_else(|| json!({})),
     );
     tag(
         &mut paths,
@@ -324,6 +482,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         "get",
         "Lists every dataset visible to the calling principal.",
     );
+    set_json_response_example(
+        &mut paths,
+        "/datasets",
+        "get",
+        "200",
+        "datasets",
+        "Dataset list for the visible Relay catalog.",
+        relay_dataset_list_example(catalog),
+    );
     tag(&mut paths, "/datasets", "get", TAG_CATALOG);
 
     for dataset in &catalog.datasets {
@@ -355,6 +522,15 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             &dataset_path,
             "get",
             "Dataset not found or not visible to the caller.",
+        );
+        set_json_response_example(
+            &mut paths,
+            &dataset_path,
+            "get",
+            "200",
+            "dataset",
+            "Dataset summary.",
+            relay_dataset_summary_example(dataset),
         );
         tag(&mut paths, &dataset_path, "get", TAG_CATALOG);
 
@@ -833,6 +1009,76 @@ fn set_code_samples(paths: &mut Map<String, Value>, path: &str, method: &str, sa
     }
 }
 
+fn set_json_response_example(
+    paths: &mut Map<String, Value>,
+    path: &str,
+    method: &str,
+    status: &str,
+    name: &str,
+    summary: &str,
+    value: Value,
+) {
+    set_response_example(
+        paths,
+        path,
+        method,
+        ResponseExampleContent::new(status, "application/json"),
+        name,
+        summary,
+        value,
+    );
+}
+
+#[derive(Clone, Copy)]
+struct ResponseExampleContent<'a> {
+    status: &'a str,
+    media_type: &'a str,
+}
+
+impl<'a> ResponseExampleContent<'a> {
+    fn new(status: &'a str, media_type: &'a str) -> Self {
+        Self { status, media_type }
+    }
+}
+
+fn set_response_example(
+    paths: &mut Map<String, Value>,
+    path: &str,
+    method: &str,
+    response_content: ResponseExampleContent<'_>,
+    name: &str,
+    summary: &str,
+    value: Value,
+) {
+    let Some(content) = paths
+        .get_mut(path)
+        .and_then(|path_item| path_item.get_mut(method))
+        .and_then(|op| op.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut(response_content.status))
+        .and_then(Value::as_object_mut)
+        .and_then(|ok| ok.get_mut("content"))
+        .and_then(Value::as_object_mut)
+        .and_then(|content| content.get_mut(response_content.media_type))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(examples) = content
+        .entry("examples".to_string())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+    else {
+        return;
+    };
+    examples.entry(name.to_string()).or_insert_with(|| {
+        json!({
+            "summary": summary,
+            "value": value,
+        })
+    });
+}
+
 /// Append the `Data-Purpose` header parameter to the operation at
 /// `(path, method)`. No-op if the operation does not exist or already
 /// declares the header. The parameter is required by the gateway when
@@ -1007,6 +1253,476 @@ fn code_samples_for_record(dataset_id: &str, entity_name: &str) -> Vec<Value> {
     ]
 }
 
+// --- response examples ---------------------------------------------
+
+fn first_dataset(catalog: &CatalogDocument) -> Option<&DatasetMetadata> {
+    catalog.datasets.first()
+}
+
+fn metadata_landing_example(catalog: &CatalogDocument) -> Value {
+    json!({
+        "links": [
+            { "rel": "self", "href": "/metadata" },
+            { "rel": "describedby", "href": "/metadata/catalog", "type": "application/json" },
+            { "rel": "alternate", "href": "/metadata/dcat", "type": "application/ld+json" },
+            { "rel": "alternate", "href": "/metadata/dcat/bregdcat-ap", "type": "application/ld+json" },
+            { "rel": "describedby", "href": "/metadata/shacl", "type": "application/ld+json" },
+            { "rel": "describedby", "href": "/metadata/policies", "type": "application/ld+json" },
+        ],
+        "catalog": portable_catalog_example(catalog),
+    })
+}
+
+fn portable_catalog_example(catalog: &CatalogDocument) -> Value {
+    json!({
+        "id": "registry-relay",
+        "title": catalog.title,
+        "description": "",
+        "publisher": catalog.publisher,
+        "base_url": catalog.base_url,
+        "participant_id": catalog.participant_id,
+        "conforms_to": [],
+        "application_profiles": [],
+        "datasets": catalog
+            .datasets
+            .iter()
+            .map(|dataset| metadata_dataset_example(catalog, dataset))
+            .collect::<Vec<_>>(),
+        "profiles": [],
+    })
+}
+
+fn relay_dataset_list_example(catalog: &CatalogDocument) -> Value {
+    json!({
+        "data": catalog
+            .datasets
+            .iter()
+            .map(relay_dataset_summary_example)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn relay_dataset_summary_example(dataset: &DatasetMetadata) -> Value {
+    let mut value = json!({
+        "dataset_id": dataset.dataset_id,
+        "title": dataset.title,
+        "description": dataset.description,
+        "owner": dataset.owner,
+        "sensitivity": dataset.sensitivity,
+        "access_rights": dataset.access_rights,
+        "update_frequency": dataset.update_frequency,
+        "conforms_to": dataset.conforms_to,
+        "links": {
+            "self": format!("/datasets/{}", dataset.dataset_id),
+        },
+        "entities": dataset
+            .entities
+            .iter()
+            .map(|entity| entity.name.clone())
+            .collect::<Vec<_>>(),
+    });
+    if let Some(ogc_collections) = dataset.links.ogc_collections.as_deref() {
+        value["links"]["ogc_collections"] = json!(ogc_collections);
+    }
+    if let Ok(standards) = serde_json::to_value(&dataset.standards) {
+        if standards.as_object().is_some_and(|obj| !obj.is_empty()) {
+            value["standards"] = standards;
+        }
+    }
+    value
+}
+
+fn metadata_dataset_list_example(catalog: &CatalogDocument) -> Value {
+    json!({
+        "datasets": catalog
+            .datasets
+            .iter()
+            .map(|dataset| metadata_dataset_example(catalog, dataset))
+            .collect::<Vec<_>>()
+    })
+}
+
+fn metadata_dataset_example(catalog: &CatalogDocument, dataset: &DatasetMetadata) -> Value {
+    let entities = dataset
+        .entities
+        .iter()
+        .map(|entity| (entity.name.clone(), metadata_entity_example(entity)))
+        .collect::<Map<_, _>>();
+    let mut value = json!({
+        "dataset_id": dataset.dataset_id,
+        "title": dataset.title,
+        "description": dataset.description,
+        "owner": dataset.owner,
+        "sensitivity": dataset.sensitivity,
+        "access_rights": dataset.access_rights,
+        "update_frequency": dataset.update_frequency,
+        "conforms_to": dataset.conforms_to,
+        "applicable_legislation": dataset.applicable_legislation,
+        "adms_status": dataset.adms_status,
+        "policy": metadata_policy_example(catalog, dataset),
+        "evidence_offerings": {},
+        "entities": entities,
+    });
+    if let Some(spatial_coverage) = dataset.spatial_coverage.as_deref() {
+        value["spatial_coverage"] = json!(spatial_coverage);
+    }
+    value
+}
+
+fn metadata_entity_example(entity: &EntityMetadata) -> Value {
+    let fields = entity
+        .fields
+        .iter()
+        .map(|field| (field.name.clone(), metadata_field_example(field)))
+        .collect::<Map<_, _>>();
+    json!({
+        "name": entity.name,
+        "title": entity.title.as_deref().unwrap_or(&entity.name),
+        "description": entity.description.as_deref().unwrap_or(""),
+        "concept_uri": entity.concept_uri,
+        "primary_key": entity.primary_key,
+        "identifiers": [],
+        "fields": fields,
+        "relationships": entity.relationships,
+    })
+}
+
+fn metadata_field_example(field: &FieldMetadata) -> Value {
+    let mut value = json!({
+        "name": field.name,
+        "field_type": field.r#type,
+        "required": !field.nullable,
+        "constraints": {},
+        "concepts": field
+            .concept_uri
+            .as_ref()
+            .map(|concept| vec![concept.clone()])
+            .unwrap_or_default(),
+    });
+    if let Some(codelist) = field.codelist.as_deref() {
+        value["codelist_scheme_iri"] = json!(codelist);
+    }
+    if let Some(unit) = field.unit.as_deref() {
+        value["unit"] = json!(unit);
+    }
+    if let Some(language) = field.language.as_deref() {
+        value["language"] = json!(language);
+    }
+    value
+}
+
+fn metadata_policy_example(catalog: &CatalogDocument, dataset: &DatasetMetadata) -> Value {
+    let policy = dataset.compiled_policy.as_ref();
+    json!({
+        "uid": policy
+            .map(|policy| policy.uid.clone())
+            .unwrap_or_else(|| format!("#policy-{}-offer", dataset.dataset_id)),
+        "assigner": policy
+            .map(|policy| policy.assigner.clone())
+            .unwrap_or_else(|| catalog.participant_id.clone()),
+        "profile": policy
+            .map(|policy| policy.profile.clone())
+            .unwrap_or_default(),
+        "permissions": policy
+            .map(|policy| {
+                policy
+                    .permissions
+                    .iter()
+                    .map(|rule| {
+                        json!({
+                            "action": rule.action,
+                            "target": rule.target,
+                            "constraints": rule.constraints,
+                            "duties": rule.duties,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                vec![json!({
+                    "action": "odrl:use",
+                    "target": format!("#dataset-{}", dataset.dataset_id),
+                    "constraints": [],
+                    "duties": [],
+                })]
+            }),
+        "prohibitions": policy
+            .map(|policy| {
+                policy
+                    .prohibitions
+                    .iter()
+                    .map(|rule| {
+                        json!({
+                            "action": rule.action,
+                            "target": rule.target,
+                            "constraints": rule.constraints,
+                            "duties": rule.duties,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+fn policy_collection_example(catalog: &CatalogDocument) -> Value {
+    json!({
+        "@context": policy_context_example(),
+        "@id": format!("{}/metadata/policies", catalog.base_url),
+        "dcterms:title": "Dataset access policies",
+        "dcterms:isPartOf": format!("{}/metadata/dcat.jsonld", catalog.base_url),
+        "@graph": catalog
+            .datasets
+            .iter()
+            .map(|dataset| dataset_policy_example(catalog, dataset))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn dataset_policy_example(catalog: &CatalogDocument, dataset: &DatasetMetadata) -> Value {
+    let policy = dataset.compiled_policy.as_ref();
+    let uid = policy
+        .map(|policy| policy.uid.clone())
+        .unwrap_or_else(|| format!("#policy-{}-offer", dataset.dataset_id));
+    let assigner = policy
+        .map(|policy| policy.assigner.clone())
+        .unwrap_or_else(|| catalog.participant_id.clone());
+    let permissions = policy
+        .map(|policy| {
+            policy
+                .permissions
+                .iter()
+                .map(|rule| {
+                    json!({
+                        "odrl:target": { "@id": rule.target },
+                        "odrl:assigner": { "@id": assigner },
+                        "odrl:action": { "@id": rule.action },
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            vec![json!({
+                "odrl:target": { "@id": format!("#dataset-{}", dataset.dataset_id) },
+                "odrl:assigner": { "@id": assigner },
+                "odrl:action": { "@id": "odrl:use" },
+            })]
+        });
+    let mut value = json!({
+        "@context": policy_context_example(),
+        "@id": uid,
+        "@type": "odrl:Offer",
+        "odrl:uid": uid,
+        "odrl:assigner": { "@id": assigner },
+        "odrl:permission": permissions,
+    });
+    if let Some(policy) = policy {
+        if !policy.profile.is_empty() {
+            value["odrl:profile"] = json!(policy
+                .profile
+                .iter()
+                .map(|profile| json!({ "@id": profile }))
+                .collect::<Vec<_>>());
+        }
+    }
+    value
+}
+
+fn policy_context_example() -> Value {
+    json!({
+        "dcterms": "http://purl.org/dc/terms/",
+        "odrl": "http://www.w3.org/ns/odrl/2/",
+        "odrl:action": { "@type": "@id" },
+        "odrl:assigner": { "@type": "@id" },
+        "odrl:target": { "@type": "@id" },
+        "odrl:uid": { "@type": "@id" },
+    })
+}
+
+fn base_dcat_example(catalog: &CatalogDocument) -> Value {
+    json!({
+        "@context": dcat_context_example(false),
+        "@id": format!("{}/metadata/dcat.jsonld", catalog.base_url),
+        "@type": "dcat:Catalog",
+        "dcterms:identifier": "registry-relay",
+        "dcterms:title": catalog.title,
+        "dcterms:publisher": {
+            "@type": "foaf:Agent",
+            "foaf:name": catalog.publisher,
+        },
+        "dcat:landingPage": catalog.base_url,
+        "dcat:dataset": catalog
+            .datasets
+            .iter()
+            .map(|dataset| {
+                json!({
+                    "@id": format!("#dataset-{}", dataset.dataset_id),
+                    "@type": "dcat:Dataset",
+                    "dcterms:identifier": dataset.dataset_id,
+                    "dcterms:title": dataset.title,
+                    "dcterms:description": dataset.description,
+                    "dcat:landingPage": dataset.links.self_url,
+                    "odrl:hasPolicy": {
+                        "@id": dataset
+                            .compiled_policy
+                            .as_ref()
+                            .map(|policy| policy.uid.clone())
+                            .unwrap_or_else(|| format!("#policy-{}-offer", dataset.dataset_id)),
+                    },
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn breg_dcat_example(catalog: &CatalogDocument) -> Value {
+    let mut example = base_dcat_example(catalog);
+    example["@context"] = dcat_context_example(true);
+    example["@id"] = json!(format!(
+        "{}/metadata/dcat.bregdcat-ap.jsonld",
+        catalog.base_url
+    ));
+    example["dcat:dataset"] = json!(catalog
+        .datasets
+        .iter()
+        .map(|dataset| {
+            json!({
+                "@id": format!("#dataset-{}", dataset.dataset_id),
+                "@type": "dcat:Dataset",
+                "dcterms:identifier": dataset.dataset_id,
+                "dcterms:title": dataset.title,
+                "dcterms:description": dataset.description,
+                "dcterms:publisher": {
+                    "@type": "foaf:Agent",
+                    "foaf:name": catalog.publisher,
+                },
+                "dcterms:rightsHolder": dataset.owner,
+                "dcterms:accessRights": dataset.access_rights,
+                "dcterms:accrualPeriodicity": dataset.update_frequency,
+                "adms:status": dataset.adms_status,
+                "dcat:landingPage": dataset.links.self_url,
+                "odrl:hasPolicy": dataset_policy_example(catalog, dataset),
+            })
+        })
+        .collect::<Vec<_>>());
+    example["sh:shapesGraph"] = json!(catalog
+        .datasets
+        .iter()
+        .flat_map(|dataset| {
+            dataset.entities.iter().map(move |entity| {
+                json!({
+                    "@id": format!("#shape-{}-{}", dataset.dataset_id, entity.name),
+                    "@type": "sh:NodeShape",
+                    "sh:targetClass": entity
+                        .concept_uri
+                        .as_deref()
+                        .unwrap_or("https://publicschema.org/concepts/Record"),
+                    "sh:nodeKind": "sh:IRI",
+                    "sh:property": entity
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            json!({
+                                "@type": "sh:PropertyShape",
+                                "sh:path": field.concept_uri.as_deref().unwrap_or(&field.name),
+                                "sh:name": field.name,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                })
+            })
+        })
+        .collect::<Vec<_>>());
+    example
+}
+
+fn dcat_context_example(include_breg_terms: bool) -> Value {
+    let mut context = json!({
+        "dcat": "http://www.w3.org/ns/dcat#",
+        "dcterms": "http://purl.org/dc/terms/",
+        "foaf": "http://xmlns.com/foaf/0.1/",
+        "odrl": "http://www.w3.org/ns/odrl/2/",
+        "dcat:dataset": { "@type": "@id" },
+        "dcat:landingPage": { "@type": "@id" },
+        "odrl:hasPolicy": { "@type": "@id" },
+    });
+    if include_breg_terms {
+        context["adms"] = json!("http://www.w3.org/ns/adms#");
+        context["dcatap"] = json!("http://data.europa.eu/r5r/");
+        context["sh"] = json!("http://www.w3.org/ns/shacl#");
+    }
+    context
+}
+
+fn evidence_offering_list_example() -> Value {
+    json!({
+        "evidence_offerings": [evidence_offering_example()]
+    })
+}
+
+fn evidence_offering_example() -> Value {
+    json!({
+        "access": {
+            "conforms_to": "https://demo.example.gov/standards/registry-relay/evidence-verification-v1",
+            "kind": "registry-relay-verification",
+            "ruleset": "benefits-person-v1",
+        },
+        "dataset_id": "benefits_casework",
+        "description": "Registry Relay verification for submitted benefits person eligibility status and role facts.",
+        "entity": "person",
+        "evidence_type": {
+            "id": "benefits_person_record_evidence",
+            "iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+            "name": "Benefits person record evidence"
+        },
+        "evidence_type_iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+        "id": "benefits_person_evidence",
+        "information_concepts": [],
+        "iri": "https://demo.example.gov/evidence-offerings/benefits-person",
+        "issuing_authority": {
+            "country": "ZZ",
+            "id": "ministry_of_social_affairs",
+            "iri": "did:web:social-affairs.demo.example.gov",
+            "name": "Ministry of Social Affairs",
+        },
+        "jurisdiction": { "country": "ZZ", "region": null },
+        "level_of_assurance": "substantial",
+        "lookup_keys": ["id"],
+        "policy": {
+            "purpose": ["https://demo.example.gov/purpose/social-protection-eligibility"],
+        },
+        "procedure_contexts": [],
+        "requirement_iris": ["https://demo.example.gov/requirements/benefits-person"],
+        "title": "Benefits person status evidence",
+        "verification_request_schema_url": "http://127.0.0.1:4242/metadata/schema/benefits_casework/person/schema.json",
+    })
+}
+
+fn evidence_verification_response_example() -> Value {
+    json!({
+        "verification_id": "01J8W7Q9M5CN4M6G0Q9Z5T2R7A",
+        "decision": "match",
+        "checked_at": "2026-05-16T08:00:00Z",
+        "requirement": "https://demo.example.gov/requirements/benefits-person",
+        "evidence_type": "https://demo.example.gov/evidence-types/benefits-person-record",
+        "evidence_offering": "https://demo.example.gov/evidence-offerings/benefits-person",
+        "issuing_authority": {
+            "country": "ZZ",
+            "id": "ministry_of_social_affairs",
+            "iri": "did:web:social-affairs.demo.example.gov",
+            "name": "Ministry of Social Affairs",
+        },
+        "jurisdiction": { "country": "ZZ", "region": null },
+        "level_of_assurance": "substantial",
+        "dataset_id": "benefits_casework",
+        "entity": "person",
+        "claim_salt": "9fd0e3c8d2f84b6e",
+        "claim_hash": "sha256:2b7f4f1a3f3a0b5c7a9f7f62c1e2d4b0a6c3e8d1f9a4b5c6d7e8f90123456789",
+        "evidence_hash": null,
+        "ingest_version": null,
+    })
+}
+
 // --- schemas --------------------------------------------------------
 
 fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
@@ -1018,6 +1734,11 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
         "MetadataCatalogDocument".to_string(),
         catalog_document_schema(),
     );
+    schemas.insert(
+        "MetadataDatasetList".to_string(),
+        metadata_dataset_list_schema(),
+    );
+    schemas.insert("MetadataDataset".to_string(), metadata_dataset_schema());
     schemas.insert("DatasetList".to_string(), dataset_list_schema());
     schemas.insert("DatasetSummary".to_string(), dataset_summary_schema());
     schemas.insert("Pagination".to_string(), pagination_schema());
@@ -1135,6 +1856,131 @@ fn dataset_list_schema() -> Value {
     json!({
         "type": "object",
         "description": "Listing of datasets visible to the calling principal.",
+    })
+}
+
+fn metadata_dataset_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Portable metadata dataset listing. See `/metadata/datasets` for the live document.",
+        "required": ["datasets"],
+        "properties": {
+            "datasets": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/MetadataDataset" },
+            },
+        },
+        "additionalProperties": true,
+    })
+}
+
+fn metadata_dataset_schema() -> Value {
+    let entity_schema = metadata_entity_schema();
+    json!({
+        "type": "object",
+        "description": "Portable metadata dataset record. See `/metadata/datasets/{dataset_id}` for the live document.",
+        "required": [
+            "dataset_id",
+            "title",
+            "description",
+            "owner",
+            "sensitivity",
+            "access_rights",
+            "update_frequency",
+            "entities"
+        ],
+        "properties": {
+            "dataset_id": { "type": "string" },
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "owner": { "type": "string" },
+            "sensitivity": { "type": "string" },
+            "access_rights": { "type": "string" },
+            "update_frequency": { "type": "string" },
+            "conforms_to": {
+                "type": "array",
+                "items": { "type": "string", "format": "uri" },
+            },
+            "applicable_legislation": {
+                "type": "array",
+                "items": { "type": "string", "format": "uri" },
+            },
+            "adms_status": { "type": "string" },
+            "spatial_coverage": { "type": "string", "format": "uri" },
+            "policy": { "type": "object", "additionalProperties": true },
+            "evidence_offerings": { "type": "object", "additionalProperties": true },
+            "entities": {
+                "type": "object",
+                "description": "Entity metadata keyed by entity name.",
+                "additionalProperties": entity_schema,
+            },
+        },
+        "additionalProperties": true,
+    })
+}
+
+fn metadata_entity_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "primary_key", "fields"],
+        "properties": {
+            "name": { "type": "string" },
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "concept_uri": { "type": ["string", "null"], "format": "uri" },
+            "primary_key": { "type": "string" },
+            "identifiers": {
+                "type": "array",
+                "items": { "type": "object", "additionalProperties": true },
+            },
+            "fields": {
+                "type": "object",
+                "description": "Field metadata keyed by field name.",
+                "additionalProperties": metadata_field_metadata_schema(),
+            },
+            "relationships": {
+                "type": "array",
+                "items": metadata_relationship_metadata_schema(),
+            },
+        },
+        "additionalProperties": true,
+    })
+}
+
+fn metadata_field_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "field_type", "required"],
+        "properties": {
+            "name": { "type": "string" },
+            "field_type": { "type": "string" },
+            "required": { "type": "boolean" },
+            "constraints": { "type": "object", "additionalProperties": true },
+            "concepts": {
+                "type": "array",
+                "items": { "type": "string", "format": "uri" },
+            },
+            "codelist_scheme_iri": { "type": "string", "format": "uri" },
+            "unit": { "type": "string" },
+            "language": { "type": "string" },
+        },
+        "additionalProperties": true,
+    })
+}
+
+fn metadata_relationship_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "kind", "target", "foreign_key"],
+        "properties": {
+            "name": { "type": "string" },
+            "kind": { "type": "string", "enum": ["belongs_to", "has_many"] },
+            "target": { "type": "string" },
+            "foreign_key": { "type": "string" },
+            "concept_uri": { "type": ["string", "null"], "format": "uri" },
+            "links": { "type": "object", "additionalProperties": true },
+        },
+        "additionalProperties": true,
     })
 }
 
@@ -2928,6 +3774,98 @@ mod tests {
         assert_eq!(
             schemas["EvidenceOffering"]["properties"]["access"]["properties"]["kind"]["enum"],
             json!(["registry-relay-verification", "registry-witness"])
+        );
+    }
+
+    #[test]
+    fn response_example_mutator_uses_named_key_status_and_preserves_existing_examples() {
+        let mut paths = Map::new();
+        paths.insert(
+            "/created".to_string(),
+            json!({
+                "post": {
+                    "responses": {
+                        "201": {
+                            "description": "Created",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "type": "object" },
+                                    "examples": {
+                                        "existing": {
+                                            "summary": "Existing example.",
+                                            "value": { "id": "kept" }
+                                        },
+                                        "created": {
+                                            "summary": "Original created example.",
+                                            "value": { "id": "original" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+
+        set_json_response_example(
+            &mut paths,
+            "/created",
+            "post",
+            "201",
+            "created",
+            "Replacement should not overwrite.",
+            json!({ "id": "replacement" }),
+        );
+        set_json_response_example(
+            &mut paths,
+            "/created",
+            "post",
+            "201",
+            "alternate",
+            "Alternate created response.",
+            json!({ "id": "alternate" }),
+        );
+        set_json_response_example(
+            &mut paths,
+            "/created",
+            "post",
+            "200",
+            "wrong_status",
+            "Wrong status should not create an example.",
+            json!({ "id": "wrong" }),
+        );
+
+        let examples = &paths["/created"]["post"]["responses"]["201"]["content"]
+            ["application/json"]["examples"];
+        assert_eq!(examples["existing"]["value"]["id"], "kept");
+        assert_eq!(examples["created"]["value"]["id"], "original");
+        assert_eq!(examples["alternate"]["value"]["id"], "alternate");
+        assert!(examples["name"].is_null());
+        assert!(examples["wrong_status"].is_null());
+    }
+
+    #[test]
+    fn metadata_dataset_components_describe_nested_catalog_shape() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        let schemas = &doc["components"]["schemas"];
+
+        assert_eq!(
+            schemas["MetadataDatasetList"]["properties"]["datasets"]["items"]["$ref"],
+            "#/components/schemas/MetadataDataset"
+        );
+        let dataset = &schemas["MetadataDataset"];
+        assert_eq!(dataset["properties"]["dataset_id"]["type"], "string");
+        assert_eq!(
+            dataset["properties"]["entities"]["additionalProperties"]["properties"]["fields"]
+                ["additionalProperties"]["properties"]["field_type"]["type"],
+            "string"
+        );
+        assert_eq!(
+            dataset["properties"]["entities"]["additionalProperties"]["properties"]
+                ["relationships"]["items"]["properties"]["kind"]["enum"],
+            json!(["belongs_to", "has_many"])
         );
     }
 
