@@ -10,14 +10,21 @@
 //! Witness compares tokens raw (no hashing), so `find_credential` is O(N) in
 //! the number of credentials. These benches lock in the per-call cost at a
 //! realistic small N (4 credentials, matching the medium perf profile).
+//!
+//! All five tokens below are exactly 46 bytes long. This matters because
+//! `subtle::ConstantTimeEq` for byte slices short-circuits on length mismatch
+//! (length is not secret). If the target token had a different length from
+//! the stored credentials, `find_credential` would skip the full byte compare
+//! on the mismatched entries and the bench would under-report worst-case
+//! linear-scan cost. Keep lengths equal when editing.
 
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use registry_witness_server::standalone::{bearer_auth_token, find_credential, ResolvedCredential};
 
-const VALID_TOKEN: &str = "perf-bench-bearer-token-abcdef-0123456789-xyz";
-const WRONG_TOKEN: &str = "perf-bench-bearer-token-wrong-000000000000-000";
+const VALID_TOKEN: &str = "perf-bench-bearer-token-target0-0000000000-099";
+const WRONG_TOKEN: &str = "perf-bench-bearer-token-wrong00-0000000000-000";
 
 fn build_credentials() -> Vec<ResolvedCredential> {
     vec![
