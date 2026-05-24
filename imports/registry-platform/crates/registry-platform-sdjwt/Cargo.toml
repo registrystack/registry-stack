@@ -1,0 +1,19 @@
+[package]
+name = "registry-platform-sdjwt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+getrandom = "0.3"
+jsonwebtoken.workspace = true
+registry-platform-crypto = { version = "0.1.0", path = "../registry-platform-crypto" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+ulid.workspace = true

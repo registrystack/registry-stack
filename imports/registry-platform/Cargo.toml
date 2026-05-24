@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/registry-platform-httputil",
+    "crates/registry-platform-authcommon",
+    "crates/registry-platform-audit",
+    "crates/registry-platform-oidc",
+    "crates/registry-platform-httpsec",
+    "crates/registry-platform-sdjwt",
+    "crates/registry-platform-crypto",
+    "crates/registry-platform-testing",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/jeremi/registry-platform"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+async-trait = { version = "0.1" }
+axum = { version = "0.8" }
+base64 = { version = "0.22" }
+bytes = { version = "1" }
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+hmac = { version = "0.12" }
+http = { version = "1" }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+proptest = { version = "1" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+sha2 = { version = "0.10" }
+subtle = { version = "2" }
+tempfile = { version = "3" }
+thiserror = { version = "2" }
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tower = { version = "0.5" }
+tower-http = { version = "0.6", features = ["cors", "limit", "set-header"] }
+ulid = { version = "1" }
+url = { version = "2" }
+wiremock = { version = "0.6" }
+zeroize = { version = "1", features = ["derive"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

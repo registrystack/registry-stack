@@ -1,0 +1,573 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Crypto primitives shared by Registry Platform consumers.
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use std::fmt;
+use std::net::IpAddr;
+use thiserror::Error;
+use url::Host;
+use zeroize::Zeroize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningAlgorithm {
+    /// Ed25519 EdDSA signatures using OKP/Ed25519 JWKs.
+    ///
+    /// This crate currently supports only EdDSA for signing and verification.
+    /// ES256, RS256, and PS256 JWKs are rejected as unsupported at parse time.
+    EdDsa,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PrivateJwk {
+    pub kty: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crv: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<String>,
+}
+
+impl fmt::Debug for PrivateJwk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateJwk")
+            .field("kty", &self.kty)
+            .field("kid", &self.kid)
+            .field("alg", &self.alg)
+            .field("crv", &self.crv)
+            .field("d", &self.d.as_ref().map(|_| "[redacted]"))
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("n", &self.n.as_ref().map(|_| "[redacted]"))
+            .field("e", &self.e)
+            .finish()
+    }
+}
+
+impl Drop for PrivateJwk {
+    fn drop(&mut self) {
+        self.d.zeroize();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PublicJwk {
+    pub kty: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crv: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<String>,
+}
+
+impl PrivateJwk {
+    pub fn parse(json: &str) -> Result<Self, JwkError> {
+        let jwk: Self = serde_json::from_str(json).map_err(JwkError::Json)?;
+        jwk.validate_private()?;
+        Ok(jwk)
+    }
+
+    #[must_use]
+    pub fn public(&self) -> PublicJwk {
+        PublicJwk {
+            kty: self.kty.clone(),
+            kid: self.kid.clone(),
+            alg: self.alg.clone(),
+            crv: self.crv.clone(),
+            x: self.x.clone(),
+            y: self.y.clone(),
+            n: self.n.clone(),
+            e: self.e.clone(),
+        }
+    }
+
+    pub fn algorithm(&self) -> Result<SigningAlgorithm, JwkError> {
+        algorithm_from_fields(self.alg.as_deref(), self.kty.as_str(), self.crv.as_deref())
+    }
+
+    fn validate_private(&self) -> Result<(), JwkError> {
+        match self.algorithm() {
+            Ok(SigningAlgorithm::EdDsa) => {
+                if self.kty != "OKP" || self.crv.as_deref() != Some("Ed25519") {
+                    return Err(JwkError::Invalid("EdDSA keys must be OKP/Ed25519"));
+                }
+                decode_fixed(self.d.as_deref(), 32, "d")?;
+                decode_fixed(self.x.as_deref(), 32, "x")?;
+            }
+            Err(err) => return Err(err),
+        }
+        Ok(())
+    }
+}
+
+impl PublicJwk {
+    pub fn parse(json: &str) -> Result<Self, JwkError> {
+        let value: Value = serde_json::from_str(json).map_err(JwkError::Json)?;
+        reject_private_members(&value)?;
+        let jwk: Self = serde_json::from_value(value).map_err(JwkError::Json)?;
+        jwk.validate_public()?;
+        Ok(jwk)
+    }
+
+    #[must_use]
+    pub fn jkt(&self) -> String {
+        let thumbprint = match self.kty.as_str() {
+            "OKP" => format!(
+                r#"{{"crv":"{}","kty":"OKP","x":"{}"}}"#,
+                self.crv.as_deref().unwrap_or_default(),
+                self.x.as_deref().unwrap_or_default()
+            ),
+            "EC" => format!(
+                r#"{{"crv":"{}","kty":"EC","x":"{}","y":"{}"}}"#,
+                self.crv.as_deref().unwrap_or_default(),
+                self.x.as_deref().unwrap_or_default(),
+                self.y.as_deref().unwrap_or_default()
+            ),
+            "RSA" => format!(
+                r#"{{"e":"{}","kty":"RSA","n":"{}"}}"#,
+                self.e.as_deref().unwrap_or_default(),
+                self.n.as_deref().unwrap_or_default()
+            ),
+            _ => String::new(),
+        };
+        URL_SAFE_NO_PAD.encode(Sha256::digest(thumbprint.as_bytes()))
+    }
+
+    pub fn algorithm(&self) -> Result<SigningAlgorithm, JwkError> {
+        algorithm_from_fields(self.alg.as_deref(), self.kty.as_str(), self.crv.as_deref())
+    }
+
+    fn validate_public(&self) -> Result<(), JwkError> {
+        match self.algorithm() {
+            Ok(SigningAlgorithm::EdDsa) => {
+                if self.kty != "OKP" || self.crv.as_deref() != Some("Ed25519") {
+                    return Err(JwkError::Invalid("EdDSA keys must be OKP/Ed25519"));
+                }
+                decode_fixed(self.x.as_deref(), 32, "x")?;
+            }
+            Err(err) => return Err(err),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum JwkError {
+    #[error("invalid JWK JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid JWK: {0}")]
+    Invalid(&'static str),
+    #[error("unsupported JWK algorithm")]
+    UnsupportedAlgorithm,
+}
+
+#[derive(Debug, Error)]
+pub enum CryptoError {
+    #[error("invalid key: {0}")]
+    InvalidKey(#[from] JwkError),
+    #[error("invalid base64url member: {0}")]
+    InvalidBase64(#[from] base64::DecodeError),
+    #[error("invalid signature")]
+    InvalidSignature,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DidMethod {
+    Web,
+    Key,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedDid {
+    pub method: DidMethod,
+    pub identifier: String,
+    pub fragment: Option<String>,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DidError {
+    #[error("DID must start with did:")]
+    MissingPrefix,
+    #[error("DID method is not allowed")]
+    MethodNotAllowed,
+    #[error("DID method is unsupported")]
+    UnsupportedMethod,
+    #[error("DID identifier is invalid")]
+    InvalidIdentifier,
+    #[error("did:web host is invalid")]
+    InvalidDidWebHost,
+    #[error("did:web paths must not contain traversal")]
+    PathTraversal,
+}
+
+pub fn validate_did(s: &str, allowed_methods: &[DidMethod]) -> Result<ValidatedDid, DidError> {
+    let rest = s.strip_prefix("did:").ok_or(DidError::MissingPrefix)?;
+    let (method, remainder) = rest.split_once(':').ok_or(DidError::InvalidIdentifier)?;
+    let (identifier, fragment) = match remainder.split_once('#') {
+        Some((identifier, fragment)) => (identifier, Some(fragment.to_string())),
+        None => (remainder, None),
+    };
+    if identifier.is_empty() {
+        return Err(DidError::InvalidIdentifier);
+    }
+    let method = match method {
+        "web" => DidMethod::Web,
+        "key" => DidMethod::Key,
+        _ => return Err(DidError::UnsupportedMethod),
+    };
+    if !allowed_methods.contains(&method) {
+        return Err(DidError::MethodNotAllowed);
+    }
+    match method {
+        DidMethod::Web => validate_did_web(s)?,
+        DidMethod::Key => {
+            if identifier.contains('/') || identifier.contains('?') || identifier.contains('#') {
+                return Err(DidError::InvalidIdentifier);
+            }
+        }
+    }
+    Ok(ValidatedDid {
+        method,
+        identifier: identifier.to_string(),
+        fragment,
+    })
+}
+
+pub fn validate_did_web(s: &str) -> Result<(), DidError> {
+    let rest = s
+        .strip_prefix("did:web:")
+        .ok_or(DidError::UnsupportedMethod)?;
+    let identifier = rest
+        .split_once('#')
+        .map_or(rest, |(identifier, _)| identifier);
+    if identifier.is_empty() {
+        return Err(DidError::InvalidIdentifier);
+    }
+    let mut segments = identifier.split(':');
+    let host = percent_decode(segments.next().ok_or(DidError::InvalidIdentifier)?)
+        .ok_or(DidError::InvalidIdentifier)?;
+    validate_dns_host(&host)?;
+    for segment in segments {
+        let decoded = percent_decode(segment).ok_or(DidError::InvalidIdentifier)?;
+        if decoded.is_empty() || decoded == "." || decoded == ".." || decoded.contains('/') {
+            return Err(DidError::PathTraversal);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum JcsError {
+    #[error("JCS does not support non-finite numbers")]
+    InvalidNumber,
+    #[error("JSON serialization failed: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub fn canonicalize_json(value: &Value) -> Result<Vec<u8>, JcsError> {
+    let mut out = Vec::new();
+    write_canonical(value, &mut out)?;
+    Ok(out)
+}
+
+pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
+    jwk.validate_private()?;
+    let seed = decode_fixed(jwk.d.as_deref(), 32, "d")?;
+    let seed: [u8; 32] = seed.try_into().map_err(|_| JwkError::Invalid("d length"))?;
+    let signature = SigningKey::from_bytes(&seed).sign(payload);
+    Ok(signature.to_bytes().to_vec())
+}
+
+pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
+    jwk.validate_public()?;
+    let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
+    let x: [u8; 32] = x.try_into().map_err(|_| JwkError::Invalid("x length"))?;
+    let verifying_key = VerifyingKey::from_bytes(&x).map_err(|_| CryptoError::InvalidSignature)?;
+    let signature = Signature::try_from(signature).map_err(|_| CryptoError::InvalidSignature)?;
+    verifying_key
+        .verify_strict(payload, &signature)
+        .map_err(|_| CryptoError::InvalidSignature)
+}
+
+fn algorithm_from_fields(
+    alg: Option<&str>,
+    kty: &str,
+    crv: Option<&str>,
+) -> Result<SigningAlgorithm, JwkError> {
+    match alg {
+        Some("EdDSA") => Ok(SigningAlgorithm::EdDsa),
+        Some(_) => Err(JwkError::UnsupportedAlgorithm),
+        None if kty == "OKP" && crv == Some("Ed25519") => Ok(SigningAlgorithm::EdDsa),
+        None => Err(JwkError::UnsupportedAlgorithm),
+    }
+}
+
+fn reject_private_members(value: &Value) -> Result<(), JwkError> {
+    const PRIVATE_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "oth"];
+    if PRIVATE_MEMBERS
+        .iter()
+        .any(|member| value.get(member).is_some())
+    {
+        return Err(JwkError::Invalid("public JWK contains private material"));
+    }
+    Ok(())
+}
+
+fn decode_fixed(
+    value: Option<&str>,
+    expected_len: usize,
+    field: &'static str,
+) -> Result<Vec<u8>, JwkError> {
+    let value = value.ok_or(JwkError::Invalid(field))?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| JwkError::Invalid(field))?;
+    if decoded.len() != expected_len {
+        return Err(JwkError::Invalid(field));
+    }
+    Ok(decoded)
+}
+
+fn validate_dns_host(host: &str) -> Result<(), DidError> {
+    if host.parse::<IpAddr>().is_ok() {
+        return Err(DidError::InvalidDidWebHost);
+    }
+    if Host::parse(host).is_err() {
+        return Err(DidError::InvalidDidWebHost);
+    }
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower == "metadata.google.internal"
+        || lower.contains("169.254.169.254")
+    {
+        return Err(DidError::InvalidDidWebHost);
+    }
+    if lower
+        .split('.')
+        .any(|label| label.is_empty() || label == "." || label == "..")
+    {
+        return Err(DidError::InvalidDidWebHost);
+    }
+    Ok(())
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hi = *bytes.get(index + 1)?;
+            let lo = *bytes.get(index + 2)?;
+            out.push((hex_value(hi)? << 4) | hex_value(lo)?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn write_canonical(value: &Value, out: &mut Vec<u8>) -> Result<(), JcsError> {
+    match value {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(value) => out.extend_from_slice(if *value { b"true" } else { b"false" }),
+        Value::Number(number) => {
+            if let Some(value) = number.as_f64() {
+                if !value.is_finite() {
+                    return Err(JcsError::InvalidNumber);
+                }
+            }
+            out.extend_from_slice(number.to_string().as_bytes());
+        }
+        Value::String(value) => out.extend_from_slice(serde_json::to_string(value)?.as_bytes()),
+        Value::Array(values) => {
+            out.push(b'[');
+            for (index, item) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical(item, out)?;
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => write_canonical_object(map, out)?,
+    }
+    Ok(())
+}
+
+fn write_canonical_object(map: &Map<String, Value>, out: &mut Vec<u8>) -> Result<(), JcsError> {
+    out.push(b'{');
+    let mut entries = map.iter().collect::<Vec<_>>();
+    entries.sort_unstable_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
+    for (index, (key, value)) in entries.into_iter().enumerate() {
+        if index > 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(serde_json::to_string(key)?.as_bytes());
+        out.push(b':');
+        write_canonical(value, out)?;
+    }
+    out.push(b'}');
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
+
+    #[test]
+    fn private_jwk_parse_debug_redacts_and_public_strips_private_material() {
+        let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        let debug = format!("{private:?}");
+
+        assert!(debug.contains("PrivateJwk"));
+        assert!(!debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
+        assert!(debug.contains("[redacted]"));
+
+        let public = private.public();
+        let public_json = serde_json::to_value(&public).expect("public jwk serializes");
+        assert_eq!(
+            public_json.get("x").and_then(Value::as_str),
+            private.x.as_deref()
+        );
+        assert!(public_json.get("d").is_none());
+    }
+
+    #[test]
+    fn public_jwk_rejects_private_members() {
+        let err = PublicJwk::parse(RAW_JWK).expect_err("private member must reject");
+        assert!(matches!(err, JwkError::Invalid(_)));
+    }
+
+    #[test]
+    fn eddsa_sign_and_verify_round_trip() {
+        let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        let public = private.public();
+        let payload = b"registry-platform";
+        let signature = sign(payload, &private).expect("payload signs");
+
+        verify(payload, &signature, &public).expect("signature verifies");
+        assert!(verify(b"tampered", &signature, &public).is_err());
+    }
+
+    #[test]
+    fn eddsa_may_be_inferred_from_okp_ed25519_without_alg() {
+        let private = PrivateJwk::parse(
+            r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"}"#,
+        )
+        .expect("Ed25519 JWK parses without alg");
+
+        assert_eq!(
+            private.algorithm().expect("algorithm"),
+            SigningAlgorithm::EdDsa
+        );
+    }
+
+    #[test]
+    fn unsupported_signing_algorithms_are_rejected_at_parse_time() {
+        let p256 = r#"{"kty":"EC","crv":"P-256","d":"jpsQnnGQmTMRzLC0W_9-v8RC0ZQ79OJWfZPOGdXGdP8","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo","alg":"ES256"}"#;
+        let rsa = r#"{"kty":"RSA","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4PBO8BxG7NXXjO4IhYGoOi0Lem4xXeUq7W57RtgGF4wSGZ4HAvY8R9H_JVU3tO7K0XG3L8m5vB2T2KQeJ0gJg9g4nG9QpXJYpJ2NmgH6L7ZqQHX7I4M","e":"AQAB","d":"V8tFoZRiEbWqT2DF3t5R6u9vS9LqQEVtGg5oQ2Y0t5k","alg":"RS256"}"#;
+        let public_p256 = r#"{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo","alg":"ES256"}"#;
+
+        assert!(matches!(
+            PrivateJwk::parse(p256),
+            Err(JwkError::UnsupportedAlgorithm)
+        ));
+        assert!(matches!(
+            PrivateJwk::parse(rsa),
+            Err(JwkError::UnsupportedAlgorithm)
+        ));
+        assert!(matches!(
+            PublicJwk::parse(public_p256),
+            Err(JwkError::UnsupportedAlgorithm)
+        ));
+    }
+
+    #[test]
+    fn validate_did_accepts_allowed_web_and_key_methods() {
+        let did = validate_did(
+            "did:web:example.org:issuers:alpha#key-1",
+            &[DidMethod::Web, DidMethod::Key],
+        )
+        .expect("did:web validates");
+
+        assert_eq!(did.method, DidMethod::Web);
+        assert_eq!(did.identifier, "example.org:issuers:alpha");
+        assert_eq!(did.fragment.as_deref(), Some("key-1"));
+
+        validate_did("did:key:z6MkiTBz", &[DidMethod::Key]).expect("did:key validates");
+    }
+
+    #[test]
+    fn validate_did_web_rejects_localhost_ips_and_path_traversal() {
+        assert!(validate_did_web("did:web:localhost").is_err());
+        assert!(validate_did_web("did:web:127.0.0.1").is_err());
+        assert!(validate_did_web("did:web:example.org:..:issuer").is_err());
+        assert!(validate_did_web("did:web:example.org:%2e%2e:issuer").is_err());
+    }
+
+    #[test]
+    fn canonicalize_json_sorts_object_keys_recursively() {
+        let value = json!({"z": 1, "a": {"b": true, "a": [null, "x"]}});
+        let canonical = canonicalize_json(&value).expect("canonicalizes");
+
+        assert_eq!(
+            String::from_utf8(canonical).expect("utf8"),
+            r#"{"a":{"a":[null,"x"],"b":true},"z":1}"#
+        );
+    }
+
+    #[test]
+    fn public_jwk_thumbprint_uses_required_members_only() {
+        let public = PrivateJwk::parse(RAW_JWK)
+            .expect("private jwk parses")
+            .public();
+        assert_eq!(public.jkt(), "qDygv_6SkrJ6krP3sYb0DCoEuYSYVP0ttF5m1cp_094");
+    }
+
+    #[test]
+    fn constant_time_eq_is_available_for_callers() {
+        use subtle::ConstantTimeEq;
+
+        assert_eq!(b"a".ct_eq(b"a").unwrap_u8(), 1);
+    }
+}
