@@ -311,9 +311,13 @@ Tests cover:
 |-----------------------------------------|--------------------------|--------------------------------------------------------|
 | `REGISTRY_WITNESS_BASE_URL`             | `http://127.0.0.1:14255` | Witness base URL used by k6 scripts                    |
 | `REGISTRY_WITNESS_BEARER_TOKEN`         | (generated)              | Bearer token with civil+farmer evidence scopes         |
+| `REGISTRY_WITNESS_BEARER_TOKEN_HASH`    | (generated)              | Server-side SHA-256 fingerprint for bearer auth        |
 | `REGISTRY_WITNESS_API_KEY`              | (generated)              | API-key token (same scopes; exercised in auth_deny)    |
+| `REGISTRY_WITNESS_API_KEY_HASH`         | (generated)              | Server-side SHA-256 fingerprint for API-key auth       |
 | `REGISTRY_WITNESS_NO_SCOPE_TOKEN`       | (generated)              | Valid bearer token with no evidence scopes (deny path) |
+| `REGISTRY_WITNESS_NO_SCOPE_TOKEN_HASH`  | (generated)              | Server-side SHA-256 fingerprint for no-scope auth      |
 | `REGISTRY_WITNESS_TOKEN_INVALID`        | `not-a-real-token-xxxx`  | Deliberately invalid token for 401 tests               |
+| `REGISTRY_WITNESS_AUDIT_HASH_SECRET`    | (generated)              | HMAC secret for audit primary-key hashing              |
 | `REGISTRY_WITNESS_PROFILE`              | `medium`                 | Profile name read by k6 for logs and tags              |
 | `REGISTRY_WITNESS_BATCH_SIZE`           | `10`                     | Subjects per batch in `batch_evaluate.js`              |
 | `REGISTRY_WITNESS_SUBJECT_COUNT`        | (matches stub profile)   | Pool size of distinct subject ids k6 cycles through    |

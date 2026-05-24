@@ -10,8 +10,10 @@
   - Default audience: `"evidence-server"` → `"registry-witness"`.
   - Cargo feature: `evidence-server-cel` → `registry-witness-cel`.
   - Project-labeled env vars: `EVIDENCE_SERVER_API_KEY`, `EVIDENCE_SERVER_BEARER_TOKEN`,
-    `EVIDENCE_SERVER_ISSUER_JWK` → `REGISTRY_WITNESS_API_KEY`, `REGISTRY_WITNESS_BEARER_TOKEN`,
-    `REGISTRY_WITNESS_ISSUER_JWK`.
+    `EVIDENCE_SERVER_ISSUER_JWK` → `REGISTRY_WITNESS_API_KEY_HASH`,
+    `REGISTRY_WITNESS_BEARER_TOKEN_HASH`, `REGISTRY_WITNESS_ISSUER_JWK`. The
+    renamed auth variables hold `sha256:<64 hex>` fingerprints, not plaintext
+    tokens.
   - Demo config: `demo/config/evidence-server.yaml` → `demo/config/registry-witness.yaml`.
 
 ## 0.1.0

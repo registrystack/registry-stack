@@ -37,6 +37,12 @@ use tempfile::TempDir;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn set_audit_secret() {
+    std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
+
 // ---------------------------------------------------------------------------
 // Shared mock upstream helpers
 // ---------------------------------------------------------------------------
@@ -120,18 +126,21 @@ fn rda_config(
     audit_path: &str,
     max_subjects: usize,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_MEMO_API_KEY
+      hash_env: TEST_MEMO_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -141,6 +150,7 @@ evidence:
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_MEMO_SOURCE_TOKEN
       max_in_flight: 32
   claims:
@@ -193,18 +203,21 @@ fn two_claims_shared_binding_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_MEMO_API_KEY
+      hash_env: TEST_MEMO_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -214,6 +227,7 @@ evidence:
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_MEMO_SOURCE_TOKEN
       max_in_flight: 32
   claims:
@@ -299,18 +313,21 @@ fn three_claims_shared_binding_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_MEMO_API_KEY
+      hash_env: TEST_MEMO_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -320,6 +337,7 @@ evidence:
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_MEMO_SOURCE_TOKEN
       max_in_flight: 32
   claims:
@@ -443,18 +461,21 @@ fn two_claims_different_fields_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_MEMO_API_KEY
+      hash_env: TEST_MEMO_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -464,6 +485,7 @@ evidence:
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_MEMO_SOURCE_TOKEN
       max_in_flight: 32
   claims:
@@ -539,18 +561,21 @@ fn two_dci_claims_different_query_type_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_MEMO_API_KEY
+      hash_env: TEST_MEMO_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -560,6 +585,7 @@ evidence:
   source_connections:
     registry_a:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_MEMO_SOURCE_TOKEN
       max_in_flight: 32
       dci:
@@ -568,6 +594,7 @@ evidence:
         records_path: /message/search_response/0/data/reg_records
     registry_b:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_MEMO_SOURCE_TOKEN
       max_in_flight: 32
       dci:
@@ -651,7 +678,10 @@ evidence:
 // ---------------------------------------------------------------------------
 
 fn set_test_env() {
-    std::env::set_var("TEST_MEMO_API_KEY", "memo-api-token");
+    std::env::set_var(
+        "TEST_MEMO_API_KEY_HASH",
+        "sha256:7ef768fc3d2b9a667fa45576a9dcc26cc47a9925fea1410910eabbd8cf2e687c",
+    );
     std::env::set_var("TEST_MEMO_SOURCE_TOKEN", "memo-source-token");
 }
 

@@ -2,26 +2,20 @@
 //! Microbenchmarks for the standalone-witness auth hot path.
 //!
 //! Covers:
-//! - `find_credential` linear scan with `subtle::ConstantTimeEq` for a hit
+//! - `find_credential` linear scan with hashed API-key verification for a hit
 //!   in a small token table and a miss against the same table.
-//! - `bearer_auth_token` header parser on a typical "Bearer <token>" value
+//! - platform Bearer header parser on a typical "Bearer <token>" value
 //!   and on an invalid input (missing scheme).
 //!
-//! Witness compares tokens raw (no hashing), so `find_credential` is O(N) in
-//! the number of credentials. These benches lock in the per-call cost at a
-//! realistic small N (4 credentials, matching the medium perf profile).
-//!
-//! All five tokens below are exactly 46 bytes long. This matters because
-//! `subtle::ConstantTimeEq` for byte slices short-circuits on length mismatch
-//! (length is not secret). If the target token had a different length from
-//! the stored credentials, `find_credential` would skip the full byte compare
-//! on the mismatched entries and the bench would under-report worst-case
-//! linear-scan cost. Keep lengths equal when editing.
+//! Witness compares request tokens against fixed-length stored fingerprints.
+//! These benches lock in the per-call cost at a realistic small N (4
+//! credentials, matching the medium perf profile).
 
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use registry_witness_server::standalone::{bearer_auth_token, find_credential, ResolvedCredential};
+use registry_platform_authcommon::parse_bearer_token;
+use registry_witness_server::standalone::{find_credential, ResolvedCredential};
 
 const VALID_TOKEN: &str = "perf-bench-bearer-token-target0-0000000000-099";
 const WRONG_TOKEN: &str = "perf-bench-bearer-token-wrong00-0000000000-000";
@@ -38,7 +32,7 @@ fn build_credentials() -> Vec<ResolvedCredential> {
 fn cred(id: &str, token: &str) -> ResolvedCredential {
     ResolvedCredential {
         id: id.to_string(),
-        token: token.to_string(),
+        fingerprint: registry_platform_authcommon::fingerprint_api_key(token),
         scopes: vec!["civil-registry.read".into(), "farmer-registry.read".into()],
     }
 }
@@ -57,17 +51,17 @@ fn benchmark_find_credential_miss(c: &mut Criterion) {
     });
 }
 
-fn benchmark_bearer_auth_token_parse(c: &mut Criterion) {
+fn benchmark_parse_bearer_token_ok(c: &mut Criterion) {
     let header = format!("Bearer {VALID_TOKEN}");
-    c.bench_function("auth/bearer_auth_token_parse_ok", |b| {
-        b.iter(|| bearer_auth_token(black_box(&header)));
+    c.bench_function("auth/parse_bearer_token_ok", |b| {
+        b.iter(|| parse_bearer_token(black_box(&header)));
     });
 }
 
-fn benchmark_bearer_auth_token_parse_bad(c: &mut Criterion) {
+fn benchmark_parse_bearer_token_bad(c: &mut Criterion) {
     let header = format!("Basic {VALID_TOKEN}");
-    c.bench_function("auth/bearer_auth_token_parse_bad_scheme", |b| {
-        b.iter(|| bearer_auth_token(black_box(&header)));
+    c.bench_function("auth/parse_bearer_token_bad_scheme", |b| {
+        b.iter(|| parse_bearer_token(black_box(&header)));
     });
 }
 
@@ -76,7 +70,7 @@ criterion_group! {
     config = Criterion::default().sample_size(50);
     targets = benchmark_find_credential_hit,
               benchmark_find_credential_miss,
-              benchmark_bearer_auth_token_parse,
-              benchmark_bearer_auth_token_parse_bad
+              benchmark_parse_bearer_token_ok,
+              benchmark_parse_bearer_token_bad
 }
 criterion_main!(benches);

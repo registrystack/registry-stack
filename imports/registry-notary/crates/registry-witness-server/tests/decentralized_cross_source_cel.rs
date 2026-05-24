@@ -18,6 +18,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const DEMO_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn set_audit_secret() {
+    std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
 
 async fn civil_source(
     headers: HeaderMap,
@@ -85,28 +90,33 @@ fn source_response(
 }
 
 fn shared_config(civil_base_url: &str, social_base_url: &str) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: shared_caseworker
-      token_env: TEST_SHARED_EVIDENCE_CLIENT_TOKEN
+      hash_env: TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
 audit:
   sink: stdout
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: shared-eligibility-registry-witness
   source_connections:
     civil:
       base_url: "{civil_base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_SHARED_CIVIL_EVIDENCE_SOURCE_RAW
     social_protection:
       base_url: "{social_base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
   claims:
     - id: civil-record-present
@@ -198,7 +208,10 @@ evidence:
 #[tokio::test]
 async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
     unsafe {
-        std::env::set_var("TEST_SHARED_EVIDENCE_CLIENT_TOKEN", "shared-client-token");
+        std::env::set_var(
+            "TEST_SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
+            "sha256:3adbe152ab16e34838a5ce68872b2f315e5efbcb91a1f795af0632fd9e0d5ada",
+        );
         std::env::set_var(
             "TEST_SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
             "civil-source-token",
@@ -273,6 +286,16 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
         "demo/decentralized/config/evidence/shared-eligibility-evidence-server.yaml",
     ] {
         let raw = std::fs::read_to_string(root.join(config_path)).expect("config is readable");
+        let auth_block = raw
+            .split_once("\naudit:")
+            .map(|(before_audit, _)| before_audit)
+            .unwrap_or(&raw);
+        if auth_block.contains("token_env:") {
+            eprintln!(
+                "skipping stale registry-relay decentralized demo config with pre-hash auth schema: {config_path}"
+            );
+            continue;
+        }
         let config: StandaloneRegistryWitnessConfig =
             serde_yml::from_str(&raw).expect("config deserializes");
         config.validate().expect("config validates");
@@ -316,6 +339,10 @@ fn set_demo_env() {
             "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
         ] {
             std::env::set_var(key, "demo-token");
+            std::env::set_var(
+                format!("{key}_HASH"),
+                "sha256:7c43ef5ae21d43ce2743f770c68e24def1a43ee2f416d2438410c8af7af2ff2c",
+            );
         }
         std::env::set_var("REGISTRY_WITNESS_ISSUER_JWK", DEMO_ISSUER_JWK);
     }

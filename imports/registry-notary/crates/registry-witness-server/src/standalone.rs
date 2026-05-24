@@ -1,21 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Witness assembly, auth, audit, and HTTP source connectors.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::future::Future;
-use std::io::{self, Write};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::Semaphore;
+use tokio::sync::{OnceCell, Semaphore};
 
+use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
+use jsonwebtoken::Algorithm;
+use registry_platform_audit::{
+    AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState, JsonlFileSink,
+    JsonlStdoutSink,
+};
+use registry_platform_authcommon::{
+    parse_bearer_token, parse_fingerprint, verify_api_key, FingerprintFormatError,
+};
+use registry_platform_httputil::{
+    read_bounded, url as httputil_url, FetchUrlPolicy, OutboundClientBuilder,
+};
+use registry_platform_oidc::{
+    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+};
 use registry_witness_core::sd_jwt::EvidenceIssuer;
 use registry_witness_core::{
     BulkMode, DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceConfig,
@@ -23,7 +37,6 @@ use registry_witness_core::{
     SourceConnectorKind, StandaloneRegistryWitnessConfig, SubjectRequest,
 };
 use serde_json::{json, Map, Value};
-use subtle::ConstantTimeEq;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -35,6 +48,7 @@ use crate::{
 
 const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
+const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 
 pub fn standalone_router(
     config: StandaloneRegistryWitnessConfig,
@@ -44,6 +58,13 @@ pub fn standalone_router(
     let source = Arc::new(HttpEvidenceSources::from_config(&config.evidence)?);
     let store = Arc::new(EvidenceStore::default());
     let issuers = Arc::new(EvidenceIssuerRegistry::from_config(&config.evidence)?);
+    let cors_policy = registry_platform_httpsec::CorsPolicy {
+        allowed_origins: config.server.cors.allowed_origins.clone(),
+        allowed_methods: Vec::new(),
+        allowed_headers: Vec::new(),
+        allow_credentials: config.server.cors.allow_credentials,
+    };
+    cors_policy.validate()?;
     let api_state = Arc::new(RegistryWitnessApiState::new(
         evidence, source, store, issuers,
     ));
@@ -51,7 +72,16 @@ pub fn standalone_router(
 
     Ok(router()
         .layer(axum::Extension(api_state))
-        .layer(from_fn_with_state(auth_state, auth_audit_middleware)))
+        .layer(from_fn_with_state(auth_state, auth_audit_middleware))
+        .layer(registry_platform_httpsec::security_headers(
+            registry_platform_httpsec::CspBuilder::restrictive(),
+        ))
+        .layer(cors_policy.layer())
+        .layer(registry_platform_httpsec::corp_conditional())
+        .layer(registry_platform_httpsec::request_body_limit(
+            MAX_INBOUND_REQUEST_BODY_BYTES,
+        ))
+        .layer(axum::middleware::from_fn(rewrite_payload_too_large_problem)))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -60,18 +90,28 @@ pub enum StandaloneServerError {
     Config(#[from] registry_witness_core::EvidenceConfigError),
     #[error("configured credential environment variable is missing or empty: {0}")]
     MissingCredentialEnv(String),
+    #[error(
+        "configured credential hash environment variable contains an invalid fingerprint: {0}"
+    )]
+    InvalidCredentialHash(String, #[source] FingerprintFormatError),
     #[error("configured source token environment variable is missing or empty: {0}")]
     MissingSourceTokenEnv(String),
     #[error("credential issuer environment variable is missing or invalid: {0}")]
     InvalidIssuerEnv(String),
     #[error("audit sink path is required when sink=file")]
     MissingAuditPath,
-    #[error("audit sink file could not be opened")]
-    AuditOpen(#[source] std::io::Error),
+    #[error("audit.hash_secret_env is required")]
+    MissingAuditHashSecretEnv,
+    #[error(transparent)]
+    Audit(#[from] AuditError),
+    #[error(transparent)]
+    Cors(#[from] registry_platform_httpsec::CorsValidationError),
     #[error("unsupported audit sink: {0}")]
     InvalidAuditSink(String),
     #[error("failed to build HTTP source client")]
     HttpClient(#[source] reqwest::Error),
+    #[error("invalid OIDC auth configuration: {0}")]
+    InvalidOidcConfig(String),
 }
 
 #[derive(Clone)]
@@ -79,6 +119,7 @@ struct ResolvedEvidenceSourceConnection {
     id: String,
     base_url: String,
     bearer_token: String,
+    fetch_url_policy: FetchUrlPolicy,
     dci: DciSourceConnectionConfig,
     /// Process-global cap on concurrent outbound calls to this connection.
     /// Permits are acquired in `read_one` and held across retries so a flaky
@@ -99,6 +140,7 @@ impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
             .field("id", &self.id)
             .field("base_url", &self.base_url)
             .field("bearer_token", &"<redacted>")
+            .field("fetch_url_policy", &self.fetch_url_policy)
             .field("dci", &self.dci)
             .field("max_in_flight", &self.max_in_flight)
             .field("bulk_mode", &self.bulk_mode)
@@ -130,6 +172,11 @@ impl HttpEvidenceSources {
                     id: id.clone(),
                     base_url: connection.base_url.clone(),
                     bearer_token,
+                    fetch_url_policy: if connection.allow_insecure_localhost {
+                        FetchUrlPolicy::dev()
+                    } else {
+                        FetchUrlPolicy::strict()
+                    },
                     dci: connection.dci.clone(),
                     semaphore: Arc::new(Semaphore::new(connection.max_in_flight)),
                     max_in_flight: connection.max_in_flight,
@@ -138,11 +185,10 @@ impl HttpEvidenceSources {
                 },
             );
         }
-        let client = reqwest::Client::builder()
+        let client = OutboundClientBuilder::new()
             .timeout(SOURCE_REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(StandaloneServerError::HttpClient)?;
+            .user_agent("registry-witness/0.2")
+            .build();
         Ok(Self {
             client,
             request_timeout: SOURCE_REQUEST_TIMEOUT,
@@ -353,13 +399,13 @@ impl EvidenceIssuerResolver for EvidenceIssuerRegistry {
 
 /// Bench-internal: exposed only so `benches/auth_bench.rs` can construct
 /// fixtures. Production code goes through `resolve_credentials`, which reads
-/// the token from `EvidenceCredentialConfig::token_env`. Not part of the
+/// the fingerprint from `EvidenceCredentialConfig::hash_env`. Not part of the
 /// public API; do not depend on this shape from outside the workspace.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct ResolvedCredential {
     pub id: String,
-    pub token: String,
+    pub fingerprint: String,
     pub scopes: Vec<String>,
 }
 
@@ -367,7 +413,7 @@ impl std::fmt::Debug for ResolvedCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedCredential")
             .field("id", &self.id)
-            .field("token", &"<redacted>")
+            .field("fingerprint", &"<redacted>")
             .field("scopes", &self.scopes)
             .finish()
     }
@@ -375,9 +421,26 @@ impl std::fmt::Debug for ResolvedCredential {
 
 #[derive(Debug)]
 struct AuthAuditState {
-    api_keys: Vec<ResolvedCredential>,
-    bearer_tokens: Vec<ResolvedCredential>,
-    audit: AuditSink,
+    authenticator: Authenticator,
+    audit: AuditPipeline,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RequestCredentials {
+    api_key: Option<String>,
+    bearer_token: Option<String>,
+}
+
+#[derive(Debug)]
+enum Authenticator {
+    Static {
+        api_keys: Vec<ResolvedCredential>,
+        bearer_tokens: Vec<ResolvedCredential>,
+    },
+    Oidc {
+        verifier: Arc<TokenVerifier>,
+        principal_claim: String,
+    },
 }
 
 impl AuthAuditState {
@@ -385,88 +448,177 @@ impl AuthAuditState {
         config: &StandaloneRegistryWitnessConfig,
     ) -> Result<Self, StandaloneServerError> {
         Ok(Self {
-            api_keys: resolve_credentials(&config.auth.api_keys)?,
-            bearer_tokens: resolve_credentials(&config.auth.bearer_tokens)?,
-            audit: AuditSink::from_config(&config.audit)?,
+            authenticator: Authenticator::from_config(config)?,
+            audit: AuditPipeline::from_config(&config.audit)?,
         })
     }
 
-    fn authenticate(&self, request: &Request) -> Result<EvidencePrincipal, EvidenceError> {
-        if let Some(value) = request.headers().get("x-api-key").and_then(header_str) {
-            if let Some(credential) = find_credential(&self.api_keys, value) {
-                return Ok(principal_from_credential(credential));
-            }
-        }
-        if let Some(value) = request
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(header_str)
-            .and_then(bearer_auth_token)
-        {
-            if let Some(credential) = find_credential(&self.bearer_tokens, value) {
-                return Ok(principal_from_credential(credential));
-            }
-        }
-        Err(EvidenceError::MissingCredential)
+    async fn authenticate(
+        &self,
+        credentials: RequestCredentials,
+    ) -> Result<EvidencePrincipal, EvidenceError> {
+        self.authenticator.authenticate(credentials).await
     }
 }
 
-enum AuditSink {
-    Stdout(Mutex<Box<dyn Write + Send>>),
-    File(Mutex<Box<dyn Write + Send>>),
-}
+impl Authenticator {
+    fn from_config(
+        config: &StandaloneRegistryWitnessConfig,
+    ) -> Result<Self, StandaloneServerError> {
+        match config.auth.mode.as_str() {
+            "api_key" => Ok(Self::Static {
+                api_keys: resolve_credentials(&config.auth.api_keys)?,
+                bearer_tokens: resolve_credentials(&config.auth.bearer_tokens)?,
+            }),
+            "oidc" => {
+                let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
+                    StandaloneServerError::InvalidOidcConfig(
+                        "auth.oidc is required when auth.mode = oidc".to_string(),
+                    )
+                })?;
+                let allowed_algorithms = oidc
+                    .allowed_algorithms
+                    .iter()
+                    .map(|algorithm| parse_oidc_algorithm(algorithm))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let scope_separator = oidc.scope_separator.chars().next().ok_or_else(|| {
+                    StandaloneServerError::InvalidOidcConfig(
+                        "scope_separator must be exactly one character".to_string(),
+                    )
+                })?;
+                let client = OutboundClientBuilder::new()
+                    .timeout(Duration::from_secs(5))
+                    .user_agent("registry-witness/0.2")
+                    .build();
+                let fetch_url_policy = if oidc.allow_insecure_localhost {
+                    FetchUrlPolicy::dev()
+                } else {
+                    FetchUrlPolicy::strict()
+                };
+                let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                    oidc.jwks_uri.clone(),
+                    client,
+                    JwksFetcherConfig::defaults(),
+                    fetch_url_policy,
+                ));
+                let verifier = TokenVerifier::new(
+                    TokenVerifierConfig {
+                        issuer: oidc.issuer.clone(),
+                        audiences: oidc.audiences.clone(),
+                        allowed_algorithms,
+                        allowed_typ: oidc.allowed_typ.clone(),
+                        scope_claim: oidc.scope_claim.clone(),
+                        scope_separator,
+                        scope_map: Some(
+                            oidc.scope_map
+                                .iter()
+                                .map(|(from, to)| (from.clone(), to.clone()))
+                                .collect::<HashMap<_, _>>(),
+                        )
+                        .filter(|scope_map| !scope_map.is_empty()),
+                        allowed_clients: oidc.allowed_clients.clone(),
+                        leeway: Duration::from_secs(oidc.leeway_seconds),
+                    },
+                    fetcher,
+                );
+                Ok(Self::Oidc {
+                    verifier: Arc::new(verifier),
+                    principal_claim: oidc.principal_claim.clone(),
+                })
+            }
+            mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
+                "unsupported auth.mode '{mode}'"
+            ))),
+        }
+    }
 
-impl std::fmt::Debug for AuditSink {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    async fn authenticate(
+        &self,
+        credentials: RequestCredentials,
+    ) -> Result<EvidencePrincipal, EvidenceError> {
         match self {
-            Self::Stdout(_) => f.debug_tuple("Stdout").finish(),
-            Self::File(_) => f.debug_tuple("File").finish(),
+            Self::Static {
+                api_keys,
+                bearer_tokens,
+            } => authenticate_static(&credentials, api_keys, bearer_tokens),
+            Self::Oidc {
+                verifier,
+                principal_claim,
+            } => authenticate_oidc(&credentials, verifier, principal_claim).await,
         }
     }
 }
 
-impl AuditSink {
+#[derive(Clone)]
+struct AuditPipeline {
+    sink: Arc<dyn PlatformAuditSink>,
+    chain: Arc<OnceCell<ChainState>>,
+    hasher: AuditKeyHasher,
+}
+
+impl std::fmt::Debug for AuditPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuditPipeline")
+            .field("sink", &"<redacted>")
+            .field("hasher", &self.hasher)
+            .finish()
+    }
+}
+
+impl AuditPipeline {
     fn from_config(
         config: &registry_witness_core::EvidenceAuditConfig,
     ) -> Result<Self, StandaloneServerError> {
-        match config.sink.as_str() {
-            "stdout" => Ok(Self::Stdout(Mutex::new(Box::new(std::io::stdout())))),
+        let hash_secret_env = config
+            .hash_secret_env
+            .as_deref()
+            .ok_or(StandaloneServerError::MissingAuditHashSecretEnv)?;
+        let hasher = AuditKeyHasher::from_env(hash_secret_env)?;
+        let sink: Arc<dyn PlatformAuditSink> = match config.sink.as_str() {
+            "stdout" => Arc::new(JsonlStdoutSink::new()),
             "file" | "jsonl" => {
                 let path = config
                     .path
                     .as_deref()
                     .ok_or(StandaloneServerError::MissingAuditPath)?;
-                let file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(StandaloneServerError::AuditOpen)?;
-                Ok(Self::File(Mutex::new(Box::new(file))))
+                Arc::new(JsonlFileSink::new(path))
             }
-            sink => Err(StandaloneServerError::InvalidAuditSink(sink.to_string())),
+            sink => return Err(StandaloneServerError::InvalidAuditSink(sink.to_string())),
+        };
+        Ok(Self {
+            sink,
+            chain: Arc::new(OnceCell::new()),
+            hasher,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_sink_dev_only(sink: Arc<dyn PlatformAuditSink>) -> Self {
+        Self {
+            sink,
+            chain: Arc::new(OnceCell::new()),
+            hasher: AuditKeyHasher::unkeyed_dev_only(),
         }
     }
 
-    fn emit(&self, event: &EvidenceAuditEvent) -> io::Result<()> {
-        match self {
-            Self::Stdout(writer) | Self::File(writer) => {
-                let mut writer = writer
-                    .lock()
-                    .map_err(|_| io::Error::other("audit sink mutex is poisoned"))?;
-                write_audit_jsonl(&mut **writer, event)
+    async fn emit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
+        let chain = self
+            .chain
+            .get_or_try_init(|| async { ChainState::bootstrap(self.sink.as_ref()).await })
+            .await?;
+        let mut record = serde_json::to_value(event).map_err(AuditError::Json)?;
+        if let Some(object) = record.as_object_mut() {
+            if let Some(principal_id) = event.principal_id.as_deref() {
+                object.insert(
+                    "principal_id_hash".to_string(),
+                    json!(self.hasher.hash(principal_id)),
+                );
             }
+            object.remove("principal_id");
         }
+        chain.append(self.sink.as_ref(), record).await?;
+        Ok(())
     }
-}
-
-fn write_audit_jsonl<W: Write + ?Sized>(
-    writer: &mut W,
-    event: &EvidenceAuditEvent,
-) -> io::Result<()> {
-    let line = serde_json::to_vec(event).map_err(io::Error::other)?;
-    writer.write_all(&line)?;
-    writer.write_all(b"\n")?;
-    writer.flush()
 }
 
 async fn auth_audit_middleware(
@@ -476,11 +628,16 @@ async fn auth_audit_middleware(
 ) -> Response {
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
-    let principal = match state.authenticate(&request) {
+    if is_public_probe_path(&path) {
+        return next.run(request).await;
+    }
+    let credentials = request_credentials(&request);
+    let principal = match state.authenticate(credentials).await {
         Ok(principal) => principal,
         Err(error) => {
             let response = crate::api::evidence_error_response(error);
-            return match emit_audit(&state, None, &method, &path, &response) {
+            let audit_event = build_audit_event(None, &method, &path, &response);
+            return match state.audit.emit(&audit_event).await {
                 Ok(()) => response,
                 Err(error) => audit_error_response(error),
             };
@@ -488,21 +645,29 @@ async fn auth_audit_middleware(
     };
     request.extensions_mut().insert(principal.clone());
     let response = next.run(request).await;
-    match emit_audit(&state, Some(&principal), &method, &path, &response) {
+    let audit_event = build_audit_event(Some(&principal), &method, &path, &response);
+    match state.audit.emit(&audit_event).await {
         Ok(()) => response,
         Err(error) => audit_error_response(error),
     }
 }
 
-fn emit_audit(
-    state: &AuthAuditState,
+fn is_public_probe_path(path: &str) -> bool {
+    matches!(path, "/healthz" | "/ready")
+}
+
+fn build_audit_event(
     principal: Option<&EvidencePrincipal>,
     method: &str,
     path: &str,
     response: &Response,
-) -> io::Result<()> {
+) -> EvidenceAuditEvent {
     let audit = response.extensions().get::<EvidenceAuditContext>();
     let error = response.extensions().get::<EvidenceErrorCodeContext>();
+    let verification_id = audit.and_then(|context| context.verification_id.clone());
+    let claim_hash = audit.and_then(|context| context.claim_hash.clone());
+    let row_count = audit.and_then(|context| context.row_count);
+    let error_code = error.map(|context| context.0.clone());
     let decision = audit
         .and_then(|context| context.verification_decision.clone())
         .unwrap_or_else(|| {
@@ -515,7 +680,7 @@ fn emit_audit(
     let occurred_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-    state.audit.emit(&EvidenceAuditEvent {
+    EvidenceAuditEvent {
         event_id: Ulid::new().to_string(),
         occurred_at,
         principal_id: principal.map(|principal| principal.principal_id.clone()),
@@ -523,11 +688,11 @@ fn emit_audit(
         method: method.to_string(),
         path: path.to_string(),
         status: response.status().as_u16(),
-        verification_id: audit.and_then(|context| context.verification_id.clone()),
-        claim_hash: audit.and_then(|context| context.claim_hash.clone()),
-        row_count: audit.and_then(|context| context.row_count),
-        error_code: error.map(|context| context.0.clone()),
-    })
+        verification_id,
+        claim_hash,
+        row_count,
+        error_code,
+    }
 }
 
 fn resolve_credentials(
@@ -536,19 +701,103 @@ fn resolve_credentials(
     credentials
         .iter()
         .map(|credential| {
-            let token = env::var(&credential.token_env)
+            let fingerprint = env::var(&credential.hash_env)
                 .ok()
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
-                    StandaloneServerError::MissingCredentialEnv(credential.token_env.clone())
+                    StandaloneServerError::MissingCredentialEnv(credential.hash_env.clone())
                 })?;
+            parse_fingerprint(&fingerprint).map_err(|error| {
+                StandaloneServerError::InvalidCredentialHash(credential.hash_env.clone(), error)
+            })?;
             Ok(ResolvedCredential {
                 id: credential.id.clone(),
-                token,
+                fingerprint,
                 scopes: credential.scopes.clone(),
             })
         })
         .collect()
+}
+
+fn request_credentials(request: &Request) -> RequestCredentials {
+    RequestCredentials {
+        api_key: request
+            .headers()
+            .get("x-api-key")
+            .and_then(header_str)
+            .map(ToOwned::to_owned),
+        bearer_token: request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(header_str)
+            .and_then(|raw| parse_bearer_token(raw).ok())
+            .map(ToOwned::to_owned),
+    }
+}
+
+fn authenticate_static(
+    credentials: &RequestCredentials,
+    api_keys: &[ResolvedCredential],
+    bearer_tokens: &[ResolvedCredential],
+) -> Result<EvidencePrincipal, EvidenceError> {
+    if let Some(value) = credentials.api_key.as_deref() {
+        if let Some(credential) = find_credential(api_keys, value) {
+            return Ok(principal_from_credential(credential));
+        }
+    }
+    if let Some(value) = credentials.bearer_token.as_deref() {
+        if let Some(credential) = find_credential(bearer_tokens, value) {
+            return Ok(principal_from_credential(credential));
+        }
+    }
+    Err(EvidenceError::MissingCredential)
+}
+
+async fn authenticate_oidc(
+    credentials: &RequestCredentials,
+    verifier: &TokenVerifier,
+    principal_claim: &str,
+) -> Result<EvidencePrincipal, EvidenceError> {
+    let Some(token) = credentials.bearer_token.as_deref() else {
+        return Err(EvidenceError::MissingCredential);
+    };
+    let verified = verifier.verify(token).await.map_err(oidc_auth_error)?;
+    principal_from_oidc(&verified, principal_claim).ok_or(EvidenceError::MissingCredential)
+}
+
+fn principal_from_oidc(
+    verified: &VerifiedToken,
+    principal_claim: &str,
+) -> Option<EvidencePrincipal> {
+    let principal_id = if principal_claim == "sub" {
+        verified.claims.sub.clone()
+    } else {
+        verified
+            .claims
+            .extra
+            .get(principal_claim)
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+    .or_else(|| verified.matched_client.clone())?;
+    Some(EvidencePrincipal {
+        principal_id,
+        scopes: verified.scopes.clone(),
+    })
+}
+
+fn oidc_auth_error(error: OidcError) -> EvidenceError {
+    tracing::debug!(target: "registry_witness_server::auth", error = %error, "OIDC token verification failed");
+    EvidenceError::MissingCredential
+}
+
+fn parse_oidc_algorithm(algorithm: &str) -> Result<Algorithm, StandaloneServerError> {
+    match algorithm {
+        "EdDSA" => Ok(Algorithm::EdDSA),
+        other => Err(StandaloneServerError::InvalidOidcConfig(format!(
+            "unsupported OIDC signing algorithm '{other}'"
+        ))),
+    }
 }
 
 /// Bench-internal: exposed only for `benches/auth_bench.rs`. Not part of the
@@ -560,7 +809,7 @@ pub fn find_credential<'a>(
 ) -> Option<&'a ResolvedCredential> {
     credentials
         .iter()
-        .find(|credential| credential.token.as_bytes().ct_eq(token.as_bytes()).into())
+        .find(|credential| verify_api_key(token, &credential.fingerprint).unwrap_or(false))
 }
 
 fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincipal {
@@ -574,20 +823,23 @@ fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
 }
 
-/// Bench-internal: exposed only for `benches/auth_bench.rs`. Not part of the
-/// public API.
-#[doc(hidden)]
-pub fn bearer_auth_token(raw: &str) -> Option<&str> {
-    let mut parts = raw.split_whitespace();
-    let scheme = parts.next()?;
-    let token = parts.next()?;
-    if parts.next().is_some() || !scheme.eq_ignore_ascii_case("Bearer") {
-        return None;
+async fn rewrite_payload_too_large_problem(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    if response.status() != StatusCode::PAYLOAD_TOO_LARGE {
+        return response;
     }
-    Some(token)
+    let is_problem_json = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/problem+json"));
+    if is_problem_json {
+        return response;
+    }
+    registry_platform_httpsec::body_limit_problem_response(Request::new(Body::empty())).await
 }
 
-fn audit_error_response(error: io::Error) -> Response {
+fn audit_error_response(error: AuditError) -> Response {
     tracing::error!(target: "registry_witness_server::audit", error = %error, "audit event write failed");
     let status = StatusCode::INTERNAL_SERVER_ERROR;
     let mut response = (
@@ -627,10 +879,11 @@ async fn read_remote_registry_data_api_one(
         ("fields".to_string(), fields.join(",")),
         (lookup_field.clone(), value_query_string(&lookup_value)?),
     ];
-    let body = send_request_with_retry(sources, connection, "rda", move || {
+    let request_url = url.clone();
+    let body = send_request_with_retry(sources, connection, "rda", &url, move || {
         sources
             .client
-            .get(url.clone())
+            .get(request_url.clone())
             .timeout(sources.request_timeout)
             .bearer_auth(&connection.bearer_token)
             .header("accept", "application/json")
@@ -662,10 +915,11 @@ async fn read_external_dci_http_one(
     let lookup_value = lookup_value(binding, subject)?;
     let url = source_url(&connection.base_url, &connection.dci.search_path)?;
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
-    let body = send_request_with_retry(sources, connection, "dci", move || {
+    let request_url = url.clone();
+    let body = send_request_with_retry(sources, connection, "dci", &url, move || {
         sources
             .client
-            .post(url.clone())
+            .post(request_url.clone())
             .timeout(sources.request_timeout)
             .bearer_auth(&connection.bearer_token)
             .header("accept", "application/json")
@@ -746,10 +1000,11 @@ async fn read_remote_registry_data_api_many(
         (filter_name, in_values.join(",")),
     ];
     let timeout_budget = bulk_timeout(connection, n);
-    let body_result = send_request_with_retry(sources, connection, "rda_bulk", move || {
+    let request_url = url.clone();
+    let body_result = send_request_with_retry(sources, connection, "rda_bulk", &url, move || {
         sources
             .client
-            .get(url.clone())
+            .get(request_url.clone())
             .timeout(timeout_budget)
             .bearer_auth(&connection.bearer_token)
             .header("accept", "application/json")
@@ -915,10 +1170,11 @@ async fn read_external_dci_http_many(
         },
     });
     let timeout_budget = bulk_timeout(connection, n_valid);
-    let body_result = send_request_with_retry(sources, connection, "dci_bulk", move || {
+    let request_url = url.clone();
+    let body_result = send_request_with_retry(sources, connection, "dci_bulk", &url, move || {
         sources
             .client
-            .post(url.clone())
+            .post(request_url.clone())
             .timeout(timeout_budget)
             .bearer_auth(&connection.bearer_token)
             .header("accept", "application/json")
@@ -1051,8 +1307,21 @@ async fn send_request_with_retry(
     _sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
     connector: &'static str,
+    url: &reqwest::Url,
     build_request: impl Fn() -> reqwest::RequestBuilder,
 ) -> Result<Value, EvidenceError> {
+    if let Err(error) = connection.fetch_url_policy.validate(url) {
+        tracing::warn!(
+            target: "registry_witness_server::outbound",
+            connection_id = %connection.id,
+            connector = connector,
+            scheme = url.scheme(),
+            host = url.host_str().unwrap_or("<missing>"),
+            error = %error,
+            "source URL rejected by fetch policy",
+        );
+        return Err(EvidenceError::SourceUnavailable);
+    }
     let permit = connection
         .semaphore
         .clone()
@@ -1142,28 +1411,9 @@ fn retry_backoff() -> Duration {
 }
 
 async fn read_source_json(response: reqwest::Response) -> Result<Value, EvidenceError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_SOURCE_JSON_BYTES as u64)
-    {
-        return Err(EvidenceError::SourceUnavailable);
-    }
-    let mut body = Vec::new();
-    let mut response = response;
-    while let Some(chunk) = response
-        .chunk()
+    let body = read_bounded(response, MAX_SOURCE_JSON_BYTES as u64)
         .await
-        .map_err(|_| EvidenceError::SourceUnavailable)?
-    {
-        let new_len = body
-            .len()
-            .checked_add(chunk.len())
-            .ok_or(EvidenceError::SourceUnavailable)?;
-        if new_len > MAX_SOURCE_JSON_BYTES {
-            return Err(EvidenceError::SourceUnavailable);
-        }
-        body.extend_from_slice(&chunk);
-    }
+        .map_err(|_| EvidenceError::SourceUnavailable)?;
     serde_json::from_slice(&body).map_err(|_| EvidenceError::SourceUnavailable)
 }
 
@@ -1171,26 +1421,30 @@ fn registry_data_api_url(
     base_url: &str,
     binding: &SourceBindingConfig,
 ) -> Result<reqwest::Url, EvidenceError> {
-    let mut url = reqwest::Url::parse(base_url).map_err(|_| EvidenceError::SourceUnavailable)?;
-    url.path_segments_mut()
-        .map_err(|_| EvidenceError::SourceUnavailable)?
-        .extend([
+    let base = reqwest::Url::parse(base_url).map_err(|_| EvidenceError::SourceUnavailable)?;
+    httputil_url::append_path_segments(
+        &base,
+        &[
             "datasets",
             binding.dataset.as_str(),
             binding.entity.as_str(),
-        ]);
-    Ok(url)
+        ],
+    )
+    .map_err(|_| EvidenceError::SourceUnavailable)
 }
 
-fn source_url(base_url: &str, path: &str) -> Result<String, EvidenceError> {
+fn source_url(base_url: &str, path: &str) -> Result<reqwest::Url, EvidenceError> {
     if reqwest::Url::parse(path).is_ok() {
         return Err(EvidenceError::SourceUnavailable);
     }
-    Ok(format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    ))
+    let base = reqwest::Url::parse(base_url).map_err(|_| EvidenceError::SourceUnavailable)?;
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(base);
+    }
+    let segments = trimmed.split('/').collect::<Vec<_>>();
+    httputil_url::append_path_segments(&base, &segments)
+        .map_err(|_| EvidenceError::SourceUnavailable)
 }
 
 fn dci_search_request_body(
@@ -1392,36 +1646,6 @@ mod tests {
     use axum::routing::get;
     use axum_test::TestServer;
     use registry_witness_core::{SourceConnectionConfig, SourceLookupConfig};
-    use std::io::{Error, ErrorKind};
-
-    #[derive(Clone)]
-    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for SharedBuffer {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0
-                .lock()
-                .expect("shared buffer lock")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct FailingWriter;
-
-    impl Write for FailingWriter {
-        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-            Err(Error::new(ErrorKind::BrokenPipe, "audit sink unavailable"))
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
 
     fn audit_event() -> EvidenceAuditEvent {
         EvidenceAuditEvent {
@@ -1439,14 +1663,16 @@ mod tests {
         }
     }
 
-    fn auth_state(audit: AuditSink) -> Arc<AuthAuditState> {
+    fn auth_state(audit: AuditPipeline) -> Arc<AuthAuditState> {
         Arc::new(AuthAuditState {
-            api_keys: vec![ResolvedCredential {
-                id: "caseworker".to_string(),
-                token: "api-token".to_string(),
-                scopes: Vec::new(),
-            }],
-            bearer_tokens: Vec::new(),
+            authenticator: Authenticator::Static {
+                api_keys: vec![ResolvedCredential {
+                    id: "caseworker".to_string(),
+                    fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+                    scopes: Vec::new(),
+                }],
+                bearer_tokens: Vec::new(),
+            },
             audit,
         })
     }
@@ -1468,55 +1694,82 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stdout_audit_sink_emits_raw_jsonl() {
-        let buffer = Arc::new(Mutex::new(Vec::new()));
-        let sink = AuditSink::Stdout(Mutex::new(Box::new(SharedBuffer(Arc::clone(&buffer)))));
+    fn test_source_config(base_url: &str, allow_insecure_localhost: bool) -> EvidenceConfig {
+        EvidenceConfig {
+            source_connections: BTreeMap::from([(
+                "registry".to_string(),
+                SourceConnectionConfig {
+                    base_url: base_url.to_string(),
+                    allow_insecure_localhost,
+                    token_env: "TEST_EVIDENCE_SOURCE_POLICY_TOKEN".to_string(),
+                    dci: DciSourceConnectionConfig::default(),
+                    max_in_flight: 8,
+                    bulk_mode: registry_witness_core::BulkMode::None,
+                    bulk_mode_lookup_unique: false,
+                    bulk_timeout_max_ms: 30_000,
+                },
+            )]),
+            ..EvidenceConfig::default()
+        }
+    }
 
-        sink.emit(&audit_event()).expect("audit write succeeds");
+    #[tokio::test]
+    async fn audit_pipeline_emits_chained_jsonl() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = tmp.path().join("audit.jsonl");
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(&path)));
 
-        let output = String::from_utf8(buffer.lock().expect("buffer lock").clone())
-            .expect("audit output is UTF-8");
+        audit
+            .emit(&audit_event())
+            .await
+            .expect("audit write succeeds");
+
+        let output = std::fs::read_to_string(path).expect("audit output is readable");
         assert!(output.ends_with('\n'));
         assert_eq!(output.lines().count(), 1);
 
         let line: Value = serde_json::from_str(output.trim_end()).expect("audit line is JSON");
-        assert_eq!(line["event_id"], json!("01HX0000000000000000000000"));
-        assert_eq!(line["principal_id"], json!("caseworker"));
-        assert!(line.get("fields").is_none());
-        assert!(line.get("audit").is_none());
+        assert!(line["envelope_id"].as_str().is_some());
+        assert_eq!(
+            line["record"]["event_id"],
+            json!("01HX0000000000000000000000")
+        );
+        assert!(line["record"]["principal_id_hash"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert!(line["record"].get("principal_id").is_none());
+        assert!(line["record"].get("fields").is_none());
+        assert!(line["record"].get("audit").is_none());
     }
 
-    #[test]
-    fn audit_sink_emit_surfaces_stdout_write_errors() {
-        let sink = AuditSink::Stdout(Mutex::new(Box::new(FailingWriter)));
+    #[tokio::test]
+    async fn audit_sink_emit_surfaces_file_write_errors() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let blocked_parent = tmp.path().join("blocked");
+        std::fs::write(&blocked_parent, b"not a directory").expect("blocked parent is file");
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(
+            blocked_parent.join("audit.jsonl"),
+        )));
 
-        let error = sink
+        let error = audit
             .emit(&audit_event())
-            .expect_err("stdout write error is returned");
-
-        assert_eq!(error.kind(), ErrorKind::BrokenPipe);
-    }
-
-    #[test]
-    fn audit_sink_emit_surfaces_file_write_errors() {
-        let sink = AuditSink::File(Mutex::new(Box::new(FailingWriter)));
-
-        let error = sink
-            .emit(&audit_event())
+            .await
             .expect_err("file write error is returned");
 
-        assert_eq!(error.kind(), ErrorKind::BrokenPipe);
+        assert!(matches!(error, AuditError::Io(_)));
     }
 
     #[tokio::test]
     async fn audit_write_failure_replaces_authorized_response_with_request_error() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let blocked_parent = tmp.path().join("blocked");
+        std::fs::write(&blocked_parent, b"not a directory").expect("blocked parent is file");
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(
+            blocked_parent.join("audit.jsonl"),
+        )));
         let app = Router::new()
             .route("/ok", get(|| async { StatusCode::OK }))
-            .layer(from_fn_with_state(
-                auth_state(AuditSink::File(Mutex::new(Box::new(FailingWriter)))),
-                auth_audit_middleware,
-            ));
+            .layer(from_fn_with_state(auth_state(audit), auth_audit_middleware));
         let server = TestServer::builder().http_transport().build(app);
 
         let response = server.get("/ok").add_header("x-api-key", "api-token").await;
@@ -1526,26 +1779,18 @@ mod tests {
         assert_eq!(body["code"], json!("audit.write_failed"));
     }
 
-    #[test]
-    fn bearer_auth_token_accepts_case_insensitive_scheme_and_whitespace() {
-        assert_eq!(bearer_auth_token("bEaReR api-token"), Some("api-token"));
-        assert_eq!(bearer_auth_token("Bearer\tapi-token"), Some("api-token"));
-        assert_eq!(bearer_auth_token("Bearer"), None);
-        assert_eq!(bearer_auth_token("Bearer api-token extra"), None);
-    }
-
-    #[test]
-    fn auth_state_accepts_case_insensitive_bearer_scheme() {
+    #[tokio::test]
+    async fn auth_state_accepts_case_insensitive_bearer_scheme() {
         let state = AuthAuditState {
-            api_keys: Vec::new(),
-            bearer_tokens: vec![ResolvedCredential {
-                id: "caseworker".to_string(),
-                token: "api-token".to_string(),
-                scopes: vec!["farmer_registry:evidence_verification".to_string()],
-            }],
-            audit: AuditSink::Stdout(Mutex::new(Box::new(SharedBuffer(Arc::new(Mutex::new(
-                Vec::new(),
-            )))))),
+            authenticator: Authenticator::Static {
+                api_keys: Vec::new(),
+                bearer_tokens: vec![ResolvedCredential {
+                    id: "caseworker".to_string(),
+                    fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+                    scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                }],
+            },
+            audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
         };
         let request = Request::builder()
             .uri("/claims")
@@ -1553,22 +1798,26 @@ mod tests {
             .body(Body::empty())
             .expect("request builds");
 
-        let principal = state.authenticate(&request).expect("bearer auth succeeds");
+        let principal = state
+            .authenticate(request_credentials(&request))
+            .await
+            .expect("bearer auth succeeds");
 
         assert_eq!(principal.principal_id, "caseworker");
     }
 
     #[test]
-    fn resolved_token_debug_output_is_redacted() {
+    fn resolved_credential_debug_output_is_redacted() {
         let credential = ResolvedCredential {
             id: "caseworker".to_string(),
-            token: "api-token".to_string(),
+            fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
             scopes: vec!["farmer_registry:evidence_verification".to_string()],
         };
         let connection = ResolvedEvidenceSourceConnection {
             id: "registry".to_string(),
             base_url: "https://registry.example.test".to_string(),
             bearer_token: "source-token".to_string(),
+            fetch_url_policy: FetchUrlPolicy::strict(),
             dci: DciSourceConnectionConfig::default(),
             semaphore: Arc::new(Semaphore::new(8)),
             max_in_flight: 8,
@@ -1606,7 +1855,8 @@ mod tests {
         assert!(source_url("https://registry.example.test", "file:///tmp/search").is_err());
         assert_eq!(
             source_url("https://registry.example.test/base", "/dci/search")
-                .expect("relative path is accepted"),
+                .expect("relative path is accepted")
+                .as_str(),
             "https://registry.example.test/base/dci/search"
         );
     }
@@ -1668,6 +1918,7 @@ mod tests {
                         .server_address()
                         .expect("HTTP transport exposes upstream address")
                         .to_string(),
+                    allow_insecure_localhost: true,
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
@@ -1707,6 +1958,54 @@ mod tests {
         assert!(matches!(error, EvidenceError::SourceUnavailable));
     }
 
+    #[tokio::test]
+    async fn http_sources_reject_private_source_urls_before_fetch() {
+        std::env::set_var("TEST_EVIDENCE_SOURCE_POLICY_TOKEN", "source-token");
+        let sources =
+            HttpEvidenceSources::from_config(&test_source_config("https://10.0.0.1", false))
+                .expect("source config resolves");
+        let binding = test_binding("farmer_registry", "farmer");
+        let subject = SubjectRequest {
+            id: "person-1".to_string(),
+            id_type: None,
+        };
+
+        let error = sources
+            .read_one(
+                &binding,
+                &subject,
+                "https://purpose.example.test/eligibility",
+            )
+            .await
+            .expect_err("private source URL is rejected");
+
+        assert!(matches!(error, EvidenceError::SourceUnavailable));
+    }
+
+    #[tokio::test]
+    async fn http_sources_reject_cloud_metadata_source_urls_before_fetch() {
+        std::env::set_var("TEST_EVIDENCE_SOURCE_POLICY_TOKEN", "source-token");
+        let sources =
+            HttpEvidenceSources::from_config(&test_source_config("http://169.254.169.254", true))
+                .expect("source config resolves");
+        let binding = test_binding("farmer_registry", "farmer");
+        let subject = SubjectRequest {
+            id: "person-1".to_string(),
+            id_type: None,
+        };
+
+        let error = sources
+            .read_one(
+                &binding,
+                &subject,
+                "https://purpose.example.test/eligibility",
+            )
+            .await
+            .expect_err("metadata source URL is rejected");
+
+        assert!(matches!(error, EvidenceError::SourceUnavailable));
+    }
+
     #[test]
     fn http_sources_from_config_sets_finite_request_timeout() {
         std::env::set_var("TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN", "source-token");
@@ -1715,6 +2014,7 @@ mod tests {
                 "registry".to_string(),
                 registry_witness_core::SourceConnectionConfig {
                     base_url: "https://registry.example.test".to_string(),
+                    allow_insecure_localhost: false,
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,

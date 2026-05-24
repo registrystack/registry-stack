@@ -5,7 +5,9 @@
 # Keep the tag for humans and the digest for reproducible pulls.
 FROM rust:1-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
 
-WORKDIR /workspace
+WORKDIR /workspace/registry-witness
+COPY --from=registry-platform Cargo.toml README.md LICENSE /workspace/registry-platform/
+COPY --from=registry-platform crates /workspace/registry-platform/crates
 COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

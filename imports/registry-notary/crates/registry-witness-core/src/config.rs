@@ -23,8 +23,25 @@ impl StandaloneRegistryWitnessConfig {
         if !self.evidence.enabled {
             return Err(EvidenceConfigError::EvidenceDisabled);
         }
-        if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
-            return Err(EvidenceConfigError::NoCredentialsConfigured);
+        match self.auth.mode.as_str() {
+            "api_key" => {
+                if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
+                    return Err(EvidenceConfigError::NoCredentialsConfigured);
+                }
+            }
+            "oidc" => {
+                let oidc = self
+                    .auth
+                    .oidc
+                    .as_ref()
+                    .ok_or(EvidenceConfigError::MissingOidcConfig)?;
+                oidc.validate()?;
+            }
+            _ => {
+                return Err(EvidenceConfigError::UnsupportedAuthMode {
+                    mode: self.auth.mode.clone(),
+                });
+            }
         }
         self.evidence.concurrency.validate()?;
         for connection in self.evidence.source_connections.values() {
@@ -196,12 +213,15 @@ fn detect_depends_on_cycle(
 pub struct RegistryWitnessHttpConfig {
     #[serde(default = "default_bind_addr")]
     pub bind: SocketAddr,
+    #[serde(default)]
+    pub cors: RegistryWitnessCorsConfig,
 }
 
 impl Default for RegistryWitnessHttpConfig {
     fn default() -> Self {
         Self {
             bind: default_bind_addr(),
+            cors: RegistryWitnessCorsConfig::default(),
         }
     }
 }
@@ -214,20 +234,130 @@ fn default_bind_addr() -> SocketAddr {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct RegistryWitnessCorsConfig {
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    #[serde(default)]
+    pub allow_credentials: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthConfig {
+    #[serde(default = "default_auth_mode")]
+    pub mode: String,
     #[serde(default)]
     pub api_keys: Vec<EvidenceCredentialConfig>,
     #[serde(default)]
     pub bearer_tokens: Vec<EvidenceCredentialConfig>,
+    #[serde(default)]
+    pub oidc: Option<EvidenceOidcAuthConfig>,
+}
+
+impl Default for EvidenceAuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_auth_mode(),
+            api_keys: Vec::new(),
+            bearer_tokens: Vec::new(),
+            oidc: None,
+        }
+    }
+}
+
+fn default_auth_mode() -> String {
+    "api_key".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceCredentialConfig {
     pub id: String,
-    pub token_env: String,
+    pub hash_env: String,
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceOidcAuthConfig {
+    pub issuer: String,
+    pub jwks_uri: String,
+    #[serde(default)]
+    pub audiences: Vec<String>,
+    #[serde(default)]
+    pub allowed_clients: Vec<String>,
+    #[serde(default = "default_oidc_allowed_algorithms")]
+    pub allowed_algorithms: Vec<String>,
+    #[serde(default = "default_oidc_allowed_typ")]
+    pub allowed_typ: Vec<String>,
+    #[serde(default = "default_oidc_scope_claim")]
+    pub scope_claim: String,
+    #[serde(default = "default_oidc_scope_separator")]
+    pub scope_separator: String,
+    #[serde(default)]
+    pub scope_map: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_oidc_principal_claim")]
+    pub principal_claim: String,
+    #[serde(default = "default_oidc_leeway_seconds")]
+    pub leeway_seconds: u64,
+    #[serde(default)]
+    pub allow_insecure_localhost: bool,
+}
+
+fn default_oidc_allowed_algorithms() -> Vec<String> {
+    vec!["EdDSA".to_string()]
+}
+
+fn default_oidc_allowed_typ() -> Vec<String> {
+    vec!["JWT".to_string()]
+}
+
+fn default_oidc_scope_claim() -> String {
+    "scope".to_string()
+}
+
+fn default_oidc_scope_separator() -> String {
+    " ".to_string()
+}
+
+fn default_oidc_principal_claim() -> String {
+    "sub".to_string()
+}
+
+fn default_oidc_leeway_seconds() -> u64 {
+    60
+}
+
+impl EvidenceOidcAuthConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.issuer.trim().is_empty() {
+            return Err(EvidenceConfigError::InvalidOidcConfig {
+                reason: "issuer must not be empty".to_string(),
+            });
+        }
+        if self.jwks_uri.trim().is_empty() {
+            return Err(EvidenceConfigError::InvalidOidcConfig {
+                reason: "jwks_uri must not be empty".to_string(),
+            });
+        }
+        if self.audiences.is_empty() {
+            return Err(EvidenceConfigError::InvalidOidcConfig {
+                reason: "audiences must list at least one accepted audience".to_string(),
+            });
+        }
+        if self.scope_separator.chars().count() != 1 {
+            return Err(EvidenceConfigError::InvalidOidcConfig {
+                reason: "scope_separator must be exactly one character".to_string(),
+            });
+        }
+        if self.principal_claim.trim().is_empty() {
+            return Err(EvidenceConfigError::InvalidOidcConfig {
+                reason: "principal_claim must not be empty".to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -237,6 +367,8 @@ pub struct EvidenceAuditConfig {
     pub sink: String,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub hash_secret_env: Option<String>,
 }
 
 impl Default for EvidenceAuditConfig {
@@ -244,6 +376,7 @@ impl Default for EvidenceAuditConfig {
         Self {
             sink: default_audit_sink(),
             path: None,
+            hash_secret_env: None,
         }
     }
 }
@@ -258,6 +391,12 @@ pub enum EvidenceConfigError {
     EvidenceDisabled,
     #[error("at least one API key or bearer token must be configured")]
     NoCredentialsConfigured,
+    #[error("unsupported auth.mode '{mode}'; supported values are 'api_key' and 'oidc'")]
+    UnsupportedAuthMode { mode: String },
+    #[error("auth.mode = oidc requires an auth.oidc block")]
+    MissingOidcConfig,
+    #[error("invalid auth.oidc config: {reason}")]
+    InvalidOidcConfig { reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
@@ -454,6 +593,10 @@ pub struct SourceBindingConfig {
 #[serde(deny_unknown_fields)]
 pub struct SourceConnectionConfig {
     pub base_url: String,
+    /// Development escape hatch for local demos and tests. Production source
+    /// fetches stay on the strict outbound URL policy by default.
+    #[serde(default)]
+    pub allow_insecure_localhost: bool,
     pub token_env: String,
     #[serde(default)]
     pub dci: DciSourceConnectionConfig,
@@ -852,9 +995,10 @@ mod tests {
 evidence:
   enabled: true
 auth:
+  mode: api_key
   api_keys:
     - id: test-key
-      token_env: TEST_TOKEN
+      hash_env: TEST_TOKEN_HASH
 "#,
         )
         .expect("minimal config is valid YAML")
@@ -1151,12 +1295,84 @@ vct: https://vct.example/test
     }
 
     #[test]
+    fn oidc_auth_mode_requires_oidc_block() {
+        let mut config = minimal_config();
+        config.auth.mode = "oidc".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("oidc mode requires OIDC settings");
+
+        assert!(matches!(err, EvidenceConfigError::MissingOidcConfig));
+    }
+
+    #[test]
+    fn oidc_auth_mode_validates_required_settings() {
+        let mut config = minimal_config();
+        config.auth.mode = "oidc".to_string();
+        config.auth.api_keys.clear();
+        config.auth.oidc = Some(EvidenceOidcAuthConfig {
+            issuer: "https://issuer.example".to_string(),
+            jwks_uri: "https://issuer.example/jwks.json".to_string(),
+            audiences: vec!["registry-witness".to_string()],
+            allowed_clients: vec!["registry-client".to_string()],
+            allowed_algorithms: vec!["EdDSA".to_string()],
+            allowed_typ: vec!["JWT".to_string()],
+            scope_claim: "scope".to_string(),
+            scope_separator: " ".to_string(),
+            scope_map: BTreeMap::new(),
+            principal_claim: "sub".to_string(),
+            leeway_seconds: 60,
+            allow_insecure_localhost: false,
+        });
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn api_key_plaintext_is_never_loaded_only_fingerprint() {
+        let err = serde_yml::from_str::<StandaloneRegistryWitnessConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: api_key
+  api_keys:
+    - id: test-key
+      token_env: TEST_TOKEN
+"#,
+        )
+        .expect_err("plaintext token_env is not part of the credential schema");
+
+        assert!(
+            err.to_string().contains("unknown field `token_env`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn unsupported_auth_mode_is_rejected() {
+        let mut config = minimal_config();
+        config.auth.mode = "oauth2".to_string();
+
+        let err = config
+            .validate()
+            .expect_err("unknown auth mode must fail validation");
+
+        assert!(matches!(
+            err,
+            EvidenceConfigError::UnsupportedAuthMode { .. }
+        ));
+    }
+
+    #[test]
     fn source_connection_max_in_flight_zero_is_rejected() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
             "src".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
                 token_env: "UPSTREAM_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 0,
@@ -1181,6 +1397,7 @@ token_env: SRC_TOKEN
 "#;
         let connection: SourceConnectionConfig =
             serde_yml::from_str(yaml).expect("connection YAML parses");
+        assert!(!connection.allow_insecure_localhost);
         assert_eq!(connection.max_in_flight, 8);
     }
 
@@ -1230,6 +1447,7 @@ token_env: SRC_TOKEN
 "#;
         let connection: SourceConnectionConfig =
             serde_yml::from_str(yaml).expect("connection YAML parses");
+        assert!(!connection.allow_insecure_localhost);
         assert_eq!(connection.bulk_mode, BulkMode::None);
         assert!(!connection.bulk_mode_lookup_unique);
         assert_eq!(connection.bulk_timeout_max_ms, 30_000);
@@ -1258,6 +1476,7 @@ bulk_mode: unsupported_mode
             "farmer_registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1290,6 +1509,7 @@ bulk_mode: unsupported_mode
             "farmer_registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1328,6 +1548,7 @@ bulk_mode: unsupported_mode
             "registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1366,6 +1587,7 @@ bulk_mode: unsupported_mode
             "registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1389,6 +1611,7 @@ bulk_mode: unsupported_mode
             "farmer_registry".to_string(),
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,

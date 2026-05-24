@@ -14,6 +14,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: v0.1.0
+
+defaults:
+  run:
+    working-directory: registry-witness
 
 # Smoke-checks the perf scaffolding without running any actual load.
 # It verifies:
@@ -32,6 +38,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          path: registry-witness
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -40,6 +56,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: perf-smoke
+          workspaces: registry-witness -> target
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

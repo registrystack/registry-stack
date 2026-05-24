@@ -14,6 +14,12 @@ registry-witness-cel = ["dep:cel-mapper-core"]
 
 [dependencies]
 registry-witness-core.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-sdjwt.workspace = true
 axum.workspace = true
 base64.workspace = true
 cel-mapper-core = { workspace = true, optional = true }
@@ -32,6 +38,8 @@ utoipa.workspace = true
 
 [dev-dependencies]
 axum-test = { version = "20" }
+registry-platform-crypto.workspace = true
+registry-platform-testing.workspace = true
 serde_yml.workspace = true
 tempfile = { version = "3" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are

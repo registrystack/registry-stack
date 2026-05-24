@@ -190,7 +190,6 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
-use tokio::task;
 use tokio::task::JoinSet;
 #[cfg(feature = "registry-witness-cel")]
 use tokio::time::timeout;
@@ -1814,7 +1813,7 @@ async fn evaluate_with_cel(ctx: &CelEvaluationContext<'_>) -> Result<Value, Evid
     )?;
     let expression = ctx.expression.to_string();
     let input = StandaloneExpressionInput::new(root_bindings);
-    let handle = task::spawn_blocking(move || {
+    let handle = tokio::task::spawn_blocking(move || {
         let runtime = MappingRuntime::new(RuntimeOptions::default());
         runtime.evaluate_cel_expression_with_input(&expression, input)
     });

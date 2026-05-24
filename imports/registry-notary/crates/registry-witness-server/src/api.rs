@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Witness routes.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::extract::Path;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use registry_witness_core::sd_jwt;
 use registry_witness_core::{
     BatchEvaluateRequest, CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest,
@@ -29,12 +27,16 @@ use crate::{
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+const ADMIN_SCOPE: &str = "registry_witness:admin";
 
 pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/healthz", get(healthz))
+        .route("/ready", get(ready))
+        .route("/admin/reload", post(admin_reload))
         .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
         .route("/.well-known/evidence/jwks.json", get(issuer_jwks))
@@ -45,6 +47,58 @@ where
         .route("/claims/batch-evaluate", post(batch_evaluate))
         .route("/evidence/render", post(render))
         .route("/credentials/issue", post(issue_credential))
+}
+
+async fn healthz() -> Response {
+    Json(json!({
+        "status": "ok",
+        "checks": {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+        },
+    }))
+    .into_response()
+}
+
+async fn ready(state: Option<Extension<Arc<RegistryWitnessApiState>>>) -> Response {
+    let ready = state
+        .as_ref()
+        .is_some_and(|Extension(state)| state.enabled_evidence().is_ok());
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(json!({
+            "status": if ready { "ready" } else { "not_ready" },
+            "checks": {
+                "total": 1,
+                "ok": u8::from(ready),
+                "failed": u8::from(!ready),
+            },
+        })),
+    )
+        .into_response()
+}
+
+async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Response {
+    let Some(Extension(principal)) = principal else {
+        return evidence_error_response(EvidenceError::MissingCredential);
+    };
+    if !principal.has_scope(ADMIN_SCOPE) {
+        return evidence_error_response(EvidenceError::ScopeDenied {
+            required: ADMIN_SCOPE.to_string(),
+        });
+    }
+    Json(json!({
+        "reloaded": false,
+        "status": "noop",
+        "detail": "standalone router has no reloadable external config handle",
+    }))
+    .into_response()
 }
 
 async fn openapi_json(principal: Option<Extension<EvidencePrincipal>>) -> Response {
@@ -578,113 +632,39 @@ fn validate_holder_proof_payload(
     evaluation: &registry_witness_core::StoredEvaluation,
     service_id: &str,
 ) -> Result<HolderProofBinding, EvidenceError> {
-    let header = decode_header(proof).map_err(|_| EvidenceError::HolderProofRequired)?;
-    if header.alg != Algorithm::EdDSA {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    let jwk = holder_jwk(holder_id)?;
-    let decoding_key =
-        DecodingKey::from_jwk(&jwk).map_err(|_| EvidenceError::HolderProofRequired)?;
-    let mut validation = Validation::new(Algorithm::EdDSA);
-    validation.algorithms = vec![Algorithm::EdDSA];
-    validation.set_audience(&[service_id]);
-    validation.required_spec_claims = [
-        "sub",
-        "aud",
-        "exp",
-        "iat",
-        "jti",
-        "evaluation_id",
-        "credential_profile",
-        "disclosure",
-        "claims",
-    ]
-    .iter()
-    .map(|claim| (*claim).to_string())
-    .collect();
-    let token = decode::<Value>(proof, &decoding_key, &validation)
-        .map_err(|_| EvidenceError::HolderProofRequired)?;
-    if token.claims.get("sub").and_then(Value::as_str) != Some(holder_id) {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    if token.claims.get("evaluation_id").and_then(Value::as_str)
-        != Some(request.evaluation_id.as_str())
-    {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    if token
-        .claims
-        .get("credential_profile")
-        .and_then(Value::as_str)
-        != Some(profile_id)
-    {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    if token.claims.get("disclosure").and_then(Value::as_str)
-        != request
-            .disclosure
-            .as_deref()
-            .or(Some(evaluation.disclosure.as_str()))
-    {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    if token.claims.get("claims") != Some(&json!(evaluation.claim_ids)) {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    let iat = token
-        .claims
-        .get("iat")
-        .and_then(Value::as_i64)
-        .ok_or(EvidenceError::HolderProofRequired)?;
-    let exp = token
-        .claims
-        .get("exp")
-        .and_then(Value::as_i64)
-        .ok_or(EvidenceError::HolderProofRequired)?;
-    let jti = token
-        .claims
-        .get("jti")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or(EvidenceError::HolderProofRequired)?;
+    let jwk = sd_jwt::holder_jwk(holder_id)?;
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    if iat < now - 120 || iat > now + 30 {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    let expires_at =
-        OffsetDateTime::from_unix_timestamp(exp).map_err(|_| EvidenceError::HolderProofRequired)?;
-    // The proof window must be a strictly positive interval bounded above by
-    // five minutes. Rejecting `exp <= iat` here means we do not depend on the
-    // JWT decoder's exp check ordering, and stops a backdated proof from
-    // ever reaching the replay-key path.
-    if exp <= iat || exp > iat + 300 {
-        return Err(EvidenceError::HolderProofRequired);
-    }
+    let disclosure = request
+        .disclosure
+        .as_deref()
+        .unwrap_or(evaluation.disclosure.as_str());
+    let disclosure_hash = Sha256::digest(disclosure.as_bytes()).to_vec();
+    let claims = validate_holder_proof(
+        proof,
+        &jwk,
+        &HolderProofBindings {
+            expected_sub: holder_id,
+            evaluation_id: request.evaluation_id.as_str(),
+            credential_profile: profile_id,
+            disclosure_hash: &disclosure_hash,
+            claim_set: &evaluation.claim_ids,
+        },
+        &HolderProofPolicy {
+            audience: service_id.to_string(),
+            max_lifetime: Duration::from_secs(300),
+        },
+        now,
+    )
+    .map_err(|_| EvidenceError::HolderProofRequired)?;
+    let expires_at = OffsetDateTime::from_unix_timestamp(claims.exp)
+        .map_err(|_| EvidenceError::HolderProofRequired)?;
     Ok(HolderProofBinding {
         replay_key: format!(
             "{}:{}:{}:{}:{}",
-            evaluation.client_id, request.evaluation_id, profile_id, holder_id, jti
+            evaluation.client_id, request.evaluation_id, profile_id, holder_id, claims.jti
         ),
         expires_at,
     })
-}
-
-fn holder_jwk(holder_id: &str) -> Result<jsonwebtoken::jwk::Jwk, EvidenceError> {
-    let encoded = holder_id
-        .strip_prefix("did:jwk:")
-        .ok_or(EvidenceError::HolderProofRequired)?;
-    let bytes = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .map_err(|_| EvidenceError::HolderProofRequired)?;
-    let value: Value =
-        serde_json::from_slice(&bytes).map_err(|_| EvidenceError::HolderProofRequired)?;
-    if ["d", "p", "q", "dp", "dq", "qi"]
-        .iter()
-        .any(|field| value.get(field).is_some())
-    {
-        return Err(EvidenceError::HolderProofRequired);
-    }
-    serde_json::from_value(value).map_err(|_| EvidenceError::HolderProofRequired)
 }
 
 fn result_json(result: Result<Value, EvidenceError>) -> Response {
@@ -980,7 +960,9 @@ fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{encode, EncodingKey, Header};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use registry_platform_crypto::{sign, PrivateJwk};
 
     // Ed25519 keypair: `d` is the seed, `x` is the corresponding public key,
     // both base64url (no padding). Identical to the key in
@@ -999,12 +981,31 @@ mod tests {
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
-        let seed = URL_SAFE_NO_PAD.decode(HOLDER_PRIV_D_B64).unwrap();
-        let pkcs8 = registry_witness_core::sd_jwt::ed25519_pkcs8_seed(&seed);
-        let key = EncodingKey::from_ed_der(&pkcs8);
-        let mut header = Header::new(Algorithm::EdDSA);
-        header.kid = Some(holder_id.to_string());
-        encode(&header, &payload, &key).expect("sign holder proof")
+        let holder = PrivateJwk::parse(
+            &json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "d": HOLDER_PRIV_D_B64,
+                "x": HOLDER_PUB_X_B64,
+                "alg": "EdDSA",
+                "kid": holder_id,
+            })
+            .to_string(),
+        )
+        .expect("holder JWK parses");
+        let header_b64 = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "alg": "EdDSA",
+                "typ": "JWT",
+                "kid": holder_id,
+            }))
+            .expect("header serializes"),
+        );
+        let payload_b64 =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload serializes"));
+        let signing_input = format!("{header_b64}.{payload_b64}");
+        let signature = sign(signing_input.as_bytes(), &holder).expect("sign holder proof");
+        format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
     }
 
     fn evaluation_for_proof() -> registry_witness_core::StoredEvaluation {
@@ -1042,7 +1043,7 @@ mod tests {
             "jti": "jti-1",
             "evaluation_id": "eval-1",
             "credential_profile": "profile-a",
-            "disclosure": "redacted",
+            "disclosure": holder_proof_disclosure("redacted"),
             "claims": ["claim-a"],
         })
     }
@@ -1090,9 +1091,13 @@ mod tests {
             "jti": "jti-window",
             "evaluation_id": "eval-1",
             "credential_profile": "profile-a",
-            "disclosure": "redacted",
+            "disclosure": holder_proof_disclosure("redacted"),
             "claims": ["claim-a"],
         })
+    }
+
+    fn holder_proof_disclosure(disclosure: &str) -> String {
+        URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()))
     }
 
     #[test]

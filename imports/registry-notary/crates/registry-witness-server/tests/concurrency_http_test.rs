@@ -18,6 +18,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 
+const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn set_audit_secret() {
+    std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
+
 #[derive(Clone, Default)]
 struct UpstreamMetrics {
     in_flight: Arc<AtomicUsize>,
@@ -85,18 +91,21 @@ fn config_with_max_in_flight(
     audit_path: &str,
     max_in_flight: usize,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_EVIDENCE_API_KEY
+      hash_env: TEST_EVIDENCE_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -106,6 +115,7 @@ evidence:
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_EVIDENCE_SOURCE_TOKEN
       max_in_flight: {max_in_flight}
   claims:
@@ -154,7 +164,10 @@ evidence:
 
 #[tokio::test]
 async fn outbound_semaphore_caps_upstream_in_flight_at_max() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let metrics = UpstreamMetrics::new();
@@ -232,7 +245,10 @@ async fn outbound_semaphore_caps_upstream_in_flight_at_max() {
 
 #[tokio::test]
 async fn outbound_retries_once_on_http_500_and_returns_success() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let metrics = UpstreamMetrics::new();
@@ -281,7 +297,10 @@ async fn outbound_retries_once_on_http_500_and_returns_success() {
 
 #[tokio::test]
 async fn outbound_gives_up_after_one_retry_when_upstream_keeps_failing() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let metrics = UpstreamMetrics::new();

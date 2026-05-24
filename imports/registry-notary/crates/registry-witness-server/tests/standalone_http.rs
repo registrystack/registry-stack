@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Witness tests that do not link Registry Relay.
 
+use axum::body::Bytes;
 use axum::extract::Query;
 #[cfg(feature = "registry-witness-cel")]
 use axum::extract::State;
@@ -11,13 +12,23 @@ use axum::routing::get;
 use axum::routing::post;
 use axum::{Json, Router};
 use axum_test::TestServer;
-use registry_witness_core::StandaloneRegistryWitnessConfig;
+use registry_platform_audit::{verify_jsonl_lines, AuditEnvelope};
+use registry_platform_testing::MockIdp;
+use registry_witness_core::{
+    EvidenceCredentialConfig, EvidenceOidcAuthConfig, StandaloneRegistryWitnessConfig,
+};
 use registry_witness_server::{standalone_router, StandaloneServerError};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 #[cfg(feature = "registry-witness-cel")]
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+
+const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn set_audit_secret() {
+    std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
 
 async fn registry_data_api(
     headers: HeaderMap,
@@ -100,6 +111,7 @@ fn config(
     connector: &str,
     source_path: &str,
 ) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let source_connection = if connector == "dci" {
         r#"
       dci:
@@ -116,13 +128,15 @@ fn config(
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_EVIDENCE_API_KEY
+      hash_env: TEST_EVIDENCE_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
@@ -130,6 +144,7 @@ evidence:
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_EVIDENCE_SOURCE_TOKEN
 {source_connection}
   claims:
@@ -207,24 +222,28 @@ fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConf
 }
 
 fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
     let raw = format!(
         r#"
 server:
   bind: 127.0.0.1:0
 auth:
+  mode: api_key
   api_keys:
     - id: caseworker
-      token_env: TEST_EVIDENCE_API_KEY
+      hash_env: TEST_EVIDENCE_API_KEY_HASH
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
   path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   service_id: evidence.test
   source_connections:
     farmer_registry:
       base_url: "{base_url}"
+      allow_insecure_localhost: true
       token_env: TEST_EVIDENCE_SOURCE_TOKEN
   claims:
     - id: farmed-land-size
@@ -266,9 +285,295 @@ evidence:
     serde_yml::from_str(&raw).expect("config deserializes")
 }
 
+fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {
+    std::fs::read_to_string(path)
+        .expect("audit jsonl is readable")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("audit line is an envelope"))
+        .collect()
+}
+
+#[tokio::test]
+async fn healthz_ready_opaque_counters_in_503_body() {
+    let server = TestServer::builder()
+        .http_transport()
+        .build(registry_witness_server::router::<()>());
+
+    let healthz = server.get("/healthz").await;
+    healthz.assert_status_ok();
+    let healthz_body: Value = healthz.json();
+    assert_eq!(healthz_body["status"], json!("ok"));
+    assert_eq!(healthz_body["checks"]["total"], json!(1));
+    assert_eq!(healthz_body["checks"]["failed"], json!(0));
+
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let ready_body: Value = ready.json();
+    assert_eq!(ready_body["status"], json!("not_ready"));
+    assert_eq!(ready_body["checks"]["total"], json!(1));
+    assert_eq!(ready_body["checks"]["ok"], json!(0));
+    assert_eq!(ready_body["checks"]["failed"], json!(1));
+    let ready_text = ready.text();
+    assert!(!ready_text.contains("farmer_registry"));
+    assert!(!ready_text.contains("source_connections"));
+    assert!(!ready_text.contains("evaluations"));
+}
+
+#[tokio::test]
+async fn admin_reload_401_unauth_403_wrong_scope_200_admin() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var(
+        "TEST_EVIDENCE_WRONG_SCOPE_KEY_HASH",
+        "sha256:ac3dced2bcf7d2cb4166747790d67437b5cc5314ed33e01d06b274a7fe0c3b3c",
+    );
+    std::env::set_var(
+        "TEST_EVIDENCE_ADMIN_KEY_HASH",
+        "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "wrong-scope".to_string(),
+        hash_env: "TEST_EVIDENCE_WRONG_SCOPE_KEY_HASH".to_string(),
+        scopes: vec!["farmer_registry:evidence_verification".to_string()],
+    });
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "admin".to_string(),
+        hash_env: "TEST_EVIDENCE_ADMIN_KEY_HASH".to_string(),
+        scopes: vec!["registry_witness:admin".to_string()],
+    });
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let unauthenticated = server.post("/admin/reload").await;
+    unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
+
+    let wrong_scope = server
+        .post("/admin/reload")
+        .add_header("x-api-key", "wrong-scope-token")
+        .await;
+    wrong_scope.assert_status(StatusCode::FORBIDDEN);
+
+    let admin = server
+        .post("/admin/reload")
+        .add_header("x-api-key", "admin-token")
+        .await;
+    admin.assert_status_ok();
+    let admin_body: Value = admin.json();
+    assert_eq!(admin_body["reloaded"], json!(false));
+    assert_eq!(admin_body["status"], json!("noop"));
+}
+
+#[tokio::test]
+async fn oidc_mode_verifies_token_from_fixture_idp() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.auth.mode = "oidc".to_string();
+    config.auth.api_keys.clear();
+    config.auth.bearer_tokens.clear();
+    config.auth.oidc = Some(EvidenceOidcAuthConfig {
+        issuer: idp.issuer(),
+        jwks_uri: idp.jwks_uri(),
+        audiences: vec!["registry-witness".to_string()],
+        allowed_clients: vec!["registry-client".to_string()],
+        allowed_algorithms: vec!["EdDSA".to_string()],
+        allowed_typ: vec!["JWT".to_string()],
+        scope_claim: "scope".to_string(),
+        scope_separator: " ".to_string(),
+        scope_map: BTreeMap::new(),
+        principal_claim: "sub".to_string(),
+        leeway_seconds: 60,
+        allow_insecure_localhost: true,
+    });
+    let token = idp.mint_token(json!({
+        "sub": "caseworker",
+        "aud": "registry-witness",
+        "azp": "registry-client",
+        "scope": "farmer_registry:evidence_verification",
+    }));
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let denied = server.get("/claims").await;
+    denied.assert_status(StatusCode::UNAUTHORIZED);
+
+    let response = server
+        .get("/claims")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["data"][0]["id"], json!("farmed-land-size"));
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    let envelopes = audit_envelopes(&audit_path);
+    assert!(envelopes
+        .iter()
+        .any(|envelope| envelope.record.get("principal_id_hash").is_some()));
+    assert!(envelopes
+        .iter()
+        .all(|envelope| envelope.record.get("principal_id").is_none()));
+    assert!(!audit.contains(&token));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn request_body_limit_returns_413_above_threshold() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let too_large = Bytes::from(vec![b' '; 1024 * 1024 + 1]);
+    let response = server
+        .post("/claims/evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("content-type", "application/json")
+        .bytes(too_large)
+        .await;
+
+    response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("content-type header")
+        .to_str()
+        .expect("content-type is valid");
+    assert!(content_type.starts_with("application/problem+json"));
+    let body: Value = response.json();
+    assert_eq!(body["status"], json!(413));
+    assert_eq!(
+        body["type"],
+        json!("https://registry-platform.dev/problems/request/body-too-large")
+    );
+}
+
+#[tokio::test]
+async fn error_responses_match_rfc_7807_shape() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server.get("/claims").await;
+
+    response.assert_status(StatusCode::UNAUTHORIZED);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("content-type header")
+        .to_str()
+        .expect("content-type is valid");
+    assert!(content_type.starts_with("application/problem+json"));
+    let body: Value = response.json();
+    assert_eq!(body["status"], json!(401));
+    assert_eq!(body["title"], json!("Missing credential"));
+    assert_eq!(body["code"], json!("auth.missing_credential"));
+    assert!(body["type"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("https://data.example.gov/problems/")));
+    assert!(body["detail"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn cors_csp_corp_headers_present_and_corp_conditional() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.server.cors.allowed_origins = vec!["https://client.example.test".to_string()];
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .get("/healthz")
+        .add_header("origin", "https://client.example.test")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://client.example.test")
+    );
+    assert!(response.headers().contains_key("content-security-policy"));
+    assert_eq!(
+        response
+            .headers()
+            .get("x-content-type-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("nosniff")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("cross-origin-resource-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("cross-origin")
+    );
+}
+
 #[tokio::test]
 async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let upstream = TestServer::builder()
@@ -347,8 +652,14 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
         );
     }
 
-    let audit = std::fs::read_to_string(audit_path).expect("audit was written");
-    assert!(audit.contains("\"principal_id\":\"caseworker\""));
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    let envelopes = audit_envelopes(&audit_path);
+    assert!(envelopes
+        .iter()
+        .any(|envelope| envelope.record.get("principal_id_hash").is_some()));
+    assert!(envelopes
+        .iter()
+        .all(|envelope| envelope.record.get("principal_id").is_none()));
     assert!(audit.contains("\"decision\":\"evaluate\""));
     assert!(audit.contains("\"claim_hash\":\"sha256:"));
     assert!(!audit.contains("api-token"));
@@ -358,9 +669,97 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 }
 
 #[tokio::test]
+async fn audit_chain_bootstraps_from_sink_tail() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+
+    let first = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config.clone()).expect("first router builds"));
+    first
+        .get("/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let second = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config).expect("second router builds"));
+    second
+        .get("/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
+    verify_jsonl_lines(contents.lines()).expect("audit chain verifies");
+    let envelopes = audit_envelopes(&audit_path);
+    assert_eq!(envelopes.len(), 2);
+    assert_eq!(envelopes[1].prev_hash, Some(envelopes[0].record_hash));
+}
+
+#[tokio::test]
+async fn audit_chain_detects_inserted_envelope() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let first = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config.clone()).expect("first router builds"));
+    first
+        .get("/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    first
+        .get("/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
+    let mut lines = contents.lines().collect::<Vec<_>>();
+    lines.insert(1, lines[0]);
+    std::fs::write(&audit_path, format!("{}\n", lines.join("\n"))).expect("tampered audit write");
+
+    let second = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config).expect("second router builds"));
+    let response = second
+        .get("/claims")
+        .add_header("x-api-key", "api-token")
+        .await;
+
+    response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("audit.write_failed"));
+}
+
+#[tokio::test]
 #[cfg(feature = "registry-witness-cel")]
 async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let observed = Arc::new(Mutex::new(None));
@@ -421,7 +820,11 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
 
 #[tokio::test]
 async fn standalone_server_extract_claim_works_without_default_features() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let upstream = TestServer::builder()
@@ -459,7 +862,11 @@ async fn standalone_server_extract_claim_works_without_default_features() {
 
 #[test]
 fn standalone_router_rejects_unknown_audit_sink() {
-    std::env::set_var("TEST_EVIDENCE_API_KEY", "api-token");
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
@@ -474,5 +881,55 @@ fn standalone_router_rejects_unknown_audit_sink() {
     assert!(matches!(
         error,
         StandaloneServerError::InvalidAuditSink(sink) if sink == "syslog"
+    ));
+}
+
+#[test]
+fn audit_hasher_from_env_returns_err_when_unset() {
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::remove_var("TEST_UNSET_REGISTRY_WITNESS_AUDIT_HASH_SECRET");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.audit.hash_secret_env =
+        Some("TEST_UNSET_REGISTRY_WITNESS_AUDIT_HASH_SECRET".to_string());
+
+    let error = standalone_router(config).expect_err("unset audit hash secret fails closed");
+
+    assert!(matches!(error, StandaloneServerError::Audit(_)));
+    assert!(error
+        .to_string()
+        .contains("TEST_UNSET_REGISTRY_WITNESS_AUDIT_HASH_SECRET"));
+}
+
+#[test]
+fn audit_hash_secret_env_is_required_for_runtime_config() {
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    config.audit.hash_secret_env = None;
+
+    let error = standalone_router(config).expect_err("missing audit hash secret fails closed");
+
+    assert!(matches!(
+        error,
+        StandaloneServerError::MissingAuditHashSecretEnv
     ));
 }

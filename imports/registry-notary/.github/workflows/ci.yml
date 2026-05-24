@@ -8,15 +8,35 @@ on:
 permissions:
   contents: read
 
+env:
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: v0.1.0
+
+defaults:
+  run:
+    working-directory: registry-witness
+
 jobs:
   cargo-deny:
     runs-on: ubuntu-latest
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout registry-witness
+        uses: actions/checkout@v6
+        with:
+          path: registry-witness
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: registry-witness -> target
       - run: cargo install cargo-deny --version 0.19.7 --locked
       - run: ~/.cargo/bin/cargo-deny --all-features check --hide-inclusion-graph
 
@@ -25,14 +45,30 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout registry-witness
+        uses: actions/checkout@v6
+        with:
+          path: registry-witness
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: registry-witness -> target
+      - run: ../registry-platform/scripts/check-hygiene-alignment.sh . ../registry-platform
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test -p registry-witness-server --no-default-features
       - run: cargo test --workspace --all-features
       - run: cargo build --workspace --all-features
       - run: cargo run -p registry-witness-bin -- openapi > target/registry-witness.openapi.json
+      - name: Build Docker image
+        working-directory: ${{ github.workspace }}
+        run: docker build --build-context registry-platform=registry-platform --file registry-witness/Dockerfile --tag registry-witness:ci registry-witness

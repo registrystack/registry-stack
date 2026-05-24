@@ -3,16 +3,12 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use getrandom::fill;
-use jsonwebtoken::{Algorithm, EncodingKey};
-use serde::Deserialize;
-use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
+use registry_platform_crypto::{PrivateJwk, PublicJwk};
+use registry_platform_sdjwt::{Disclosure, HolderConfirmation, SdJwtIssuanceInput, SdJwtIssuer};
+use serde_json::{json, Value};
 use std::fmt;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use ulid::Ulid;
-use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::CredentialProfileConfig;
 use crate::error::EvidenceError;
@@ -29,7 +25,7 @@ pub struct SignedSdJwtVc {
 #[derive(Clone)]
 pub struct EvidenceIssuer {
     verification_method_id: String,
-    encoding_key: EncodingKey,
+    issuer: SdJwtIssuer,
     public_jwk: Value,
 }
 
@@ -55,50 +51,17 @@ impl EvidenceIssuer {
     }
 
     pub fn from_jwk_str(raw: &str, verification_method_id: String) -> Result<Self, EvidenceError> {
-        let jwk: PrivateJwk =
-            serde_json::from_str(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
-        if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("Ed25519") {
-            return Err(EvidenceError::CredentialIssuanceFailed);
-        }
-        if let Some(jwk_alg) = jwk.alg.as_deref() {
-            if jwk_alg != "EdDSA" {
-                return Err(EvidenceError::CredentialIssuanceFailed);
-            }
-        }
-        let d = jwk
-            .d
-            .as_deref()
-            .ok_or(EvidenceError::CredentialIssuanceFailed)?;
-        let x = jwk
-            .x
-            .as_deref()
-            .ok_or(EvidenceError::CredentialIssuanceFailed)?;
-        let d_bytes = Zeroizing::new(
-            URL_SAFE_NO_PAD
-                .decode(d)
-                .map_err(|_| EvidenceError::CredentialIssuanceFailed)?,
-        );
-        if d_bytes.len() != 32 {
-            return Err(EvidenceError::CredentialIssuanceFailed);
-        }
-        let x_bytes = URL_SAFE_NO_PAD
-            .decode(x)
-            .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
-        if x_bytes.len() != 32 {
-            return Err(EvidenceError::CredentialIssuanceFailed);
-        }
-        let pkcs8 = ed25519_pkcs8_seed(d_bytes.as_slice());
-        let encoding_key = EncodingKey::from_ed_der(pkcs8.as_slice());
-        let public_jwk = json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": x,
-            "alg": "EdDSA",
-            "kid": verification_method_id.clone(),
-        });
+        let jwk = PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        let mut public = jwk.public();
+        public.kid = Some(verification_method_id.clone());
+        public.alg.get_or_insert_with(|| "EdDSA".to_string());
+        let public_jwk =
+            serde_json::to_value(public).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        let issuer =
+            SdJwtIssuer::from_jwk(jwk).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
         Ok(Self {
             verification_method_id,
-            encoding_key,
+            issuer,
             public_jwk,
         })
     }
@@ -106,23 +69,6 @@ impl EvidenceIssuer {
     #[must_use]
     pub fn public_jwk(&self) -> Value {
         self.public_jwk.clone()
-    }
-
-    fn sign(&self, header: Value, payload: Value) -> Result<String, EvidenceError> {
-        let header_b64 = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&header).map_err(|_| EvidenceError::CredentialIssuanceFailed)?,
-        );
-        let payload_b64 = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&payload).map_err(|_| EvidenceError::CredentialIssuanceFailed)?,
-        );
-        let signing_input = format!("{header_b64}.{payload_b64}");
-        let signature = jsonwebtoken::crypto::sign(
-            signing_input.as_bytes(),
-            &self.encoding_key,
-            Algorithm::EdDSA,
-        )
-        .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
-        Ok(format!("{signing_input}.{signature}"))
     }
 }
 
@@ -133,108 +79,69 @@ pub fn issue(
     holder_id: Option<&str>,
     iat: OffsetDateTime,
 ) -> Result<SignedSdJwtVc, EvidenceError> {
-    if profile.holder_binding.mode != "none" && holder_id.is_none() {
+    let holder_confirmation = holder_id.map(holder_confirmation).transpose()?;
+    if profile.holder_binding.mode != "none" && holder_confirmation.is_none() {
         return Err(EvidenceError::HolderProofRequired);
     }
     let expires_at = iat + time::Duration::seconds(profile.validity_seconds);
-    let credential_id = format!("urn:ulid:{}", Ulid::new());
-    let mut payload = Map::new();
-    payload.insert("iss".to_string(), Value::String(profile.issuer.clone()));
-    payload.insert(
-        "iat".to_string(),
-        Value::Number(iat.unix_timestamp().into()),
-    );
-    payload.insert(
-        "exp".to_string(),
-        Value::Number(expires_at.unix_timestamp().into()),
-    );
-    payload.insert("vct".to_string(), Value::String(profile.vct.clone()));
-    payload.insert("id".to_string(), Value::String(credential_id.clone()));
-    payload.insert("jti".to_string(), Value::String(credential_id.clone()));
-    payload.insert("_sd_alg".to_string(), Value::String("sha-256".to_string()));
-    if let Some(holder_id) = holder_id {
-        payload.insert("cnf".to_string(), json!({ "kid": holder_id }));
-    }
-
-    let mut sd = Vec::new();
-    let mut disclosures = Vec::new();
-    for result in results {
-        let claim_value = json!({
-            "claim_id": result.claim_id,
-            "version": result.claim_version,
-            "value": result.value,
-            "satisfied": result.satisfied,
-            "subject_type": result.subject_type,
-            "issued_at": result.issued_at,
-        });
-        let disclosure = disclosure(&result.claim_id, claim_value)?;
-        sd.push(disclosure.digest);
-        disclosures.push(disclosure.encoded);
-    }
-    sd.sort_unstable();
-    payload.insert(
-        "_sd".to_string(),
-        Value::Array(sd.into_iter().map(Value::String).collect()),
-    );
-
-    let header = json!({
-        "alg": "EdDSA",
-        "typ": "dc+sd-jwt",
-        "kid": issuer.verification_method_id,
-    });
-    let compact = issuer.sign(header, Value::Object(payload))?;
+    let subject_ref = results
+        .first()
+        .map(|result| result.subject_ref.as_str())
+        .or(holder_id)
+        .unwrap_or(profile.issuer.as_str())
+        .to_string();
+    let disclosures = results
+        .iter()
+        .map(|result| Disclosure {
+            name: result.claim_id.clone(),
+            value: json!({
+                "claim_id": result.claim_id,
+                "version": result.claim_version,
+                "value": result.value,
+                "satisfied": result.satisfied,
+                "subject_type": result.subject_type,
+                "issued_at": result.issued_at,
+            }),
+        })
+        .collect();
+    let signed = issuer
+        .issuer
+        .issue(SdJwtIssuanceInput {
+            iss: profile.issuer.clone(),
+            sub_ref: subject_ref,
+            iat: iat.unix_timestamp(),
+            exp: expires_at.unix_timestamp(),
+            vct: profile.vct.clone(),
+            signing_kid: issuer.verification_method_id.clone(),
+            cnf: holder_confirmation,
+            disclosures,
+        })
+        .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
     Ok(SignedSdJwtVc {
-        credential_id,
+        credential_id: signed.credential_id,
         issuer: profile.issuer.clone(),
         expires_at: format_time(expires_at),
-        compact: format!("{}~{}~", compact, disclosures.join("~")),
+        compact: signed.jwt,
     })
 }
 
-struct Disclosure {
-    encoded: String,
-    digest: String,
+fn holder_confirmation(holder_id: &str) -> Result<HolderConfirmation, EvidenceError> {
+    Ok(HolderConfirmation {
+        jwk: holder_jwk(holder_id)?,
+        kid: Some(holder_id.to_string()),
+    })
 }
 
-fn disclosure(name: &str, value: Value) -> Result<Disclosure, EvidenceError> {
-    let mut salt = [0u8; 16];
-    fill(&mut salt).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
-    let salt = URL_SAFE_NO_PAD.encode(salt);
-    let encoded = URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&json!([salt, name, value]))
-            .map_err(|_| EvidenceError::CredentialIssuanceFailed)?,
-    );
-    let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(encoded.as_bytes()));
-    Ok(Disclosure { encoded, digest })
-}
-
-#[derive(Debug, Deserialize)]
-struct PrivateJwk {
-    kty: String,
-    #[serde(default)]
-    crv: Option<String>,
-    #[serde(default)]
-    d: Option<String>,
-    #[serde(default)]
-    x: Option<String>,
-    #[serde(default)]
-    alg: Option<String>,
-}
-
-impl Drop for PrivateJwk {
-    fn drop(&mut self) {
-        self.d.zeroize();
-    }
-}
-
-pub fn ed25519_pkcs8_seed(seed: &[u8]) -> Zeroizing<Vec<u8>> {
-    let mut out = Vec::with_capacity(48);
-    out.extend_from_slice(&[
-        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
-        0x20,
-    ]);
-    out.extend_from_slice(seed);
-    Zeroizing::new(out)
+pub fn holder_jwk(holder_id: &str) -> Result<PublicJwk, EvidenceError> {
+    let encoded = holder_id
+        .strip_prefix("did:jwk:")
+        .ok_or(EvidenceError::HolderProofRequired)?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| EvidenceError::HolderProofRequired)?;
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|_| EvidenceError::HolderProofRequired)?;
+    PublicJwk::parse(&value.to_string()).map_err(|_| EvidenceError::HolderProofRequired)
 }
 
 fn format_time(value: OffsetDateTime) -> String {
@@ -247,33 +154,24 @@ fn format_time(value: OffsetDateTime) -> String {
 mod tests {
     use super::*;
     use crate::model::ClaimProvenance;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
     #[test]
-    fn disclosure_digest_is_over_encoded_disclosure() {
-        let d = disclosure("x", json!(1)).expect("disclosure");
-        assert_eq!(
-            d.digest,
-            URL_SAFE_NO_PAD.encode(Sha256::digest(d.encoded.as_bytes()))
-        );
-    }
-
-    #[test]
     fn signing_algorithm_header_value_is_stable() {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
-        let compact = issuer
-            .sign(
-                json!({
-                    "alg": "EdDSA",
-                    "typ": "dc+sd-jwt",
-                    "kid": "did:web:issuer.test#key-1",
-                }),
-                json!({ "iss": "did:web:issuer.test" }),
-            )
-            .expect("test jwt signs");
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("first")],
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+        let compact = signed.compact.split('~').next().expect("compact jwt");
         let header = compact.split('.').next().expect("compact jwt has header");
         let header: Value = serde_json::from_slice(
             &URL_SAFE_NO_PAD
@@ -301,6 +199,27 @@ mod tests {
 
         assert_eq!(payload["jti"], signed.credential_id);
         assert_eq!(payload["id"], signed.credential_id);
+    }
+
+    #[test]
+    fn issued_credential_uses_platform_holder_confirmation() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let holder = holder_did_jwk();
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("first")],
+            Some(&holder),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+        let payload = payload(&signed);
+
+        assert_eq!(payload["cnf"]["kid"], holder);
+        assert_eq!(payload["cnf"]["jwk"]["kty"], "OKP");
+        assert_eq!(payload["cnf"]["jwk"]["crv"], "Ed25519");
+        assert!(payload["cnf"]["jwk"].get("d").is_none());
     }
 
     #[test]
@@ -417,6 +336,17 @@ mod tests {
                 computed_by: "test".to_string(),
             },
         }
+    }
+
+    fn holder_did_jwk() -> String {
+        let public_jwk = json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+        });
+        let encoded =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&public_jwk).expect("holder JWK serializes"));
+        format!("did:jwk:{encoded}")
     }
 
     fn payload_sd(signed: &SignedSdJwtVc) -> Vec<String> {

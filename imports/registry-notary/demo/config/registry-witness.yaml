@@ -7,15 +7,16 @@ server:
   bind: 127.0.0.1:4255
 
 auth:
+  mode: api_key
   api_keys:
     - id: verification_service
-      token_env: REGISTRY_WITNESS_API_KEY
+      hash_env: REGISTRY_WITNESS_API_KEY_HASH
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
   bearer_tokens:
     - id: verification_service
-      token_env: REGISTRY_WITNESS_BEARER_TOKEN
+      hash_env: REGISTRY_WITNESS_BEARER_TOKEN_HASH
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
@@ -23,6 +24,7 @@ auth:
 audit:
   sink: file
   path: demo/var/registry-witness-audit.jsonl
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
@@ -32,6 +34,7 @@ evidence:
   source_connections:
     crvs:
       base_url: http://127.0.0.1:4256
+      allow_insecure_localhost: true
       token_env: EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN
       dci:
         search_path: /dci/crvs/registry/sync/search
@@ -41,6 +44,7 @@ evidence:
           birth_date: /birth_date
     farmer_registry:
       base_url: http://127.0.0.1:4256
+      allow_insecure_localhost: true
       token_env: EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN
       dci:
         search_path: /dci/fr/registry/sync/search
