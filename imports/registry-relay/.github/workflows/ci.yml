@@ -125,14 +125,11 @@ jobs:
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.19.7 --locked
+
       - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2   # pinned to major v2
-        with:
-          # `arguments` defaults to `--all-features` and is interpolated
-          # BEFORE the subcommand. The check types are positional args of
-          # `check`, so they belong in `command-arguments`.
-          command: check
-          command-arguments: licenses advisories bans sources
+        run: cargo deny check licenses advisories bans sources
 
   # ── Postgres-backed datasource integration ───────────────────────────────
   postgres-integration:
