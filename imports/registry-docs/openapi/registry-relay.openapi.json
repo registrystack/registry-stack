@@ -162,104 +162,74 @@
         "description": "Per-dataset metadata. See `/datasets/{id}` for the live shape.",
         "type": "object"
       },
-      "Entity_civil_registry_civil_person": {
-        "description": "Person-level civil status projection for evidence computation.",
+      "Entity_social_registry_household": {
+        "description": "A household participating in Program X",
         "examples": [
           {
-            "birth_date": "2026-01-15",
-            "civil_status": "<civil_status>",
-            "deceased": true,
-            "district": "<district>",
-            "given_name": "Alex Example",
-            "national_id": "01HZX9...",
-            "surname": "Alex Example"
+            "enrolled_on": "2026-01-15",
+            "id": "01HZX9...",
+            "region": "north"
           }
         ],
         "properties": {
-          "birth_date": {
-            "description": "Required `date` field.",
+          "enrolled_on": {
+            "description": "Optional `date` field.",
             "examples": [
               "2026-01-15"
             ],
             "format": "date",
-            "type": "string",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/birth_date"
-          },
-          "civil_status": {
-            "description": "Required `string` field.",
-            "examples": [
-              "<civil_status>"
+            "type": [
+              "string",
+              "null"
             ],
-            "type": "string",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/civil_status"
+            "x-concept-uri": "https://publicschema.org/properties/enrollmentDate"
           },
-          "deceased": {
-            "description": "Required `boolean` field.",
-            "examples": [
-              true
-            ],
-            "type": "boolean",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/deceased"
-          },
-          "district": {
-            "description": "Required `string` field.",
-            "examples": [
-              "<district>"
-            ],
-            "type": "string",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/district"
-          },
-          "given_name": {
-            "description": "Required `string` field.",
-            "examples": [
-              "Alex Example"
-            ],
-            "type": "string",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/given_name"
-          },
-          "national_id": {
+          "id": {
             "description": "Required `string` field.",
             "examples": [
               "01HZX9..."
             ],
             "type": "string",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/national_id"
+            "x-concept-uri": "https://publicschema.org/properties/householdIdentifier"
           },
-          "surname": {
-            "description": "Required `string` field.",
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/Entity_social_registry_individual"
+            },
+            "type": "array",
+            "x-foreign-key": "household_id",
+            "x-relationship-kind": "has_many",
+            "x-target-entity": "individual",
+            "x-target-schema": "https://data.example.gov/metadata/schema/social_registry/individual/schema.json"
+          },
+          "region": {
+            "description": "Optional `string` field.",
             "examples": [
-              "Alex Example"
+              "north"
             ],
-            "type": "string",
-            "x-concept-uri": "http://civil-registry-relay:8080/datasets/civil_registry/civil_person/fields/surname"
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-concept-uri": "http://data.europa.eu/m8g/Location"
           }
         },
         "required": [
-          "national_id",
-          "given_name",
-          "surname",
-          "birth_date",
-          "civil_status",
-          "deceased",
-          "district"
+          "id"
         ],
         "type": "object",
-        "x-concept-uri": "https://schema.spdci.org/extensions/crvs/v1/Person",
-        "x-dataset-id": "civil_registry",
-        "x-entity-name": "civil_person"
+        "x-concept-uri": "https://publicschema.org/concepts/Household",
+        "x-dataset-id": "social_registry",
+        "x-entity-name": "household"
       },
-      "Entity_civil_registry_civil_personCollection": {
+      "Entity_social_registry_householdCollection": {
         "examples": [
           {
             "data": [
               {
-                "birth_date": "2026-01-15",
-                "civil_status": "<civil_status>",
-                "deceased": true,
-                "district": "<district>",
-                "given_name": "Alex Example",
-                "national_id": "01HZX9...",
-                "surname": "Alex Example"
+                "enrolled_on": "2026-01-15",
+                "id": "01HZX9...",
+                "region": "north"
               }
             ],
             "pagination": {
@@ -271,7 +241,7 @@
         "properties": {
           "data": {
             "items": {
-              "$ref": "#/components/schemas/Entity_civil_registry_civil_person"
+              "$ref": "#/components/schemas/Entity_social_registry_household"
             },
             "type": "array"
           },
@@ -285,7 +255,7 @@
         ],
         "type": "object"
       },
-      "Entity_civil_registry_civil_personSchema": {
+      "Entity_social_registry_householdSchema": {
         "properties": {
           "dataset_id": {
             "type": "string"
@@ -310,9 +280,141 @@
           }
         },
         "type": "object",
-        "x-concept-uri": "https://schema.spdci.org/extensions/crvs/v1/Person",
-        "x-dataset-id": "civil_registry",
-        "x-entity-name": "civil_person"
+        "x-concept-uri": "https://publicschema.org/concepts/Household",
+        "x-dataset-id": "social_registry",
+        "x-entity-name": "household"
+      },
+      "Entity_social_registry_individual": {
+        "description": "A person enrolled in Program X",
+        "examples": [
+          {
+            "household_id": "01HZX9...",
+            "id": "01HZX9...",
+            "municipality_code": "REG-001",
+            "payment_amount": 12.34
+          }
+        ],
+        "properties": {
+          "household": {
+            "$ref": "#/components/schemas/Entity_social_registry_household",
+            "x-foreign-key": "household_id",
+            "x-relationship-kind": "belongs_to",
+            "x-target-entity": "household",
+            "x-target-schema": "https://data.example.gov/metadata/schema/social_registry/household/schema.json"
+          },
+          "household_id": {
+            "description": "Required `string` field.",
+            "examples": [
+              "01HZX9..."
+            ],
+            "type": "string",
+            "x-concept-uri": "https://publicschema.org/properties/householdIdentifier"
+          },
+          "id": {
+            "description": "Required `string` field.",
+            "examples": [
+              "01HZX9..."
+            ],
+            "type": "string",
+            "x-concept-uri": "https://publicschema.org/properties/personIdentifier"
+          },
+          "municipality_code": {
+            "description": "Optional `string` field. Codelist: `https://www.insee.fr/codes/cog`.",
+            "examples": [
+              "REG-001"
+            ],
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-codelist": "https://www.insee.fr/codes/cog",
+            "x-concept-uri": "http://data.europa.eu/m8g/Location"
+          },
+          "payment_amount": {
+            "description": "Optional `number` field. Unit: `EUR`.",
+            "examples": [
+              12.34
+            ],
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ],
+            "x-concept-uri": "https://publicschema.org/properties/paymentAmount",
+            "x-unit": "EUR"
+          }
+        },
+        "required": [
+          "id",
+          "household_id"
+        ],
+        "type": "object",
+        "x-concept-uri": "https://publicschema.org/concepts/Person",
+        "x-dataset-id": "social_registry",
+        "x-entity-name": "individual"
+      },
+      "Entity_social_registry_individualCollection": {
+        "examples": [
+          {
+            "data": [
+              {
+                "household_id": "01HZX9...",
+                "id": "01HZX9...",
+                "municipality_code": "REG-001",
+                "payment_amount": 12.34
+              }
+            ],
+            "pagination": {
+              "has_more": false,
+              "next_cursor": null
+            }
+          }
+        ],
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Entity_social_registry_individual"
+            },
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "type": "object"
+      },
+      "Entity_social_registry_individualSchema": {
+        "properties": {
+          "dataset_id": {
+            "type": "string"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "primary_key": {
+            "type": "string"
+          },
+          "relationships": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "x-concept-uri": "https://publicschema.org/concepts/Person",
+        "x-dataset-id": "social_registry",
+        "x-entity-name": "individual"
       },
       "EvidenceOffering": {
         "additionalProperties": true,
@@ -347,7 +449,7 @@
               "kind": {
                 "enum": [
                   "registry-relay-verification",
-                  "evidence-server"
+                  "registry-witness"
                 ],
                 "type": "string"
               },
@@ -621,6 +723,217 @@
         "description": "Portable metadata catalog. See `/metadata/catalog` for the live document.",
         "type": "object"
       },
+      "MetadataDataset": {
+        "additionalProperties": true,
+        "description": "Portable metadata dataset record. See `/metadata/datasets/{dataset_id}` for the live document.",
+        "properties": {
+          "access_rights": {
+            "type": "string"
+          },
+          "adms_status": {
+            "type": "string"
+          },
+          "applicable_legislation": {
+            "items": {
+              "format": "uri",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "conforms_to": {
+            "items": {
+              "format": "uri",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "entities": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "properties": {
+                "concept_uri": {
+                  "format": "uri",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                },
+                "fields": {
+                  "additionalProperties": {
+                    "additionalProperties": true,
+                    "properties": {
+                      "codelist_scheme_iri": {
+                        "format": "uri",
+                        "type": "string"
+                      },
+                      "concepts": {
+                        "items": {
+                          "format": "uri",
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "constraints": {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      "field_type": {
+                        "type": "string"
+                      },
+                      "language": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "unit": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "field_type",
+                      "required"
+                    ],
+                    "type": "object"
+                  },
+                  "description": "Field metadata keyed by field name.",
+                  "type": "object"
+                },
+                "identifiers": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "primary_key": {
+                  "type": "string"
+                },
+                "relationships": {
+                  "items": {
+                    "additionalProperties": true,
+                    "properties": {
+                      "concept_uri": {
+                        "format": "uri",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "foreign_key": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "belongs_to",
+                          "has_many"
+                        ],
+                        "type": "string"
+                      },
+                      "links": {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "target": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "kind",
+                      "target",
+                      "foreign_key"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "primary_key",
+                "fields"
+              ],
+              "type": "object"
+            },
+            "description": "Entity metadata keyed by entity name.",
+            "type": "object"
+          },
+          "evidence_offerings": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "policy": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "sensitivity": {
+            "type": "string"
+          },
+          "spatial_coverage": {
+            "format": "uri",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "update_frequency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "title",
+          "description",
+          "owner",
+          "sensitivity",
+          "access_rights",
+          "update_frequency",
+          "entities"
+        ],
+        "type": "object"
+      },
+      "MetadataDatasetList": {
+        "additionalProperties": true,
+        "description": "Portable metadata dataset listing. See `/metadata/datasets` for the live document.",
+        "properties": {
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/MetadataDataset"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "datasets"
+        ],
+        "type": "object"
+      },
       "MetadataLanding": {
         "additionalProperties": true,
         "description": "Portable metadata landing document with links and an embedded scoped catalog.",
@@ -706,16 +1019,6 @@
           }
         },
         "type": "object"
-      },
-      "SpdciSyncRequest": {
-        "additionalProperties": true,
-        "description": "SP DCI sync request envelope.",
-        "type": "object"
-      },
-      "SpdciSyncResponse": {
-        "additionalProperties": true,
-        "description": "SP DCI sync response envelope.",
-        "type": "object"
       }
     },
     "securitySchemes": {
@@ -734,7 +1037,7 @@
   },
   "info": {
     "contact": {
-      "name": "Civil Registration Authority (Demo)"
+      "name": "Ministry of Digital Government"
     },
     "description": "Best-effort Registry Relay API document generated from visible metadata.",
     "license": {
@@ -742,7 +1045,7 @@
       "name": "Apache-2.0"
     },
     "summary": "Read-only data gateway exposing entity records, catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.",
-    "title": "Civil Registry Relay (Decentralized Demo)",
+    "title": "Internal Government Registry Relay",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
@@ -756,6 +1059,36 @@
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "datasets": {
+                    "summary": "Dataset list for the visible Relay catalog.",
+                    "value": {
+                      "data": [
+                        {
+                          "access_rights": "restricted",
+                          "conforms_to": [
+                            "https://publicschema.org/concepts/Person",
+                            "https://publicschema.org/concepts/Enrollment",
+                            "http://data.europa.eu/m8g/CorePerson"
+                          ],
+                          "dataset_id": "social_registry",
+                          "description": "Registry of households participating in Program X",
+                          "entities": [
+                            "household",
+                            "individual"
+                          ],
+                          "links": {
+                            "self": "/datasets/social_registry"
+                          },
+                          "owner": "Ministry of Social Affairs",
+                          "sensitivity": "personal",
+                          "title": "Social Registry",
+                          "update_frequency": "monthly"
+                        }
+                      ]
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/DatasetList"
                 }
@@ -800,15 +1133,41 @@
         ]
       }
     },
-    "/datasets/civil_registry": {
+    "/datasets/social_registry": {
       "get": {
-        "description": "Returns metadata for the `civil_registry` dataset: entities, publishers, sensitivity, update frequency, and links to JSON, JSON-LD, and SHACL artifacts.\n\nSynthetic civil status records for decentralized evidence demo flows.",
-        "operationId": "get_civil_registry_metadata",
+        "description": "Returns metadata for the `social_registry` dataset: entities, publishers, sensitivity, update frequency, and links to JSON, JSON-LD, and SHACL artifacts.\n\nRegistry of households participating in Program X",
+        "operationId": "get_social_registry_metadata",
         "parameters": [],
         "responses": {
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "dataset": {
+                    "summary": "Dataset summary.",
+                    "value": {
+                      "access_rights": "restricted",
+                      "conforms_to": [
+                        "https://publicschema.org/concepts/Person",
+                        "https://publicschema.org/concepts/Enrollment",
+                        "http://data.europa.eu/m8g/CorePerson"
+                      ],
+                      "dataset_id": "social_registry",
+                      "description": "Registry of households participating in Program X",
+                      "entities": [
+                        "household",
+                        "individual"
+                      ],
+                      "links": {
+                        "self": "/datasets/social_registry"
+                      },
+                      "owner": "Ministry of Social Affairs",
+                      "sensitivity": "personal",
+                      "title": "Social Registry",
+                      "update_frequency": "monthly"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/DatasetSummary"
                 }
@@ -863,10 +1222,10 @@
         ]
       }
     },
-    "/datasets/civil_registry/civil_person": {
+    "/datasets/social_registry/household": {
       "get": {
-        "description": "List `civil_person` records from dataset `civil_registry`. Person-level civil status projection for evidence computation.\n\nSupports pagination via `limit`+`cursor`, projection via `fields`, relationship expansion via `expand`, and configured filters.",
-        "operationId": "list_civil_registry_civil_person_records",
+        "description": "List `household` records from dataset `social_registry`. A household participating in Program X\n\nSupports pagination via `limit`+`cursor`, projection via `fields`, relationship expansion via `expand`, and configured filters.",
+        "operationId": "list_social_registry_household_records",
         "parameters": [
           {
             "description": "Maximum records to return. Capped by the entity's `api.max_limit`.",
@@ -903,104 +1262,50 @@
             }
           },
           {
-            "description": "Filter by exact match on `national_id`.",
+            "description": "Comma-separated relationships to expand inline. Limited to the entity's configured `allowed_expansions`.",
             "in": "query",
-            "name": "national_id",
+            "name": "expand",
+            "required": false,
+            "schema": {
+              "enum": [
+                "members"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `id`.",
+            "in": "query",
+            "name": "id",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Filter by inclusion in a comma-separated list of `national_id` values.",
+            "description": "Filter by inclusion in a comma-separated list of `id` values.",
             "in": "query",
-            "name": "national_id.in",
+            "name": "id.in",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Filter by exact match on `birth_date`.",
+            "description": "Filter by exact match on `region`.",
             "in": "query",
-            "name": "birth_date",
+            "name": "region",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Filter where `birth_date` is greater than or equal to the value.",
+            "description": "Filter by inclusion in a comma-separated list of `region` values.",
             "in": "query",
-            "name": "birth_date.gte",
+            "name": "region.in",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter where `birth_date` is less than or equal to the value.",
-            "in": "query",
-            "name": "birth_date.lte",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by exact match on `civil_status`.",
-            "in": "query",
-            "name": "civil_status",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by inclusion in a comma-separated list of `civil_status` values.",
-            "in": "query",
-            "name": "civil_status.in",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by exact match on `deceased`.",
-            "in": "query",
-            "name": "deceased",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by exact match on `district`.",
-            "in": "query",
-            "name": "district",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by inclusion in a comma-separated list of `district` values.",
-            "in": "query",
-            "name": "district.in",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
-            "example": "https://demo.example.gov/purpose/demo-review",
-            "in": "header",
-            "name": "Data-Purpose",
-            "required": true,
-            "schema": {
-              "format": "uri",
-              "minLength": 1,
               "type": "string"
             }
           }
@@ -1010,7 +1315,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Entity_civil_registry_civil_personCollection"
+                  "$ref": "#/components/schemas/Entity_social_registry_householdCollection"
                 }
               }
             },
@@ -1049,26 +1354,26 @@
         },
         "summary": "List records",
         "tags": [
-          "civil_registry / civil_person"
+          "social_registry / household"
         ],
         "x-codeSamples": [
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/civil_registry/civil_person?limit=10'"
+            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/social_registry/household?limit=10'"
           },
           {
             "label": "httpx",
             "lang": "Python",
-            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nresp = httpx.get(\n    'http://localhost:4242/datasets/civil_registry/civil_person',\n    params={'limit': 10},\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\npage = resp.json()\nfor row in page['data']:\n    print(row)\nnext_cursor = page['pagination'].get('next_cursor')"
+            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nresp = httpx.get(\n    'http://localhost:4242/datasets/social_registry/household',\n    params={'limit': 10},\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\npage = resp.json()\nfor row in page['data']:\n    print(row)\nnext_cursor = page['pagination'].get('next_cursor')"
           }
         ]
       }
     },
-    "/datasets/civil_registry/civil_person/aggregates": {
+    "/datasets/social_registry/household/aggregates": {
       "get": {
-        "description": "Lists the named aggregate queries defined for `civil_person` in `civil_registry`. Each entry declares its group-by columns, measures, and minimum group size used for disclosure control.",
-        "operationId": "list_civil_registry_civil_person_aggregates",
+        "description": "Lists the named aggregate queries defined for `household` in `social_registry`. Each entry declares its group-by columns, measures, and minimum group size used for disclosure control.",
+        "operationId": "list_social_registry_household_aggregates",
         "parameters": [],
         "responses": {
           "200": {
@@ -1114,14 +1419,14 @@
         },
         "summary": "List aggregates",
         "tags": [
-          "civil_registry / civil_person"
+          "social_registry / household"
         ]
       }
     },
-    "/datasets/civil_registry/civil_person/aggregates/{aggregate_id}": {
+    "/datasets/social_registry/household/aggregates/{aggregate_id}": {
       "get": {
-        "description": "Runs the named aggregate against `civil_person`. Returns the configured group-by and measures, with sub-threshold groups suppressed per disclosure control.",
-        "operationId": "run_civil_registry_civil_person_aggregate",
+        "description": "Runs the named aggregate against `household`. Returns the configured group-by and measures, with sub-threshold groups suppressed per disclosure control.",
+        "operationId": "run_social_registry_household_aggregate",
         "parameters": [
           {
             "description": "Aggregate identifier",
@@ -1187,21 +1492,21 @@
         },
         "summary": "Run aggregate",
         "tags": [
-          "civil_registry / civil_person"
+          "social_registry / household"
         ]
       }
     },
-    "/datasets/civil_registry/civil_person/schema": {
+    "/datasets/social_registry/household/schema": {
       "get": {
-        "description": "Returns the `civil_person` field schema in a JSON-friendly form: field names, types, concept URIs, codelists, units, and language tags. Useful for codegen and validation.",
-        "operationId": "get_civil_registry_civil_person_field_schema",
+        "description": "Returns the `household` field schema in a JSON-friendly form: field names, types, concept URIs, codelists, units, and language tags. Useful for codegen and validation.",
+        "operationId": "get_social_registry_household_field_schema",
         "parameters": [],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Entity_civil_registry_civil_personSchema"
+                  "$ref": "#/components/schemas/Entity_social_registry_householdSchema"
                 }
               }
             },
@@ -1240,14 +1545,14 @@
         },
         "summary": "Field schema",
         "tags": [
-          "civil_registry / civil_person"
+          "social_registry / household"
         ]
       }
     },
-    "/datasets/civil_registry/civil_person/{id}": {
+    "/datasets/social_registry/household/{id}": {
       "get": {
-        "description": "Return a single `civil_person` record from `civil_registry` by primary key. Person-level civil status projection for evidence computation.",
-        "operationId": "get_civil_registry_civil_person_record",
+        "description": "Return a single `household` record from `social_registry` by primary key. A household participating in Program X",
+        "operationId": "get_social_registry_household_record",
         "parameters": [
           {
             "description": "Entity primary key",
@@ -1268,14 +1573,14 @@
             }
           },
           {
-            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
-            "example": "https://demo.example.gov/purpose/demo-review",
-            "in": "header",
-            "name": "Data-Purpose",
-            "required": true,
+            "description": "Comma-separated relationships to expand inline. Limited to the entity's configured `allowed_expansions`.",
+            "in": "query",
+            "name": "expand",
+            "required": false,
             "schema": {
-              "format": "uri",
-              "minLength": 1,
+              "enum": [
+                "members"
+              ],
               "type": "string"
             }
           }
@@ -1285,7 +1590,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Entity_civil_registry_civil_person"
+                  "$ref": "#/components/schemas/Entity_social_registry_household"
                 }
               }
             },
@@ -1319,7 +1624,7 @@
                 }
               }
             },
-            "description": "`civil_person` record with the given primary key not found."
+            "description": "`household` record with the given primary key not found."
           },
           "default": {
             "content": {
@@ -1334,67 +1639,99 @@
         },
         "summary": "Get record by id",
         "tags": [
-          "civil_registry / civil_person"
+          "social_registry / household"
         ],
         "x-codeSamples": [
           {
             "label": "curl",
             "lang": "Shell",
-            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/civil_registry/civil_person/$ID'"
+            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/social_registry/household/$ID'"
           },
           {
             "label": "httpx",
             "lang": "Python",
-            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nrecord_id = '...'\nresp = httpx.get(\n    f'http://localhost:4242/datasets/civil_registry/civil_person/{record_id}',\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\nprint(resp.json())"
+            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nrecord_id = '...'\nresp = httpx.get(\n    f'http://localhost:4242/datasets/social_registry/household/{record_id}',\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\nprint(resp.json())"
           }
         ]
       }
     },
-    "/dci/{registry}/registry/sync/disabled": {
-      "post": {
-        "description": "Returns disability status using the configured SP DCI disability registry binding.",
-        "operationId": "spdci_disabled_status",
+    "/datasets/social_registry/household/{id}/members": {
+      "get": {
+        "description": "Returns the `members` (has_many) target(s) for one `household` record. Foreign key: `household_id`.",
+        "operationId": "get_social_registry_household_members",
         "parameters": [
           {
-            "description": "Configured SP DCI registry adapter name.",
+            "description": "Entity primary key",
             "in": "path",
-            "name": "registry",
+            "name": "id",
             "required": true,
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SpdciSyncRequest"
+          },
+          {
+            "description": "Maximum records to return. Capped by the entity's `api.max_limit`.",
+            "examples": {
+              "default": {
+                "value": 10
               }
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
             }
           },
-          "required": true
-        },
+          {
+            "description": "Opaque pagination cursor returned in a prior response's `pagination.next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "$ref": "#/components/schemas/Entity_social_registry_individual"
+                      },
+                      "type": "array"
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "pagination"
+                  ],
+                  "type": "object"
                 }
               }
             },
-            "description": "Successful SP DCI response envelope."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Invalid SP DCI request header or message envelope."
+            "description": "Successful response"
           },
           "401": {
             "content": {
@@ -1414,7 +1751,7 @@
                 }
               }
             },
-            "description": "Authenticated principal lacks the scope required for this adapter."
+            "description": "Authenticated principal lacks the scope required for this operation."
           },
           "404": {
             "content": {
@@ -1424,7 +1761,7 @@
                 }
               }
             },
-            "description": "Configured SP DCI registry adapter was not found."
+            "description": "Parent record not found, or relationship target unavailable."
           },
           "default": {
             "content": {
@@ -1437,57 +1774,140 @@
             "description": "Problem Details error response."
           }
         },
-        "summary": "SP DCI disabled status",
+        "summary": "Relationship: members",
         "tags": [
-          "SP DCI"
+          "social_registry / household"
         ]
       }
     },
-    "/dci/{registry}/registry/sync/get-disability-details": {
-      "post": {
-        "description": "Returns disability details using the configured SP DCI registry binding.",
-        "operationId": "spdci_get_disability_details",
+    "/datasets/social_registry/individual": {
+      "get": {
+        "description": "List `individual` records from dataset `social_registry`. A person enrolled in Program X\n\nSupports pagination via `limit`+`cursor`, projection via `fields`, relationship expansion via `expand`, and configured filters.",
+        "operationId": "list_social_registry_individual_records",
         "parameters": [
           {
-            "description": "Configured SP DCI registry adapter name.",
-            "in": "path",
-            "name": "registry",
+            "description": "Maximum records to return. Capped by the entity's `api.max_limit`.",
+            "examples": {
+              "default": {
+                "value": 10
+              }
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque pagination cursor returned in a prior response's `pagination.next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated list of entity fields to project. Unknown fields are rejected.",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated relationships to expand inline. Limited to the entity's configured `allowed_expansions`.",
+            "in": "query",
+            "name": "expand",
+            "required": false,
+            "schema": {
+              "enum": [
+                "household"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `id`.",
+            "in": "query",
+            "name": "id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by inclusion in a comma-separated list of `id` values.",
+            "in": "query",
+            "name": "id.in",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `household_id`.",
+            "in": "query",
+            "name": "household_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by inclusion in a comma-separated list of `household_id` values.",
+            "in": "query",
+            "name": "household_id.in",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by exact match on `municipality_code`.",
+            "in": "query",
+            "name": "municipality_code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by inclusion in a comma-separated list of `municipality_code` values.",
+            "in": "query",
+            "name": "municipality_code.in",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
             "required": true,
             "schema": {
+              "format": "uri",
+              "minLength": 1,
               "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SpdciSyncRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                  "$ref": "#/components/schemas/Entity_social_registry_individualCollection"
                 }
               }
             },
-            "description": "Successful SP DCI response envelope."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Invalid SP DCI request header or message envelope."
+            "description": "Successful response"
           },
           "401": {
             "content": {
@@ -1507,17 +1927,7 @@
                 }
               }
             },
-            "description": "Authenticated principal lacks the scope required for this adapter."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Configured SP DCI registry adapter was not found."
+            "description": "Authenticated principal lacks the scope required for this operation."
           },
           "default": {
             "content": {
@@ -1530,57 +1940,39 @@
             "description": "Problem Details error response."
           }
         },
-        "summary": "SP DCI disability details",
+        "summary": "List records",
         "tags": [
-          "SP DCI"
+          "social_registry / individual"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/social_registry/individual?limit=10'"
+          },
+          {
+            "label": "httpx",
+            "lang": "Python",
+            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nresp = httpx.get(\n    'http://localhost:4242/datasets/social_registry/individual',\n    params={'limit': 10},\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\npage = resp.json()\nfor row in page['data']:\n    print(row)\nnext_cursor = page['pagination'].get('next_cursor')"
+          }
         ]
       }
     },
-    "/dci/{registry}/registry/sync/get-disability-support": {
-      "post": {
-        "description": "Returns disability support using the configured SP DCI registry binding.",
-        "operationId": "spdci_get_disability_support",
-        "parameters": [
-          {
-            "description": "Configured SP DCI registry adapter name.",
-            "in": "path",
-            "name": "registry",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SpdciSyncRequest"
-              }
-            }
-          },
-          "required": true
-        },
+    "/datasets/social_registry/individual/aggregates": {
+      "get": {
+        "description": "Lists the named aggregate queries defined for `individual` in `social_registry`. Each entry declares its group-by columns, measures, and minimum group size used for disclosure control.",
+        "operationId": "list_social_registry_individual_aggregates",
+        "parameters": [],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                  "$ref": "#/components/schemas/AggregateListResponse"
                 }
               }
             },
-            "description": "Successful SP DCI response envelope."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Invalid SP DCI request header or message envelope."
+            "description": "Successful response"
           },
           "401": {
             "content": {
@@ -1600,17 +1992,7 @@
                 }
               }
             },
-            "description": "Authenticated principal lacks the scope required for this adapter."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Configured SP DCI registry adapter was not found."
+            "description": "Authenticated principal lacks the scope required for this operation."
           },
           "default": {
             "content": {
@@ -1623,57 +2005,37 @@
             "description": "Problem Details error response."
           }
         },
-        "summary": "SP DCI disability support",
+        "summary": "List aggregates",
         "tags": [
-          "SP DCI"
+          "social_registry / individual"
         ]
       }
     },
-    "/dci/{registry}/registry/sync/search": {
-      "post": {
-        "description": "Runs the configured SP DCI registry sync search adapter for a named registry.",
-        "operationId": "spdci_sync_search",
+    "/datasets/social_registry/individual/aggregates/{aggregate_id}": {
+      "get": {
+        "description": "Runs the named aggregate against `individual`. Returns the configured group-by and measures, with sub-threshold groups suppressed per disclosure control.",
+        "operationId": "run_social_registry_individual_aggregate",
         "parameters": [
           {
-            "description": "Configured SP DCI registry adapter name.",
+            "description": "Aggregate identifier",
             "in": "path",
-            "name": "registry",
+            "name": "aggregate_id",
             "required": true,
             "schema": {
               "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SpdciSyncRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SpdciSyncResponse"
+                  "$ref": "#/components/schemas/AggregateResult"
                 }
               }
             },
-            "description": "Successful SP DCI response envelope."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Invalid SP DCI request header or message envelope."
+            "description": "Successful response"
           },
           "401": {
             "content": {
@@ -1693,7 +2055,7 @@
                 }
               }
             },
-            "description": "Authenticated principal lacks the scope required for this adapter."
+            "description": "Authenticated principal lacks the scope required for this operation."
           },
           "404": {
             "content": {
@@ -1703,7 +2065,7 @@
                 }
               }
             },
-            "description": "Configured SP DCI registry adapter was not found."
+            "description": "Aggregate definition not found for this entity."
           },
           "default": {
             "content": {
@@ -1716,9 +2078,265 @@
             "description": "Problem Details error response."
           }
         },
-        "summary": "SP DCI sync search",
+        "summary": "Run aggregate",
         "tags": [
-          "SP DCI"
+          "social_registry / individual"
+        ]
+      }
+    },
+    "/datasets/social_registry/individual/schema": {
+      "get": {
+        "description": "Returns the `individual` field schema in a JSON-friendly form: field names, types, concept URIs, codelists, units, and language tags. Useful for codegen and validation.",
+        "operationId": "get_social_registry_individual_field_schema",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entity_social_registry_individualSchema"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Field schema",
+        "tags": [
+          "social_registry / individual"
+        ]
+      }
+    },
+    "/datasets/social_registry/individual/{id}": {
+      "get": {
+        "description": "Return a single `individual` record from `social_registry` by primary key. A person enrolled in Program X",
+        "operationId": "get_social_registry_individual_record",
+        "parameters": [
+          {
+            "description": "Entity primary key",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated list of entity fields to project. Unknown fields are rejected.",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated relationships to expand inline. Limited to the entity's configured `allowed_expansions`.",
+            "in": "query",
+            "name": "expand",
+            "required": false,
+            "schema": {
+              "enum": [
+                "household"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entity_social_registry_individual"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "`individual` record with the given primary key not found."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Get record by id",
+        "tags": [
+          "social_registry / individual"
+        ],
+        "x-codeSamples": [
+          {
+            "label": "curl",
+            "lang": "Shell",
+            "source": "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/social_registry/individual/$ID'"
+          },
+          {
+            "label": "httpx",
+            "lang": "Python",
+            "source": "import os, httpx\n\ntoken = os.environ['REGISTRY_RELAY_TOKEN']\nrecord_id = '...'\nresp = httpx.get(\n    f'http://localhost:4242/datasets/social_registry/individual/{record_id}',\n    headers={'Authorization': f'Bearer {token}'}\n)\nresp.raise_for_status()\nprint(resp.json())"
+          }
+        ]
+      }
+    },
+    "/datasets/social_registry/individual/{id}/household": {
+      "get": {
+        "description": "Returns the `household` (belongs_to) target(s) for one `individual` record. Foreign key: `household_id`.",
+        "operationId": "get_social_registry_individual_household",
+        "parameters": [
+          {
+            "description": "Entity primary key",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Absolute purpose-of-use IRI recorded in the audit trail. Required by this entity's policy. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent.",
+            "example": "https://demo.example.gov/purpose/demo-review",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entity_social_registry_household"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Parent record not found, or relationship target unavailable."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Relationship: household",
+        "tags": [
+          "social_registry / individual"
         ]
       }
     },
@@ -1776,6 +2394,36 @@
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "verification_match": {
+                    "summary": "Completed registry-backed evidence verification.",
+                    "value": {
+                      "checked_at": "2026-05-16T08:00:00Z",
+                      "claim_hash": "sha256:2b7f4f1a3f3a0b5c7a9f7f62c1e2d4b0a6c3e8d1f9a4b5c6d7e8f90123456789",
+                      "claim_salt": "9fd0e3c8d2f84b6e",
+                      "dataset_id": "benefits_casework",
+                      "decision": "match",
+                      "entity": "person",
+                      "evidence_hash": null,
+                      "evidence_offering": "https://demo.example.gov/evidence-offerings/benefits-person",
+                      "evidence_type": "https://demo.example.gov/evidence-types/benefits-person-record",
+                      "ingest_version": null,
+                      "issuing_authority": {
+                        "country": "ZZ",
+                        "id": "ministry_of_social_affairs",
+                        "iri": "did:web:social-affairs.demo.example.gov",
+                        "name": "Ministry of Social Affairs"
+                      },
+                      "jurisdiction": {
+                        "country": "ZZ",
+                        "region": null
+                      },
+                      "level_of_assurance": "substantial",
+                      "requirement": "https://demo.example.gov/requirements/benefits-person",
+                      "verification_id": "01J8W7Q9M5CN4M6G0Q9Z5T2R7A"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/EvidenceVerificationResponse"
                 }
@@ -1950,6 +2598,197 @@
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "metadata_landing": {
+                    "summary": "Metadata landing page with scoped catalog links.",
+                    "value": {
+                      "catalog": {
+                        "application_profiles": [],
+                        "base_url": "https://data.example.gov",
+                        "conforms_to": [],
+                        "datasets": [
+                          {
+                            "access_rights": "restricted",
+                            "adms_status": "under_development",
+                            "applicable_legislation": [],
+                            "conforms_to": [
+                              "https://publicschema.org/concepts/Person",
+                              "https://publicschema.org/concepts/Enrollment",
+                              "http://data.europa.eu/m8g/CorePerson"
+                            ],
+                            "dataset_id": "social_registry",
+                            "description": "Registry of households participating in Program X",
+                            "entities": {
+                              "household": {
+                                "concept_uri": "https://publicschema.org/concepts/Household",
+                                "description": "A household participating in Program X",
+                                "fields": {
+                                  "enrolled_on": {
+                                    "concepts": [
+                                      "https://publicschema.org/properties/enrollmentDate"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "date",
+                                    "name": "enrolled_on",
+                                    "required": false
+                                  },
+                                  "id": {
+                                    "concepts": [
+                                      "https://publicschema.org/properties/householdIdentifier"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "string",
+                                    "name": "id",
+                                    "required": true
+                                  },
+                                  "region": {
+                                    "concepts": [
+                                      "http://data.europa.eu/m8g/Location"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "string",
+                                    "name": "region",
+                                    "required": false
+                                  }
+                                },
+                                "identifiers": [],
+                                "name": "household",
+                                "primary_key": "id",
+                                "relationships": [
+                                  {
+                                    "foreign_key": "household_id",
+                                    "kind": "has_many",
+                                    "links": {
+                                      "target_schema": "https://data.example.gov/metadata/schema/social_registry/individual/schema.json"
+                                    },
+                                    "name": "members",
+                                    "target": "individual"
+                                  }
+                                ],
+                                "title": "Household"
+                              },
+                              "individual": {
+                                "concept_uri": "https://publicschema.org/concepts/Person",
+                                "description": "A person enrolled in Program X",
+                                "fields": {
+                                  "household_id": {
+                                    "concepts": [
+                                      "https://publicschema.org/properties/householdIdentifier"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "string",
+                                    "name": "household_id",
+                                    "required": true
+                                  },
+                                  "id": {
+                                    "concepts": [
+                                      "https://publicschema.org/properties/personIdentifier"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "string",
+                                    "name": "id",
+                                    "required": true
+                                  },
+                                  "municipality_code": {
+                                    "codelist_scheme_iri": "https://www.insee.fr/codes/cog",
+                                    "concepts": [
+                                      "http://data.europa.eu/m8g/Location"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "string",
+                                    "name": "municipality_code",
+                                    "required": false
+                                  },
+                                  "payment_amount": {
+                                    "concepts": [
+                                      "https://publicschema.org/properties/paymentAmount"
+                                    ],
+                                    "constraints": {},
+                                    "field_type": "number",
+                                    "name": "payment_amount",
+                                    "required": false,
+                                    "unit": "EUR"
+                                  }
+                                },
+                                "identifiers": [],
+                                "name": "individual",
+                                "primary_key": "id",
+                                "relationships": [
+                                  {
+                                    "foreign_key": "household_id",
+                                    "kind": "belongs_to",
+                                    "links": {
+                                      "target_schema": "https://data.example.gov/metadata/schema/social_registry/household/schema.json"
+                                    },
+                                    "name": "household",
+                                    "target": "household"
+                                  }
+                                ],
+                                "title": "Individual"
+                              }
+                            },
+                            "evidence_offerings": {},
+                            "owner": "Ministry of Social Affairs",
+                            "policy": {
+                              "assigner": "did:web:data.example.gov",
+                              "permissions": [
+                                {
+                                  "action": "odrl:use",
+                                  "constraints": [],
+                                  "duties": [],
+                                  "target": "#dataset-social_registry"
+                                }
+                              ],
+                              "profile": [],
+                              "prohibitions": [],
+                              "uid": "#policy-social_registry-offer"
+                            },
+                            "sensitivity": "personal",
+                            "title": "Social Registry",
+                            "update_frequency": "monthly"
+                          }
+                        ],
+                        "description": "",
+                        "id": "registry-relay",
+                        "participant_id": "did:web:data.example.gov",
+                        "profiles": [],
+                        "publisher": "Ministry of Digital Government",
+                        "title": "Internal Government Registry Relay"
+                      },
+                      "links": [
+                        {
+                          "href": "/metadata",
+                          "rel": "self"
+                        },
+                        {
+                          "href": "/metadata/catalog",
+                          "rel": "describedby",
+                          "type": "application/json"
+                        },
+                        {
+                          "href": "/metadata/dcat",
+                          "rel": "alternate",
+                          "type": "application/ld+json"
+                        },
+                        {
+                          "href": "/metadata/dcat/bregdcat-ap",
+                          "rel": "alternate",
+                          "type": "application/ld+json"
+                        },
+                        {
+                          "href": "/metadata/shacl",
+                          "rel": "describedby",
+                          "type": "application/ld+json"
+                        },
+                        {
+                          "href": "/metadata/policies",
+                          "rel": "describedby",
+                          "type": "application/ld+json"
+                        }
+                      ]
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/MetadataLanding"
                 }
@@ -2003,6 +2842,164 @@
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "metadata_catalog": {
+                    "summary": "Scoped portable metadata catalog.",
+                    "value": {
+                      "application_profiles": [],
+                      "base_url": "https://data.example.gov",
+                      "conforms_to": [],
+                      "datasets": [
+                        {
+                          "access_rights": "restricted",
+                          "adms_status": "under_development",
+                          "applicable_legislation": [],
+                          "conforms_to": [
+                            "https://publicschema.org/concepts/Person",
+                            "https://publicschema.org/concepts/Enrollment",
+                            "http://data.europa.eu/m8g/CorePerson"
+                          ],
+                          "dataset_id": "social_registry",
+                          "description": "Registry of households participating in Program X",
+                          "entities": {
+                            "household": {
+                              "concept_uri": "https://publicschema.org/concepts/Household",
+                              "description": "A household participating in Program X",
+                              "fields": {
+                                "enrolled_on": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/enrollmentDate"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "date",
+                                  "name": "enrolled_on",
+                                  "required": false
+                                },
+                                "id": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/householdIdentifier"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "id",
+                                  "required": true
+                                },
+                                "region": {
+                                  "concepts": [
+                                    "http://data.europa.eu/m8g/Location"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "region",
+                                  "required": false
+                                }
+                              },
+                              "identifiers": [],
+                              "name": "household",
+                              "primary_key": "id",
+                              "relationships": [
+                                {
+                                  "foreign_key": "household_id",
+                                  "kind": "has_many",
+                                  "links": {
+                                    "target_schema": "https://data.example.gov/metadata/schema/social_registry/individual/schema.json"
+                                  },
+                                  "name": "members",
+                                  "target": "individual"
+                                }
+                              ],
+                              "title": "Household"
+                            },
+                            "individual": {
+                              "concept_uri": "https://publicschema.org/concepts/Person",
+                              "description": "A person enrolled in Program X",
+                              "fields": {
+                                "household_id": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/householdIdentifier"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "household_id",
+                                  "required": true
+                                },
+                                "id": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/personIdentifier"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "id",
+                                  "required": true
+                                },
+                                "municipality_code": {
+                                  "codelist_scheme_iri": "https://www.insee.fr/codes/cog",
+                                  "concepts": [
+                                    "http://data.europa.eu/m8g/Location"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "municipality_code",
+                                  "required": false
+                                },
+                                "payment_amount": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/paymentAmount"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "number",
+                                  "name": "payment_amount",
+                                  "required": false,
+                                  "unit": "EUR"
+                                }
+                              },
+                              "identifiers": [],
+                              "name": "individual",
+                              "primary_key": "id",
+                              "relationships": [
+                                {
+                                  "foreign_key": "household_id",
+                                  "kind": "belongs_to",
+                                  "links": {
+                                    "target_schema": "https://data.example.gov/metadata/schema/social_registry/household/schema.json"
+                                  },
+                                  "name": "household",
+                                  "target": "household"
+                                }
+                              ],
+                              "title": "Individual"
+                            }
+                          },
+                          "evidence_offerings": {},
+                          "owner": "Ministry of Social Affairs",
+                          "policy": {
+                            "assigner": "did:web:data.example.gov",
+                            "permissions": [
+                              {
+                                "action": "odrl:use",
+                                "constraints": [],
+                                "duties": [],
+                                "target": "#dataset-social_registry"
+                              }
+                            ],
+                            "profile": [],
+                            "prohibitions": [],
+                            "uid": "#policy-social_registry-offer"
+                          },
+                          "sensitivity": "personal",
+                          "title": "Social Registry",
+                          "update_frequency": "monthly"
+                        }
+                      ],
+                      "description": "",
+                      "id": "registry-relay",
+                      "participant_id": "did:web:data.example.gov",
+                      "profiles": [],
+                      "publisher": "Ministry of Digital Government",
+                      "title": "Internal Government Registry Relay"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/MetadataCatalogDocument"
                 }
@@ -2047,6 +3044,426 @@
         ]
       }
     },
+    "/metadata/datasets": {
+      "get": {
+        "description": "Lists portable metadata datasets visible to the calling principal.",
+        "operationId": "list_metadata_datasets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "metadata_datasets": {
+                    "summary": "Portable metadata dataset list.",
+                    "value": {
+                      "datasets": [
+                        {
+                          "access_rights": "restricted",
+                          "adms_status": "under_development",
+                          "applicable_legislation": [],
+                          "conforms_to": [
+                            "https://publicschema.org/concepts/Person",
+                            "https://publicschema.org/concepts/Enrollment",
+                            "http://data.europa.eu/m8g/CorePerson"
+                          ],
+                          "dataset_id": "social_registry",
+                          "description": "Registry of households participating in Program X",
+                          "entities": {
+                            "household": {
+                              "concept_uri": "https://publicschema.org/concepts/Household",
+                              "description": "A household participating in Program X",
+                              "fields": {
+                                "enrolled_on": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/enrollmentDate"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "date",
+                                  "name": "enrolled_on",
+                                  "required": false
+                                },
+                                "id": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/householdIdentifier"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "id",
+                                  "required": true
+                                },
+                                "region": {
+                                  "concepts": [
+                                    "http://data.europa.eu/m8g/Location"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "region",
+                                  "required": false
+                                }
+                              },
+                              "identifiers": [],
+                              "name": "household",
+                              "primary_key": "id",
+                              "relationships": [
+                                {
+                                  "foreign_key": "household_id",
+                                  "kind": "has_many",
+                                  "links": {
+                                    "target_schema": "https://data.example.gov/metadata/schema/social_registry/individual/schema.json"
+                                  },
+                                  "name": "members",
+                                  "target": "individual"
+                                }
+                              ],
+                              "title": "Household"
+                            },
+                            "individual": {
+                              "concept_uri": "https://publicschema.org/concepts/Person",
+                              "description": "A person enrolled in Program X",
+                              "fields": {
+                                "household_id": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/householdIdentifier"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "household_id",
+                                  "required": true
+                                },
+                                "id": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/personIdentifier"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "id",
+                                  "required": true
+                                },
+                                "municipality_code": {
+                                  "codelist_scheme_iri": "https://www.insee.fr/codes/cog",
+                                  "concepts": [
+                                    "http://data.europa.eu/m8g/Location"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "string",
+                                  "name": "municipality_code",
+                                  "required": false
+                                },
+                                "payment_amount": {
+                                  "concepts": [
+                                    "https://publicschema.org/properties/paymentAmount"
+                                  ],
+                                  "constraints": {},
+                                  "field_type": "number",
+                                  "name": "payment_amount",
+                                  "required": false,
+                                  "unit": "EUR"
+                                }
+                              },
+                              "identifiers": [],
+                              "name": "individual",
+                              "primary_key": "id",
+                              "relationships": [
+                                {
+                                  "foreign_key": "household_id",
+                                  "kind": "belongs_to",
+                                  "links": {
+                                    "target_schema": "https://data.example.gov/metadata/schema/social_registry/household/schema.json"
+                                  },
+                                  "name": "household",
+                                  "target": "household"
+                                }
+                              ],
+                              "title": "Individual"
+                            }
+                          },
+                          "evidence_offerings": {},
+                          "owner": "Ministry of Social Affairs",
+                          "policy": {
+                            "assigner": "did:web:data.example.gov",
+                            "permissions": [
+                              {
+                                "action": "odrl:use",
+                                "constraints": [],
+                                "duties": [],
+                                "target": "#dataset-social_registry"
+                              }
+                            ],
+                            "profile": [],
+                            "prohibitions": [],
+                            "uid": "#policy-social_registry-offer"
+                          },
+                          "sensitivity": "personal",
+                          "title": "Social Registry",
+                          "update_frequency": "monthly"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataDatasetList"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "List metadata datasets",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
+    "/metadata/datasets/{dataset_id}": {
+      "get": {
+        "description": "Returns one visible portable metadata dataset with entity field metadata.",
+        "operationId": "get_metadata_dataset",
+        "parameters": [
+          {
+            "description": "Dataset identifier",
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "metadata_dataset": {
+                    "summary": "Portable metadata dataset record.",
+                    "value": {
+                      "access_rights": "restricted",
+                      "adms_status": "under_development",
+                      "applicable_legislation": [],
+                      "conforms_to": [
+                        "https://publicschema.org/concepts/Person",
+                        "https://publicschema.org/concepts/Enrollment",
+                        "http://data.europa.eu/m8g/CorePerson"
+                      ],
+                      "dataset_id": "social_registry",
+                      "description": "Registry of households participating in Program X",
+                      "entities": {
+                        "household": {
+                          "concept_uri": "https://publicschema.org/concepts/Household",
+                          "description": "A household participating in Program X",
+                          "fields": {
+                            "enrolled_on": {
+                              "concepts": [
+                                "https://publicschema.org/properties/enrollmentDate"
+                              ],
+                              "constraints": {},
+                              "field_type": "date",
+                              "name": "enrolled_on",
+                              "required": false
+                            },
+                            "id": {
+                              "concepts": [
+                                "https://publicschema.org/properties/householdIdentifier"
+                              ],
+                              "constraints": {},
+                              "field_type": "string",
+                              "name": "id",
+                              "required": true
+                            },
+                            "region": {
+                              "concepts": [
+                                "http://data.europa.eu/m8g/Location"
+                              ],
+                              "constraints": {},
+                              "field_type": "string",
+                              "name": "region",
+                              "required": false
+                            }
+                          },
+                          "identifiers": [],
+                          "name": "household",
+                          "primary_key": "id",
+                          "relationships": [
+                            {
+                              "foreign_key": "household_id",
+                              "kind": "has_many",
+                              "links": {
+                                "target_schema": "https://data.example.gov/metadata/schema/social_registry/individual/schema.json"
+                              },
+                              "name": "members",
+                              "target": "individual"
+                            }
+                          ],
+                          "title": "Household"
+                        },
+                        "individual": {
+                          "concept_uri": "https://publicschema.org/concepts/Person",
+                          "description": "A person enrolled in Program X",
+                          "fields": {
+                            "household_id": {
+                              "concepts": [
+                                "https://publicschema.org/properties/householdIdentifier"
+                              ],
+                              "constraints": {},
+                              "field_type": "string",
+                              "name": "household_id",
+                              "required": true
+                            },
+                            "id": {
+                              "concepts": [
+                                "https://publicschema.org/properties/personIdentifier"
+                              ],
+                              "constraints": {},
+                              "field_type": "string",
+                              "name": "id",
+                              "required": true
+                            },
+                            "municipality_code": {
+                              "codelist_scheme_iri": "https://www.insee.fr/codes/cog",
+                              "concepts": [
+                                "http://data.europa.eu/m8g/Location"
+                              ],
+                              "constraints": {},
+                              "field_type": "string",
+                              "name": "municipality_code",
+                              "required": false
+                            },
+                            "payment_amount": {
+                              "concepts": [
+                                "https://publicschema.org/properties/paymentAmount"
+                              ],
+                              "constraints": {},
+                              "field_type": "number",
+                              "name": "payment_amount",
+                              "required": false,
+                              "unit": "EUR"
+                            }
+                          },
+                          "identifiers": [],
+                          "name": "individual",
+                          "primary_key": "id",
+                          "relationships": [
+                            {
+                              "foreign_key": "household_id",
+                              "kind": "belongs_to",
+                              "links": {
+                                "target_schema": "https://data.example.gov/metadata/schema/social_registry/household/schema.json"
+                              },
+                              "name": "household",
+                              "target": "household"
+                            }
+                          ],
+                          "title": "Individual"
+                        }
+                      },
+                      "evidence_offerings": {},
+                      "owner": "Ministry of Social Affairs",
+                      "policy": {
+                        "assigner": "did:web:data.example.gov",
+                        "permissions": [
+                          {
+                            "action": "odrl:use",
+                            "constraints": [],
+                            "duties": [],
+                            "target": "#dataset-social_registry"
+                          }
+                        ],
+                        "profile": [],
+                        "prohibitions": [],
+                        "uid": "#policy-social_registry-offer"
+                      },
+                      "sensitivity": "personal",
+                      "title": "Social Registry",
+                      "update_frequency": "monthly"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataDataset"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Dataset not found or not visible to the caller."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Metadata dataset",
+        "tags": [
+          "Catalog"
+        ]
+      }
+    },
     "/metadata/datasets/{dataset_id}/policy": {
       "get": {
         "description": "Returns the ODRL access-policy document for one visible dataset.",
@@ -2066,6 +3483,48 @@
           "200": {
             "content": {
               "application/ld+json": {
+                "examples": {
+                  "dataset_policy": {
+                    "summary": "One dataset ODRL policy document.",
+                    "value": {
+                      "@context": {
+                        "dcterms": "http://purl.org/dc/terms/",
+                        "odrl": "http://www.w3.org/ns/odrl/2/",
+                        "odrl:action": {
+                          "@type": "@id"
+                        },
+                        "odrl:assigner": {
+                          "@type": "@id"
+                        },
+                        "odrl:target": {
+                          "@type": "@id"
+                        },
+                        "odrl:uid": {
+                          "@type": "@id"
+                        }
+                      },
+                      "@id": "#policy-social_registry-offer",
+                      "@type": "odrl:Offer",
+                      "odrl:assigner": {
+                        "@id": "did:web:data.example.gov"
+                      },
+                      "odrl:permission": [
+                        {
+                          "odrl:action": {
+                            "@id": "odrl:use"
+                          },
+                          "odrl:assigner": {
+                            "@id": "did:web:data.example.gov"
+                          },
+                          "odrl:target": {
+                            "@id": "#dataset-social_registry"
+                          }
+                        }
+                      ],
+                      "odrl:uid": "#policy-social_registry-offer"
+                    }
+                  }
+                },
                 "schema": {
                   "type": "object"
                 }
@@ -2119,6 +3578,50 @@
           "200": {
             "content": {
               "application/ld+json": {
+                "examples": {
+                  "base_dcat": {
+                    "summary": "Base DCAT JSON-LD catalog.",
+                    "value": {
+                      "@context": {
+                        "dcat": "http://www.w3.org/ns/dcat#",
+                        "dcat:dataset": {
+                          "@type": "@id"
+                        },
+                        "dcat:landingPage": {
+                          "@type": "@id"
+                        },
+                        "dcterms": "http://purl.org/dc/terms/",
+                        "foaf": "http://xmlns.com/foaf/0.1/",
+                        "odrl": "http://www.w3.org/ns/odrl/2/",
+                        "odrl:hasPolicy": {
+                          "@type": "@id"
+                        }
+                      },
+                      "@id": "https://data.example.gov/metadata/dcat.jsonld",
+                      "@type": "dcat:Catalog",
+                      "dcat:dataset": [
+                        {
+                          "@id": "#dataset-social_registry",
+                          "@type": "dcat:Dataset",
+                          "dcat:landingPage": "https://data.example.gov/datasets/social_registry",
+                          "dcterms:description": "Registry of households participating in Program X",
+                          "dcterms:identifier": "social_registry",
+                          "dcterms:title": "Social Registry",
+                          "odrl:hasPolicy": {
+                            "@id": "#policy-social_registry-offer"
+                          }
+                        }
+                      ],
+                      "dcat:landingPage": "https://data.example.gov",
+                      "dcterms:identifier": "registry-relay",
+                      "dcterms:publisher": {
+                        "@type": "foaf:Agent",
+                        "foaf:name": "Ministry of Digital Government"
+                      },
+                      "dcterms:title": "Internal Government Registry Relay"
+                    }
+                  }
+                },
                 "schema": {
                   "type": "object"
                 }
@@ -2172,6 +3675,148 @@
           "200": {
             "content": {
               "application/ld+json": {
+                "examples": {
+                  "bregdcat_ap": {
+                    "summary": "BRegDCAT-AP JSON-LD catalog with embedded SHACL shape.",
+                    "value": {
+                      "@context": {
+                        "adms": "http://www.w3.org/ns/adms#",
+                        "dcat": "http://www.w3.org/ns/dcat#",
+                        "dcat:dataset": {
+                          "@type": "@id"
+                        },
+                        "dcat:landingPage": {
+                          "@type": "@id"
+                        },
+                        "dcatap": "http://data.europa.eu/r5r/",
+                        "dcterms": "http://purl.org/dc/terms/",
+                        "foaf": "http://xmlns.com/foaf/0.1/",
+                        "odrl": "http://www.w3.org/ns/odrl/2/",
+                        "odrl:hasPolicy": {
+                          "@type": "@id"
+                        },
+                        "sh": "http://www.w3.org/ns/shacl#"
+                      },
+                      "@id": "https://data.example.gov/metadata/dcat.bregdcat-ap.jsonld",
+                      "@type": "dcat:Catalog",
+                      "dcat:dataset": [
+                        {
+                          "@id": "#dataset-social_registry",
+                          "@type": "dcat:Dataset",
+                          "adms:status": "under_development",
+                          "dcat:landingPage": "https://data.example.gov/datasets/social_registry",
+                          "dcterms:accessRights": "restricted",
+                          "dcterms:accrualPeriodicity": "monthly",
+                          "dcterms:description": "Registry of households participating in Program X",
+                          "dcterms:identifier": "social_registry",
+                          "dcterms:publisher": {
+                            "@type": "foaf:Agent",
+                            "foaf:name": "Ministry of Digital Government"
+                          },
+                          "dcterms:rightsHolder": "Ministry of Social Affairs",
+                          "dcterms:title": "Social Registry",
+                          "odrl:hasPolicy": {
+                            "@context": {
+                              "dcterms": "http://purl.org/dc/terms/",
+                              "odrl": "http://www.w3.org/ns/odrl/2/",
+                              "odrl:action": {
+                                "@type": "@id"
+                              },
+                              "odrl:assigner": {
+                                "@type": "@id"
+                              },
+                              "odrl:target": {
+                                "@type": "@id"
+                              },
+                              "odrl:uid": {
+                                "@type": "@id"
+                              }
+                            },
+                            "@id": "#policy-social_registry-offer",
+                            "@type": "odrl:Offer",
+                            "odrl:assigner": {
+                              "@id": "did:web:data.example.gov"
+                            },
+                            "odrl:permission": [
+                              {
+                                "odrl:action": {
+                                  "@id": "odrl:use"
+                                },
+                                "odrl:assigner": {
+                                  "@id": "did:web:data.example.gov"
+                                },
+                                "odrl:target": {
+                                  "@id": "#dataset-social_registry"
+                                }
+                              }
+                            ],
+                            "odrl:uid": "#policy-social_registry-offer"
+                          }
+                        }
+                      ],
+                      "dcat:landingPage": "https://data.example.gov",
+                      "dcterms:identifier": "registry-relay",
+                      "dcterms:publisher": {
+                        "@type": "foaf:Agent",
+                        "foaf:name": "Ministry of Digital Government"
+                      },
+                      "dcterms:title": "Internal Government Registry Relay",
+                      "sh:shapesGraph": [
+                        {
+                          "@id": "#shape-social_registry-household",
+                          "@type": "sh:NodeShape",
+                          "sh:nodeKind": "sh:IRI",
+                          "sh:property": [
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "id",
+                              "sh:path": "https://publicschema.org/properties/householdIdentifier"
+                            },
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "region",
+                              "sh:path": "http://data.europa.eu/m8g/Location"
+                            },
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "enrolled_on",
+                              "sh:path": "https://publicschema.org/properties/enrollmentDate"
+                            }
+                          ],
+                          "sh:targetClass": "https://publicschema.org/concepts/Household"
+                        },
+                        {
+                          "@id": "#shape-social_registry-individual",
+                          "@type": "sh:NodeShape",
+                          "sh:nodeKind": "sh:IRI",
+                          "sh:property": [
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "id",
+                              "sh:path": "https://publicschema.org/properties/personIdentifier"
+                            },
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "household_id",
+                              "sh:path": "https://publicschema.org/properties/householdIdentifier"
+                            },
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "municipality_code",
+                              "sh:path": "http://data.europa.eu/m8g/Location"
+                            },
+                            {
+                              "@type": "sh:PropertyShape",
+                              "sh:name": "payment_amount",
+                              "sh:path": "https://publicschema.org/properties/paymentAmount"
+                            }
+                          ],
+                          "sh:targetClass": "https://publicschema.org/concepts/Person"
+                        }
+                      ]
+                    }
+                  }
+                },
                 "schema": {
                   "type": "object"
                 }
@@ -2225,6 +3870,59 @@
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "evidence_offerings": {
+                    "summary": "Evidence offering discovery list.",
+                    "value": {
+                      "evidence_offerings": [
+                        {
+                          "access": {
+                            "conforms_to": "https://demo.example.gov/standards/registry-relay/evidence-verification-v1",
+                            "kind": "registry-relay-verification",
+                            "ruleset": "benefits-person-v1"
+                          },
+                          "dataset_id": "benefits_casework",
+                          "description": "Registry Relay verification for submitted benefits person eligibility status and role facts.",
+                          "entity": "person",
+                          "evidence_type": {
+                            "id": "benefits_person_record_evidence",
+                            "iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+                            "name": "Benefits person record evidence"
+                          },
+                          "evidence_type_iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+                          "id": "benefits_person_evidence",
+                          "information_concepts": [],
+                          "iri": "https://demo.example.gov/evidence-offerings/benefits-person",
+                          "issuing_authority": {
+                            "country": "ZZ",
+                            "id": "ministry_of_social_affairs",
+                            "iri": "did:web:social-affairs.demo.example.gov",
+                            "name": "Ministry of Social Affairs"
+                          },
+                          "jurisdiction": {
+                            "country": "ZZ",
+                            "region": null
+                          },
+                          "level_of_assurance": "substantial",
+                          "lookup_keys": [
+                            "id"
+                          ],
+                          "policy": {
+                            "purpose": [
+                              "https://demo.example.gov/purpose/social-protection-eligibility"
+                            ]
+                          },
+                          "procedure_contexts": [],
+                          "requirement_iris": [
+                            "https://demo.example.gov/requirements/benefits-person"
+                          ],
+                          "title": "Benefits person status evidence",
+                          "verification_request_schema_url": "http://127.0.0.1:4242/metadata/schema/benefits_casework/person/schema.json"
+                        }
+                      ]
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/EvidenceOfferingList"
                 }
@@ -2288,6 +3986,55 @@
           "200": {
             "content": {
               "application/json": {
+                "examples": {
+                  "evidence_offering": {
+                    "summary": "Evidence offering discovery record.",
+                    "value": {
+                      "access": {
+                        "conforms_to": "https://demo.example.gov/standards/registry-relay/evidence-verification-v1",
+                        "kind": "registry-relay-verification",
+                        "ruleset": "benefits-person-v1"
+                      },
+                      "dataset_id": "benefits_casework",
+                      "description": "Registry Relay verification for submitted benefits person eligibility status and role facts.",
+                      "entity": "person",
+                      "evidence_type": {
+                        "id": "benefits_person_record_evidence",
+                        "iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+                        "name": "Benefits person record evidence"
+                      },
+                      "evidence_type_iri": "https://demo.example.gov/evidence-types/benefits-person-record",
+                      "id": "benefits_person_evidence",
+                      "information_concepts": [],
+                      "iri": "https://demo.example.gov/evidence-offerings/benefits-person",
+                      "issuing_authority": {
+                        "country": "ZZ",
+                        "id": "ministry_of_social_affairs",
+                        "iri": "did:web:social-affairs.demo.example.gov",
+                        "name": "Ministry of Social Affairs"
+                      },
+                      "jurisdiction": {
+                        "country": "ZZ",
+                        "region": null
+                      },
+                      "level_of_assurance": "substantial",
+                      "lookup_keys": [
+                        "id"
+                      ],
+                      "policy": {
+                        "purpose": [
+                          "https://demo.example.gov/purpose/social-protection-eligibility"
+                        ]
+                      },
+                      "procedure_contexts": [],
+                      "requirement_iris": [
+                        "https://demo.example.gov/requirements/benefits-person"
+                      ],
+                      "title": "Benefits person status evidence",
+                      "verification_request_schema_url": "http://127.0.0.1:4242/metadata/schema/benefits_casework/person/schema.json"
+                    }
+                  }
+                },
                 "schema": {
                   "$ref": "#/components/schemas/EvidenceOffering"
                 }
@@ -2341,6 +4088,71 @@
           "200": {
             "content": {
               "application/ld+json": {
+                "examples": {
+                  "policy_collection": {
+                    "summary": "Dataset ODRL policy collection.",
+                    "value": {
+                      "@context": {
+                        "dcterms": "http://purl.org/dc/terms/",
+                        "odrl": "http://www.w3.org/ns/odrl/2/",
+                        "odrl:action": {
+                          "@type": "@id"
+                        },
+                        "odrl:assigner": {
+                          "@type": "@id"
+                        },
+                        "odrl:target": {
+                          "@type": "@id"
+                        },
+                        "odrl:uid": {
+                          "@type": "@id"
+                        }
+                      },
+                      "@graph": [
+                        {
+                          "@context": {
+                            "dcterms": "http://purl.org/dc/terms/",
+                            "odrl": "http://www.w3.org/ns/odrl/2/",
+                            "odrl:action": {
+                              "@type": "@id"
+                            },
+                            "odrl:assigner": {
+                              "@type": "@id"
+                            },
+                            "odrl:target": {
+                              "@type": "@id"
+                            },
+                            "odrl:uid": {
+                              "@type": "@id"
+                            }
+                          },
+                          "@id": "#policy-social_registry-offer",
+                          "@type": "odrl:Offer",
+                          "odrl:assigner": {
+                            "@id": "did:web:data.example.gov"
+                          },
+                          "odrl:permission": [
+                            {
+                              "odrl:action": {
+                                "@id": "odrl:use"
+                              },
+                              "odrl:assigner": {
+                                "@id": "did:web:data.example.gov"
+                              },
+                              "odrl:target": {
+                                "@id": "#dataset-social_registry"
+                              }
+                            }
+                          ],
+                          "odrl:uid": "#policy-social_registry-offer"
+                        }
+                      ],
+                      "@id": "https://data.example.gov/metadata/policies",
+                      "dcterms:isPartOf": "https://data.example.gov/metadata/dcat.jsonld",
+                      "dcterms:title": "Dataset access policies"
+                    }
+                  }
+                },
                 "schema": {
                   "type": "object"
                 }
@@ -2451,7 +4263,7 @@
   "servers": [
     {
       "description": "Configured base URL for this gateway instance.",
-      "url": "http://civil-registry-relay:8080"
+      "url": "https://data.example.gov"
     }
   ],
   "tags": [
@@ -2464,13 +4276,14 @@
       "name": "Catalog"
     },
     {
-      "description": "Social Protection Digital Convergence Initiative sync adapter routes.",
-      "name": "SP DCI"
+      "description": "Operations on the `household` entity in dataset `social_registry`. A household participating in Program X",
+      "name": "social_registry / household",
+      "x-displayName": "Household"
     },
     {
-      "description": "Operations on the `civil_person` entity in dataset `civil_registry`. Person-level civil status projection for evidence computation.",
-      "name": "civil_registry / civil_person",
-      "x-displayName": "Civil Person"
+      "description": "Operations on the `individual` entity in dataset `social_registry`. A person enrolled in Program X",
+      "name": "social_registry / individual",
+      "x-displayName": "Individual"
     }
   ],
   "x-tagGroups": [
@@ -2487,15 +4300,10 @@
       ]
     },
     {
-      "name": "SP DCI",
+      "name": "Social Registry",
       "tags": [
-        "SP DCI"
-      ]
-    },
-    {
-      "name": "Civil Registry",
-      "tags": [
-        "civil_registry / civil_person"
+        "social_registry / household",
+        "social_registry / individual"
       ]
     }
   ]

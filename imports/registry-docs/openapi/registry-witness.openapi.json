@@ -16,10 +16,85 @@
         "operationId": "getEvidenceService",
         "responses": {
           "200": {
-            "description": "Service document"
+            "description": "Service document",
+            "content": {
+              "application/json": {
+                "example": {
+                  "api_version": "2026-05",
+                  "auth": {
+                    "api_key": {
+                      "header": "x-api-key"
+                    },
+                    "audience": "demo.registry-witness",
+                    "bearer": {
+                      "format": "Bearer <token>",
+                      "header": "Authorization",
+                      "scheme": "bearer"
+                    },
+                    "methods": [
+                      "api_key",
+                      "bearer"
+                    ]
+                  },
+                  "base_url": "http://127.0.0.1:4255",
+                  "batch": {
+                    "idempotency_window": "PT15M",
+                    "max_inline_subjects": 20
+                  },
+                  "claims_url": "/claims",
+                  "formats": [
+                    {
+                      "id": "application/dc+sd-jwt",
+                      "kind": "credential",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/ld+json; profile=\"cccev\"",
+                      "kind": "renderer",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/vnd.registry-witness.claim-result+json",
+                      "kind": "claim_result",
+                      "status": "enabled"
+                    }
+                  ],
+                  "formats_url": "/formats",
+                  "identity": {
+                    "mapper": "common_subject_id",
+                    "production_mapper": false
+                  },
+                  "issuer": {
+                    "id": "did:web:agriculture.demo.example.gov",
+                    "name": "demo.registry-witness"
+                  },
+                  "operations": {
+                    "batch_evaluate": true,
+                    "credential_issue": true,
+                    "evaluate": true,
+                    "render": true
+                  },
+                  "service_id": "demo.registry-witness"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           }
         }
       }
@@ -30,10 +105,39 @@
         "operationId": "getEvidenceJwks",
         "responses": {
           "200": {
-            "description": "Public JWKS"
+            "description": "Public JWKS",
+            "content": {
+              "application/json": {
+                "example": {
+                  "keys": [
+                    {
+                      "alg": "EdDSA",
+                      "crv": "Ed25519",
+                      "kid": "did:web:agriculture.demo.example.gov#registry-witness-demo-key-1",
+                      "kty": "OKP",
+                      "x": "11qYAYKxCrfVS_3XDbXJC2AgYI57qXzcS7P0W5Y9f4Y"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           }
         }
       }
@@ -44,13 +148,50 @@
         "operationId": "adminReload",
         "responses": {
           "200": {
-            "description": "Standalone router accepted the reload request"
+            "description": "Standalone router accepted the reload request",
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "standalone router has no reloadable external config handle",
+                  "reloaded": false,
+                  "status": "noop"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Caller lacks registry_witness:admin scope"
+            "description": "Caller lacks registry_witness:admin scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://data.example.gov/problems/auth/scope_denied"
+                }
+              }
+            }
           }
         }
       }
@@ -61,10 +202,83 @@
         "operationId": "listClaims",
         "responses": {
           "200": {
-            "description": "Visible claims"
+            "description": "Visible claims",
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": [
+                    {
+                      "cccev": null,
+                      "disclosure": {
+                        "allowed": [
+                          "value",
+                          "redacted"
+                        ],
+                        "default": "value",
+                        "downgrade": "deny"
+                      },
+                      "formats": [
+                        "application/vnd.registry-witness.claim-result+json",
+                        "application/ld+json; profile=\"cccev\""
+                      ],
+                      "id": "date-of-birth",
+                      "oots": null,
+                      "operations": {
+                        "batch_evaluate": false,
+                        "evaluate": true
+                      },
+                      "subject_type": "person",
+                      "title": "Date of birth",
+                      "version": "2026-05"
+                    },
+                    {
+                      "cccev": {
+                        "requirement_type": "InformationRequirement"
+                      },
+                      "disclosure": {
+                        "allowed": [
+                          "predicate",
+                          "redacted"
+                        ],
+                        "default": "predicate",
+                        "downgrade": "deny"
+                      },
+                      "formats": [
+                        "application/vnd.registry-witness.claim-result+json",
+                        "application/ld+json; profile=\"cccev\"",
+                        "application/dc+sd-jwt"
+                      ],
+                      "id": "farmer-under-4ha",
+                      "oots": null,
+                      "operations": {
+                        "batch_evaluate": true,
+                        "evaluate": true
+                      },
+                      "subject_type": "person",
+                      "title": "Farmer under four hectares",
+                      "version": "2026-05"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           }
         }
       }
@@ -95,16 +309,98 @@
         },
         "responses": {
           "200": {
-            "description": "Per-subject claim evaluation results"
+            "description": "Per-subject claim evaluation results",
+            "content": {
+              "application/json": {
+                "example": {
+                  "batch_id": "01HX7Y4N6S7ZK0R2T8Q9V1M3PA",
+                  "claims": [
+                    "farmer-under-4ha"
+                  ],
+                  "items": [
+                    {
+                      "claim_results": [
+                        {
+                          "claim_id": "farmer-under-4ha",
+                          "claim_version": "2026-05",
+                          "disclosure": "predicate",
+                          "provenance": {
+                            "computed_by": "demo.registry-witness",
+                            "source_count": 1,
+                            "source_versions": {}
+                          },
+                          "result_id": "01HX7Y5F31M8BZWQ2HY7P6J9FA",
+                          "satisfied": true,
+                          "value": true,
+                          "value_type": "boolean"
+                        }
+                      ],
+                      "errors": [],
+                      "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                      "input_index": 0,
+                      "status": "succeeded",
+                      "subject_ref": "person-1"
+                    }
+                  ],
+                  "status": "completed",
+                  "summary": {
+                    "failed": 0,
+                    "succeeded": 1
+                  }
+                }
+              }
+            }
           },
           "400": {
-            "description": "Invalid request"
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://data.example.gov/problems/request/invalid"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Not authorized for requested claim, purpose, disclosure, or format"
+            "description": "Not authorized for requested claim, purpose, disclosure, or format",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "claim.disclosure_not_allowed",
+                  "detail": "the requested disclosure profile is not allowed",
+                  "status": 403,
+                  "title": "Disclosure not allowed",
+                  "type": "https://data.example.gov/problems/claim/disclosure_not_allowed"
+                }
+              }
+            }
           }
         }
       }
@@ -125,16 +421,84 @@
         },
         "responses": {
           "200": {
-            "description": "Claim evaluation result"
+            "description": "Claim evaluation result",
+            "content": {
+              "application/json": {
+                "example": {
+                  "results": [
+                    {
+                      "claim_id": "farmer-under-4ha",
+                      "claim_version": "2026-05",
+                      "disclosure": "predicate",
+                      "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                      "expires_at": "2026-05-25T12:00:00Z",
+                      "format": "application/vnd.registry-witness.claim-result+json",
+                      "issued_at": "2026-05-24T12:00:00Z",
+                      "provenance": {
+                        "computed_by": "demo.registry-witness",
+                        "source_count": 1,
+                        "source_versions": {}
+                      },
+                      "satisfied": true,
+                      "subject_ref": "person-1",
+                      "subject_type": "person",
+                      "value": true
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
-            "description": "Invalid request"
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://data.example.gov/problems/request/invalid"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Not authorized for requested claim, purpose, disclosure, or format"
+            "description": "Not authorized for requested claim, purpose, disclosure, or format",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://data.example.gov/problems/auth/scope_denied"
+                }
+              }
+            }
           }
         }
       }
@@ -155,13 +519,72 @@
         ],
         "responses": {
           "200": {
-            "description": "Claim definition"
+            "description": "Claim definition",
+            "content": {
+              "application/json": {
+                "example": {
+                  "cccev": {
+                    "requirement_type": "InformationRequirement"
+                  },
+                  "disclosure": {
+                    "allowed": [
+                      "predicate",
+                      "redacted"
+                    ],
+                    "default": "predicate",
+                    "downgrade": "deny"
+                  },
+                  "formats": [
+                    "application/vnd.registry-witness.claim-result+json",
+                    "application/ld+json; profile=\"cccev\"",
+                    "application/dc+sd-jwt"
+                  ],
+                  "id": "farmer-under-4ha",
+                  "oots": null,
+                  "operations": {
+                    "batch_evaluate": true,
+                    "evaluate": true
+                  },
+                  "subject_type": "person",
+                  "title": "Farmer under four hectares",
+                  "version": "2026-05"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Claim not found"
+            "description": "Claim not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "claim.not_found",
+                  "detail": "the requested claim is not available",
+                  "status": 404,
+                  "title": "Claim not found",
+                  "type": "https://data.example.gov/problems/claim/not_found"
+                }
+              }
+            }
           }
         }
       }
@@ -182,16 +605,69 @@
         },
         "responses": {
           "200": {
-            "description": "Issued credential"
+            "description": "Issued credential",
+            "content": {
+              "application/json": {
+                "example": {
+                  "credential": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YifQ.signature~disclosure",
+                  "credential_id": "urn:registry-witness:credential:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                  "expires_at": "2026-05-25T12:00:00Z",
+                  "format": "application/dc+sd-jwt",
+                  "issuer": "did:web:agriculture.demo.example.gov"
+                }
+              }
+            }
           },
           "400": {
-            "description": "Invalid request or disclosure widening attempt"
+            "description": "Invalid request or disclosure widening attempt",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "credential.holder_proof_required",
+                  "detail": "holder proof of possession is required",
+                  "status": 400,
+                  "title": "Holder proof required",
+                  "type": "https://data.example.gov/problems/credential/holder_proof_required"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Evaluation not found"
+            "description": "Evaluation not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "evaluation.not_found",
+                  "detail": "the evaluation id is unknown or expired",
+                  "status": 404,
+                  "title": "Evaluation not found",
+                  "type": "https://data.example.gov/problems/evaluation/not_found"
+                }
+              }
+            }
           }
         }
       }
@@ -212,16 +688,84 @@
         },
         "responses": {
           "200": {
-            "description": "Rendered evidence artifact"
+            "description": "Rendered evidence artifact",
+            "content": {
+              "application/json": {
+                "example": {
+                  "results": [
+                    {
+                      "claim_id": "farmer-under-4ha",
+                      "claim_version": "2026-05",
+                      "disclosure": "predicate",
+                      "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                      "expires_at": "2026-05-25T12:00:00Z",
+                      "format": "application/vnd.registry-witness.claim-result+json",
+                      "issued_at": "2026-05-24T12:00:00Z",
+                      "provenance": {
+                        "computed_by": "demo.registry-witness",
+                        "source_count": 1,
+                        "source_versions": {}
+                      },
+                      "satisfied": true,
+                      "subject_ref": "person-1",
+                      "subject_type": "person",
+                      "value": true
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
-            "description": "Invalid request or disclosure widening attempt"
+            "description": "Invalid request or disclosure widening attempt",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://data.example.gov/problems/request/invalid"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Evaluation not found"
+            "description": "Evaluation not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "evaluation.not_found",
+                  "detail": "the evaluation id is unknown or expired",
+                  "status": 404,
+                  "title": "Evaluation not found",
+                  "type": "https://data.example.gov/problems/evaluation/not_found"
+                }
+              }
+            }
           }
         }
       }
@@ -232,10 +776,47 @@
         "operationId": "listFormats",
         "responses": {
           "200": {
-            "description": "Supported formats"
+            "description": "Supported formats",
+            "content": {
+              "application/json": {
+                "example": {
+                  "formats": [
+                    {
+                      "id": "application/dc+sd-jwt",
+                      "kind": "credential",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/ld+json; profile=\"cccev\"",
+                      "kind": "renderer",
+                      "status": "enabled"
+                    },
+                    {
+                      "id": "application/vnd.registry-witness.claim-result+json",
+                      "kind": "claim_result",
+                      "status": "enabled"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           }
         }
       }
@@ -246,10 +827,36 @@
         "operationId": "getHealthz",
         "responses": {
           "200": {
-            "description": "Service process is alive"
+            "description": "Service process is alive",
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "failed": 0,
+                    "ok": 1,
+                    "total": 1
+                  },
+                  "status": "ok"
+                }
+              }
+            }
           },
           "4XX": {
-            "description": "Client error"
+            "description": "Client error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://data.example.gov/problems/request/invalid"
+                }
+              }
+            }
           }
         },
         "security": []
@@ -261,10 +868,38 @@
         "operationId": "getOpenApi",
         "responses": {
           "200": {
-            "description": "OpenAPI document"
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {
+                "example": {
+                  "info": {
+                    "title": "Registry Witness API",
+                    "version": "0.2.1"
+                  },
+                  "openapi": "3.1.0",
+                  "paths": {
+                    "/claims/evaluate": {}
+                  }
+                }
+              }
+            }
           },
           "401": {
-            "description": "Missing or invalid credential"
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://data.example.gov/problems/auth/missing_credential"
+                }
+              }
+            }
           }
         }
       }
@@ -275,13 +910,51 @@
         "operationId": "getReady",
         "responses": {
           "200": {
-            "description": "Evidence runtime is ready"
+            "description": "Evidence runtime is ready",
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "failed": 0,
+                    "ok": 1,
+                    "total": 1
+                  },
+                  "status": "ready"
+                }
+              }
+            }
           },
           "4XX": {
-            "description": "Client error"
+            "description": "Client error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                },
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the evidence request is invalid",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://data.example.gov/problems/request/invalid"
+                }
+              }
+            }
           },
           "503": {
-            "description": "Evidence runtime is not ready"
+            "description": "Evidence runtime is not ready",
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "failed": 1,
+                    "ok": 0,
+                    "total": 1
+                  },
+                  "status": "not_ready"
+                }
+              }
+            }
           }
         },
         "security": []
@@ -439,6 +1112,36 @@
           }
         },
         "additionalProperties": false
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": true
       },
       "RenderRequest": {
         "type": "object",

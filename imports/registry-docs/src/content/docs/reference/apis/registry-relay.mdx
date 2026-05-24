@@ -26,15 +26,14 @@ The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, and what the specification does not cover.
 
-Evidence source: [Registry Relay](../../../projects/registry-relay/) release tag `v0.1.1` (`85d32f062388a7711d66aae94e8a15e588d3aa3a`), reviewed 2026-05-24.
+Evidence source: [Registry Relay](../../../projects/registry-relay/) `main` commit `5a2a8f2`, generated after the `v0.1.1` release and reviewed 2026-05-24.
 
 ## API surface
 
 Registry Relay is a Rust async HTTP service that turns sensitive government
 tabular files and database tables into protected, read-only, domain-oriented consultation APIs.
 The route inventory on this page follows the released source.
-The Redoc artifact is a pinned civil demo snapshot and does not cover every route registered
-by the released server.
+The Redoc artifact is a pinned civil demo snapshot generated from the current Relay runtime and includes catalog, metadata, dataset, policy, and evidence-offering response examples for the configured demo catalog.
 
 The API groups into six domains:
 
@@ -132,8 +131,8 @@ enabled.
 and `GET /metrics` are mounted on a separate admin listener (`server.admin_bind`). The admin listener is optional: it is not enabled unless `admin_bind` is configured. Example value: `127.0.0.1:8081`. Admin routes require `admin` scope and do not appear in the public OpenAPI document.
 
 **Artifact snapshot.** The current artifact is a pinned civil demo snapshot, not a release-grade
-export. Some routes and configurations are not reflected, including OIDC auth, SP DCI adapter,
-OGC API Records, DID, schema, context, and some metadata routes.
+export. Some optional routes and configurations are not reflected, including OIDC auth, SP DCI adapter,
+OGC API Records, DID, schema, and context routes unless the runtime is configured with those features.
 Regenerate from `GET /openapi.json` on a running Relay instance configured with the relevant features.
 
 **No write operations.** Registry Relay is a read-only service. Write operations (provisioning,

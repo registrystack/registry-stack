@@ -23,7 +23,7 @@ The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, what disclosure profiles the specification exposes, and what is not in scope.
 
-Evidence source: [Registry Witness](../../../projects/registry-witness/) `main` commit `526e0a6a94ded74e210e510d6caf43b6a32eb5ce`, generated after the `v0.2.1` release and reviewed 2026-05-24.
+Evidence source: [Registry Witness](../../../projects/registry-witness/) `main` commit `5b6be8a`, generated after the `v0.2.1` release and reviewed 2026-05-24.
 
 Generate or refresh the artifact:
 
@@ -39,7 +39,7 @@ Registry Witness runs independently; it does not require Registry Relay to be ru
 
 The pinned OpenAPI document is generated from the Registry Witness source and reports `info.version` as `0.2.1`.
 The artifact includes the crate license metadata, protected API routes, public probe routes,
-and the protected admin reload route mounted by the standalone router.
+the protected admin reload route mounted by the standalone router, and Redoc response examples for the high-value success and problem responses.
 Routes are implemented in `crates/registry-witness-server/src/api.rs` and
 `crates/registry-witness-server/src/standalone.rs`; the OpenAPI generator lives in
 `crates/registry-witness-server/src/openapi.rs`.

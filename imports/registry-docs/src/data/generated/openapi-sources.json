@@ -5,7 +5,7 @@
     "owner": "registry-relay",
     "source": "Auth-gated `GET /openapi.json` from a configured Relay runtime.",
     "artifact": "openapi/registry-relay.openapi.json",
-    "status": "pinned civil demo snapshot; does not yet cover the current platform-refactored Relay source",
+    "status": "pinned generated civil demo snapshot from the local Registry Relay runtime",
     "redoc_path": "/registry-legend/api/registry-relay.html"
   },
   {
@@ -14,7 +14,7 @@
     "owner": "registry-witness",
     "source": "`cargo run -p registry-witness-bin -- openapi`",
     "artifact": "openapi/registry-witness.openapi.json",
-    "status": "pinned generated snapshot from the local Registry Witness workspace",
+    "status": "pinned generated snapshot from the local Registry Witness workspace with response examples",
     "redoc_path": "/registry-legend/api/registry-witness.html"
   }
 ]
