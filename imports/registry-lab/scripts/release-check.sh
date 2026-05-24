@@ -6,6 +6,9 @@ demo_dir="$(cd "${script_dir}/.." && pwd)"
 
 export REGISTRY_RELAY_SOURCE_DIR="${REGISTRY_RELAY_SOURCE_DIR:-"${demo_dir}/vendor/registry-relay"}"
 export REGISTRY_WITNESS_SOURCE_DIR="${REGISTRY_WITNESS_SOURCE_DIR:-"${demo_dir}/vendor/registry-witness"}"
+export REGISTRY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR:-"${demo_dir}/vendor/registry-platform"}"
+export REGISTRY_RELAY_PLATFORM_SOURCE_DIR="${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
+export REGISTRY_WITNESS_PLATFORM_SOURCE_DIR="${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
 
 cleanup() {
   docker compose -f "${demo_dir}/compose.yaml" down -v >/dev/null 2>&1 || true

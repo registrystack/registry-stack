@@ -4,19 +4,21 @@ server:
   bind: 0.0.0.0:8080
 
 auth:
+  mode: api_key
   api_keys:
     - id: social_protection_evidence_client
-      token_env: SOCIAL_EVIDENCE_CLIENT_TOKEN
+      hash_env: SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH
       scopes:
         - social_protection_registry:evidence_verification
   bearer_tokens:
     - id: social_protection_evidence_client
-      token_env: SOCIAL_EVIDENCE_CLIENT_BEARER
+      hash_env: SOCIAL_EVIDENCE_CLIENT_BEARER_HASH
       scopes:
         - social_protection_registry:evidence_verification
 
 audit:
   sink: stdout
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
@@ -26,6 +28,7 @@ evidence:
   source_connections:
     social_protection:
       base_url: http://social-protection-registry-relay:8080
+      allow_insecure_private_network: true
       token_env: SOCIAL_EVIDENCE_SOURCE_RAW
   credential_profiles:
     enrollment_sd_jwt:

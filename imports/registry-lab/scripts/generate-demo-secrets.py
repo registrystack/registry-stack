@@ -66,6 +66,8 @@ def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_witness_issuer_jwk()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_claim_verification_binding_key(),
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
+        "REGISTRY_WITNESS_AUDIT_HASH_SECRET": generate_raw_key(),
         "REGISTRY_WITNESS_ISSUER_JWK": issuer_jwk,
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
@@ -78,10 +80,20 @@ def generate_env() -> dict[str, str]:
     values["SOCIAL_PROTECTION_EVIDENCE_SOURCE_RAW"] = values["SOCIAL_EVIDENCE_SOURCE_RAW"]
     values["SOCIAL_PROTECTION_EVIDENCE_SOURCE_HASH"] = values["SOCIAL_EVIDENCE_SOURCE_HASH"]
     for name in EVIDENCE_CLIENT_NAMES:
-        values[f"{name}_TOKEN"] = generate_raw_key()
-        values[f"{name}_BEARER"] = generate_raw_key()
+        token = generate_raw_key()
+        bearer = generate_raw_key()
+        values[f"{name}_TOKEN"] = token
+        values[f"{name}_TOKEN_HASH"] = fingerprint(token)
+        values[f"{name}_BEARER"] = bearer
+        values[f"{name}_BEARER_HASH"] = fingerprint(bearer)
     values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN"] = values["SOCIAL_EVIDENCE_CLIENT_TOKEN"]
+    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN_HASH"] = values[
+        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH"
+    ]
     values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER"] = values["SOCIAL_EVIDENCE_CLIENT_BEARER"]
+    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER_HASH"] = values[
+        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH"
+    ]
     return values
 
 
@@ -120,7 +132,11 @@ def main() -> int:
     )
     if args.print_summary:
         summary = {
-            "raw_token_variables": sorted(k for k in values if k.endswith(("_RAW", "_TOKEN", "_BEARER"))),
+            "raw_secret_variables": sorted(
+                k
+                for k in values
+                if k.endswith(("_RAW", "_TOKEN", "_BEARER", "_AUDIT_HASH_SECRET"))
+            ),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
             "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
             "binding_key": "CLAIM_VERIFICATION_BINDING_KEY",

@@ -63,9 +63,10 @@ files are written under `static-metadata/`. Both directories keep only their
 ## Source Repositories
 
 This demo keeps runtime orchestration, fixtures, static metadata config, and
-walkthrough scripts in this repository. Registry Relay and Registry Witness are
-submodules under `vendor/`:
+walkthrough scripts in this repository. Registry Platform, Registry Relay, and
+Registry Witness are submodules under `vendor/`:
 
+- `vendor/registry-platform`: shared platform crates used by Relay and Witness.
 - `vendor/registry-relay`: Relay source used by `Dockerfile.registry-relay`.
 - `vendor/registry-witness`: Registry Witness source used by
   `Dockerfile.registry-witness`.
@@ -75,6 +76,7 @@ used without changing `compose.yaml`:
 
 ```bash
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
+REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
 REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
 docker compose -f compose.yaml build
 ```
@@ -82,8 +84,8 @@ docker compose -f compose.yaml build
 Use the same variables with `scripts/generate-demo-secrets.py` and
 `scripts/publish-static-metadata.sh` when you want those scripts to use a sibling
 Relay checkout instead of the `vendor/registry-relay` submodule. For a release,
-pin the submodules to commits that already include the Registry Relay and
-Registry Witness behavior required by this demo.
+pin the submodules to commits that already include the Registry Platform,
+Registry Relay, and Registry Witness behavior required by this demo.
 
 ## Fixture Data
 
@@ -117,14 +119,16 @@ Credential classes:
 - aggregate-reader tokens for the aggregate consultation;
 - separate Registry Witness client API keys and bearer tokens;
 - distinct shared Registry Witness source tokens for civil, social, and health.
+- per-deployment audit hash secrets for Relay and Witness redaction.
 
 The social protection Relay config keeps row and aggregate scopes on separate
 credentials so the smoke flow can prove row-reader credentials cannot run the
 aggregate endpoint. Civil and health aggregate credentials are generated for
 future symmetry but are not used by the v1 walkthrough.
 
-Relay configs should reference only `*_HASH` env vars. Registry Witness configs
-should reference only `token_env` names. No raw token should be committed.
+Relay and Registry Witness auth configs should reference only `*_HASH` env vars.
+Registry Witness upstream source connections still reference raw `token_env`
+names for outbound calls to Relay. No raw token should be committed.
 
 ## Static Metadata
 

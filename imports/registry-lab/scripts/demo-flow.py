@@ -162,7 +162,13 @@ def holder_did() -> str:
     return f"did:jwk:{encoded}"
 
 
-def sign_holder_proof(evaluation_id: str, credential_profile: str, claims: list[str]) -> tuple[str, str]:
+def sign_holder_proof(
+    evaluation_id: str,
+    credential_profile: str,
+    claims: list[str],
+    disclosure: str,
+    audience: str,
+) -> tuple[str, str]:
     if shutil.which("openssl") is None:
         raise DemoError("openssl is required for the demo holder proof")
     holder_id = holder_did()
@@ -173,13 +179,13 @@ def sign_holder_proof(evaluation_id: str, credential_profile: str, claims: list[
         json.dumps(
             {
                 "sub": holder_id,
-                "aud": "registry-witness",
+                "aud": audience,
                 "exp": now + 300,
                 "iat": now,
                 "jti": jti,
                 "evaluation_id": evaluation_id,
                 "credential_profile": credential_profile,
-                "disclosure": "predicate",
+                "disclosure": b64url(hashlib.sha256(disclosure.encode("utf-8")).digest()),
                 "claims": claims,
             },
             separators=(",", ":"),
@@ -509,7 +515,13 @@ def main() -> int:
     )
     save(out, step, "credential-bound-evaluation", credential_eval)
     step += 1
-    holder_id, proof = sign_holder_proof(first_result_id(credential_eval), "civil_status_sd_jwt", ["person-is-alive"])
+    holder_id, proof = sign_holder_proof(
+        first_result_id(credential_eval),
+        "civil_status_sd_jwt",
+        ["person-is-alive"],
+        "predicate",
+        "civil-witness",
+    )
     credential = require(
         request(
             "POST",

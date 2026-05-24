@@ -43,6 +43,17 @@ curl_json() {
   curl "${args[@]}"
 }
 
+curl_json_api_key() {
+  local method="$1"
+  local url="$2"
+  local token="$3"
+  local out="$4"
+  shift 4
+  local args=(-fsS -X "${method}" -H "Accept: */*" -H "x-request-id: ${correlation_id}" -H "x-api-key: ${token}")
+  args+=("$@" -o "${out}" "${url}")
+  curl "${args[@]}"
+}
+
 curl_status() {
   local method="$1"
   local url="$2"
@@ -54,6 +65,28 @@ curl_status() {
   fi
   args+=("$@" "${url}")
   curl "${args[@]}"
+}
+
+wait_http() {
+  local name="$1"
+  local url="$2"
+  local token="${3:-}"
+  local deadline="${SMOKE_WAIT_SECONDS:-90}"
+  local start
+  start="$(date +%s)"
+  local status="000"
+  while (( $(date +%s) - start < deadline )); do
+    local args=(-sS -o /dev/null -w "%{http_code}" -H "Accept: */*" -H "x-request-id: ${correlation_id}")
+    if [[ -n "${token}" ]]; then
+      args+=(-H "Authorization: Bearer ${token}")
+    fi
+    status="$(curl "${args[@]}" "${url}" 2>/dev/null || true)"
+    if [[ "${status}" =~ ^2[0-9][0-9]$ ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "${name} did not become ready within ${deadline}s, last status ${status}"
 }
 
 json_has_key() {
@@ -100,6 +133,14 @@ PY
 
 mkdir -p "${output_dir}"
 
+wait_http "civil relay health" http://127.0.0.1:4311/health "${CIVIL_METADATA_CLIENT_RAW}"
+wait_http "social relay health" http://127.0.0.1:4312/health "${SOCIAL_METADATA_CLIENT_RAW}"
+wait_http "health relay health" http://127.0.0.1:4313/health "${HEALTH_METADATA_CLIENT_RAW}"
+wait_http "civil evidence discovery" http://127.0.0.1:4321/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}"
+wait_http "social evidence discovery" http://127.0.0.1:4322/.well-known/evidence-service "${SOCIAL_EVIDENCE_CLIENT_BEARER}"
+wait_http "shared evidence discovery" http://127.0.0.1:4323/.well-known/evidence-service "${SHARED_EVIDENCE_CLIENT_BEARER}"
+wait_http "static metadata publisher" http://127.0.0.1:4331/metadata/index.json ""
+
 check "civil relay health" curl_json GET http://127.0.0.1:4311/health "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-health.json"
 check "social relay health" curl_json GET http://127.0.0.1:4312/health "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-health.json"
 check "health relay health" curl_json GET http://127.0.0.1:4313/health "${HEALTH_METADATA_CLIENT_RAW}" "${output_dir}/smoke-health-health.json"
@@ -109,8 +150,11 @@ check "social relay ready" curl_json GET http://127.0.0.1:4312/ready "${SOCIAL_M
 check "health relay ready" curl_json GET http://127.0.0.1:4313/ready "${HEALTH_METADATA_CLIENT_RAW}" "${output_dir}/smoke-health-ready.json"
 
 check "civil evidence discovery" curl_json GET http://127.0.0.1:4321/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evidence-discovery.json"
+check "civil evidence discovery x-api-key" curl_json_api_key GET http://127.0.0.1:4321/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_TOKEN}" "${output_dir}/smoke-civil-evidence-discovery-api-key.json"
 check "social evidence discovery" curl_json GET http://127.0.0.1:4322/.well-known/evidence-service "${SOCIAL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-social-evidence-discovery.json"
+check "social evidence discovery x-api-key" curl_json_api_key GET http://127.0.0.1:4322/.well-known/evidence-service "${SOCIAL_EVIDENCE_CLIENT_TOKEN}" "${output_dir}/smoke-social-evidence-discovery-api-key.json"
 check "shared evidence discovery" curl_json GET http://127.0.0.1:4323/.well-known/evidence-service "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evidence-discovery.json"
+check "shared evidence discovery x-api-key" curl_json_api_key GET http://127.0.0.1:4323/.well-known/evidence-service "${SHARED_EVIDENCE_CLIENT_TOKEN}" "${output_dir}/smoke-shared-evidence-discovery-api-key.json"
 
 check "civil relay OpenAPI" curl_json GET http://127.0.0.1:4311/openapi.json "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-openapi.json"
 check "social relay OpenAPI" curl_json GET http://127.0.0.1:4312/openapi.json "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-openapi.json"
@@ -175,5 +219,47 @@ docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
 grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit event"
+
+for secret_var in \
+  CLAIM_VERIFICATION_BINDING_KEY \
+  REGISTRY_RELAY_AUDIT_HASH_SECRET \
+  REGISTRY_WITNESS_AUDIT_HASH_SECRET \
+  REGISTRY_WITNESS_ISSUER_JWK \
+  CIVIL_EVIDENCE_ISSUER_JWK \
+  SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK \
+  SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK \
+  CIVIL_METADATA_CLIENT_RAW \
+  CIVIL_EVIDENCE_SOURCE_RAW \
+  CIVIL_EVIDENCE_ONLY_RAW \
+  CIVIL_ROW_READER_RAW \
+  CIVIL_AGGREGATE_READER_RAW \
+  SHARED_CIVIL_EVIDENCE_SOURCE_RAW \
+  SOCIAL_METADATA_CLIENT_RAW \
+  SOCIAL_EVIDENCE_SOURCE_RAW \
+  SOCIAL_PROTECTION_EVIDENCE_SOURCE_RAW \
+  SOCIAL_EVIDENCE_ONLY_RAW \
+  SOCIAL_ROW_READER_RAW \
+  SOCIAL_AGGREGATE_READER_RAW \
+  SHARED_SOCIAL_EVIDENCE_SOURCE_RAW \
+  HEALTH_METADATA_CLIENT_RAW \
+  HEALTH_EVIDENCE_SOURCE_RAW \
+  HEALTH_EVIDENCE_ONLY_RAW \
+  HEALTH_ROW_READER_RAW \
+  HEALTH_AGGREGATE_READER_RAW \
+  SHARED_HEALTH_EVIDENCE_SOURCE_RAW \
+  CIVIL_EVIDENCE_CLIENT_TOKEN \
+  CIVIL_EVIDENCE_CLIENT_BEARER \
+  SOCIAL_EVIDENCE_CLIENT_TOKEN \
+  SOCIAL_EVIDENCE_CLIENT_BEARER \
+  SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN \
+  SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER \
+  SHARED_EVIDENCE_CLIENT_TOKEN \
+  SHARED_EVIDENCE_CLIENT_BEARER
+do
+  secret_value="${!secret_var:-}"
+  if [[ -n "${secret_value}" ]] && grep -F -- "${secret_value}" "${log_file}" >/dev/null; then
+    fail "service logs leaked ${secret_var}"
+  fi
+done
 
 echo "smoke OK"

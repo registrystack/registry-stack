@@ -4,3 +4,6 @@
 [submodule "vendor/registry-witness"]
 	path = vendor/registry-witness
 	url = git@github.com:jeremi/registry-witness.git
+[submodule "vendor/registry-platform"]
+	path = vendor/registry-platform
+	url = git@github.com:jeremi/registry-platform.git

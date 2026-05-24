@@ -4,19 +4,21 @@ server:
   bind: 0.0.0.0:8080
 
 auth:
+  mode: api_key
   api_keys:
     - id: civil_evidence_client
-      token_env: CIVIL_EVIDENCE_CLIENT_TOKEN
+      hash_env: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
     - id: civil_evidence_client
-      token_env: CIVIL_EVIDENCE_CLIENT_BEARER
+      hash_env: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
       scopes:
         - civil_registry:evidence_verification
 
 audit:
   sink: stdout
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
@@ -26,6 +28,7 @@ evidence:
   source_connections:
     civil:
       base_url: http://civil-registry-relay:8080
+      allow_insecure_private_network: true
       token_env: CIVIL_EVIDENCE_SOURCE_RAW
       dci:
         search_path: /dci/crvs/registry/sync/search

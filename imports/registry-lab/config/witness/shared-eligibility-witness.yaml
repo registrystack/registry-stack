@@ -4,16 +4,17 @@ server:
   bind: 0.0.0.0:8080
 
 auth:
+  mode: api_key
   api_keys:
     - id: shared_evidence_client
-      token_env: SHARED_EVIDENCE_CLIENT_TOKEN
+      hash_env: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
   bearer_tokens:
     - id: shared_evidence_client
-      token_env: SHARED_EVIDENCE_CLIENT_BEARER
+      hash_env: SHARED_EVIDENCE_CLIENT_BEARER_HASH
       scopes:
         - civil_registry:evidence_verification
         - social_protection_registry:evidence_verification
@@ -21,6 +22,7 @@ auth:
 
 audit:
   sink: stdout
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
@@ -30,12 +32,15 @@ evidence:
   source_connections:
     civil:
       base_url: http://civil-registry-relay:8080
+      allow_insecure_private_network: true
       token_env: SHARED_CIVIL_EVIDENCE_SOURCE_RAW
     social_protection:
       base_url: http://social-protection-registry-relay:8080
+      allow_insecure_private_network: true
       token_env: SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
     health:
       base_url: http://health-registry-relay:8080
+      allow_insecure_private_network: true
       token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
   credential_profiles:
     combined_support_sd_jwt:
