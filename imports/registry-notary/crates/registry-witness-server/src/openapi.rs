@@ -18,7 +18,8 @@ pub fn openapi_document() -> OpenApi {
             "version": env!("CARGO_PKG_VERSION"),
             "description": "Standalone claim evaluation, rendering, and credential issuance API.",
             "license": {
-                "name": env!("CARGO_PKG_LICENSE")
+                "name": env!("CARGO_PKG_LICENSE"),
+                "identifier": env!("CARGO_PKG_LICENSE")
             }
         },
         "security": [
@@ -32,7 +33,8 @@ pub fn openapi_document() -> OpenApi {
                     "operationId": "getHealthz",
                     "security": [],
                     "responses": {
-                        "200": { "description": "Service process is alive" }
+                        "200": { "description": "Service process is alive" },
+                        "4XX": { "description": "Client error" }
                     }
                 }
             },
@@ -43,6 +45,7 @@ pub fn openapi_document() -> OpenApi {
                     "security": [],
                     "responses": {
                         "200": { "description": "Evidence runtime is ready" },
+                        "4XX": { "description": "Client error" },
                         "503": { "description": "Evidence runtime is not ready" }
                     }
                 }
@@ -292,6 +295,10 @@ mod tests {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(doc["info"]["license"]["name"], env!("CARGO_PKG_LICENSE"));
+        assert_eq!(
+            doc["info"]["license"]["identifier"],
+            env!("CARGO_PKG_LICENSE")
+        );
     }
 
     #[test]
@@ -299,5 +306,13 @@ mod tests {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         assert_eq!(doc["paths"]["/healthz"]["get"]["security"], json!([]));
         assert_eq!(doc["paths"]["/ready"]["get"]["security"], json!([]));
+        assert_eq!(
+            doc["paths"]["/healthz"]["get"]["responses"]["4XX"]["description"],
+            "Client error"
+        );
+        assert_eq!(
+            doc["paths"]["/ready"]["get"]["responses"]["4XX"]["description"],
+            "Client error"
+        );
     }
 }
