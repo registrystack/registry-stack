@@ -8,7 +8,7 @@
 - Initial release target: `v0.1.0`.
 - Consumers pin git tags, not branches.
 - All crates in this workspace share the same version in `[workspace.package]`.
-- A tag is not cut until CI is green for format, clippy, build, tests, dependency policy, and hygiene checks.
+- A tag is not cut until CI is green for format, clippy, build, tests, dependency policy, secret scanning, and hygiene checks.
 
 ## Semver Before 1.0
 
@@ -26,6 +26,9 @@ Platform-owned signing and verification supports EdDSA with Ed25519 JWKs. ES256,
 RS256, PS256, and other JWK algorithms are intentionally rejected as unsupported
 until a production consumer needs them. This keeps the first tag narrow while
 making unsupported algorithms fail closed instead of silently falling back.
+OIDC JWT verification is separate from platform-owned signing and remains
+caller-configurable so consumers can interoperate with providers that do not
+offer EdDSA, as long as their algorithm allowlist is explicit.
 
 ## Consumer Alignment
 
@@ -44,7 +47,8 @@ Relay and Witness must pin the same `registry-platform` tag during coordinated m
    - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
    - `cargo install cargo-deny --version 0.19.7 --locked`
    - `cargo deny check`
-   - `cargo test --workspace --all-features`
+   - `cargo test --workspace --all-targets --all-features`
+   - `gitleaks dir --no-banner --redact --verbose --timeout 120 .` with the CI `target/` allowlist
 4. Confirm `scripts/check-hygiene-alignment.sh . .` is green.
 5. Confirm consumer PRs are ready to pin the new tag.
 6. Create and push the signed tag.

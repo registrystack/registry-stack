@@ -8,7 +8,9 @@ Shared fixtures and assertions for registry-platform consumers.
   key rotation.
 - `MockHttpUpstream`, a WireMock-backed upstream with request-size tracking.
 - Ed25519 JWK fixtures for signing and verification tests.
-- `assert_chain_integrity` for audit envelope assertions.
+- `assert_chain_integrity` for internally consistent audit envelope assertions.
+- `assert_chain_integrity_with_anchors` for retained chains or checks that must
+  be bound to a trusted start or tail hash.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
 
 ## Typical Use

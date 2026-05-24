@@ -35,10 +35,11 @@ security, SD-JWT VC support, crypto primitives, and integration-test fixtures.
 - Rust edition: 2021.
 - License: Apache-2.0.
 - Publication: crates are private to this workspace (`publish = false`).
-- Versioning: all crates currently share the workspace version `0.1.0`.
-- Signing support: v0.1.0 supports EdDSA/Ed25519 for platform-owned signing and
-  verification. Other JWK algorithms are rejected as unsupported until a
-  consumer requires them.
+- Versioning: all crates currently share the workspace version `0.1.2`.
+- Signing support: v0.1.2 supports EdDSA/Ed25519 for platform-owned signing and
+  verification. OIDC JWT verification is caller-configurable for provider
+  compatibility, but consumers should keep algorithm allowlists as narrow as
+  their provider supports.
 
 ## Consuming the Workspace
 
@@ -47,8 +48,8 @@ only the crates they need.
 
 ```toml
 [dependencies]
-registry-platform-httputil = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.0" }
-registry-platform-oidc = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.0" }
+registry-platform-httputil = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.2" }
+registry-platform-oidc = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.2" }
 ```
 
 The `registry-platform-httputil` crate defaults to `rustls`. Use
@@ -61,9 +62,19 @@ Run checks from the workspace root:
 
 ```sh
 cargo fmt --check
+cargo build --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo test --workspace --all-targets --all-features
 cargo deny check
+GITLEAKS_CONFIG_TOML="$(cat <<'TOML'
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignore generated Rust build output."
+paths = ["(^|/)target/"]
+TOML
+)" gitleaks dir --no-banner --redact --verbose --timeout 120 .
 ```
 
 For focused work on one crate:

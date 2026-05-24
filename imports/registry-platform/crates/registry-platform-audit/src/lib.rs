@@ -28,7 +28,7 @@ const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
 
 /// One chained audit record.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditEnvelope {
     /// ULID assigned by the chain when the record is appended.
     pub envelope_id: String,
@@ -43,6 +43,18 @@ pub struct AuditEnvelope {
     /// serialized as lowercase hex in JSONL.
     #[serde(with = "hash_hex")]
     pub record_hash: [u8; 32],
+}
+
+impl fmt::Debug for AuditEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuditEnvelope")
+            .field("envelope_id", &self.envelope_id)
+            .field("timestamp_unix_ms", &self.timestamp_unix_ms)
+            .field("prev_hash", &self.prev_hash)
+            .field("record", &"<redacted>")
+            .field("record_hash", &self.record_hash)
+            .finish()
+    }
 }
 
 impl AuditEnvelope {
@@ -554,6 +566,43 @@ pub struct ChainVerification {
     pub last_hash: Option<[u8; 32]>,
 }
 
+/// External anchors used to turn chain consistency checks into anchored
+/// verification.
+///
+/// `trusted_start_prev_hash` verifies a retained suffix starts after a hash
+/// stored outside the JSONL set. `trusted_last_hash` verifies the retained set
+/// still ends at a previously stored tail/head hash. Callers should store these
+/// anchor values in a location an audit-log writer cannot rewrite.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ChainVerificationAnchors {
+    pub trusted_start_prev_hash: Option<[u8; 32]>,
+    pub trusted_last_hash: Option<[u8; 32]>,
+}
+
+impl ChainVerificationAnchors {
+    #[must_use]
+    pub fn from_trusted_start_prev_hash(trusted_start_prev_hash: Option<[u8; 32]>) -> Self {
+        Self {
+            trusted_start_prev_hash,
+            trusted_last_hash: None,
+        }
+    }
+
+    #[must_use]
+    pub fn from_trusted_last_hash(trusted_last_hash: [u8; 32]) -> Self {
+        Self {
+            trusted_start_prev_hash: None,
+            trusted_last_hash: Some(trusted_last_hash),
+        }
+    }
+
+    #[must_use]
+    pub fn with_trusted_last_hash(mut self, trusted_last_hash: [u8; 32]) -> Self {
+        self.trusted_last_hash = Some(trusted_last_hash);
+        self
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ChainVerificationError {
     #[error("audit chain line {line} is not valid JSON: {message}")]
@@ -566,12 +615,33 @@ pub enum ChainVerificationError {
     },
     #[error("audit chain line {line} has an invalid record_hash")]
     RecordHashMismatch { line: usize },
+    #[error("audit chain last hash mismatch")]
+    LastHashMismatch {
+        expected: [u8; 32],
+        actual: Option<[u8; 32]>,
+    },
 }
 
 pub fn verify_chain(
     envelopes: &[AuditEnvelope],
 ) -> Result<ChainVerification, ChainVerificationError> {
     verify_chain_expected_prev_hash(envelopes, None)
+}
+
+pub fn verify_chain_with_anchors(
+    envelopes: &[AuditEnvelope],
+    anchors: ChainVerificationAnchors,
+) -> Result<ChainVerification, ChainVerificationError> {
+    let verification = verify_chain_expected_prev_hash(envelopes, anchors.trusted_start_prev_hash)?;
+    if let Some(expected) = anchors.trusted_last_hash {
+        if verification.last_hash != Some(expected) {
+            return Err(ChainVerificationError::LastHashMismatch {
+                expected,
+                actual: verification.last_hash,
+            });
+        }
+    }
+    Ok(verification)
 }
 
 fn verify_chain_expected_prev_hash(
@@ -581,6 +651,7 @@ fn verify_chain_expected_prev_hash(
     let mut records = 0usize;
     let mut previous_hash = expected_start_prev_hash;
     let mut start_prev_hash = None;
+    let mut last_hash = None;
 
     for (index, envelope) in envelopes.iter().enumerate() {
         let line = index + 1;
@@ -611,13 +682,14 @@ fn verify_chain_expected_prev_hash(
         }
 
         previous_hash = Some(envelope.record_hash);
+        last_hash = Some(envelope.record_hash);
         records += 1;
     }
 
     Ok(ChainVerification {
         records,
         start_prev_hash,
-        last_hash: previous_hash,
+        last_hash,
     })
 }
 
@@ -628,6 +700,18 @@ where
 {
     let envelopes = parse_jsonl_lines(lines)?;
     verify_chain(&envelopes)
+}
+
+pub fn verify_jsonl_lines_with_anchors<I, S>(
+    lines: I,
+    anchors: ChainVerificationAnchors,
+) -> Result<ChainVerification, ChainVerificationError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let envelopes = parse_jsonl_lines(lines)?;
+    verify_chain_with_anchors(&envelopes, anchors)
 }
 
 fn parse_jsonl_lines<I, S>(lines: I) -> Result<Vec<AuditEnvelope>, ChainVerificationError>
@@ -1031,6 +1115,28 @@ mod tests {
     }
 
     #[test]
+    fn audit_envelope_debug_redacts_record() {
+        let envelope = AuditEnvelope::new(
+            json!({
+                "event": "credential.issued",
+                "token": "secret-token",
+                "email": "jeremi@example.test",
+            }),
+            None,
+        )
+        .expect("envelope");
+
+        let debug = format!("{envelope:?}");
+
+        assert!(debug.contains("AuditEnvelope"));
+        assert!(debug.contains("record: \"<redacted>\""));
+        assert!(debug.contains(&envelope.envelope_id));
+        assert!(!debug.contains("secret-token"));
+        assert!(!debug.contains("jeremi@example.test"));
+        assert!(!debug.contains("credential.issued"));
+    }
+
+    #[test]
     fn audit_chain_detects_tampered_record() {
         let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
         let mut second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
@@ -1186,6 +1292,81 @@ mod tests {
                 expected: None,
                 actual: Some(_),
             })
+        ));
+    }
+
+    #[test]
+    fn verify_chain_with_anchors_accepts_trusted_retained_suffix() {
+        let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
+        let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
+            .expect("second");
+        let third = AuditEnvelope::new(json!({ "event": "third" }), Some(second.record_hash))
+            .expect("third");
+
+        let verification = verify_chain_with_anchors(
+            &[second.clone(), third.clone()],
+            ChainVerificationAnchors::from_trusted_start_prev_hash(Some(first.record_hash))
+                .with_trusted_last_hash(third.record_hash),
+        )
+        .expect("anchored suffix verifies");
+
+        assert_eq!(verification.records, 2);
+        assert_eq!(verification.start_prev_hash, Some(first.record_hash));
+        assert_eq!(verification.last_hash, Some(third.record_hash));
+    }
+
+    #[test]
+    fn verify_chain_with_trusted_tail_rejects_full_rewrite() {
+        let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
+        let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
+            .expect("second");
+        let rewritten_first =
+            AuditEnvelope::new(json!({ "event": "fake-first" }), None).expect("fake first");
+        let rewritten_second = AuditEnvelope::new(
+            json!({ "event": "fake-second" }),
+            Some(rewritten_first.record_hash),
+        )
+        .expect("fake second");
+
+        let rewritten = [rewritten_first, rewritten_second];
+        assert!(verify_chain(&rewritten).is_ok());
+
+        let err = verify_chain_with_anchors(
+            &rewritten,
+            ChainVerificationAnchors::from_trusted_last_hash(second.record_hash),
+        )
+        .expect_err("trusted tail detects full rewrite");
+
+        assert!(matches!(
+            err,
+            ChainVerificationError::LastHashMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_jsonl_lines_with_anchors_checks_trusted_tail() {
+        let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
+        let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
+            .expect("second");
+        let lines = [first.to_jsonl().unwrap(), second.to_jsonl().unwrap()];
+
+        let verification = verify_jsonl_lines_with_anchors(
+            lines.iter(),
+            ChainVerificationAnchors::from_trusted_last_hash(second.record_hash),
+        )
+        .expect("anchored JSONL verifies");
+
+        assert_eq!(verification.records, 2);
+        assert_eq!(verification.last_hash, Some(second.record_hash));
+
+        let err = verify_jsonl_lines_with_anchors(
+            lines.iter(),
+            ChainVerificationAnchors::from_trusted_last_hash([42; 32]),
+        )
+        .expect_err("wrong trusted tail rejected");
+        assert!(matches!(
+            err,
+            ChainVerificationError::LastHashMismatch { .. }
         ));
     }
 

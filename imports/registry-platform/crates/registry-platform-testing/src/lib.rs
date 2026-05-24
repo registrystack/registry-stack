@@ -13,7 +13,9 @@ use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::Algorithm;
-use registry_platform_audit::{verify_chain, AuditEnvelope};
+use registry_platform_audit::{
+    verify_chain, verify_chain_with_anchors, AuditEnvelope, ChainVerificationAnchors,
+};
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use serde_json::{json, Map, Value};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
@@ -329,9 +331,17 @@ pub mod fixtures {
 }
 
 pub type ChainAssertionError = registry_platform_audit::ChainVerificationError;
+pub type ChainAssertionAnchors = ChainVerificationAnchors;
 
 pub fn assert_chain_integrity(envelopes: &[AuditEnvelope]) -> Result<(), ChainAssertionError> {
     verify_chain(envelopes).map(|_| ())
+}
+
+pub fn assert_chain_integrity_with_anchors(
+    envelopes: &[AuditEnvelope],
+    anchors: ChainAssertionAnchors,
+) -> Result<(), ChainAssertionError> {
+    verify_chain_with_anchors(envelopes, anchors).map(|_| ())
 }
 
 #[must_use]
@@ -489,6 +499,43 @@ mod tests {
         assert_chain_integrity(&[first.clone(), second.clone()]).expect("chain is valid");
         second.record["event"] = json!("changed");
         assert!(assert_chain_integrity(&[first, second]).is_err());
+    }
+
+    #[tokio::test]
+    async fn anchored_chain_integrity_assertion_checks_trusted_tail() {
+        let sink = MemorySink::default();
+        let chain = ChainState::new();
+        let first = chain
+            .append(&sink, json!({ "event": "first" }))
+            .await
+            .expect("first append");
+        let second = chain
+            .append(&sink, json!({ "event": "second" }))
+            .await
+            .expect("second append");
+        let rewritten_sink = MemorySink::default();
+        let rewritten_chain = ChainState::new();
+        let rewritten_first = rewritten_chain
+            .append(&rewritten_sink, json!({ "event": "fake-first" }))
+            .await
+            .expect("rewritten first append");
+        let rewritten_second = rewritten_chain
+            .append(&rewritten_sink, json!({ "event": "fake-second" }))
+            .await
+            .expect("rewritten second append");
+        let rewritten = [rewritten_first, rewritten_second];
+
+        assert_chain_integrity(&rewritten).expect("unanchored chain is internally consistent");
+        assert!(assert_chain_integrity_with_anchors(
+            &rewritten,
+            ChainAssertionAnchors::from_trusted_last_hash(second.record_hash),
+        )
+        .is_err());
+        assert_chain_integrity_with_anchors(
+            &[first, second.clone()],
+            ChainAssertionAnchors::from_trusted_last_hash(second.record_hash),
+        )
+        .expect("anchored chain verifies");
     }
 
     #[derive(Default)]

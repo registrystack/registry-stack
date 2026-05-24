@@ -11,9 +11,11 @@ use registry_platform_httputil::{read_bounded, FetchUrlError, FetchUrlPolicy};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 const DEFAULT_DOC_BYTES: u64 = 1024 * 1024;
+const DEFAULT_MAX_KID_BYTES: usize = 1024;
+const DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES: usize = 1024;
 
 #[derive(Debug, Clone)]
 pub struct OidcDiscoveryConfig {
@@ -45,7 +47,9 @@ pub async fn fetch_discovery_with_policy(
 ) -> Result<DiscoveryDocument, OidcError> {
     if let Some(jwks_uri) = &cfg.jwks_uri_override {
         let url = Url::parse(jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
-        fetch_url_policy.validate_for_immediate_fetch(&url)?;
+        fetch_url_policy
+            .validate_for_immediate_fetch_with_timeout(&url, cfg.discovery_timeout)
+            .await?;
         return Ok(DiscoveryDocument {
             issuer: cfg.issuer.clone(),
             jwks_uri: jwks_uri.clone(),
@@ -55,7 +59,9 @@ pub async fn fetch_discovery_with_policy(
     let mut issuer = cfg.issuer.trim_end_matches('/').to_string();
     issuer.push_str("/.well-known/openid-configuration");
     let url = Url::parse(&issuer).map_err(|_| OidcError::InvalidUrl)?;
-    let validated_url = fetch_url_policy.validate_for_immediate_fetch(&url)?;
+    let validated_url = fetch_url_policy
+        .validate_for_immediate_fetch_with_timeout(&url, cfg.discovery_timeout)
+        .await?;
     let resp = validated_url
         .immediate_get()?
         .timeout(cfg.discovery_timeout)
@@ -75,7 +81,9 @@ pub async fn fetch_discovery_with_policy(
         });
     }
     let jwks_uri = Url::parse(&document.jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
-    fetch_url_policy.validate_for_immediate_fetch(&jwks_uri)?;
+    fetch_url_policy
+        .validate_for_immediate_fetch_with_timeout(&jwks_uri, cfg.discovery_timeout)
+        .await?;
     Ok(document)
 }
 
@@ -123,6 +131,7 @@ pub struct JwksFetcher {
     config: JwksFetcherConfig,
     fetch_url_policy: FetchUrlPolicy,
     state: RwLock<JwksState>,
+    refresh_lock: Mutex<()>,
 }
 
 impl JwksFetcher {
@@ -144,6 +153,7 @@ impl JwksFetcher {
             config,
             fetch_url_policy,
             state: RwLock::new(JwksState::default()),
+            refresh_lock: Mutex::new(()),
         }
     }
 
@@ -151,26 +161,36 @@ impl JwksFetcher {
         if kid.is_empty() {
             return Err(OidcError::MissingKid);
         }
-        match self.cached_key(kid, Instant::now()).await? {
+        if kid.len() > DEFAULT_MAX_KID_BYTES {
+            return Err(OidcError::KidTooLong);
+        }
+        let now = Instant::now();
+        match self.cached_key(kid, now).await? {
             JwksCacheLookup::Hit(key) => return Ok(key),
-            JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
-            JwksCacheLookup::FreshMiss => {}
-            JwksCacheLookup::StaleOrEmpty => {
-                self.refresh(false).await?;
-                match self.cached_key(kid, Instant::now()).await? {
-                    JwksCacheLookup::Hit(key) => return Ok(key),
-                    JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
-                    JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {
-                        self.remember_unknown_kid(kid).await;
-                        return Err(OidcError::UnknownKid);
+            JwksCacheLookup::NegativeMiss => {
+                if self.should_force_refresh(now).await {
+                    match self.refresh_and_cached_key(kid, true).await? {
+                        JwksCacheLookup::Hit(key) => return Ok(key),
+                        JwksCacheLookup::NegativeMiss
+                        | JwksCacheLookup::FreshMiss
+                        | JwksCacheLookup::StaleOrEmpty => {}
                     }
                 }
+                return Err(OidcError::UnknownKid);
             }
+            JwksCacheLookup::FreshMiss => {}
+            JwksCacheLookup::StaleOrEmpty => match self.refresh_and_cached_key(kid, false).await? {
+                JwksCacheLookup::Hit(key) => return Ok(key),
+                JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
+                JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {
+                    self.remember_unknown_kid(kid).await;
+                    return Err(OidcError::UnknownKid);
+                }
+            },
         }
 
         if self.should_force_refresh(Instant::now()).await {
-            self.refresh(true).await?;
-            match self.cached_key(kid, Instant::now()).await? {
+            match self.refresh_and_cached_key(kid, true).await? {
                 JwksCacheLookup::Hit(key) => return Ok(key),
                 JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
                 JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {}
@@ -189,11 +209,17 @@ impl JwksFetcher {
     }
 
     async fn remember_unknown_kid(&self, kid: &str) {
-        self.state
-            .write()
-            .await
+        let now = Instant::now();
+        let mut state = self.state.write().await;
+        state
             .negative
-            .insert(kid.to_string(), Instant::now());
+            .retain(|_, seen| now.duration_since(*seen) < self.config.negative_cache_ttl);
+        while state.negative.len() >= DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES
+            && !state.negative.contains_key(kid)
+        {
+            evict_oldest_negative_entry(&mut state.negative);
+        }
+        state.negative.insert(kid.to_string(), now);
     }
 
     async fn cached_key(&self, kid: &str, now: Instant) -> Result<JwksCacheLookup, OidcError> {
@@ -220,9 +246,37 @@ impl JwksFetcher {
             })
     }
 
+    async fn refresh_and_cached_key(
+        &self,
+        kid: &str,
+        forced: bool,
+    ) -> Result<JwksCacheLookup, OidcError> {
+        let _guard = self.refresh_lock.lock().await;
+
+        match self.cached_key(kid, Instant::now()).await? {
+            JwksCacheLookup::Hit(key) => return Ok(JwksCacheLookup::Hit(key)),
+            JwksCacheLookup::NegativeMiss if !forced => {
+                return Ok(JwksCacheLookup::NegativeMiss);
+            }
+            JwksCacheLookup::NegativeMiss => {}
+            JwksCacheLookup::FreshMiss if !forced => return Ok(JwksCacheLookup::FreshMiss),
+            JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {}
+        }
+
+        if forced && !self.should_force_refresh(Instant::now()).await {
+            return self.cached_key(kid, Instant::now()).await;
+        }
+
+        self.refresh(forced).await?;
+        self.cached_key(kid, Instant::now()).await
+    }
+
     async fn refresh(&self, forced: bool) -> Result<(), OidcError> {
         let url = Url::parse(&self.jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
-        let validated_url = self.fetch_url_policy.validate_for_immediate_fetch(&url)?;
+        let validated_url = self
+            .fetch_url_policy
+            .validate_for_immediate_fetch_with_timeout(&url, self.config.request_timeout)
+            .await?;
         let resp = validated_url
             .immediate_get()?
             .timeout(self.config.request_timeout)
@@ -247,6 +301,16 @@ impl JwksFetcher {
             state.last_forced_refresh = Some(Instant::now());
         }
         Ok(())
+    }
+}
+
+fn evict_oldest_negative_entry(negative: &mut HashMap<String, Instant>) {
+    if let Some(kid) = negative
+        .iter()
+        .min_by_key(|(_, seen)| **seen)
+        .map(|(kid, _)| kid.clone())
+    {
+        negative.remove(&kid);
     }
 }
 
@@ -460,6 +524,8 @@ pub enum OidcError {
     TokenTypeNotAllowed,
     #[error("token header is missing kid")]
     MissingKid,
+    #[error("token header kid is too long")]
+    KidTooLong,
     #[error("kid is unknown")]
     UnknownKid,
     #[error("JWK is invalid")]
@@ -559,6 +625,36 @@ mod tests {
         }
     }
 
+    fn unsigned_token(header: Value, claims: Value) -> String {
+        format!(
+            "{}.{}.",
+            URL_SAFE_NO_PAD.encode(header.to_string()),
+            URL_SAFE_NO_PAD.encode(claims.to_string())
+        )
+    }
+
+    fn verifier_for_header_tests() -> TokenVerifier {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            reqwest::Client::new(),
+            JwksFetcherConfig::defaults(),
+        ));
+        TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: "https://issuer.example".to_string(),
+                audiences: vec!["registry-api".to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: vec!["JWT".to_string()],
+                scope_claim: "scope".to_string(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients: Vec::new(),
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        )
+    }
+
     #[test]
     fn oidc_allowed_clients_matches_azp_then_client_id_never_sub() {
         let fetcher = Arc::new(JwksFetcher::new(
@@ -621,6 +717,48 @@ mod tests {
             verifier.match_client(&claims).unwrap(),
             Some("azp:client-a".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn oidc_rejects_unsigned_or_disallowed_algorithm() {
+        let verifier = verifier_for_header_tests();
+        let token = unsigned_token(
+            json!({ "alg": "none", "typ": "JWT", "kid": "kid" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+
+        assert!(matches!(
+            verifier.verify(&token).await,
+            Err(OidcError::AlgorithmNotAllowed | OidcError::MalformedToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_rejects_bad_typ_before_jwks_lookup() {
+        let verifier = verifier_for_header_tests();
+        let token = unsigned_token(
+            json!({ "alg": "EdDSA", "typ": "at+jwt", "kid": "kid" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+
+        assert!(matches!(
+            verifier.verify(&token).await,
+            Err(OidcError::TokenTypeNotAllowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_rejects_missing_kid_before_jwks_lookup() {
+        let verifier = verifier_for_header_tests();
+        let token = unsigned_token(
+            json!({ "alg": "EdDSA", "typ": "JWT" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+
+        assert!(matches!(
+            verifier.verify(&token).await,
+            Err(OidcError::MissingKid)
+        ));
     }
 
     #[test]
@@ -778,6 +916,192 @@ mod tests {
             .expect_err("negative cache answers repeated unknown kid");
         assert!(matches!(err, OidcError::UnknownKid));
         assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn jwks_fetcher_rejects_overlong_kid_and_bounds_negative_cache() {
+        let document = Arc::new(RwLock::new(jwks_with_kids(&["known"])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            reqwest::Client::new(),
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        );
+
+        let overlong_kid = "x".repeat(DEFAULT_MAX_KID_BYTES + 1);
+        let err = fetcher
+            .key_for_kid(&overlong_kid)
+            .await
+            .expect_err("overlong kid is rejected before fetching");
+        assert!(matches!(err, OidcError::KidTooLong));
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        assert!(fetcher.state.read().await.negative.is_empty());
+
+        fetcher
+            .key_for_kid("known")
+            .await
+            .expect("initial lookup fetches key");
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+        let now = Instant::now();
+        {
+            let mut state = fetcher.state.write().await;
+            for index in 0..DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES {
+                state.negative.insert(format!("miss-{index}"), now);
+            }
+        }
+        fetcher.remember_unknown_kid("overflow").await;
+
+        let state = fetcher.state.read().await;
+        assert_eq!(state.negative.len(), DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES);
+        assert!(state.negative.contains_key("overflow"));
+        let retained_seed_entries = (0..DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES)
+            .filter(|index| state.negative.contains_key(&format!("miss-{index}")))
+            .count();
+        assert_eq!(
+            retained_seed_entries,
+            DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES - 1
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn jwks_fetcher_singleflights_concurrent_cold_refresh() {
+        let document = Arc::new(RwLock::new(jwks_with_kids(&["cold-kid"])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            reqwest::Client::new(),
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        ));
+
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let fetcher = Arc::clone(&fetcher);
+            tasks.push(tokio::spawn(async move {
+                fetcher
+                    .key_for_kid("cold-kid")
+                    .await
+                    .expect("concurrent lookup gets key");
+            }));
+        }
+
+        for task in tasks {
+            task.await.expect("lookup task joins");
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn jwks_fetcher_singleflights_concurrent_stale_refresh() {
+        let document = Arc::new(RwLock::new(jwks_with_kids(&["stale-kid"])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let mut config = jwks_test_config();
+        config.cache_ttl = Duration::from_millis(500);
+        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            reqwest::Client::new(),
+            config,
+            FetchUrlPolicy::dev(),
+        ));
+
+        fetcher
+            .key_for_kid("stale-kid")
+            .await
+            .expect("initial lookup fetches key");
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let fetcher = Arc::clone(&fetcher);
+            tasks.push(tokio::spawn(async move {
+                fetcher
+                    .key_for_kid("stale-kid")
+                    .await
+                    .expect("concurrent stale lookup gets key");
+            }));
+        }
+
+        for task in tasks {
+            task.await.expect("lookup task joins");
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn jwks_fetcher_forced_refresh_loads_rotated_key() {
+        let document = Arc::new(RwLock::new(jwks_with_kids(&["old-kid"])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            reqwest::Client::new(),
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        );
+
+        fetcher
+            .key_for_kid("old-kid")
+            .await
+            .expect("initial lookup fetches key");
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+        *document.write().await = jwks_with_kids(&["rotated"]);
+        fetcher
+            .key_for_kid("rotated")
+            .await
+            .expect("fresh unknown kid forces refresh for key rotation");
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn jwks_fetcher_retries_negative_kid_after_refresh_cooldown() {
+        let document = Arc::new(RwLock::new(jwks_with_kids(&["old-kid"])));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
+        let mut config = jwks_test_config();
+        config.refresh_cooldown = Duration::from_millis(50);
+        config.negative_cache_ttl = Duration::from_secs(3600);
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            reqwest::Client::new(),
+            config,
+            FetchUrlPolicy::dev(),
+        );
+
+        fetcher
+            .key_for_kid("old-kid")
+            .await
+            .expect("initial lookup fetches key");
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+        let err = fetcher
+            .key_for_kid("attacker-miss")
+            .await
+            .expect_err("unknown kid triggers a forced refresh");
+        assert!(matches!(err, OidcError::UnknownKid));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+
+        *document.write().await = jwks_with_kids(&["rotated"]);
+        let err = fetcher
+            .key_for_kid("rotated")
+            .await
+            .expect_err("cooldown suppresses immediate repeated refresh");
+        assert!(matches!(err, OidcError::UnknownKid));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        fetcher
+            .key_for_kid("rotated")
+            .await
+            .expect("negative kid is retried after refresh cooldown");
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

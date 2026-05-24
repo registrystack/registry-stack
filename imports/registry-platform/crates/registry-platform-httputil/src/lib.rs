@@ -5,6 +5,9 @@ use std::time::{Duration, SystemTime};
 
 use thiserror::Error;
 
+/// Default timeout for requests built from [`ValidatedFetchUrl`].
+pub const DEFAULT_VALIDATED_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Builder for outbound HTTP clients used by platform fetchers.
 #[derive(Debug, Clone)]
 pub struct OutboundClientBuilder {
@@ -196,8 +199,13 @@ impl FetchUrlPolicy {
         }
     }
 
-    /// Validate an outbound URL against scheme, localhost, private-network,
-    /// cloud-metadata, and DNS resolution rules.
+    /// Validate an outbound URL against this policy.
+    ///
+    /// This compatibility helper proves only that the URL is acceptable at the
+    /// moment validation runs. It resolves DNS but discards the DNS evidence, so
+    /// it must not be used as the sole guard for a later outbound request. Use
+    /// [`Self::validate_for_immediate_fetch`] and
+    /// [`ValidatedFetchUrl::immediate_get`] for SSRF-sensitive fetches.
     pub fn validate(&self, url: &reqwest::Url) -> Result<(), FetchUrlError> {
         self.validate_for_immediate_fetch(url).map(|_| ())
     }
@@ -242,6 +250,12 @@ impl FetchUrlPolicy {
             if is_loopback_ip(*ip) && !localhost_allowed {
                 return Err(FetchUrlError::LocalhostDenied { ip: *ip });
             }
+            if is_unspecified_ip(*ip) {
+                return Err(FetchUrlError::PrivateRangeDenied { ip: *ip });
+            }
+            if self.deny_cloud_metadata && is_link_local_ip(*ip) {
+                return Err(FetchUrlError::PrivateRangeDenied { ip: *ip });
+            }
             if self.deny_private_ranges
                 && is_private_or_link_local_ip(*ip)
                 && !(localhost_allowed && is_loopback_ip(*ip))
@@ -252,7 +266,9 @@ impl FetchUrlPolicy {
 
         if url.scheme() == "http" {
             let http_private_network_allowed = self.allow_http_private_network
-                && resolved.iter().all(|ip| is_private_or_link_local_ip(*ip));
+                && resolved
+                    .iter()
+                    .all(|ip| is_http_private_network_ip(*ip, !self.deny_cloud_metadata));
             if !(localhost_allowed || http_private_network_allowed) {
                 return Err(FetchUrlError::HttpRequiresLoopback);
             }
@@ -263,6 +279,28 @@ impl FetchUrlPolicy {
             resolved_addrs,
             validated_at: SystemTime::now(),
         })
+    }
+
+    /// Validate an outbound URL with a wall-clock bound around DNS resolution.
+    ///
+    /// This is the async companion to [`Self::validate_for_immediate_fetch`].
+    /// It prevents a slow platform DNS lookup from blocking the caller beyond
+    /// the supplied timeout. The blocking resolver task may still finish in the
+    /// background after this method returns a timeout error.
+    pub async fn validate_for_immediate_fetch_with_timeout(
+        &self,
+        url: &reqwest::Url,
+        timeout: Duration,
+    ) -> Result<ValidatedFetchUrl, FetchUrlError> {
+        let policy = self.clone();
+        let url = url.clone();
+        tokio::time::timeout(
+            timeout,
+            tokio::task::spawn_blocking(move || policy.validate_for_immediate_fetch(&url)),
+        )
+        .await
+        .map_err(|_| FetchUrlError::ValidationTimeout { timeout })?
+        .map_err(FetchUrlError::ValidationTask)?
     }
 }
 
@@ -307,20 +345,35 @@ impl ValidatedFetchUrl {
     /// Build an immediate GET request from this validated URL.
     ///
     /// The returned request builder uses a short-lived client whose resolver is
-    /// pinned to the socket addresses accepted by the policy check.
+    /// pinned to the socket addresses accepted by the policy check. Requests use
+    /// [`DEFAULT_VALIDATED_FETCH_TIMEOUT`] unless callers override the request
+    /// timeout on the returned builder or use [`Self::immediate_get_with_timeout`].
     pub fn immediate_get(&self) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_get_with_timeout(DEFAULT_VALIDATED_FETCH_TIMEOUT)
+    }
+
+    /// Build an immediate GET request with an explicit request timeout.
+    ///
+    /// The timeout is applied to both the short-lived client and the returned
+    /// request builder so callers have a clear per-fetch bound even when the
+    /// request is sent without further customization.
+    pub fn immediate_get_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
         let host = self
             .url
             .host_str()
             .ok_or(FetchUrlError::MissingHost)?
             .to_string();
         let client = reqwest::Client::builder()
+            .timeout(timeout)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .resolve_to_addrs(&host, &self.resolved_addrs)
             .build()
             .map_err(FetchUrlError::ClientBuild)?;
-        Ok(client.get(self.url.clone()))
+        Ok(client.get(self.url.clone()).timeout(timeout))
     }
 }
 
@@ -352,6 +405,12 @@ pub enum FetchUrlError {
     /// Building a pinned client failed.
     #[error("failed to build pinned HTTP client: {0}")]
     ClientBuild(#[source] reqwest::Error),
+    /// URL validation exceeded the caller's wall-clock bound.
+    #[error("URL validation exceeded timeout {timeout:?}")]
+    ValidationTimeout { timeout: Duration },
+    /// The blocking validation task failed.
+    #[error("URL validation task failed: {0}")]
+    ValidationTask(#[source] tokio::task::JoinError),
     /// Localhost was denied by policy.
     #[error("localhost address {ip} is denied")]
     LocalhostDenied { ip: IpAddr },
@@ -425,6 +484,29 @@ fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
     }
 }
 
+fn is_http_private_network_ip(ip: IpAddr, allow_link_local: bool) -> bool {
+    match normalize_ipv4_mapped(ip) {
+        IpAddr::V4(ip) => ip.is_private() || (allow_link_local && ip.is_link_local()),
+        IpAddr::V6(ip) => {
+            ip.is_unique_local() || (allow_link_local && is_ipv6_unicast_link_local(ip))
+        }
+    }
+}
+
+fn is_link_local_ip(ip: IpAddr) -> bool {
+    match normalize_ipv4_mapped(ip) {
+        IpAddr::V4(ip) => ip.is_link_local(),
+        IpAddr::V6(ip) => is_ipv6_unicast_link_local(ip),
+    }
+}
+
+fn is_unspecified_ip(ip: IpAddr) -> bool {
+    match normalize_ipv4_mapped(ip) {
+        IpAddr::V4(ip) => ip.is_unspecified(),
+        IpAddr::V6(ip) => ip.is_unspecified(),
+    }
+}
+
 fn normalize_ipv4_mapped(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(ip) => ip
@@ -461,6 +543,17 @@ mod tests {
             axum::serve(listener, router).await.expect("serve test app");
         });
         format!("http://{addr}")
+    }
+
+    async fn serve_with_addr(router: Router) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve test app");
+        });
+        addr
     }
 
     #[tokio::test]
@@ -601,6 +694,45 @@ mod tests {
             .build()
             .expect("request builds");
         assert_eq!(request.url(), &url);
+        assert_eq!(request.timeout(), Some(&DEFAULT_VALIDATED_FETCH_TIMEOUT));
+    }
+
+    #[test]
+    fn immediate_get_with_timeout_uses_explicit_timeout() {
+        let url = reqwest::Url::parse("https://93.184.216.34/jwks").expect("url parses");
+        let validated = FetchUrlPolicy::strict()
+            .validate_for_immediate_fetch(&url)
+            .expect("public HTTPS IP accepted");
+        let timeout = Duration::from_secs(7);
+
+        let request = validated
+            .immediate_get_with_timeout(timeout)
+            .expect("pinned request builder builds")
+            .build()
+            .expect("request builds");
+        assert_eq!(request.timeout(), Some(&timeout));
+    }
+
+    #[tokio::test]
+    async fn immediate_get_uses_pinned_resolved_socket_address() {
+        let addr = serve_with_addr(Router::new().route("/body", get(|| async { "pinned" }))).await;
+        let url = reqwest::Url::parse(&format!("http://example.test:{}/body", addr.port()))
+            .expect("url parses");
+        let validated = ValidatedFetchUrl {
+            url,
+            resolved_addrs: vec![addr],
+            validated_at: SystemTime::now(),
+        };
+
+        let response = validated
+            .immediate_get()
+            .expect("pinned request builds")
+            .send()
+            .await
+            .expect("pinned request reaches test server");
+        let body = response.text().await.expect("body reads");
+
+        assert_eq!(body, "pinned");
     }
 
     #[test]
@@ -662,6 +794,80 @@ mod tests {
             .validate(&url)
             .expect_err("cloud metadata target rejected");
         assert!(matches!(err, FetchUrlError::CloudMetadataDenied { .. }));
+    }
+
+    #[test]
+    fn private_network_policy_rejects_link_local_without_escape_hatch() {
+        let policy = FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string()],
+            allow_localhost: false,
+            allow_http_private_network: true,
+            deny_private_ranges: false,
+            deny_cloud_metadata: true,
+        };
+
+        for raw in [
+            "http://169.254.1.1/jwks",
+            "https://169.254.1.1/jwks",
+            "http://[fe80::1]/jwks",
+            "https://[fe80::1]/jwks",
+        ] {
+            let url = reqwest::Url::parse(raw).expect("url parses");
+            let err = match policy.validate(&url) {
+                Ok(()) => panic!("link-local target rejected for {raw}"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, FetchUrlError::PrivateRangeDenied { .. }),
+                "unexpected error for {raw}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_network_policy_can_explicitly_allow_link_local_metadata_targets() {
+        let policy = FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string()],
+            allow_localhost: false,
+            allow_http_private_network: true,
+            deny_private_ranges: false,
+            deny_cloud_metadata: false,
+        };
+
+        for raw in [
+            "http://169.254.1.1/jwks",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[fe80::1]/jwks",
+            "http://[fd00:ec2::254]/latest/meta-data/",
+        ] {
+            let url = reqwest::Url::parse(raw).expect("url parses");
+            policy
+                .validate(&url)
+                .unwrap_or_else(|err| panic!("explicit escape hatch should accept {raw}: {err}"));
+        }
+    }
+
+    #[test]
+    fn private_network_policy_rejects_unspecified_addresses() {
+        let policy = FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string()],
+            allow_localhost: false,
+            allow_http_private_network: true,
+            deny_private_ranges: false,
+            deny_cloud_metadata: false,
+        };
+
+        for raw in ["http://0.0.0.0/jwks", "https://[::]/jwks"] {
+            let url = reqwest::Url::parse(raw).expect("url parses");
+            let err = match policy.validate(&url) {
+                Ok(()) => panic!("unspecified target rejected for {raw}"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, FetchUrlError::PrivateRangeDenied { .. }),
+                "unexpected error for {raw}: {err}"
+            );
+        }
     }
 
     #[test]

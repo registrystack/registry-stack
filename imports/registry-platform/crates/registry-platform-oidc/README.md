@@ -5,8 +5,8 @@ OIDC discovery, JWKS caching, and JWT verification for registry services.
 ## What It Provides
 
 - Discovery document fetch and validation.
-- JWKS fetching with positive cache, negative `kid` cache, and forced refresh
-  cooldowns.
+- JWKS fetching with positive cache, bounded negative `kid` cache,
+  singleflight refreshes, and forced refresh cooldowns.
 - Fetch URL policy integration through `registry-platform-httputil`.
 - JWT verification with issuer, audience, algorithm, `typ`, `kid`, time, client,
   and scope handling.
@@ -67,7 +67,14 @@ Ok(verifier)
 - `fetch_discovery` and `JwksFetcher::new` use `FetchUrlPolicy::strict`.
 - Use `*_with_policy` constructors only for tests or controlled local
   development.
-- Allowed algorithms and token types must be explicit.
+- Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the
+  configured timeout, including DNS validation.
+- Allowed algorithms and token types must be explicit. Keep `allowed_algorithms`
+  as narrow as the provider allows.
+- `kid` values are capped generously and unknown `kid` entries are evicted from
+  the negative cache to keep issuer compatibility without unbounded memory use.
+  Negative `kid` entries are retried after the forced-refresh cooldown so real
+  provider key rotations are not blocked for the full negative-cache TTL.
 - If `allowed_clients` is set, `azp` takes precedence over `client_id`; `sub` is
   never used as a client identity.
 - Store replay state, authorization decisions, and tenant boundaries in the

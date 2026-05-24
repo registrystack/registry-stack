@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   rust:
     runs-on: ubuntu-latest
@@ -33,6 +36,26 @@ jobs:
       - uses: actions/checkout@v6
       - run: ./scripts/check-hygiene-alignment.sh . .
       - run: ./scripts/audit-configs.sh --base .. --format paths >/tmp/config-inventory.txt
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Gitleaks
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/zricethezav/gitleaks/v8@v8.30.1
+      - name: Scan tracked files for secrets
+        env:
+          GITLEAKS_CONFIG_TOML: |
+            [extend]
+            useDefault = true
+
+            [[allowlists]]
+            description = "Ignore generated Rust build output."
+            paths = ["(^|/)target/"]
+        run: |
+          "$RUNNER_TEMP/bin/gitleaks" dir --no-banner --redact --verbose --timeout 120 .
 
   dependency-policy:
     runs-on: ubuntu-latest

@@ -48,6 +48,8 @@ Every security-relevant event should be written through `AuditEnvelope` and `Cha
 
 PII-bearing identifiers must be hashed or redacted before envelope construction. Use keyed HMAC hashing in operator-facing environments; `unkeyed_dev_only()` is only for local fixtures and tests.
 
+Audit chain verification without an external anchor is a consistency check over the retained records. It detects edits, gaps, and reordering inside that set, but it is not proof against a malicious actor replacing the full retained log set with a new internally consistent chain. For stronger evidence, store trusted start or tail/head hashes outside the JSONL logs, such as off-host log shipping, transparency logs, deployment evidence, or operator-maintained manifests, and verify with the audit crate's anchored verification helpers.
+
 ## 10. Keep Workspace Hygiene Canonical
 
 `clippy.toml`, `rustfmt.toml`, and `deny.toml` in consumer repos come from `registry-platform/templates/`. Consumer CI must run `scripts/check-hygiene-alignment.sh` so lint, formatting, dependency license policy, and advisory posture do not drift.
