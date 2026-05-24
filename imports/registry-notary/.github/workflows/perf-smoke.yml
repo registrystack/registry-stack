@@ -1,0 +1,72 @@
+name: perf-smoke
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Cancel superseded runs on branches; keep main runs.
+concurrency:
+  group: perf-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Smoke-checks the perf scaffolding without running any actual load.
+# It verifies:
+#   1. The Criterion benches compile (`cargo bench --no-run`).
+#   2. Every k6 scenario and shared lib passes `node --check`.
+#   3. Perf Python scripts and the source stub parse cleanly.
+# It does NOT install k6 or execute scenarios; scheduled perf jobs do that.
+
+jobs:
+  perf-smoke:
+    name: perf-smoke
+    runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: perf-smoke
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Node (for node --check)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Compile Criterion benches
+        run: cargo bench --no-run --workspace --all-features
+
+      - name: Syntax-check every k6 scenario
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in perf/k6/*.js perf/k6/lib/*.js; do
+            if ! node --check "$f"; then
+              echo "node --check failed: $f"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+      - name: Syntax-check perf Python scripts and stub
+        run: |
+          set -euo pipefail
+          for f in perf/scripts/*.py perf/stub/*.py; do
+            python -c "import ast; ast.parse(open('$f').read())"
+          done
