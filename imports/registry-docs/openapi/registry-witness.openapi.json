@@ -3,7 +3,11 @@
   "info": {
     "title": "Registry Witness API",
     "description": "Standalone claim evaluation, rendering, and credential issuance API.",
-    "version": "0.1.0"
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.2.1"
   },
   "paths": {
     "/.well-known/evidence-service": {
@@ -30,6 +34,23 @@
           },
           "401": {
             "description": "Missing or invalid credential"
+          }
+        }
+      }
+    },
+    "/admin/reload": {
+      "post": {
+        "summary": "Request a standalone config reload",
+        "operationId": "adminReload",
+        "responses": {
+          "200": {
+            "description": "Standalone router accepted the reload request"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Caller lacks registry_witness:admin scope"
           }
         }
       }
@@ -219,6 +240,21 @@
         }
       }
     },
+    "/healthz": {
+      "get": {
+        "summary": "Return the liveness probe",
+        "operationId": "getHealthz",
+        "responses": {
+          "200": {
+            "description": "Service process is alive"
+          },
+          "4XX": {
+            "description": "Client error"
+          }
+        },
+        "security": []
+      }
+    },
     "/openapi.json": {
       "get": {
         "summary": "Fetch this OpenAPI document",
@@ -231,6 +267,24 @@
             "description": "Missing or invalid credential"
           }
         }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Return the readiness probe",
+        "operationId": "getReady",
+        "responses": {
+          "200": {
+            "description": "Evidence runtime is ready"
+          },
+          "4XX": {
+            "description": "Client error"
+          },
+          "503": {
+            "description": "Evidence runtime is not ready"
+          }
+        },
+        "security": []
       }
     }
   },
