@@ -15,14 +15,49 @@ pub fn openapi_document() -> OpenApi {
         "openapi": "3.1.0",
         "info": {
             "title": "Registry Witness API",
-            "version": "0.1.0",
-            "description": "Standalone claim evaluation, rendering, and credential issuance API."
+            "version": env!("CARGO_PKG_VERSION"),
+            "description": "Standalone claim evaluation, rendering, and credential issuance API.",
+            "license": {
+                "name": env!("CARGO_PKG_LICENSE")
+            }
         },
         "security": [
             { "apiKeyAuth": [] },
             { "bearerAuth": [] }
         ],
         "paths": {
+            "/healthz": {
+                "get": {
+                    "summary": "Return the liveness probe",
+                    "operationId": "getHealthz",
+                    "security": [],
+                    "responses": {
+                        "200": { "description": "Service process is alive" }
+                    }
+                }
+            },
+            "/ready": {
+                "get": {
+                    "summary": "Return the readiness probe",
+                    "operationId": "getReady",
+                    "security": [],
+                    "responses": {
+                        "200": { "description": "Evidence runtime is ready" },
+                        "503": { "description": "Evidence runtime is not ready" }
+                    }
+                }
+            },
+            "/admin/reload": {
+                "post": {
+                    "summary": "Request a standalone config reload",
+                    "operationId": "adminReload",
+                    "responses": {
+                        "200": { "description": "Standalone router accepted the reload request" },
+                        "401": { "description": "Missing or invalid credential" },
+                        "403": { "description": "Caller lacks registry_witness:admin scope" }
+                    }
+                }
+            },
             "/openapi.json": {
                 "get": {
                     "summary": "Fetch this OpenAPI document",
@@ -227,12 +262,16 @@ pub fn openapi_document() -> OpenApi {
 #[cfg(test)]
 mod tests {
     use super::openapi_document;
+    use serde_json::json;
 
     #[test]
     fn documents_split_registry_witness_routes() {
         let doc = openapi_document();
         let paths = doc.paths.paths;
         for route in [
+            "/healthz",
+            "/ready",
+            "/admin/reload",
             "/openapi.json",
             "/.well-known/evidence-service",
             "/.well-known/evidence/jwks.json",
@@ -246,5 +285,19 @@ mod tests {
         ] {
             assert!(paths.contains_key(route), "missing {route}");
         }
+    }
+
+    #[test]
+    fn document_info_tracks_crate_metadata() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(doc["info"]["license"]["name"], env!("CARGO_PKG_LICENSE"));
+    }
+
+    #[test]
+    fn public_probe_routes_do_not_require_security() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        assert_eq!(doc["paths"]["/healthz"]["get"]["security"], json!([]));
+        assert_eq!(doc["paths"]["/ready"]["get"]["security"], json!([]));
     }
 }
