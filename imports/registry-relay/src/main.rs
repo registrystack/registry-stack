@@ -12,7 +12,7 @@
 //!    The keyring lives inside `ApiKeyAuth` and is immutable for the
 //!    lifetime of the process.
 //! 4. Build the configured audit sink: stdout, file, or syslog, with
-//!    optional audit-chain envelopes.
+//!    platform tamper-evident envelopes.
 //! 5. Build ingest, readiness, entity registry, row-query, and aggregate
 //!    query state, then compose the public data-plane router.
 //! 6. Bind on `config.server.bind`, optionally bind the admin router on
@@ -33,7 +33,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
-use registry_relay::audit::{AuditSink, ChainingSink, FileSink, StdoutSink, SyslogSink};
+use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::middleware::AuthProviderRef;
 use registry_relay::auth::oidc::{OidcAuth, ReqwestJwksFetcher};
@@ -109,7 +109,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = Arc::new(loaded.runtime);
 
     let auth = build_auth(&config).await?;
-    let audit_sink = build_audit_sink(&config);
+    let audit_sink = build_audit_sink(&config)?;
     let bind: SocketAddr = config.server.bind;
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
     let audit_kind = audit_sink_kind(&config);
@@ -247,7 +247,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 readiness_tx.clone(),
                 Arc::clone(&ingest),
                 Arc::clone(&metrics),
-            );
+            )?;
             let admin_serve = axum::serve(
                 admin_listener,
                 admin_app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -420,33 +420,35 @@ fn build_api_key_entry(key: &ApiKeyConfig) -> Result<ApiKeyEntry, Error> {
 }
 
 /// Instantiate the configured audit sink.
-fn build_audit_sink(config: &Config) -> Arc<dyn AuditSink> {
-    let sink: Arc<dyn AuditSink> = match &config.audit.sink {
+fn build_audit_sink(config: &Config) -> Result<Arc<AuditPipeline>, Error> {
+    let sink: Arc<dyn registry_platform_audit::AuditSink> = match &config.audit.sink {
         AuditSinkConfig::Stdout {} => Arc::new(StdoutSink::new()),
         AuditSinkConfig::File { path, rotate } => {
             match FileSink::new(path, rotate.max_size_mb, rotate.max_files) {
                 Ok(sink) => Arc::new(sink),
                 Err(err) => {
-                    warn!(
+                    error!(
                         error = %err,
                         requested = "file",
-                        "audit file sink unavailable; falling back to stdout"
+                        path = %path.display(),
+                        "configured audit file sink is unavailable"
                     );
-                    Arc::new(StdoutSink::new())
+                    return Err(Error::from(ConfigError::ValidationError));
                 }
             }
         }
         AuditSinkConfig::Syslog {} => Arc::new(SyslogSink::new()),
         _ => {
-            warn!("unknown audit sink variant; falling back to stdout");
-            Arc::new(StdoutSink::new())
+            error!("unknown audit sink variant");
+            return Err(Error::from(ConfigError::ValidationError));
         }
     };
-    if config.audit.chain {
-        Arc::new(ChainingSink::new(sink))
-    } else {
-        sink
+    if !config.audit.chain {
+        info!(
+            "audit.chain is accepted for config compatibility; platform audit envelopes are always chained"
+        );
     }
+    Ok(Arc::new(AuditPipeline::new(sink)))
 }
 
 fn audit_sink_kind(config: &Config) -> &'static str {

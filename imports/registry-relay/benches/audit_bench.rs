@@ -6,15 +6,13 @@
 //!
 //! Covers:
 //! - `AuditRecord` struct construction (field assignment, timestamp formatting).
-//! - `AuditEnvelope::from(record)` wrapping.
-//! - `InMemorySink::write(envelope).await` (serialize + mutex push).
-//! - `AuditEnvelope::to_jsonl()` serialization in isolation.
+//! - `AuditRecord` conversion into the platform envelope record body.
+//! - `AuditPipeline::write_record(record).await` (chain + serialize + mutex push).
 
 use std::hint::black_box;
-use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use registry_relay::audit::{AuditEnvelope, AuditRecord, AuditSink, EndpointKind, InMemorySink};
+use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySink};
 
 fn sample_record() -> AuditRecord {
     AuditRecord {
@@ -94,23 +92,20 @@ fn benchmark_record_construction(c: &mut Criterion) {
     });
 }
 
-fn benchmark_envelope_jsonl(c: &mut Criterion) {
+fn benchmark_record_to_platform_value(c: &mut Criterion) {
     let record = sample_record();
-    let envelope = AuditEnvelope::from(record);
-    c.bench_function("audit/envelope_to_jsonl", |b| {
-        b.iter(|| black_box(&envelope).to_jsonl().expect("serialize"));
+    c.bench_function("audit/record_to_platform_value", |b| {
+        b.iter(|| serde_json::to_value(black_box(&record)).expect("serialize"));
     });
 }
 
 fn benchmark_sink_write(c: &mut Criterion) {
-    let sink: Arc<InMemorySink> = Arc::new(InMemorySink::new());
+    let sink = AuditPipeline::from_sink(InMemorySink::new());
     let rt = tokio::runtime::Runtime::new().expect("runtime");
 
     c.bench_function("audit/memory_sink_write", |b| {
-        b.to_async(&rt).iter(|| {
-            let envelope = AuditEnvelope::from(sample_record());
-            sink.write(black_box(envelope))
-        });
+        b.to_async(&rt)
+            .iter(|| sink.write_record(black_box(sample_record())));
     });
 }
 
@@ -119,7 +114,7 @@ criterion_group! {
     config = Criterion::default().sample_size(50);
     targets =
         benchmark_record_construction,
-        benchmark_envelope_jsonl,
+        benchmark_record_to_platform_value,
         benchmark_sink_write
 }
 criterion_main!(benches);

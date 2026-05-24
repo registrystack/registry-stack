@@ -17,7 +17,7 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 
 ## Current Status
 
-0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, optional audit chaining, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include dataset-scoped ODRL Offers, standards-shaped media type metadata, evidence offerings, and DCAT access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
+0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, tamper-evident platform audit envelopes, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include dataset-scoped ODRL Offers, standards-shaped media type metadata, evidence offerings, and DCAT access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
 
 ## Repository Map
 
@@ -151,6 +151,7 @@ cp fixtures/example_social_registry.xlsx data/social_registry.xlsx
 export PROGRAM_SYSTEM_API_KEY_HASH='sha256:<64 lowercase hex chars>'
 export STATS_OFFICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
 export VERIFICATION_SERVICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
+export REGISTRY_RELAY_AUDIT_HASH_SECRET='<at least 32 random bytes>'
 just run
 ```
 
@@ -263,10 +264,18 @@ just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld pro
 
 ## Container Image
 
+The image build uses the shared `registry-platform` crates through the same
+path dependency layout as local Cargo builds. Keep a `registry-platform`
+checkout next to this repository, or set `REGISTRY_PLATFORM_DIR` when using the
+helper script.
+
 Build the production image with Docker:
 
 ```sh
-docker build -t registry-relay:local .
+docker buildx build --load \
+  --build-context registry-platform=../registry-platform \
+  -t registry-relay:local \
+  .
 ```
 
 or with the helper:
@@ -291,6 +300,7 @@ docker run --rm -p 8080:8080 \
   -e PROGRAM_SYSTEM_API_KEY_HASH \
   -e STATS_OFFICE_API_KEY_HASH \
   -e VERIFICATION_SERVICE_API_KEY_HASH \
+  -e REGISTRY_RELAY_AUDIT_HASH_SECRET \
   -v "$PWD/config/example.yaml:/etc/registry-relay/config.yaml:ro" \
   -v "$PWD/fixtures:/var/lib/registry-relay/data:ro" \
   registry-relay:local

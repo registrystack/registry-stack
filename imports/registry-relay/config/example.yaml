@@ -255,6 +255,7 @@ datasets:
 audit:
   sink: stdout            # stdout | file | syslog
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
   # path: /var/log/registry-relay/audit.jsonl   # when sink == file
 
 # Data provenance (signed Verifiable Credentials).

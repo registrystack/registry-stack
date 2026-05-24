@@ -33,6 +33,8 @@ env:
   CATALOG_PATH: ${{ github.event.inputs.catalog_path || 'target/dcat-ap/catalog.dcat-ap.jsonld' }}
   SEMIC_REPORT_PATH: target/dcat-ap/semic-report.json
   SEMIC_BREGDCATAP_REPORT_PATH: target/dcat-ap/semic-bregdcatap-report.json
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: v0.1.0
 
 jobs:
   semic-dcat-ap:
@@ -42,6 +44,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

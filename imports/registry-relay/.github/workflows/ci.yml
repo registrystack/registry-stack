@@ -17,6 +17,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: v0.1.0
 
 # Default the GITHUB_TOKEN granted to each job to read-only on contents.
 # Individual jobs can widen this when they truly need write access.
@@ -43,6 +45,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6   # pinned to major v6
 
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable   # pinned to major stable channel
 
@@ -61,6 +74,9 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Check platform hygiene alignment
+        run: bash registry-platform/scripts/check-hygiene-alignment.sh . registry-platform
 
       - name: Clippy (treat warnings as errors)
         run: cargo clippy --all-targets -- -D warnings
@@ -98,6 +114,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6   # pinned to major v6
 
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2   # pinned to major v2
         with:
@@ -127,6 +154,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -153,6 +191,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
       # Buildx + GHA cache backend persists the Dockerfile's
       # `RUN --mount=type=cache` cargo registry and target directories
       # across runs. First run is a cold compile; subsequent runs reuse
@@ -165,6 +211,8 @@ jobs:
         with:
           context: .
           file: Dockerfile
+          build-contexts: |
+            registry-platform=./registry-platform
           tags: registry-relay:ci
           load: false
           push: false

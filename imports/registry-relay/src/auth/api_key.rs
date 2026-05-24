@@ -26,15 +26,15 @@ use std::collections::HashMap;
 use std::pin::Pin;
 
 use axum::http::{header, HeaderMap};
-use sha2::{Digest, Sha256};
+use registry_platform_authcommon::{
+    fingerprint_api_key, parse_bearer_token, parse_fingerprint, verify_api_key,
+    FingerprintFormatError,
+};
 use zeroize::Zeroizing;
 
 use crate::error::AuthError;
 
 use super::{AuthMode, AuthProvider, Principal, ScopeSet};
-
-/// HTTP authentication scheme accepted in V1.
-const BEARER_SCHEME: &str = "Bearer";
 
 /// Compatibility header accepted alongside `Authorization: Bearer`.
 const X_API_KEY: &str = "x-api-key";
@@ -46,6 +46,7 @@ pub struct ApiKeyEntry {
     id: String,
     scopes: ScopeSet,
     fingerprint: TokenFingerprint,
+    canonical_fingerprint: String,
 }
 
 impl ApiKeyEntry {
@@ -57,11 +58,13 @@ impl ApiKeyEntry {
     /// Returns `Err` with a static string if the fingerprint does not
     /// parse. Callers surface this as `config.validation_error`.
     pub fn new(id: String, scopes: ScopeSet, fingerprint: String) -> Result<Self, &'static str> {
-        let fingerprint = parse_token_fingerprint(&fingerprint)?;
+        let parsed_fingerprint =
+            parse_fingerprint(&fingerprint).map_err(fingerprint_format_message)?;
         Ok(Self {
             id,
             scopes,
-            fingerprint,
+            fingerprint: parsed_fingerprint,
+            canonical_fingerprint: fingerprint,
         })
     }
 
@@ -76,10 +79,16 @@ impl ApiKeyEntry {
 /// from config at startup; never mutates after construction.
 #[derive(Debug, Clone)]
 pub struct ApiKeyAuth {
-    principals: HashMap<TokenFingerprint, Principal>,
+    principals: HashMap<TokenFingerprint, ApiKeyPrincipal>,
 }
 
 type TokenFingerprint = [u8; 32];
+
+#[derive(Debug, Clone)]
+struct ApiKeyPrincipal {
+    principal: Principal,
+    canonical_fingerprint: String,
+}
 
 impl ApiKeyAuth {
     /// Build a provider from already-resolved entries. Startup calls
@@ -92,10 +101,13 @@ impl ApiKeyAuth {
             .map(|entry| {
                 (
                     entry.fingerprint,
-                    Principal {
-                        principal_id: entry.id,
-                        scopes: entry.scopes,
-                        auth_mode: AuthMode::ApiKey,
+                    ApiKeyPrincipal {
+                        principal: Principal {
+                            principal_id: entry.id,
+                            scopes: entry.scopes,
+                            auth_mode: AuthMode::ApiKey,
+                        },
+                        canonical_fingerprint: entry.canonical_fingerprint,
                     },
                 )
             })
@@ -122,14 +134,20 @@ impl ApiKeyAuth {
     /// so the trait method body is small and the verify loop is unit
     /// testable.
     fn verify(&self, presented: &str) -> Result<Principal, AuthError> {
-        let fingerprint = token_fingerprint(presented);
-        if let Some(principal) = self.principals.get(&fingerprint).cloned() {
+        let fingerprint = parse_fingerprint(&fingerprint_api_key(presented))
+            .expect("generated fingerprint parses");
+        if let Some(entry) = self.principals.get(&fingerprint) {
+            let verified = verify_api_key(presented, &entry.canonical_fingerprint)
+                .map_err(|_| AuthError::InvalidCredential)?;
+            if !verified {
+                return Err(AuthError::InvalidCredential);
+            }
             tracing::debug!(
                 target: "registry_relay::auth",
-                principal_id = %principal.principal_id,
+                principal_id = %entry.principal.principal_id,
                 "api key verified",
             );
-            return Ok(principal);
+            return Ok(entry.principal.clone());
         }
         tracing::debug!(
             target: "registry_relay::auth",
@@ -139,29 +157,13 @@ impl ApiKeyAuth {
     }
 }
 
-fn token_fingerprint(presented: &str) -> TokenFingerprint {
-    Sha256::digest(presented.as_bytes()).into()
-}
-
-fn parse_token_fingerprint(value: &str) -> Result<TokenFingerprint, &'static str> {
-    let hex = value
-        .strip_prefix("sha256:")
-        .ok_or("API key fingerprint must start with sha256:")?;
-    if hex.len() != 64 {
-        return Err("API key fingerprint must contain 64 lowercase hex characters");
-    }
-    let mut out = [0u8; 32];
-    for (index, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
-        out[index] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
-    }
-    Ok(out)
-}
-
-fn hex_nibble(byte: u8) -> Result<u8, &'static str> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        _ => Err("API key fingerprint must contain lowercase hex only"),
+fn fingerprint_format_message(error: FingerprintFormatError) -> &'static str {
+    match error {
+        FingerprintFormatError::MissingPrefix => "API key fingerprint must start with sha256:",
+        FingerprintFormatError::InvalidLength => {
+            "API key fingerprint must contain 64 lowercase hex characters"
+        }
+        FingerprintFormatError::InvalidHex => "API key fingerprint must contain lowercase hex only",
     }
 }
 
@@ -204,13 +206,7 @@ fn extract_credential(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthErro
 
 fn extract_bearer_value(value: &axum::http::HeaderValue) -> Result<Zeroizing<String>, AuthError> {
     let raw = value.to_str().map_err(|_| AuthError::MalformedCredential)?;
-    let token = raw
-        .strip_prefix(BEARER_SCHEME)
-        .and_then(|rest| rest.strip_prefix(' '))
-        .ok_or(AuthError::MalformedCredential)?;
-    if token.is_empty() {
-        return Err(AuthError::MalformedCredential);
-    }
+    let token = parse_bearer_token(raw).map_err(|_| AuthError::MalformedCredential)?;
     Ok(Zeroizing::new(token.to_string()))
 }
 
@@ -219,7 +215,7 @@ mod tests {
     use super::*;
 
     fn make_fingerprint(plain: &str) -> String {
-        format!("sha256:{}", hex_lower(&token_fingerprint(plain)))
+        fingerprint_api_key(plain)
     }
 
     fn provider_with(plain: &str) -> ApiKeyAuth {
@@ -294,6 +290,22 @@ mod tests {
     }
 
     #[test]
+    fn extract_bearer_accepts_case_insensitive_scheme() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "bEaReR abc123".parse().unwrap());
+        let token = extract_credential(&headers).expect("token extracted");
+        assert_eq!(&*token, "abc123");
+    }
+
+    #[test]
+    fn extract_bearer_rejects_extra_whitespace() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer  abc123".parse().unwrap());
+        let err = extract_credential(&headers).expect_err("extra whitespace");
+        assert!(matches!(err, AuthError::MalformedCredential));
+    }
+
+    #[test]
     fn extract_x_api_key_returns_token() {
         let mut headers = HeaderMap::new();
         headers.insert(X_API_KEY, "abc123".parse().unwrap());
@@ -331,15 +343,5 @@ mod tests {
         assert!(provider.is_empty());
         let err = provider.verify("anything").expect_err("denied");
         assert!(matches!(err, AuthError::InvalidCredential));
-    }
-
-    fn hex_lower(bytes: &[u8]) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(bytes.len() * 2);
-        for byte in bytes {
-            out.push(HEX[(byte >> 4) as usize] as char);
-            out.push(HEX[(byte & 0x0f) as usize] as char);
-        }
-        out
     }
 }

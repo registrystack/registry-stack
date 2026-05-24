@@ -36,7 +36,10 @@ just build
 Build a container image:
 
 ```sh
-docker build -t registry-relay:<version> .
+docker buildx build --load \
+  --build-context registry-platform=../registry-platform \
+  -t registry-relay:<version> \
+  .
 ```
 
 or:
@@ -44,6 +47,11 @@ or:
 ```sh
 scripts/build-image.sh registry-relay:<version>
 ```
+
+The build requires the pinned `registry-platform` source tree because Relay
+uses sibling path dependencies for the platform security crates. For local
+builds, keep `../registry-platform` next to this repository or set
+`REGISTRY_PLATFORM_DIR` before running `scripts/build-image.sh`.
 
 Before promoting an image, inspect the effective config and verify that every referenced `hash_env` is supplied by the runtime environment. Do not bake API keys or API-key hashes into the image.
 
@@ -167,7 +175,7 @@ Current runtime behavior:
 - `audit.sink: stdout` writes audit JSONL to stdout.
 - `audit.sink: file` writes audit JSONL to the configured path and rotates in-process by `rotate.max_size_mb` and `rotate.max_files`.
 - `audit.sink: syslog` ships audit JSONL to the local syslog Unix datagram socket.
-- `audit.chain: true` wraps sink output with `prev_hash` and `record_hash` fields for tamper-evidence.
+- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields for tamper evidence. `audit.chain` is retained for config compatibility.
 - HTTP request completion is logged at `info` with method, matched route template, request id, status, and latency. It does not log raw query strings, request bodies, auth headers, or row values.
 - `REGISTRY_RELAY_LOG_FORMAT=json` switches stderr operational logs from text to JSONL.
 
@@ -177,6 +185,7 @@ File sink example:
 audit:
   sink: file
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
   path: /var/log/registry-relay/audit.jsonl
   rotate:
     max_size_mb: 100
@@ -184,6 +193,8 @@ audit:
 ```
 
 For container deployments, `stdout` is still the simplest default because the platform log pipeline owns retention, rotation, access control, and SIEM forwarding. For VM deployments, use `file` when the gateway should own audit rotation locally, or `syslog` when the host forwards records to a central collector.
+
+`audit.hash_secret_env` is required for runtime startup and must point to at least 32 bytes of deployment-specific random secret material. The relay fails closed when the setting is missing, empty, unset, or weak, so sensitive audit lookup hashes never silently downgrade to unkeyed SHA-256.
 
 Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely.
 

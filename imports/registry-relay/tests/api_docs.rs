@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use registry_relay::api::docs_router;
-use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::ApiKeyAuth;
 use registry_relay::server::build_app;
 
@@ -26,10 +26,14 @@ fn full_app_server() -> TestServer {
             "CLAIM_VERIFICATION_BINDING_KEY",
             "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         );
+        env::set_var(
+            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            "relay-api-docs-audit-secret-32-bytes",
+        );
     }
     let config = Arc::new(registry_relay::config::load(&path).expect("example config loads"));
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     TestServer::new(build_app(config, auth, sink).unwrap())
 }
 

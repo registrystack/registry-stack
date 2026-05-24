@@ -70,6 +70,11 @@ def generate_claim_verification_binding_key() -> str:
     return f"hex:{secrets.token_bytes(32).hex()}"
 
 
+def generate_audit_hash_secret() -> str:
+    """Return a per-deployment audit HMAC secret for local demos."""
+    return secrets.token_urlsafe(48)
+
+
 def generate_registry_witness_issuer_jwk() -> str:
     """Return a private Ed25519 JWK for local SD-JWT VC issuance demos."""
     try:
@@ -155,6 +160,7 @@ def self_verify(pairs: list[tuple[str, str, str]]) -> None:
 def format_export_block(
     pairs: list[tuple[str, str, str]],
     claim_verification_binding_key: str,
+    audit_hash_secret: str,
     registry_witness_issuer_jwk: str,
 ) -> str:
     lines = []
@@ -165,6 +171,7 @@ def format_export_block(
     lines.append(
         f"export CLAIM_VERIFICATION_BINDING_KEY='{claim_verification_binding_key}'"
     )
+    lines.append(f"export REGISTRY_RELAY_AUDIT_HASH_SECRET='{audit_hash_secret}'")
     lines.append(f"export REGISTRY_WITNESS_ISSUER_JWK='{registry_witness_issuer_jwk}'")
     return "\n".join(lines) + "\n"
 
@@ -212,13 +219,17 @@ def main() -> int:
         pairs = generate_pairs()
         self_verify(pairs)
         claim_verification_binding_key = generate_claim_verification_binding_key()
+        audit_hash_secret = generate_audit_hash_secret()
         registry_witness_issuer_jwk = generate_registry_witness_issuer_jwk()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     export_block = format_export_block(
-        pairs, claim_verification_binding_key, registry_witness_issuer_jwk
+        pairs,
+        claim_verification_binding_key,
+        audit_hash_secret,
+        registry_witness_issuer_jwk,
     )
     bruno_env_block = format_bruno_env_block(pairs)
 
@@ -227,7 +238,7 @@ def main() -> int:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(export_block, encoding="utf-8")
         print(
-            f"wrote {len(pairs)} key pairs, evidence-verification binding key, and Evidence Server issuer JWK to {dest}",
+            f"wrote {len(pairs)} key pairs, evidence-verification binding key, audit hash secret, and Evidence Server issuer JWK to {dest}",
             file=sys.stderr,
         )
 

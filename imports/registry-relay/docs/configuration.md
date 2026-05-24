@@ -300,7 +300,8 @@ The integration test verifies the auth wiring (signature, issuer, audience, prin
 audit:
   sink: stdout
   format: jsonl
-  chain: false
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+  chain: true
   include_health: false
 ```
 
@@ -310,12 +311,14 @@ Supported sinks:
 audit:
   sink: stdout
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
 ```yaml
 audit:
   sink: file
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
   path: /var/log/registry-relay/audit.jsonl
   rotate:
     max_size_mb: 100
@@ -326,9 +329,10 @@ audit:
 audit:
   sink: syslog
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
-`chain: true` wraps audit records with hash-chain fields for tamper evidence. Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
+`hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak. Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained. Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
 
 ## Datasets
 

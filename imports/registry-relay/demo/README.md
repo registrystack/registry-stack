@@ -135,7 +135,8 @@ just demo-keys
 
 This writes two files in one go (both gitignored):
 
-- `demo/.env.local` with `export <PERSONA>_HASH` and `export <PERSONA>_RAW`
+- `demo/.env.local` with `export <PERSONA>_HASH`, `export <PERSONA>_RAW`,
+  `REGISTRY_RELAY_AUDIT_HASH_SECRET`, and the local demo signing secrets
   lines per persona. The `_HASH` values feed each config's `hash_env:` fields;
   the `_RAW` values are what Bruno sends as `Bearer` tokens.
 - `bruno/registry-relay-demo/.env` with one `<PERSONA>_RAW=<value>` per persona,

@@ -17,7 +17,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
-use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::ApiKeyAuth;
 use registry_relay::config::{Config, ProvenanceAlgorithm, SoftwareSignerConfig};
 use registry_relay::provenance::resources;
@@ -39,6 +39,10 @@ fn load_example_config() -> Config {
         env::set_var(
             "CLAIM_VERIFICATION_BINDING_KEY",
             "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        env::set_var(
+            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            "relay-provenance-schemas-audit-secret-32-bytes",
         );
     }
     registry_relay::config::load(&path).expect("example config loads")
@@ -90,7 +94,7 @@ fn build_state() -> Arc<ProvenanceState> {
 fn build_app() -> axum::Router {
     let config = Arc::new(load_example_config());
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     build_app_with_provenance(config, auth, sink, Some(build_state())).unwrap()
 }
 
@@ -138,7 +142,7 @@ async fn schemas_route_is_not_mounted_without_provenance_state() {
     // this path.
     let config = Arc::new(load_example_config());
     let auth = Arc::new(ApiKeyAuth::new(Vec::new()));
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_app_with_provenance(config, auth, sink, None).unwrap();
     let server = TestServer::new(app);
     let resp = server.get("/schemas/aggregate-result/v1.json").await;

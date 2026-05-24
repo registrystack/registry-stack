@@ -4,9 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use registry_relay::audit::{
-    AuditEnvelope, AuditRecord, AuditSink, EndpointKind, FileSink, SyslogSink,
-};
+use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, FileSink, SyslogSink};
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::time::{timeout, Duration};
@@ -52,9 +50,9 @@ fn sample_record(path: &str) -> AuditRecord {
 async fn file_sink_writes_jsonl_and_creates_parent_dir() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("nested").join("audit.jsonl");
-    let sink = FileSink::new(&path, 100, 14).expect("sink");
+    let sink = AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("sink"));
 
-    sink.write(AuditEnvelope::from(sample_record("/datasets")))
+    sink.write_record(sample_record("/datasets"))
         .await
         .expect("write");
     sink.flush().await.expect("flush");
@@ -64,28 +62,30 @@ async fn file_sink_writes_jsonl_and_creates_parent_dir() {
     assert_eq!(lines.len(), 1);
 
     let value: Value = serde_json::from_str(lines[0]).expect("json line");
-    assert_eq!(value["path"], "/datasets");
-    assert_eq!(value["endpoint_kind"], "catalog");
+    assert!(value["envelope_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    assert!(value["timestamp_unix_ms"].as_i64().is_some());
+    assert!(value["prev_hash"].is_null());
+    assert_eq!(
+        value["record_hash"].as_str().expect("record_hash").len(),
+        64
+    );
+    assert_eq!(value["record"]["path"], "/datasets");
+    assert_eq!(value["record"]["endpoint_kind"], "catalog");
 }
 
 #[tokio::test]
 async fn file_sink_rotates_when_next_record_exceeds_max_size() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("audit.jsonl");
-    let first = AuditEnvelope::from(sample_record("/first"))
-        .to_jsonl()
-        .unwrap();
-    let sink = FileSink::new(&path, 1, 3).expect("sink");
+    let sink = AuditPipeline::from_sink(FileSink::new(&path, 1, 3).expect("sink"));
 
-    fs::write(&path, "x".repeat((1024 * 1024) - first.len() + 1)).expect("seed oversized tail");
-
-    sink.write(AuditEnvelope::from(sample_record("/first")))
+    let oversized_path = format!("/first/{}", "a".repeat(1024 * 1024));
+    sink.write_record(sample_record(&oversized_path))
         .await
         .expect("first write");
-    let mut seeded_active = fs::read_to_string(&path).expect("active after first write");
-    seeded_active.push_str(&"x".repeat(1024 * 1024));
-    fs::write(&path, seeded_active).expect("force second rotation");
-    sink.write(AuditEnvelope::from(sample_record("/second")))
+    sink.write_record(sample_record("/second"))
         .await
         .expect("second write");
 
@@ -94,7 +94,67 @@ async fn file_sink_rotates_when_next_record_exceeds_max_size() {
 
     assert!(active.contains("\"path\":\"/second\""));
     assert!(!active.contains("\"path\":\"/first\""));
-    assert!(rotated.contains("\"path\":\"/first\""));
+    assert!(rotated.contains("\"path\":\"/first/"));
+}
+
+#[tokio::test]
+async fn file_sink_bootstraps_chain_from_existing_tail() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("audit.jsonl");
+    let first_sink = AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("first sink"));
+    first_sink
+        .write_record(sample_record("/first"))
+        .await
+        .expect("first write");
+
+    let first_line = fs::read_to_string(&path).expect("audit file");
+    let first_value: Value = serde_json::from_str(first_line.lines().next().expect("first line"))
+        .expect("first platform envelope");
+    let first_hash = first_value["record_hash"]
+        .as_str()
+        .expect("first record hash")
+        .to_owned();
+
+    let restarted_sink =
+        AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("restarted sink"));
+    restarted_sink
+        .write_record(sample_record("/second"))
+        .await
+        .expect("second write");
+
+    let contents = fs::read_to_string(&path).expect("audit file");
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len(), 2);
+    let second_value: Value = serde_json::from_str(lines[1]).expect("second platform envelope");
+    assert_eq!(second_value["prev_hash"], first_hash);
+}
+
+#[tokio::test]
+async fn file_sink_rejects_tampered_existing_jsonl_before_append() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("audit.jsonl");
+    let first_sink = AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("first sink"));
+    first_sink
+        .write_record(sample_record("/first"))
+        .await
+        .expect("first write");
+
+    let tampered = fs::read_to_string(&path)
+        .expect("audit file")
+        .replace("/first", "/tampered");
+    fs::write(&path, tampered).expect("tamper audit file");
+
+    let restarted_sink =
+        AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("restarted sink"));
+    let error = restarted_sink
+        .write_record(sample_record("/second"))
+        .await
+        .expect_err("tampered existing audit file must reject append");
+
+    assert!(matches!(
+        error,
+        registry_relay::audit::AuditError::ChainVerification(_)
+    ));
 }
 
 #[cfg(unix)]
@@ -103,9 +163,9 @@ async fn syslog_sink_emits_jsonl_datagram() {
     let dir = tempdir().expect("tempdir");
     let socket_path = dir.path().join("syslog.sock");
     let receiver = tokio::net::UnixDatagram::bind(&socket_path).expect("bind syslog socket");
-    let sink = SyslogSink::with_socket_path(&socket_path);
+    let sink = AuditPipeline::from_sink(SyslogSink::with_socket_path(&socket_path));
 
-    sink.write(AuditEnvelope::from(sample_record("/syslog")))
+    sink.write_record(sample_record("/syslog"))
         .await
         .expect("write");
 
@@ -116,9 +176,13 @@ async fn syslog_sink_emits_jsonl_datagram() {
         .expect("receive");
     let line = std::str::from_utf8(&buf[..received]).expect("utf8");
 
-    assert!(line.ends_with('\n'));
-    let value: Value = serde_json::from_str(line.trim_end()).expect("json line");
-    assert_eq!(value["path"], "/syslog");
+    let json_start = line.find('{').expect("json envelope suffix");
+    assert!(line[..json_start].contains("registry-platform-audit"));
+    let value: Value = serde_json::from_str(&line[json_start..]).expect("json envelope suffix");
+    assert!(value["envelope_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    assert_eq!(value["record"]["path"], "/syslog");
 }
 
 #[cfg(unix)]
@@ -126,10 +190,10 @@ async fn syslog_sink_emits_jsonl_datagram() {
 async fn syslog_sink_returns_io_error_when_socket_unavailable() {
     let dir = tempdir().expect("tempdir");
     let socket_path = dir.path().join("missing.sock");
-    let sink = SyslogSink::with_socket_path(socket_path);
+    let sink = AuditPipeline::from_sink(SyslogSink::with_socket_path(socket_path));
 
     let error = sink
-        .write(AuditEnvelope::from(sample_record("/missing")))
+        .write_record(sample_record("/missing"))
         .await
         .expect_err("missing socket should be an audit error");
 

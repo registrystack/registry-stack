@@ -5,6 +5,8 @@ FROM rust:1-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d
 WORKDIR /workspace/registry_relay
 
 COPY Cargo.toml Cargo.lock ./
+COPY --from=registry-platform /Cargo.toml /Cargo.lock /workspace/registry-platform/
+COPY --from=registry-platform /crates /workspace/registry-platform/crates
 COPY benches ./benches
 COPY resources ./resources
 COPY src ./src

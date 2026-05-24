@@ -33,7 +33,7 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use datafusion::execution::context::SessionContext;
-use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::ApiKeyAuth;
 use registry_relay::auth::AuthProvider;
 use registry_relay::config::{Config, DatasetId, ResourceId};
@@ -65,17 +65,21 @@ fn load_example_config() -> Config {
             "CLAIM_VERIFICATION_BINDING_KEY",
             "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         );
+        std::env::set_var(
+            "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+            "relay-e2e-health-audit-secret-32-bytes",
+        );
     }
     registry_relay::config::load(&path).expect("example config loads")
 }
 
-fn build_test_app(sink: Arc<dyn AuditSink>) -> axum::Router {
+fn build_test_app(sink: Arc<AuditPipeline>) -> axum::Router {
     let config = Arc::new(load_example_config());
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
     build_app(config, auth, sink).unwrap()
 }
 
-fn build_test_app_with_health_audit(sink: Arc<dyn AuditSink>) -> axum::Router {
+fn build_test_app_with_health_audit(sink: Arc<AuditPipeline>) -> axum::Router {
     let mut cfg = load_example_config();
     cfg.audit.include_health = true;
     let config = Arc::new(cfg);
@@ -83,7 +87,7 @@ fn build_test_app_with_health_audit(sink: Arc<dyn AuditSink>) -> axum::Router {
     build_app(config, auth, sink).unwrap()
 }
 
-fn build_test_app_with_config(config: Arc<Config>, sink: Arc<dyn AuditSink>) -> axum::Router {
+fn build_test_app_with_config(config: Arc<Config>, sink: Arc<AuditPipeline>) -> axum::Router {
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
     build_app(config, auth, sink).unwrap()
 }
@@ -95,14 +99,14 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 fn build_test_app_with_readiness(snapshot: ReadinessSnapshot) -> axum::Router {
     let config = Arc::new(load_example_config());
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let (_tx, rx) = watch::channel(snapshot);
     build_app_with_readiness(config, auth, sink, rx).unwrap()
 }
 
 #[tokio::test]
 async fn health_returns_200_with_status_ok_body() {
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
@@ -115,7 +119,7 @@ async fn health_returns_200_with_status_ok_body() {
 
 #[tokio::test]
 async fn health_response_carries_x_request_id_header() {
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
@@ -135,7 +139,7 @@ async fn health_response_carries_x_request_id_header() {
 
 #[tokio::test]
 async fn client_supplied_x_request_id_is_replaced() {
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
     let spoofed = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -155,7 +159,7 @@ async fn client_supplied_x_request_id_is_replaced() {
 #[tokio::test]
 async fn ready_returns_200_without_resource_readiness_state() {
     // Without a readiness receiver, `build_app` reports trivial ready.
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
@@ -252,7 +256,7 @@ async fn ready_503_reports_unresolved_count_without_names() {
 #[tokio::test]
 async fn audit_middleware_fires_on_health() {
     let inmem = InMemorySink::new();
-    let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
     let app = build_test_app_with_health_audit(sink);
     let server = TestServer::new(app);
 
@@ -266,7 +270,7 @@ async fn audit_middleware_fires_on_health() {
         "audit middleware must emit exactly one record per request"
     );
 
-    let record: Value = serde_json::from_str(captured[0].trim_end()).expect("valid JSONL");
+    let record = audit_record_from_platform_envelope(&captured[0]);
     assert_eq!(record["status_code"], 200);
     assert_eq!(record["method"], "GET");
     assert_eq!(record["path"], "/health");
@@ -276,7 +280,7 @@ async fn audit_middleware_fires_on_health() {
 #[tokio::test]
 async fn health_audit_is_suppressed_by_default() {
     let inmem = InMemorySink::new();
-    let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
@@ -298,7 +302,7 @@ async fn cors_allowed_origin_from_config_is_echoed_on_preflight() {
     cfg.server.cors.allowed_origins = vec!["https://allowed.example.gov".to_string()];
     let config = Arc::new(cfg);
 
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app_with_config(config, sink);
     let server = TestServer::new(app);
 
@@ -320,7 +324,7 @@ async fn cors_unconfigured_origin_is_not_echoed() {
     cfg.server.cors.allowed_origins = vec!["https://allowed.example.gov".to_string()];
     let config = Arc::new(cfg);
 
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app_with_config(config, sink);
     let server = TestServer::new(app);
 
@@ -348,7 +352,7 @@ async fn server_request_timeout_field_reaches_timeout_layer() {
     cfg.server.request_timeout = Duration::from_secs(120);
     let config = Arc::new(cfg);
 
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_test_app_with_config(config, sink);
     let server = TestServer::new(app);
 
@@ -363,7 +367,7 @@ async fn overlong_uri_returns_414_uri_too_long() {
     // with the `internal.uri_too_long` problem-details code, matching
     // the shape used by the timeout and body-limit layers.
     let inmem = InMemorySink::new();
-    let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
@@ -399,7 +403,7 @@ async fn admin_bind_serves_health_on_second_listener() {
     cfg.datasets.clear();
     let config = Arc::new(cfg);
 
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
     let ingest = Arc::new(
         IngestRegistry::from_config(
@@ -419,7 +423,8 @@ async fn admin_bind_serves_health_on_second_listener() {
         readiness_rx,
         readiness_tx,
         ingest,
-    );
+    )
+    .expect("admin app builds");
 
     // Serve both routers in background tasks. We do not bother with
     // graceful shutdown here because the test process tears them down
@@ -473,7 +478,7 @@ async fn trusted_proxy_forwarded_for_reaches_audit_on_real_listener() {
     let config = Arc::new(cfg);
 
     let inmem = InMemorySink::new();
-    let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
     let app = build_test_app_with_config(config, sink);
 
     let handle = tokio::spawn(async move {
@@ -494,10 +499,16 @@ async fn trusted_proxy_forwarded_for_reaches_audit_on_real_listener() {
 
     let records = inmem.snapshot();
     assert_eq!(records.len(), 1);
-    let record: Value = serde_json::from_str(records[0].trim_end()).expect("valid audit JSON");
+    let record = audit_record_from_platform_envelope(&records[0]);
     assert_eq!(record["remote_addr"], "203.0.113.10");
 
     handle.abort();
+}
+
+fn audit_record_from_platform_envelope(line: &str) -> Value {
+    let envelope: Value =
+        serde_json::from_str(line.trim_end()).expect("valid platform audit envelope");
+    envelope["record"].clone()
 }
 
 /// Minimal HTTP/1.1 GET client. We avoid pulling reqwest into

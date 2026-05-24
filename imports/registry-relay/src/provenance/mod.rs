@@ -22,6 +22,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use registry_platform_crypto::PublicJwk;
 use time::OffsetDateTime;
 
 use crate::config::{IssuerConfig, ProvenanceConfig, RetiredKeyConfig, SignerConfig};
@@ -33,6 +34,7 @@ pub mod jwt_vc;
 pub mod negotiate;
 pub mod publicschema;
 pub mod resources;
+pub mod sdjwt;
 pub mod signer;
 pub mod signers;
 
@@ -515,9 +517,41 @@ fn load_retired_keys(
                     serde_json::Value::String(entry.verification_method_id.clone())
                 });
             }
+            let public_jwk = PublicJwk::parse(&serde_json::to_string(&jwk).map_err(|err| {
+                tracing::error!(
+                    code = "provenance.config.retired_key_jwk_parse_failed",
+                    verification_method_id = %entry.verification_method_id,
+                    error = %err,
+                    "retired key jwk serialize failed",
+                );
+                BuildStateError::SignerLoad(SignerError::KeyLoad {
+                    reason: "retired key jwk parse failed",
+                })
+            })?)
+            .map_err(|err| {
+                tracing::error!(
+                    code = "provenance.config.retired_key_jwk_parse_failed",
+                    verification_method_id = %entry.verification_method_id,
+                    error = %err,
+                    "retired key public jwk validation failed",
+                );
+                BuildStateError::SignerLoad(SignerError::KeyLoad {
+                    reason: "retired key jwk parse failed",
+                })
+            })?;
             Ok(ResolvedRetiredKey {
                 verification_method_id: entry.verification_method_id.clone(),
-                public_jwk: jwk,
+                public_jwk: serde_json::to_value(public_jwk).map_err(|err| {
+                    tracing::error!(
+                        code = "provenance.config.retired_key_jwk_parse_failed",
+                        verification_method_id = %entry.verification_method_id,
+                        error = %err,
+                        "retired key public jwk serialize failed",
+                    );
+                    BuildStateError::SignerLoad(SignerError::KeyLoad {
+                        reason: "retired key jwk parse failed",
+                    })
+                })?,
                 retired_after: entry.retired_after,
             })
         })

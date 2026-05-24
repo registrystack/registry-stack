@@ -24,6 +24,7 @@ cp fixtures/example_social_registry.xlsx data/social_registry.xlsx
 export PROGRAM_SYSTEM_API_KEY_HASH='sha256:<64 lowercase hex chars>'
 export STATS_OFFICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
 export VERIFICATION_SERVICE_API_KEY_HASH='sha256:<64 lowercase hex chars>'
+export REGISTRY_RELAY_AUDIT_HASH_SECRET='<at least 32 random bytes>'
 just run
 ```
 

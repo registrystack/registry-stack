@@ -2,7 +2,7 @@
 //! HTTP server composition.
 //!
 //! [`build_app`] composes the public data-plane router from parsed
-//! [`Config`], [`AuthProvider`], and [`AuditSink`] state. The production
+//! [`Config`], [`AuthProvider`], and [`AuditPipeline`] state. The production
 //! path installs ingest readiness plus entity/query state through
 //! [`build_app_with_entity_query`]. Layering order follows the V1
 //! operational requirements for request ids, audit records, bounded
@@ -61,6 +61,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
 use registry_manifest_core::CompiledMetadata;
+use registry_platform_audit::AuditKeyHasher;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{
@@ -73,7 +74,7 @@ use ulid::Ulid;
 
 use crate::api::EvidenceVerificationLimiter;
 use crate::api::{self, CursorSigner};
-use crate::audit::{self, AuditSettings, AuditSink};
+use crate::audit::{self, AuditPipeline, AuditSettings};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
 use crate::claim_verification::{decode_binding_key, ClaimVerificationHasher};
 use crate::config::{Config, CorsConfig};
@@ -129,7 +130,7 @@ impl MakeRequestId for UlidMakeRequestId {
 pub fn build_app(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
 ) -> Result<Router, ConfigError> {
     build_app_with_provenance(config, auth, audit_sink, None)
 }
@@ -140,7 +141,7 @@ pub fn build_app(
 pub fn build_app_with_provenance(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
 ) -> Result<Router, ConfigError> {
     build_app_with_provenance_and_metrics(
@@ -157,7 +158,7 @@ pub fn build_app_with_provenance(
 pub fn build_app_with_provenance_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
@@ -169,7 +170,7 @@ pub fn build_app_with_provenance_and_metrics(
 fn build_app_with_provenance_metadata_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metadata: Option<Arc<CompiledMetadata>>,
     metrics: Arc<RequestMetrics>,
@@ -229,7 +230,7 @@ fn build_app_with_provenance_metadata_and_metrics(
     let evidence_verification_limiter = Arc::new(EvidenceVerificationLimiter::new(
         &config.evidence_verification.rate_limit,
     ));
-    let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
+    let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
         .layer(Extension(cursor_signer))
         .layer(Extension(evidence_verification_limiter))
         .layer(Extension(config));
@@ -276,7 +277,7 @@ fn merge_spdci_routes(router: Router) -> Router {
 pub fn build_app_with_readiness(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
 ) -> Result<Router, ConfigError> {
     Ok(build_app(config, auth, audit_sink)?.layer(Extension(readiness)))
@@ -287,7 +288,7 @@ pub fn build_app_with_readiness(
 pub fn build_app_with_entity_query(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
@@ -309,7 +310,7 @@ pub fn build_app_with_entity_query(
 pub fn build_app_with_entity_query_and_provenance(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
@@ -337,7 +338,7 @@ pub fn build_app_with_entity_query_and_provenance(
 pub fn build_app_with_entity_query_and_provenance_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
@@ -359,7 +360,7 @@ pub fn build_app_with_entity_query_and_provenance_and_metrics(
 pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
@@ -386,11 +387,11 @@ pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
 pub fn build_admin_app(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     readiness_tx: tokio::sync::watch::Sender<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     build_admin_app_with_metrics(
         config,
         auth,
@@ -407,30 +408,32 @@ pub fn build_admin_app(
 pub fn build_admin_app_with_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
     readiness_tx: tokio::sync::watch::Sender<ReadinessSnapshot>,
     ingest: Arc<IngestRegistry>,
     metrics: Arc<RequestMetrics>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     let public = api::health_router()
         .merge(crate::observability::router())
         .layer(Extension(metrics.clone()));
     let protected = api::admin_router().layer(Extension(ingest));
     let protected = auth_layer(protected, auth);
     let merged: Router<()> = Router::new().merge(public).merge(protected);
-    apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)
-        .layer(Extension(readiness))
-        .layer(Extension(readiness_tx))
-        .layer(Extension(config))
+    Ok(
+        apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
+            .layer(Extension(readiness))
+            .layer(Extension(readiness_tx))
+            .layer(Extension(config)),
+    )
 }
 
 fn apply_cross_cutting_layers_with_metrics(
     router: Router,
     config: &Config,
-    audit_sink: Arc<dyn AuditSink>,
+    audit_sink: Arc<AuditPipeline>,
     metrics: Arc<RequestMetrics>,
-) -> Router {
+) -> Result<Router, ConfigError> {
     let x_request_id: HeaderName = HeaderName::from_static("x-request-id");
     let cors = build_cors_layer(&config.server.cors);
     let audit_settings = AuditSettings {
@@ -438,7 +441,7 @@ fn apply_cross_cutting_layers_with_metrics(
         trust_proxy_enabled: config.server.trust_proxy.enabled,
         trusted_proxies: config.server.trust_proxy.trusted_proxies.clone(),
         sensitive_fields: audit_sensitive_fields(config),
-        hash_secret: load_audit_hash_secret(config.audit.hash_secret_env.as_deref()),
+        hash_hasher: load_audit_hash_secret(config.audit.hash_secret_env.as_deref())?,
     };
 
     let with_operational_layers = router
@@ -470,13 +473,13 @@ fn apply_cross_cutting_layers_with_metrics(
         audit_settings,
     );
 
-    with_audit
+    Ok(with_audit
         // Strip client-supplied request ids, then mint and propagate a
         // server-owned `x-request-id` value.
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(SetRequestIdLayer::new(x_request_id, UlidMakeRequestId))
         .layer(from_fn(strip_untrusted_request_id))
-        .layer(from_fn(add_security_headers))
+        .layer(from_fn(add_security_headers)))
 }
 
 fn operational_route(request: &Request<Body>) -> &str {
@@ -539,45 +542,23 @@ async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
 
 /// Resolve the audit hash secret from the env var named by config.
 ///
-/// Returns `None` (with a `warn!` log) when no env var name is
-/// configured or the named variable is unset/empty. In that case the
-/// audit middleware falls back to unkeyed SHA-256, which is fine for
-/// local development but rainbow-tableable for small keyspaces (see
-/// [`AuditSettings::hash_secret`]). Production deployments must set
-/// `audit.hash_secret_env` and populate the named env var with at
-/// least 32 bytes of high-entropy random data.
-fn load_audit_hash_secret(env_var: Option<&str>) -> Option<crate::audit::AuditHashSecret> {
-    let Some(var_name) = env_var.filter(|name| !name.is_empty()) else {
-        tracing::warn!(
-            "audit.hash_secret_env not configured: sensitive audit values will use unkeyed \
-             SHA-256, which is rainbow-tableable for small keyspaces; do not run this way \
-             in production"
-        );
-        return None;
+/// Production startup fails closed when `audit.hash_secret_env` is
+/// missing, empty, unset, or resolves to a weak secret. Direct
+/// middleware tests can still opt into `AuditKeyHasher::unkeyed_dev_only`
+/// through `AuditSettings::default()`.
+fn load_audit_hash_secret(env_var: Option<&str>) -> Result<AuditKeyHasher, ConfigError> {
+    let Some(var_name) = env_var.filter(|name| !name.trim().is_empty()) else {
+        tracing::error!("audit.hash_secret_env is required");
+        return Err(ConfigError::MissingSecret);
     };
-    match env::var(var_name) {
-        Ok(value) if !value.is_empty() => {
-            let bytes: Box<[u8]> = value.into_bytes().into_boxed_slice();
-            // We don't enforce a minimum length here: any length works
-            // for HMAC, and operators who want to verify entropy can do
-            // so out of band. But surface a soft warning under 32 bytes.
-            if bytes.len() < 32 {
-                tracing::warn!(
-                    env_var = %var_name,
-                    bytes = bytes.len(),
-                    "audit hash secret is shorter than 32 bytes; consider using a longer key"
-                );
-            }
-            Some(Arc::from(bytes))
-        }
-        Ok(_) | Err(_) => {
-            tracing::warn!(
-                env_var = %var_name,
-                "audit hash secret env var is unset or empty: falling back to unkeyed SHA-256"
-            );
-            None
-        }
-    }
+    AuditKeyHasher::from_env(var_name).map_err(|err| {
+        tracing::error!(
+            env_var = %var_name,
+            error = %err,
+            "audit hash secret failed validation"
+        );
+        ConfigError::MissingSecret
+    })
 }
 
 fn audit_sensitive_fields(config: &Config) -> Vec<String> {
@@ -688,7 +669,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::audit::{AuditSink, InMemorySink};
+    use crate::audit::{AuditPipeline, InMemorySink};
     use axum::body::Body;
     use axum::routing::get;
     use serde_json::Value;
@@ -706,9 +687,64 @@ mod tests {
                 "CLAIM_VERIFICATION_BINDING_KEY",
                 "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             );
+            std::env::set_var(
+                "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+                "relay-audit-test-secret-32-bytes-minimum",
+            );
         }
         crate::config::load(&path).expect("example config loads")
     }
+
+    fn captured_audit_record(line: &str) -> Value {
+        let envelope: Value =
+            serde_json::from_str(line.trim_end()).expect("platform audit envelope JSON");
+        assert_platform_audit_envelope(&envelope);
+        envelope["record"].clone()
+    }
+
+    fn assert_platform_audit_envelope(envelope: &Value) {
+        let object = envelope
+            .as_object()
+            .expect("platform audit envelope object");
+        assert_eq!(
+            object.len(),
+            5,
+            "platform audit envelope must only expose envelope metadata plus record"
+        );
+        for key in [
+            "envelope_id",
+            "timestamp_unix_ms",
+            "prev_hash",
+            "record",
+            "record_hash",
+        ] {
+            assert!(object.contains_key(key), "missing envelope field {key}");
+        }
+        assert!(envelope["envelope_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        assert!(envelope["timestamp_unix_ms"].as_i64().is_some());
+        assert!(
+            envelope["prev_hash"].is_null() || is_lower_hex_hash(&envelope["prev_hash"]),
+            "prev_hash must be null or lowercase hex: {}",
+            envelope["prev_hash"]
+        );
+        assert!(
+            is_lower_hex_hash(&envelope["record_hash"]),
+            "record_hash must be lowercase hex: {}",
+            envelope["record_hash"]
+        );
+        assert!(envelope["record"].is_object());
+    }
+
+    fn is_lower_hex_hash(value: &Value) -> bool {
+        value.as_str().is_some_and(|s| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        })
+    }
+
     use crate::config::CorsConfig;
 
     #[test]
@@ -742,14 +778,15 @@ mod tests {
     #[tokio::test]
     async fn cross_cutting_layers_add_baseline_security_headers() {
         let config = Arc::new(load_example_config());
-        let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
         let router = Router::new().route("/ok", get(|| async { StatusCode::OK }));
         let app = apply_cross_cutting_layers_with_metrics(
             router,
             &config,
             sink,
             RequestMetrics::shared(),
-        );
+        )
+        .expect("audit hash secret configured");
 
         let response = app
             .oneshot(
@@ -804,14 +841,15 @@ mod tests {
         let mut config = load_example_config();
         config.server.cors.allowed_origins = vec!["https://allowed.example.gov".to_string()];
         let config = Arc::new(config);
-        let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
         let router = Router::new().route("/ok", get(|| async { StatusCode::OK }));
         let app = apply_cross_cutting_layers_with_metrics(
             router,
             &config,
             sink,
             RequestMetrics::shared(),
-        );
+        )
+        .expect("audit hash secret configured");
 
         let response = app
             .oneshot(
@@ -846,7 +884,7 @@ mod tests {
         config.server.request_timeout = Duration::from_millis(1);
         let config = Arc::new(config);
         let inmem = InMemorySink::new();
-        let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
         let router = Router::new().route(
             "/slow",
             get(|| async {
@@ -859,7 +897,8 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
-        );
+        )
+        .expect("audit hash secret configured");
 
         let response = app
             .oneshot(
@@ -880,7 +919,7 @@ mod tests {
 
         let records = inmem.snapshot();
         assert_eq!(records.len(), 1);
-        let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
+        let record = captured_audit_record(&records[0]);
         assert_eq!(record["error_code"], "internal.timeout");
         assert_eq!(record["status_code"], 504);
     }
@@ -889,7 +928,7 @@ mod tests {
     async fn body_limit_layer_returns_problem_details_and_audit_code() {
         let config = Arc::new(load_example_config());
         let inmem = InMemorySink::new();
-        let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
         let router = Router::new().route(
             "/echo",
             axum::routing::post(|_body: String| async { StatusCode::OK }),
@@ -899,7 +938,8 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
-        );
+        )
+        .expect("audit hash secret configured");
         let body = vec![b'x'; REQUEST_BODY_LIMIT_BYTES + 1];
 
         let response = app
@@ -922,7 +962,7 @@ mod tests {
 
         let records = inmem.snapshot();
         assert_eq!(records.len(), 1);
-        let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
+        let record = captured_audit_record(&records[0]);
         assert_eq!(record["error_code"], "internal.payload_too_large");
         assert_eq!(record["status_code"], 413);
     }
@@ -931,14 +971,15 @@ mod tests {
     async fn uri_length_layer_returns_problem_details_and_audit_code() {
         let config = Arc::new(load_example_config());
         let inmem = InMemorySink::new();
-        let sink: Arc<dyn AuditSink> = Arc::new(inmem.clone());
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
         let router = Router::new().route("/", get(|| async { StatusCode::OK }));
         let app = apply_cross_cutting_layers_with_metrics(
             router,
             &config,
             sink,
             RequestMetrics::shared(),
-        );
+        )
+        .expect("audit hash secret configured");
         let uri = format!("/{}", "x".repeat(MAX_URI_BYTES));
 
         let response = app
@@ -961,7 +1002,7 @@ mod tests {
 
         let records = inmem.snapshot();
         assert_eq!(records.len(), 1);
-        let record: Value = serde_json::from_str(records[0].trim_end()).expect("audit JSON");
+        let record = captured_audit_record(&records[0]);
         assert_eq!(record["error_code"], "internal.uri_too_long");
         assert_eq!(record["status_code"], 414);
     }

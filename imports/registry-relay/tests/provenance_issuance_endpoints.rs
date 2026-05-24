@@ -32,7 +32,7 @@ use datafusion::execution::context::SessionContext;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
 use registry_relay::api::{aggregates_router, entity_router, CursorSigner};
-use registry_relay::audit::{audit_layer, AuditSettings, AuditSink, InMemorySink};
+use registry_relay::audit::{audit_layer, AuditPipeline, AuditSettings, InMemorySink};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{
     self, Config, DatasetId, ProvenanceAlgorithm, ResourceId, SoftwareSignerConfig,
@@ -167,7 +167,7 @@ fn assert_credential_subject_matches_schema(
 /// shape used inside `build_app_with_provenance` so the
 /// `provenance.vc.issued` block ends up in the JSONL envelope just
 /// like in production.
-fn with_audit<S>(router: Router<S>, sink: Arc<dyn AuditSink>) -> Router<S>
+fn with_audit<S>(router: Router<S>, sink: Arc<AuditPipeline>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -262,9 +262,16 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET
 "#
     );
     std::fs::write(&path, body).expect("write config");
+    unsafe {
+        env::set_var(
+            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+            "relay-provenance-issuance-audit-secret-32-bytes",
+        );
+    }
     config::load(&path).expect("config loads")
 }
 
@@ -326,7 +333,7 @@ fn build_entity_harness(env_name: &str) -> Harness {
 
     let (state, verifying_key) = build_provenance_state(env_name);
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
     let router = entity_router::<()>()
         .layer(Extension(query))
@@ -366,7 +373,7 @@ fn build_aggregate_harness(env_name: &str) -> Harness {
 
     let (state, verifying_key) = build_provenance_state(env_name);
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
     let router = aggregates_router::<()>()
         .layer(Extension(query))
@@ -391,11 +398,12 @@ fn audit_record_for(sink: &InMemorySink, path: &str) -> Value {
         .find(|line| {
             serde_json::from_str::<Value>(line)
                 .ok()
-                .and_then(|v| v["path"].as_str().map(|p| p == path))
+                .and_then(|v| v["record"]["path"].as_str().map(|p| p == path))
                 .unwrap_or(false)
         })
         .unwrap_or_else(|| panic!("no audit record for path {path}; got {lines:?}"));
-    serde_json::from_str(line).expect("audit line is JSON")
+    let envelope: Value = serde_json::from_str(line).expect("audit envelope is JSON");
+    envelope["record"].clone()
 }
 
 const INDIVIDUAL_RECORD_AUDIT_PATH: &str = "/datasets/social_registry/individual/{id}";
@@ -553,7 +561,7 @@ async fn aggregate_vc_as_of_reflects_resource_registered_at() {
 
     let (state, verifying_key) = build_provenance_state("PROVENANCE_ISSUANCE_AGGREGATE_AS_OF_JWK");
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
     let router = aggregates_router::<()>()
         .layer(Extension(query))
@@ -615,7 +623,7 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     let (state, verifying_key) =
         build_provenance_state("PROVENANCE_ISSUANCE_AGGREGATE_SUPPRESS_JWK");
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
     let router = aggregates_router::<()>()
         .layer(Extension(query))
@@ -719,7 +727,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
         auth_entry,
     ]));
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
     let (provenance, verifying_key) = build_provenance_state("FULL_STACK_PROVENANCE_JWK");
 
     let app = registry_relay::server::build_app_with_entity_query_and_provenance(
@@ -791,7 +799,7 @@ async fn entity_record_returns_plain_json_when_provenance_state_is_absent() {
     );
     let (_tx, readiness) = watch::channel(snapshot);
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
     let router = entity_router::<()>()
         .layer(Extension(query))

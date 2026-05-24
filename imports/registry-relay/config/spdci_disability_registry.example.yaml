@@ -158,3 +158,4 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET

@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_relay::audit::chain::{
-    verify_chain_lines, verify_chain_lines_from_prev_hash, ChainState, ChainVerificationError,
+use registry_platform_audit::{
+    verify_chain, verify_jsonl_lines, ChainState, ChainVerificationError,
 };
-use registry_relay::audit::redact::{redact_query_with_sensitive_fields, sensitive_value_hash};
-use registry_relay::audit::{
-    AuditEnvelope, AuditError, AuditFuture, AuditRecord, AuditSink, ChainingSink, EndpointKind,
+use registry_relay::audit::redact::{
+    redact_query_with_sensitive_fields, sensitive_value_hash, QueryRedactionError, QueryRedactor,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use registry_relay::audit::{AuditRecord, EndpointKind, InMemorySink};
 
 fn sample_record(request_id: usize) -> AuditRecord {
     AuditRecord {
@@ -85,128 +83,98 @@ fn redaction_hashes_sensitive_values_without_leaking_raw_pii() {
 }
 
 #[test]
-fn chained_envelopes_verify_and_detect_tampering() {
-    let mut state = ChainState::new();
-    let first = state
-        .wrap(AuditEnvelope::from(sample_record(1)))
-        .to_jsonl()
-        .expect("first jsonl");
-    let second = state
-        .wrap(AuditEnvelope::from(sample_record(2)))
-        .to_jsonl()
-        .expect("second jsonl");
+fn redaction_hashes_configured_sensitive_fields_case_insensitively() {
+    let redacted = redact_query_with_sensitive_fields("ID=IND-001234&Name=Ana", ["id", "name"]);
 
-    let result = verify_chain_lines([first.as_str(), second.as_str()]).expect("valid chain");
+    assert_eq!(
+        redacted["ID"]["value_hash"],
+        sensitive_value_hash("ID", "IND-001234")
+    );
+    assert_eq!(
+        redacted["Name"]["value_hash"],
+        sensitive_value_hash("Name", "Ana")
+    );
+}
+
+#[test]
+fn redaction_surfaces_invalid_utf8_query_encoding() {
+    let redactor = QueryRedactor::new(["id"]);
+
+    let err = redactor
+        .try_redact_query("id=%FF")
+        .expect_err("invalid UTF-8 is not silently lossy-decoded");
+    assert_eq!(err, QueryRedactionError::InvalidUtf8);
+
+    let redacted = redactor.redact_query("id=%FF");
+    assert_eq!(redacted["_error"]["code"], "invalid_query_encoding");
+    assert!(!redacted.to_string().contains('\u{fffd}'));
+}
+
+#[tokio::test]
+async fn platform_chained_envelopes_verify_and_detect_tampering() {
+    let sink = InMemorySink::new();
+    let state = ChainState::new();
+    let first = state
+        .append(&sink, sample_record(1))
+        .await
+        .expect("first append");
+    let mut second = state
+        .append(&sink, sample_record(2))
+        .await
+        .expect("second append");
+
+    let result = verify_chain(&[first.clone(), second.clone()]).expect("valid chain");
     assert_eq!(result.records, 2);
     assert!(result.start_prev_hash.is_none());
     assert!(result.last_hash.is_some());
 
-    let tampered = second.replace("REQ-00002", "REQ-99999");
-    let err = verify_chain_lines([first.as_str(), tampered.as_str()]).expect_err("tampered chain");
+    second.record["request_id"] = serde_json::json!("REQ-99999");
+    let err = verify_chain(&[first, second]).expect_err("tampered chain");
     assert!(matches!(
         err,
-        ChainVerificationError::RecordHashMismatch { line: 2, .. }
+        ChainVerificationError::RecordHashMismatch { line: 2 }
     ));
 }
 
-#[test]
-fn verification_accepts_rotation_boundary_records() {
-    let mut state = ChainState::new();
+#[tokio::test]
+async fn platform_verification_rejects_rotation_segment_without_genesis() {
+    let sink = InMemorySink::new();
+    let state = ChainState::new();
     let first = state
-        .wrap(AuditEnvelope::from(sample_record(1)))
-        .to_jsonl()
-        .expect("first jsonl");
-    let boundary_prev_hash = verify_chain_lines([first.as_str()])
-        .expect("first segment")
-        .last_hash
-        .expect("first hash");
+        .append(&sink, sample_record(1))
+        .await
+        .expect("first append");
 
     let rotated = state
-        .wrap(AuditEnvelope::from(sample_record(2)))
+        .append(&sink, sample_record(2))
+        .await
+        .expect("second append")
         .to_jsonl()
         .expect("rotated jsonl");
 
-    let standalone = verify_chain_lines([rotated.as_str()]).expect("rotated segment");
-    assert_eq!(standalone.records, 1);
-    assert_eq!(
-        standalone.start_prev_hash.as_deref(),
-        Some(boundary_prev_hash.as_str())
-    );
-
-    verify_chain_lines_from_prev_hash([rotated.as_str()], Some(boundary_prev_hash.as_str()))
-        .expect("rotated segment with known predecessor");
-}
-
-#[test]
-fn ten_thousand_record_chain_verification_smoke_is_quick() {
-    let mut state = ChainState::new();
-    let mut lines = Vec::with_capacity(10_000);
-
-    for i in 0..10_000 {
-        lines.push(
-            state
-                .wrap(AuditEnvelope::from(sample_record(i)))
-                .to_jsonl()
-                .expect("jsonl"),
-        );
-    }
-
-    let result = verify_chain_lines(lines.iter().map(String::as_str)).expect("valid chain");
-    assert_eq!(result.records, 10_000);
-    assert!(result.last_hash.is_some());
-}
-
-#[derive(Debug, Default)]
-struct FailOnceSink {
-    calls: AtomicUsize,
-    captured: Mutex<Vec<AuditEnvelope>>,
-}
-
-impl FailOnceSink {
-    fn captured(&self) -> Vec<AuditEnvelope> {
-        self.captured
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-}
-
-impl AuditSink for FailOnceSink {
-    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
-        Box::pin(async move {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                return Err(AuditError::Io(std::io::Error::other("forced failure")));
-            }
-            self.captured
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(envelope);
-            Ok(())
-        })
-    }
-
-    fn flush<'a>(&'a self) -> AuditFuture<'a> {
-        Box::pin(async move { Ok(()) })
-    }
+    let err = verify_jsonl_lines([rotated.as_str()])
+        .expect_err("public verification requires the retained genesis chain");
+    assert!(matches!(
+        err,
+        ChainVerificationError::PrevHashMismatch {
+            line: 1,
+            expected: None,
+            actual: Some(actual),
+        } if actual == first.record_hash
+    ));
 }
 
 #[tokio::test]
-async fn chaining_sink_does_not_advance_hash_after_failed_write() {
-    let inner = Arc::new(FailOnceSink::default());
-    let sink = ChainingSink::new(inner.clone());
+async fn ten_thousand_platform_record_chain_verification_smoke_is_quick() {
+    let sink = InMemorySink::new();
+    let state = ChainState::new();
 
-    sink.write(AuditEnvelope::from(sample_record(1)))
-        .await
-        .expect_err("first write fails");
-    sink.write(AuditEnvelope::from(sample_record(2)))
-        .await
-        .expect("second write succeeds");
+    for i in 0..10_000 {
+        state.append(&sink, sample_record(i)).await.expect("append");
+    }
 
-    let captured = inner.captured();
-    assert_eq!(captured.len(), 1);
-    assert!(
-        captured[0].prev_hash.is_none(),
-        "a failed write must not become the previous hash for the next record"
-    );
-    assert!(captured[0].record_hash.is_some());
+    let lines = sink.snapshot();
+    let result = verify_jsonl_lines(lines.iter().map(String::as_str)).expect("valid chain");
+    assert_eq!(result.records, 10_000);
+    assert!(result.last_hash.is_some());
 }

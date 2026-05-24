@@ -19,6 +19,8 @@ Also emits:
 
 - CLAIM_VERIFICATION_BINDING_KEY: hex: prefixed 32-byte secret for the
   internal matching HMAC key used by evidence verification.
+- REGISTRY_RELAY_AUDIT_HASH_SECRET: per-deployment audit HMAC secret used to
+  hash sensitive audit identifiers.
 - REGISTRY_RELAY_PROVENANCE_JWK: JSON-encoded Ed25519 private JWK used by
   the provenance signer to issue signed evidence-verification receipts.
 
@@ -73,6 +75,11 @@ def generate_binding_key() -> str:
     return f"hex:{secrets.token_hex(32)}"
 
 
+def generate_audit_hash_secret() -> str:
+    """Return a per-deployment audit HMAC secret for perf smoke runs."""
+    return secrets.token_urlsafe(48)
+
+
 def _b64url(raw: bytes) -> str:
     """Unpadded base64url encoding per RFC 7515."""
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -112,7 +119,10 @@ def generate_provenance_jwk() -> str:
 
 
 def build_env_lines(
-    tokens: dict[str, str], binding_key: str, provenance_jwk: str
+    tokens: dict[str, str],
+    binding_key: str,
+    audit_hash_secret: str,
+    provenance_jwk: str,
 ) -> list[str]:
     """Build the env file lines from the token map. Never includes raw tokens."""
     lines = [
@@ -143,6 +153,10 @@ def build_env_lines(
         "# Evidence verification HMAC binding key (hex:<64 lowercase hex chars>).",
         "# Must remain stable across server restarts so claim_hash values stay interpretable.",
         f"CLAIM_VERIFICATION_BINDING_KEY={binding_key}",
+        "#",
+        "# Audit HMAC secret for sensitive audit identifiers.",
+        "# Must remain stable across server restarts for consistent audit lookups.",
+        f"REGISTRY_RELAY_AUDIT_HASH_SECRET={audit_hash_secret}",
         "#",
         "# Provenance signing key: JSON-encoded Ed25519 private JWK.",
         "# Read by the software signer at startup. NEVER commit this file.",
@@ -182,9 +196,10 @@ def main() -> None:
     # the Ed25519 private JWK for the provenance signer.
     tokens: dict[str, str] = {key_id: generate_token() for key_id, _, _ in KEY_DEFS}
     binding_key = generate_binding_key()
+    audit_hash_secret = generate_audit_hash_secret()
     provenance_jwk = generate_provenance_jwk()
 
-    env_lines = build_env_lines(tokens, binding_key, provenance_jwk)
+    env_lines = build_env_lines(tokens, binding_key, audit_hash_secret, provenance_jwk)
     env_content = "\n".join(env_lines) + "\n"
 
     env_path.write_text(env_content, encoding="utf-8")
@@ -206,6 +221,7 @@ def main() -> None:
         "REGISTRY_RELAY_ENTITY",
     ] + [hash_env for _, hash_env, _ in KEY_DEFS] + [
         "CLAIM_VERIFICATION_BINDING_KEY",
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         "REGISTRY_RELAY_PROVENANCE_JWK",
     ]
     for name in var_names:

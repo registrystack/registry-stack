@@ -4,6 +4,7 @@ target
 cache
 data
 agent-skills
+registry-platform
 fixtures
 tests
 docs

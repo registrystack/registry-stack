@@ -2756,6 +2756,10 @@ mod tests {
                 "CLAIM_VERIFICATION_BINDING_KEY",
                 "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             );
+            env::set_var(
+                "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+                "relay-openapi-audit-secret-32-bytes",
+            );
         }
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
         crate::config::load(&path).expect("example config loads")

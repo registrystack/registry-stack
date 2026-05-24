@@ -1,5 +1,2 @@
 edition = "2021"
 max_width = 100
-# imports_granularity is a nightly-only option; it has no effect on stable
-# but is recorded here for documentation and future nightly runs.
-imports_granularity = "Crate"

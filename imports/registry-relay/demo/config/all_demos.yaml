@@ -98,6 +98,7 @@ audit:
   sink: file
   path: demo/var/audit.jsonl
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
   rotate:
     max_size_mb: 50
     max_files: 5

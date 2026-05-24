@@ -1,6 +1,2 @@
-# Cognitive complexity cap; lower this over time as code matures.
 cognitive-complexity-threshold = 25
-
-# Disallowed-method list is intentionally empty in Wave 0.
-# Populate as anti-patterns are identified in later waves.
 disallowed-methods = []

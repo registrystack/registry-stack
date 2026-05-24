@@ -1,30 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Syslog audit sink over a local Unix datagram socket.
+//! Syslog audit sink adapter backed by `registry-platform-audit`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::{AuditEnvelope, AuditError, AuditFuture, AuditSink};
+use registry_platform_audit::AuditSink as PlatformAuditSink;
 
-/// Sends audit JSONL records to a local syslog Unix datagram socket.
+use super::AuditError;
+
+/// Sends relay audit records as platform audit JSONL envelopes to syslog.
 #[derive(Debug, Clone)]
 pub struct SyslogSink {
-    socket_path: PathBuf,
+    inner: registry_platform_audit::SyslogSink,
 }
 
 impl SyslogSink {
-    /// Construct a sink using the platform's common local syslog socket.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_socket_path(default_socket_path())
+        Self::with_inner(registry_platform_audit::SyslogSink::new())
     }
 
-    /// Construct a sink with an explicit socket path. Intended for
-    /// tests and non-standard syslog deployments.
     #[must_use]
     pub fn with_socket_path(path: impl Into<PathBuf>) -> Self {
-        Self {
-            socket_path: path.into(),
-        }
+        Self::with_inner(registry_platform_audit::SyslogSink::with_socket_path(path))
+    }
+
+    fn with_inner(inner: registry_platform_audit::SyslogSink) -> Self {
+        Self { inner }
     }
 }
 
@@ -34,48 +35,16 @@ impl Default for SyslogSink {
     }
 }
 
-impl AuditSink for SyslogSink {
-    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
-        Box::pin(async move {
-            let line = envelope.to_jsonl()?;
-            send_datagram(&self.socket_path, line.as_bytes()).await
-        })
+#[async_trait::async_trait]
+impl PlatformAuditSink for SyslogSink {
+    async fn write(
+        &self,
+        envelope: &registry_platform_audit::AuditEnvelope,
+    ) -> Result<(), AuditError> {
+        self.inner.write(envelope).await
     }
 
-    fn flush<'a>(&'a self) -> AuditFuture<'a> {
-        Box::pin(async move { Ok(()) })
+    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        self.inner.tail_hash().await
     }
-}
-
-#[cfg(unix)]
-async fn send_datagram(socket_path: &Path, bytes: &[u8]) -> Result<(), AuditError> {
-    let socket = tokio::net::UnixDatagram::unbound().map_err(AuditError::Io)?;
-    socket
-        .send_to(bytes, socket_path)
-        .await
-        .map_err(AuditError::Io)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-async fn send_datagram(_socket_path: &Path, _bytes: &[u8]) -> Result<(), AuditError> {
-    Err(AuditError::Io(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "syslog audit sink requires Unix datagram sockets",
-    )))
-}
-
-#[cfg(target_os = "macos")]
-fn default_socket_path() -> PathBuf {
-    PathBuf::from("/var/run/syslog")
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn default_socket_path() -> PathBuf {
-    PathBuf::from("/dev/log")
-}
-
-#[cfg(not(unix))]
-fn default_socket_path() -> PathBuf {
-    PathBuf::from("")
 }

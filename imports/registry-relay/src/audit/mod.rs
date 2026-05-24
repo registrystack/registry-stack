@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Audit core: trait, record schema, JSONL envelope, and helpers.
+//! Audit core: record schema, platform audit pipeline, and helpers.
 //!
-//! V1 ships the in-process trait, the `AuditRecord` struct, stdout/file
-//! / syslog sinks, optional chaining, and the request-scoped middleware.
+//! V1 ships the `AuditRecord` struct, stdout/file/syslog platform
+//! sinks, tamper-evident envelopes, and the request-scoped middleware.
 //!
 //! Forward compatibility:
 //! - `FileSink` and `SyslogSink` are production audit destinations.
-//! - Chained-hash tamper-evidence injects `prev_hash` / `record_hash`
-//!   envelope fields while keeping the core `AuditRecord` stable.
+//! - Platform audit sinks wrap the core `AuditRecord` in chained
+//!   `registry-platform-audit` envelopes.
 //!
 //! Integration:
 //! - The middleware reads `Principal` from request extensions when
@@ -18,7 +18,6 @@
 //!   this module; the audit middleware reads it and records it.
 
 use std::net::IpAddr;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -32,22 +31,22 @@ use serde_json::Value;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 use time::OffsetDateTime;
+use tokio::sync::OnceCell;
 use tracing::error;
 use ulid::Ulid;
 
-pub mod chain;
 pub mod file;
 pub mod middleware;
 pub mod redact;
 pub mod stdout;
 pub mod syslog;
 
-pub use chain::ChainingSink;
 pub use file::FileSink;
 pub use redact::{
     redact_query_with_secret_and_fields, redact_query_with_sensitive_fields, sensitive_value_hash,
     sensitive_value_hash_keyed, AuditHashSecret, QueryRedactor,
 };
+pub use registry_platform_audit::AuditKeyHasher;
 pub use stdout::StdoutSink;
 pub use syslog::SyslogSink;
 
@@ -62,21 +61,29 @@ pub struct ErrorCodeExt(pub String);
 /// Runtime knobs used by the audit middleware. Production installs this
 /// from `Config`; unit tests may omit it and get secure defaults.
 ///
-/// `hash_secret` is the per-deploy HMAC key used to hash sensitive
-/// audit values (single-record primary keys, sensitive query-parameter
-/// values). Production deployments inject the secret from the env var
-/// named by `audit.hash_secret_env`. When `None`, the middleware falls
-/// back to unkeyed SHA-256 hashing: stable across processes, but
-/// rainbow-tableable for small enumerable keyspaces (national IDs,
-/// household composites). `None` is intended for local development and
-/// the test suite; production should always set it.
-#[derive(Debug, Clone, Default)]
+/// `hash_hasher` is the per-deploy keyed hasher used for sensitive
+/// audit lookup values. Production loads it through
+/// `registry-platform-audit` from `audit.hash_secret_env`; tests and
+/// explicit local development use `AuditKeyHasher::unkeyed_dev_only()`.
+#[derive(Debug, Clone)]
 pub struct AuditSettings {
     pub include_health: bool,
     pub trust_proxy_enabled: bool,
     pub trusted_proxies: Vec<String>,
     pub sensitive_fields: Vec<String>,
-    pub hash_secret: Option<AuditHashSecret>,
+    pub hash_hasher: AuditKeyHasher,
+}
+
+impl Default for AuditSettings {
+    fn default() -> Self {
+        Self {
+            include_health: false,
+            trust_proxy_enabled: false,
+            trusted_proxies: Vec::new(),
+            sensitive_fields: Vec::new(),
+            hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
+        }
+    }
 }
 
 /// Optional structured context projected by handlers that have
@@ -284,66 +291,61 @@ impl From<&ProvenanceIssuanceExt> for ProvenanceIssuanceRecord {
     }
 }
 
-/// JSONL envelope handed to a sink. The chaining wrapper attaches
-/// `prev_hash` / `record_hash` here before serialising, so the inner
-/// record schema never changes.
-#[derive(Debug, Clone, Serialize)]
-pub struct AuditEnvelope {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prev_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub record_hash: Option<String>,
-    #[serde(flatten)]
-    pub record: AuditRecord,
-}
-
-impl From<AuditRecord> for AuditEnvelope {
-    fn from(record: AuditRecord) -> Self {
-        Self {
-            prev_hash: None,
-            record_hash: None,
-            record,
-        }
-    }
-}
-
-impl AuditEnvelope {
-    /// Serialise as a single JSON line terminated by `\n`. Returns
-    /// `Err` only if serialisation fails; callers should log and
-    /// continue so audit I/O cannot break request handling.
-    pub fn to_jsonl(&self) -> Result<String, AuditError> {
-        let mut s = serde_json::to_string(self).map_err(AuditError::Serialize)?;
-        s.push('\n');
-        Ok(s)
-    }
-}
-
 /// Errors surfaced by sinks. The middleware logs and swallows these;
 /// the request path must not fail because of audit-write failures.
-#[derive(Debug, thiserror::Error)]
-pub enum AuditError {
-    #[error("audit record serialization failed: {0}")]
-    Serialize(#[source] serde_json::Error),
-    #[error("audit sink I/O failure: {0}")]
-    Io(#[source] std::io::Error),
+pub type AuditError = registry_platform_audit::AuditError;
+
+/// Chained writer for relay audit records.
+///
+/// Concrete sinks implement `registry-platform-audit::AuditSink`; this
+/// pipeline owns the per-sink chain state, bootstraps it from the sink
+/// tail on first write, and serializes relay's typed `AuditRecord` into
+/// the platform envelope record body.
+#[derive(Clone)]
+pub struct AuditPipeline {
+    sink: Arc<dyn registry_platform_audit::AuditSink>,
+    chain: Arc<OnceCell<registry_platform_audit::ChainState>>,
 }
 
-/// Future returned by [`AuditSink::write`] / [`AuditSink::flush`].
-/// Manually typed so the trait stays dyn-compatible without depending
-/// on `async-trait` (which is a transitive, not a direct, dep).
-pub type AuditFuture<'a> =
-    Pin<Box<dyn std::future::Future<Output = Result<(), AuditError>> + Send + 'a>>;
+impl std::fmt::Debug for AuditPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuditPipeline").finish_non_exhaustive()
+    }
+}
 
-/// Destination for audit records. Errors from `write` MUST never break
-/// the request path: the caller logs the failure and continues serving.
-///
-pub trait AuditSink: Send + Sync + 'static {
-    /// Write a single envelope. Implementations should be non-blocking
-    /// on the request path; long I/O belongs behind an internal channel.
-    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a>;
+impl AuditPipeline {
+    #[must_use]
+    pub fn new(sink: Arc<dyn registry_platform_audit::AuditSink>) -> Self {
+        Self {
+            sink,
+            chain: Arc::new(OnceCell::new()),
+        }
+    }
 
-    /// Best-effort flush on graceful shutdown. Idempotent.
-    fn flush<'a>(&'a self) -> AuditFuture<'a>;
+    #[must_use]
+    pub fn from_sink<S>(sink: S) -> Arc<Self>
+    where
+        S: registry_platform_audit::AuditSink + 'static,
+    {
+        Arc::new(Self::new(Arc::new(sink)))
+    }
+
+    pub async fn write_record(&self, record: AuditRecord) -> Result<(), AuditError> {
+        let chain = self
+            .chain
+            .get_or_try_init(|| async {
+                registry_platform_audit::ChainState::bootstrap(self.sink.as_ref()).await
+            })
+            .await?;
+        chain.append(self.sink.as_ref(), record).await?;
+        Ok(())
+    }
+
+    /// Best-effort flush hook kept for shutdown symmetry. Platform
+    /// sinks flush per write today, so there is no additional work.
+    pub async fn flush(&self) -> Result<(), AuditError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -440,20 +442,25 @@ impl InMemorySink {
     }
 }
 
-impl AuditSink for InMemorySink {
-    fn write<'a>(&'a self, envelope: AuditEnvelope) -> AuditFuture<'a> {
-        Box::pin(async move {
-            let line = envelope.to_jsonl()?;
-            match self.inner.lock() {
-                Ok(mut g) => g.push(line),
-                Err(p) => p.into_inner().push(line),
-            }
-            Ok(())
-        })
+#[async_trait::async_trait]
+impl registry_platform_audit::AuditSink for InMemorySink {
+    async fn write(
+        &self,
+        envelope: &registry_platform_audit::AuditEnvelope,
+    ) -> Result<(), AuditError> {
+        let line = envelope.to_jsonl()?;
+        match self.inner.lock() {
+            Ok(mut g) => g.push(line),
+            Err(p) => p.into_inner().push(line),
+        }
+        Ok(())
     }
 
-    fn flush<'a>(&'a self) -> AuditFuture<'a> {
-        Box::pin(async move { Ok(()) })
+    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        let lines = self.snapshot();
+        let verification = registry_platform_audit::verify_jsonl_lines(lines.iter())
+            .map_err(AuditError::ChainVerification)?;
+        Ok(verification.last_hash)
     }
 }
 
@@ -466,10 +473,10 @@ impl AuditSink for InMemorySink {
 /// configured sink. Errors writing the audit record are logged via
 /// `tracing::error!` and do not affect the response.
 ///
-/// State is `Arc<dyn AuditSink>` so the same layer factory works with
+/// State is `Arc<AuditPipeline>` so the same layer factory works with
 /// any sink choice (stdout, file, tee, chain).
 pub async fn audit_layer(
-    Extension(sink): Extension<Arc<dyn AuditSink>>,
+    Extension(sink): Extension<Arc<AuditPipeline>>,
     settings: Option<Extension<AuditSettings>>,
     request: Request<Body>,
     next: Next,
@@ -578,11 +585,11 @@ pub async fn audit_layer(
     }
 
     let query_params = redact_query_with_secret_and_fields(
-        settings.hash_secret.clone(),
+        settings.hash_hasher.clone(),
         &query,
         context_sensitive_fields(&settings, &context),
     );
-    let primary_key = audit_primary_key_hash(&context, settings.hash_secret.as_deref());
+    let primary_key = audit_primary_key_hash(&context, &settings.hash_hasher);
     let record_path = audit_path(&path, &context, endpoint_kind);
 
     let record = AuditRecord {
@@ -623,7 +630,7 @@ pub async fn audit_layer(
     // Fire and await the write; the sink is responsible for making
     // this cheap. We do NOT wrap in `tokio::spawn` so that ordering
     // is preserved within a single client's traffic.
-    if let Err(e) = sink.write(AuditEnvelope::from(record)).await {
+    if let Err(e) = sink.write_record(record).await {
         // Audit failures never fail the request: log and continue.
         error!(error = %e, "audit.write_failed");
     }
@@ -659,10 +666,10 @@ fn merge_inferred_context(
     context
 }
 
-fn audit_primary_key_hash(context: &AuditContextExt, secret: Option<&[u8]>) -> Option<String> {
+fn audit_primary_key_hash(context: &AuditContextExt, hasher: &AuditKeyHasher) -> Option<String> {
     let value = context.primary_key.as_deref()?;
     Some(sensitive_value_hash_keyed(
-        secret,
+        hasher,
         &primary_key_hash_field(context),
         value,
     ))

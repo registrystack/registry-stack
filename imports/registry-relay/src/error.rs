@@ -26,19 +26,15 @@
 //! stripped and the result is truncated to a safe length so that an
 //! attacker cannot smuggle newlines into the audit JSONL stream.
 
-use axum::body::Body;
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use http_api_problem::HttpApiProblem;
+use registry_platform_httpsec::Problem;
 use serde_json::json;
 use thiserror::Error;
 
 /// Base URL for RFC 9457 `type` URIs. Becomes configurable in V1.x;
 /// pinned at compile time for V1.
 const PROBLEM_TYPE_BASE: &str = "https://data.example.gov/problems/";
-
-/// Content-Type for RFC 9457 Problem Details responses.
-const PROBLEM_JSON: &str = "application/problem+json";
 
 /// Maximum number of characters retained from an operator-supplied
 /// scope name when rendered into a detail message.
@@ -555,18 +551,16 @@ impl Error {
         format!("{PROBLEM_TYPE_BASE}{path}")
     }
 
-    /// Render the error as an [`HttpApiProblem`] with all required
+    /// Render the error as a shared platform [`Problem`] with all required
     /// RFC 9457 fields and the stable `code` extension.
-    fn to_problem(&self) -> HttpApiProblem {
-        let problem = HttpApiProblem::new(self.http_status())
-            .type_url(self.type_uri())
-            .title(self.title())
+    fn to_problem(&self) -> Problem {
+        let problem = Problem::new(&self.type_uri(), self.title(), self.http_status())
             .detail(self.detail())
-            .value("code", &json!(self.code()));
+            .with_extra("code", json!(self.code()));
         match self {
-            Error::Spatial(SpatialError::FilterUnsupported { parameter }) => problem.value(
+            Error::Spatial(SpatialError::FilterUnsupported { parameter }) => problem.with_extra(
                 "parameter",
-                &json!(sanitise_operator_string(parameter, MAX_SCOPE_NAME_LEN)),
+                json!(sanitise_operator_string(parameter, MAX_SCOPE_NAME_LEN)),
             ),
             _ => problem,
         }
@@ -1421,14 +1415,8 @@ impl QueryError {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let problem = self.to_problem();
-        let status = self.http_status();
         let code = self.code().to_string();
-        let body = problem.json_bytes();
-        let mut response = Response::new(Body::from(body));
-        *response.status_mut() = status;
-        response
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, HeaderValue::from_static(PROBLEM_JSON));
+        let mut response = problem.into_response();
         // Attach the stable taxonomy code to the response so the audit
         // middleware can record `error_code` on every 4xx/5xx, including
         // the auth-failure short-circuit path that routes through this

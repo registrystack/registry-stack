@@ -19,7 +19,7 @@ use axum::Extension;
 use axum::Router;
 use registry_relay::audit::{
     audit_layer, redact_query, sensitive_value_hash, sensitive_value_hash_keyed, AuditContextExt,
-    AuditEnvelope, AuditHashSecret, AuditOutcome, AuditRecord, AuditSettings, AuditSink,
+    AuditHashSecret, AuditKeyHasher, AuditOutcome, AuditPipeline, AuditRecord, AuditSettings,
     EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
 };
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
@@ -61,6 +61,48 @@ fn sample_record() -> AuditRecord {
         error_code: None,
         provenance: None,
     }
+}
+
+fn captured_record(line: &str) -> Value {
+    let envelope: Value = serde_json::from_str(line.trim_end()).expect("valid audit envelope JSON");
+    record_from_envelope(&envelope)
+}
+
+fn record_from_envelope(envelope: &Value) -> Value {
+    envelope
+        .get("record")
+        .and_then(Value::as_object)
+        .expect("envelope record object");
+    envelope["record"].clone()
+}
+
+fn assert_platform_envelope_metadata(envelope: &Value) {
+    assert!(envelope["envelope_id"].is_string());
+    assert!(envelope["timestamp_unix_ms"].as_i64().is_some());
+    assert!(
+        envelope["prev_hash"].is_null() || is_lower_hex_hash(&envelope["prev_hash"]),
+        "prev_hash must be null or lowercase hex: {}",
+        envelope["prev_hash"]
+    );
+    assert!(
+        is_lower_hex_hash(&envelope["record_hash"]),
+        "record_hash must be lowercase hex: {}",
+        envelope["record_hash"]
+    );
+}
+
+fn is_lower_hex_hash(value: &Value) -> bool {
+    value.as_str().is_some_and(|s| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    })
+}
+
+fn in_memory_pipeline() -> (InMemorySink, Arc<AuditPipeline>) {
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+    (sink, pipeline)
 }
 
 /// Section 13.1 contract: exactly the documented set of required + conditional
@@ -222,16 +264,21 @@ fn empty_query_redacts_to_empty_object() {
 #[tokio::test]
 async fn in_memory_sink_writes_one_jsonl_line_per_record() {
     let sink = InMemorySink::new();
-    let envelope = AuditEnvelope::from(sample_record());
-    sink.write(envelope).await.expect("write succeeds");
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+    pipeline
+        .write_record(sample_record())
+        .await
+        .expect("write succeeds");
     let captured = sink.snapshot();
     // Exactly one record.
     assert_eq!(captured.len(), 1);
     // Trailing newline; one '\n' total.
     assert!(captured[0].ends_with('\n'));
     assert_eq!(captured[0].matches('\n').count(), 1);
-    // The body parses as JSON and carries `request_id`.
-    let parsed: Value = serde_json::from_str(captured[0].trim_end()).expect("valid JSON");
+    // The body parses as a platform envelope carrying relay record metadata.
+    let envelope: Value = serde_json::from_str(captured[0].trim_end()).expect("valid JSON");
+    assert_platform_envelope_metadata(&envelope);
+    let parsed = record_from_envelope(&envelope);
     assert_eq!(parsed["request_id"], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
 }
 
@@ -240,8 +287,8 @@ async fn stdout_sink_is_constructible() {
     // We do not assert on actual stdout bytes here; the e2e tests cover
     // the process-level path. We assert the sink constructs and a write
     // call returns Ok.
-    let sink: Arc<dyn AuditSink> = Arc::new(StdoutSink::new());
-    sink.write(AuditEnvelope::from(sample_record()))
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(StdoutSink::new());
+    sink.write_record(sample_record())
         .await
         .expect("stdout write must not error");
     sink.flush().await.expect("flush ok");
@@ -249,11 +296,11 @@ async fn stdout_sink_is_constructible() {
 
 #[tokio::test]
 async fn middleware_emits_one_record_per_request_with_response_status() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -271,7 +318,7 @@ async fn middleware_emits_one_record_per_request_with_response_status() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1, "exactly one audit record per request");
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["status_code"], 200);
     assert_eq!(parsed["method"], "GET");
     assert_eq!(parsed["path"], "/probe");
@@ -291,11 +338,11 @@ async fn middleware_records_error_code_when_handler_sets_extension() {
             .insert(ErrorCodeExt("auth.scope_denied".to_string()));
         resp
     }
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route("/deny", get(failing))
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -307,7 +354,7 @@ async fn middleware_records_error_code_when_handler_sets_extension() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["status_code"], 403);
     assert_eq!(parsed["error_code"], "auth.scope_denied");
 }
@@ -339,11 +386,11 @@ fn endpoint_kind_renders_canonical_strings() {
 #[tokio::test]
 async fn header_map_keeps_no_raw_secret_in_record() {
     // The middleware must never copy bearer credentials into the record.
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route("/x", get(|| async { StatusCode::OK }))
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -361,18 +408,18 @@ async fn header_map_keeps_no_raw_secret_in_record() {
         "audit record must not echo raw credentials: {}",
         records[0]
     );
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     // Purpose header is captured verbatim.
     assert_eq!(parsed["purpose"], "qa");
 }
 
 #[tokio::test]
 async fn response_body_unaffected_by_audit_middleware() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route("/echo", get(|| async { "hello" }))
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
     let req = Request::builder()
         .method(Method::GET)
         .uri("/echo")
@@ -399,7 +446,7 @@ async fn middleware_projects_principal_into_record() {
         next.run(req).await
     }
 
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     // `.layer(...)` wraps innermost-first: the second `.layer(...)`
     // call ends up outermost. We want `inject_principal` to run BEFORE
     // `audit_layer` so the principal is on the request by the time
@@ -410,7 +457,7 @@ async fn middleware_projects_principal_into_record() {
         .route("/probe", get(|| async { StatusCode::OK }))
         .layer(from_fn(audit_layer))
         .layer(from_fn(inject_principal))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -422,7 +469,7 @@ async fn middleware_projects_principal_into_record() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["principal_id"], "test_client");
     assert_eq!(parsed["auth_mode"], "api_key");
     let scopes: BTreeSet<&str> = parsed["scopes_used"]
@@ -455,12 +502,12 @@ async fn middleware_adopts_upstream_request_id() {
         next.run(req).await
     }
 
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
         .layer(from_fn(audit_layer))
         .layer(from_fn(set_upstream_id))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -471,7 +518,7 @@ async fn middleware_adopts_upstream_request_id() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(
         parsed["request_id"], UPSTREAM_ID,
         "audit record must adopt the upstream x-request-id"
@@ -490,13 +537,13 @@ fn ip_default_when_no_connect_info() {
 
 #[tokio::test]
 async fn middleware_hashes_configured_sensitive_query_values() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let settings = AuditSettings {
         include_health: true,
         trust_proxy_enabled: false,
         trusted_proxies: Vec::new(),
         sensitive_fields: vec!["social_registry:individual:id".to_string()],
-        hash_secret: None,
+        hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
     };
     let app = Router::new()
         .route(
@@ -514,7 +561,7 @@ async fn middleware_hashes_configured_sensitive_query_values() {
         )
         .layer(from_fn(audit_layer))
         .layer(Extension(settings))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let resp = app
         .oneshot(
@@ -530,7 +577,7 @@ async fn middleware_hashes_configured_sensitive_query_values() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["dataset_id"], "social_registry");
     assert_eq!(parsed["entity_name"], "individual");
     assert_eq!(parsed["table_id"], "individuals_table");
@@ -545,14 +592,14 @@ async fn middleware_hashes_configured_sensitive_query_values() {
 
 #[tokio::test]
 async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
             "/datasets/social_registry/individual/IND-001234",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let resp = app
         .oneshot(
@@ -573,7 +620,7 @@ async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
         "audit record must not contain raw primary key: {}",
         records[0]
     );
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["path"], "/datasets/social_registry/individual/{id}");
     assert_eq!(
         parsed["primary_key"],
@@ -585,7 +632,7 @@ async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
 
 #[tokio::test]
 async fn middleware_primary_key_hash_is_stable_and_context_bound() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
             "/datasets/social_registry/individual/IND-001234",
@@ -596,7 +643,7 @@ async fn middleware_primary_key_hash_is_stable_and_context_bound() {
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     for uri in [
         "/datasets/social_registry/individual/IND-001234",
@@ -619,9 +666,9 @@ async fn middleware_primary_key_hash_is_stable_and_context_bound() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 3);
-    let first: Value = serde_json::from_str(records[0].trim_end()).unwrap();
-    let second: Value = serde_json::from_str(records[1].trim_end()).unwrap();
-    let other_dataset: Value = serde_json::from_str(records[2].trim_end()).unwrap();
+    let first = captured_record(&records[0]);
+    let second = captured_record(&records[1]);
+    let other_dataset = captured_record(&records[2]);
 
     assert_eq!(first["primary_key"], second["primary_key"]);
     assert_ne!(first["primary_key"], other_dataset["primary_key"]);
@@ -639,21 +686,17 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
     // with different secrets must produce different hashes for the same
     // (dataset, entity, id) tuple. This is the property that closes the
     // rainbow-table attack on small keyspaces (national IDs etc.).
-    let secret_a: AuditHashSecret = Arc::from(
-        b"deploy-a-32-bytes-of-entropy----"
-            .to_vec()
-            .into_boxed_slice(),
+    let hasher_a = AuditKeyHasher::Keyed(
+        AuditHashSecret::new(b"deploy-a-32-bytes-of-entropy----".to_vec()).unwrap(),
     );
-    let secret_b: AuditHashSecret = Arc::from(
-        b"deploy-b-32-bytes-of-entropy----"
-            .to_vec()
-            .into_boxed_slice(),
+    let hasher_b = AuditKeyHasher::Keyed(
+        AuditHashSecret::new(b"deploy-b-32-bytes-of-entropy----".to_vec()).unwrap(),
     );
 
-    async fn run_with_secret(secret: AuditHashSecret) -> String {
-        let sink = Arc::new(InMemorySink::new());
+    async fn run_with_hasher(hasher: AuditKeyHasher) -> String {
+        let (sink, pipeline) = in_memory_pipeline();
         let settings = AuditSettings {
-            hash_secret: Some(secret),
+            hash_hasher: hasher,
             ..AuditSettings::default()
         };
         let app = Router::new()
@@ -663,7 +706,7 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
             )
             .layer(from_fn(audit_layer))
             .layer(Extension(settings))
-            .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+            .layer(Extension(pipeline.clone()));
 
         let resp = app
             .oneshot(
@@ -679,10 +722,10 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
         sink.snapshot().pop().expect("one record")
     }
 
-    let record_a = run_with_secret(secret_a.clone()).await;
-    let record_b = run_with_secret(secret_b).await;
-    let parsed_a: Value = serde_json::from_str(record_a.trim_end()).unwrap();
-    let parsed_b: Value = serde_json::from_str(record_b.trim_end()).unwrap();
+    let record_a = run_with_hasher(hasher_a.clone()).await;
+    let record_b = run_with_hasher(hasher_b).await;
+    let parsed_a = captured_record(&record_a);
+    let parsed_b = captured_record(&record_b);
 
     let hash_a = parsed_a["primary_key"].as_str().expect("hash a present");
     let hash_b = parsed_b["primary_key"].as_str().expect("hash b present");
@@ -701,7 +744,7 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
     assert_eq!(
         parsed_a["primary_key"],
         sensitive_value_hash_keyed(
-            Some(secret_a.as_ref()),
+            &hasher_a,
             "primary_key:social_registry:individual",
             "IND-001234",
         )
@@ -714,14 +757,14 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
 
 #[tokio::test]
 async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
             "/datasets/social_registry/household/HH-001/members",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let resp = app
         .oneshot(
@@ -738,7 +781,7 @@ async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
     assert!(!records[0].contains("HH-001"));
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(
         parsed["path"],
         "/datasets/social_registry/household/{id}/members"
@@ -752,7 +795,7 @@ async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
 
 #[tokio::test]
 async fn middleware_leaves_non_record_dataset_paths_unredacted() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
             "/datasets/social_registry/individual/schema",
@@ -767,7 +810,7 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     for uri in [
         "/datasets/social_registry/individual/schema",
@@ -793,7 +836,7 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
     let paths: Vec<String> = records
         .iter()
         .map(|line| {
-            let parsed: Value = serde_json::from_str(line.trim_end()).unwrap();
+            let parsed = captured_record(line);
             assert!(parsed["primary_key"].is_null());
             parsed["path"].as_str().expect("path").to_string()
         })
@@ -836,7 +879,7 @@ async fn middleware_projects_principal_when_auth_runs_inside_audit() {
     .expect("fingerprint parses");
     let provider = Arc::new(ApiKeyAuth::new(vec![entry]));
 
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
 
     // Production composition: auth wraps the protected sub-router,
     // audit wraps the whole thing. This matches `crate::server::build_app`.
@@ -847,7 +890,7 @@ async fn middleware_projects_principal_when_auth_runs_inside_audit() {
     let app = Router::new()
         .merge(protected)
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let req = Request::builder()
         .method(Method::GET)
@@ -860,7 +903,7 @@ async fn middleware_projects_principal_when_auth_runs_inside_audit() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["principal_id"], "statistics_office");
     assert_eq!(parsed["auth_mode"], "api_key");
     let scopes: BTreeSet<&str> = parsed["scopes_used"]
@@ -896,7 +939,7 @@ async fn middleware_captures_error_code_from_auth_short_circuit() {
     use registry_relay::auth::middleware::auth_layer;
 
     let provider = Arc::new(ApiKeyAuth::new(Vec::new()));
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
 
     let protected = auth_layer(
         Router::new().route("/probe", get(|| async { StatusCode::OK })),
@@ -905,7 +948,7 @@ async fn middleware_captures_error_code_from_auth_short_circuit() {
     let app = Router::new()
         .merge(protected)
         .layer(from_fn(audit_layer))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     // No Authorization header => MissingCredential.
     let req = Request::builder()
@@ -918,26 +961,26 @@ async fn middleware_captures_error_code_from_auth_short_circuit() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["error_code"], "auth.missing_credential");
     assert_eq!(parsed["principal_id"], Value::Null);
 }
 
 #[tokio::test]
 async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let settings = AuditSettings {
         include_health: true,
         trust_proxy_enabled: true,
         trusted_proxies: vec!["10.0.0.0/8".to_string()],
         sensitive_fields: Vec::new(),
-        hash_secret: None,
+        hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
         .layer(from_fn(audit_layer))
         .layer(Extension(settings))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let mut req = Request::builder()
         .method(Method::GET)
@@ -954,25 +997,25 @@ async fn middleware_uses_x_forwarded_for_from_trusted_proxy() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["remote_addr"], "203.0.113.10");
 }
 
 #[tokio::test]
 async fn middleware_ignores_x_forwarded_for_from_untrusted_peer() {
-    let sink = Arc::new(InMemorySink::new());
+    let (sink, pipeline) = in_memory_pipeline();
     let settings = AuditSettings {
         include_health: true,
         trust_proxy_enabled: true,
         trusted_proxies: vec!["10.0.0.0/8".to_string()],
         sensitive_fields: Vec::new(),
-        hash_secret: None,
+        hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
     };
     let app = Router::new()
         .route("/probe", get(|| async { StatusCode::OK }))
         .layer(from_fn(audit_layer))
         .layer(Extension(settings))
-        .layer(Extension(sink.clone() as Arc<dyn AuditSink>));
+        .layer(Extension(pipeline.clone()));
 
     let mut req = Request::builder()
         .method(Method::GET)
@@ -989,6 +1032,6 @@ async fn middleware_ignores_x_forwarded_for_from_untrusted_peer() {
 
     let records = sink.snapshot();
     assert_eq!(records.len(), 1);
-    let parsed: Value = serde_json::from_str(records[0].trim_end()).unwrap();
+    let parsed = captured_record(&records[0]);
     assert_eq!(parsed["remote_addr"], "192.0.2.1");
 }

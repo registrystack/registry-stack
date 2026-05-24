@@ -77,6 +77,13 @@ humantime-serde = { version = "1" }
 registry-manifest-core = { version = "0.1.1", git = "https://github.com/jeremi/registry-manifest", tag = "v0.1.2" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
+registry-platform-authcommon = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-authcommon" }
+registry-platform-audit = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-audit" }
+registry-platform-crypto = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-crypto" }
+registry-platform-httpsec = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-httpsec" }
+registry-platform-httputil = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-httputil" }
+registry-platform-oidc = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-sdjwt = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-sdjwt" }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }
 sha2 = { version = "0.11" }
@@ -93,7 +100,7 @@ base64 = { version = "0.22" }
 # Used by the OIDC auth provider to fetch JWKS documents and resolve
 # `.well-known/openid-configuration`. native-tls keeps the TLS stack
 # consistent with the postgres-native-tls path already in this binary.
-reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "form"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 
 # ─── time / ids ──────────────────────────────────────────────────────────────
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
@@ -103,9 +110,8 @@ ulid = { version = "1" }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 
-# ─── errors / problem details ────────────────────────────────────────────────
+# ─── errors ──────────────────────────────────────────────────────────────────
 thiserror = { version = "2" }
-http-api-problem = { version = "0.60" }
 
 # ─── openapi ─────────────────────────────────────────────────────────────────
 utoipa = { version = "5", features = ["axum_extras"] }

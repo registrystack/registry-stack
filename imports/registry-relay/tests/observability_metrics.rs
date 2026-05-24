@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use datafusion::execution::context::SessionContext;
-use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::ScopeSet;
 use registry_relay::config::{self, Config};
@@ -131,6 +131,7 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET
 "#,
         cache_dir = cache_dir.to_string_lossy(),
     );
@@ -164,6 +165,13 @@ fn ready_snapshot() -> ReadinessSnapshot {
 fn build_fixture() -> MetricsFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var(
+            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+            "relay-observability-audit-secret-32-bytes",
+        );
+    }
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let df_ctx = Arc::new(SessionContext::new());
     let ingest = Arc::new(
@@ -176,7 +184,7 @@ fn build_fixture() -> MetricsFixture {
         .expect("ingest registry builds"),
     );
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ready_snapshot());
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let public = TestServer::new(
         build_app_with_readiness(
             Arc::clone(&config),
@@ -186,14 +194,17 @@ fn build_fixture() -> MetricsFixture {
         )
         .unwrap(),
     );
-    let admin = TestServer::new(build_admin_app(
-        config,
-        build_auth(),
-        sink,
-        readiness_rx,
-        readiness_tx,
-        ingest,
-    ));
+    let admin = TestServer::new(
+        build_admin_app(
+            config,
+            build_auth(),
+            sink,
+            readiness_rx,
+            readiness_tx,
+            ingest,
+        )
+        .expect("admin app builds"),
+    );
 
     MetricsFixture {
         _tmp: tmp,
@@ -353,8 +364,15 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
 async fn bare_public_app_does_not_mount_metrics() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var(
+            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+            "relay-observability-audit-secret-32-bytes",
+        );
+    }
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let public = TestServer::new(build_app(config, build_auth(), sink).unwrap());
 
     let resp = public.get("/metrics").await;

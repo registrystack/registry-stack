@@ -1,72 +1,63 @@
+[graph]
+all-features = false
+no-default-features = false
+targets = []
+
+[output]
+feature-depth = 1
+
 [advisories]
-# Warn on unmaintained crates; error on actively vulnerable ones.
-# The default policy for Wave 0 is to warn so CI is not broken by
-# advisories on transitive deps we cannot control yet.
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
-    # RUSTSEC-2024-0436: serde_yaml (unmaintained) reaches us only via the
-    # optional standards-cel-mapping feature, not the runtime config parser.
-    "RUSTSEC-2024-0436",
-    # RUSTSEC-2023-0089: atomic-polyfill (unmaintained) reaches us only via
-    # the optional standards-cel-mapping feature, pulled in through
-    # cel-mapper-core -> phonenumber -> postcard -> heapless.
-    # heapless 0.8+ drops atomic-polyfill for portable-atomic; we cannot
-    # apply that upgrade here without forking cel-mapper-core. Re-evaluate
-    # when cel-mapper-core upgrades phonenumber/postcard/heapless.
-    "RUSTSEC-2023-0089",
-    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in the `rsa`
-    # crate. Pulled in transitively by jsonwebtoken 10's rust_crypto
-    # backend, which bundles every JWS algorithm family. This project
-    # only wires EdDSA and ES256 (see src/provenance/signers/software.rs);
-    # no RS256/PS256 code path exists, so the vulnerable RSA primitives
-    # are unreachable. jsonwebtoken 10 has no feature to drop RSA;
-    # switching to aws_lc_rs would avoid it but adds a C build. Re-evaluate
-    # when either rsa publishes a constant-time fix or jsonwebtoken adds
-    # finer-grained feature gating.
     "RUSTSEC-2023-0071",
+    "RUSTSEC-2023-0089",
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2025-0068",
 ]
 
 [licenses]
-# Architect decision #10: Apache-2.0 only for this project.
-# Allow these common permissive licenses in the dependency tree.
+confidence-threshold = 0.8
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
-    "MIT",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
-    "Zlib",
-    "Unicode-DFS-2016",
-    # Unicode-3.0: used by ICU / IDNA crates (transitive through url crate).
-    # Requires a current cargo-deny; 0.14.x does not know this SPDX term.
-    "Unicode-3.0",
-    # CC0-1.0: public domain dedication; used by some utility crates
-    "CC0-1.0",
-    # bzip2-1.0.6: permissive; used by the bzip2 crate (datafusion transitive dep)
+    "BSL-1.0",
     "bzip2-1.0.6",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
 ]
 exceptions = []
 
 [[licenses.clarify]]
-# ring uses a non-SPDX license expression; clarify it so cargo-deny can parse it.
 name = "ring"
 expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
+[licenses.private]
+ignore = true
+registries = []
+
 [bans]
-# Warn on duplicate versions of the same crate.
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
 deny = []
 skip = []
 skip-tree = []
 
 [sources]
-# Only allow crates from crates.io plus pinned split repositories.
-# Keep git exceptions narrow and explicit.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

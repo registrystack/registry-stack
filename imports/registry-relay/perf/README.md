@@ -269,6 +269,7 @@ correct choice only when freshness is worth the upstream database round trip.
 | `PERF_NO_SCOPE_KEY_HASH`                  | (generated sha256 hash)  | Fingerprint for `perf_no_scope`                        |
 | `PERF_EVIDENCE_VERIFICATION_KEY_HASH`        | (generated sha256 hash)  | Fingerprint for `perf_evidence_verification`              |
 | `CLAIM_VERIFICATION_BINDING_KEY`          | (generated `hex:`)       | HMAC key for `claim_hash`; must stay stable across restarts |
+| `REGISTRY_RELAY_AUDIT_HASH_SECRET`        | (generated)              | HMAC secret for sensitive audit identifiers; must stay stable across restarts |
 | `REGISTRY_RELAY_PROVENANCE_JWK`           | (generated Ed25519 JWK)  | Private signing key for the evidence-verification receipt issuer |
 
 All hash env vars follow registry-relay's convention: `sha256:<64 lowercase hex chars>`.

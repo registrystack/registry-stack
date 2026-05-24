@@ -17,6 +17,7 @@ RELAY_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(RELAY_ROOT / "demo/scripts"))
 
 from generate_demo_keys import (  # noqa: E402
+    generate_audit_hash_secret,
     generate_claim_verification_binding_key,
     generate_registry_witness_issuer_jwk,
     generate_raw_key,
@@ -64,6 +65,7 @@ def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_witness_issuer_jwk()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_claim_verification_binding_key(),
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_audit_hash_secret(),
         "REGISTRY_WITNESS_ISSUER_JWK": issuer_jwk,
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
@@ -122,6 +124,7 @@ def main() -> int:
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
             "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
             "binding_key": "CLAIM_VERIFICATION_BINDING_KEY",
+            "audit_hash_secret": "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

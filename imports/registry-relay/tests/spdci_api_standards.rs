@@ -104,6 +104,7 @@ auth:
 audit:
   sink: stdout
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET
 
 standards:
   spdci:
@@ -203,6 +204,10 @@ async fn try_server_with_options(
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("spdci.yaml");
     std::fs::write(&config_path, spdci_config(registry_extra)).expect("write config");
+    env::set_var(
+        "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+        "relay-spdci-audit-secret-32-bytes",
+    );
     let config = Arc::new(config::load(&config_path)?);
     let response_mapper = build_spdci_response_mapper(&config)?.map(Arc::new);
     let registry = Arc::new(EntityRegistry::from_config(&config)?);
@@ -959,7 +964,7 @@ mod full_stack {
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::datasource::MemTable;
     use datafusion::execution::context::SessionContext;
-    use registry_relay::audit::{AuditSink, InMemorySink};
+    use registry_relay::audit::{AuditPipeline, InMemorySink};
     use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
     use registry_relay::auth::ScopeSet;
     use registry_relay::config::{self, DatasetId, ResourceId};
@@ -1011,6 +1016,10 @@ mod full_stack {
         let tmp = TempDir::new().expect("tempdir");
         let config_path = tmp.path().join("spdci.yaml");
         std::fs::write(&config_path, spdci_config("")).expect("write config");
+        std::env::set_var(
+            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+            "relay-spdci-audit-secret-32-bytes",
+        );
         let config = Arc::new(config::load(&config_path).expect("config loads"));
 
         // Mirror `main.rs`: build the response mapper if the config asks
@@ -1075,7 +1084,7 @@ mod full_stack {
         let auth = Arc::new(ApiKeyAuth::new(vec![entry]));
 
         let audit_sink = InMemorySink::new();
-        let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+        let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
         // Production assembly. `provenance` stays `None` because the SP
         // DCI surface does not interact with VC issuance.
@@ -1119,11 +1128,12 @@ mod full_stack {
             .find(|line| {
                 serde_json::from_str::<Value>(line)
                     .ok()
-                    .and_then(|v| v["path"].as_str().map(|p| p == path))
+                    .and_then(|v| v["record"]["path"].as_str().map(|p| p == path))
                     .unwrap_or(false)
             })
             .unwrap_or_else(|| panic!("no audit record for path {path}; got {lines:?}"));
-        serde_json::from_str(line).expect("audit line is JSON")
+        let envelope: Value = serde_json::from_str(line).expect("audit envelope is JSON");
+        envelope["record"].clone()
     }
 
     fn search_body() -> Value {

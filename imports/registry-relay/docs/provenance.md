@@ -259,6 +259,9 @@ and `credential_type` under the same `publicschema:` block.
 The mapper dependency is pinned to the public
 `https://github.com/PublicSchema/cel-mapping` repository in
 `Cargo.toml`, so release builds do not depend on a sibling checkout.
+Profile overrides do not bypass provenance audit: PublicSchema issuance
+still attaches the `provenance.vc.issued` block, with `claim_type`
+recording the overridden VC type such as `Person`.
 
 Build and verify the optional path with:
 
@@ -414,6 +417,14 @@ signer:
   jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
   signing_algorithm: EdDSA
 ```
+
+The software signer, public JWK export, DID validation, and SD-JWT
+holder-proof helpers are delegated to the shared `registry-platform`
+crypto and SD-JWT crates. This keeps Relay's provenance behavior aligned
+with the platform verifier rules, including `aud`, `exp > iat`, maximum
+300-second holder-proof lifetime, bound evaluation/profile/disclosure
+claims, sorted `_sd` digests, and `jti == credential_id` issuance
+parity.
 
 `signer.kind: kms` is reserved for future remote signing backends and
 is rejected by config validation today. The internal signer trait is

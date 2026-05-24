@@ -22,7 +22,7 @@ use datafusion::execution::context::SessionContext;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
 use registry_relay::api::{entity_router, CursorSigner};
-use registry_relay::audit::{audit_layer, AuditSettings, AuditSink, InMemorySink};
+use registry_relay::audit::{audit_layer, AuditPipeline, AuditSettings, InMemorySink};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, Config, DatasetId, ProvenanceAlgorithm, ResourceId};
 use registry_relay::entity::EntityRegistry;
@@ -194,7 +194,7 @@ fn assert_node_verifier_accepts_publicschema_person_vc(
     );
 }
 
-fn with_audit<S>(router: Router<S>, sink: Arc<dyn AuditSink>) -> Router<S>
+fn with_audit<S>(router: Router<S>, sink: Arc<AuditPipeline>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -440,14 +440,15 @@ fn audit_record_for(sink: &InMemorySink, path: &str) -> Value {
             serde_json::from_str::<Value>(line)
                 .ok()
                 .and_then(|value| {
-                    value["path"]
+                    value["record"]["path"]
                         .as_str()
                         .map(|record_path| record_path == path)
                 })
                 .unwrap_or(false)
         })
         .unwrap_or_else(|| panic!("no audit record for path {path}; got {lines:?}"));
-    serde_json::from_str(line).expect("audit JSON")
+    let envelope: Value = serde_json::from_str(line).expect("audit envelope JSON");
+    envelope["record"].clone()
 }
 
 #[test]
@@ -627,7 +628,7 @@ fn publicschema_runtime_rejects_subject_id_that_does_not_match_gateway_uri() {
 }
 
 #[tokio::test]
-async fn entity_record_vc_can_be_issued_as_publicschema_person() {
+async fn credential_profile_override_still_emits_provenance_audit_for_publicschema_person() {
     let tmp = TempDir::new().expect("tempdir");
     let cfg = Arc::new(write_config(&tmp));
     let publicschema = Arc::new(
@@ -654,7 +655,7 @@ async fn entity_record_vc_can_be_issued_as_publicschema_person() {
     let (_tx, readiness) = watch::channel(snapshot);
     let (state, verifying_key) = build_provenance_state("PUBLICSCHEMA_FEATURE_JWK");
     let audit_sink = InMemorySink::new();
-    let sink_arc: Arc<dyn AuditSink> = Arc::new(audit_sink.clone());
+    let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
     let router = entity_router::<()>()
         .layer(Extension(query))

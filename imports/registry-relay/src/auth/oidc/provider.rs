@@ -36,12 +36,14 @@
 use std::collections::{BTreeMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::http::{header, HeaderMap};
-use jsonwebtoken::errors::ErrorKind as JwtErrorKind;
-use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
-use serde::Deserialize;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use jsonwebtoken::{decode_header, Algorithm};
+use registry_platform_oidc::{
+    OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
@@ -49,7 +51,7 @@ use crate::config::{OidcAlgorithm, OidcConfig};
 use crate::error::AuthError;
 
 use super::super::{AuthMode, AuthProvider, Principal, ScopeSet};
-use super::jwks::{JwksCache, JwksError, JwksFetcher};
+use super::jwks::{JwksCache, JwksFetcher};
 
 /// HTTP authentication scheme accepted by the OIDC provider.
 const BEARER_SCHEME: &str = "Bearer";
@@ -60,25 +62,14 @@ const BEARER_SCHEME: &str = "Bearer";
 /// `Arc<dyn AuthProvider>`. The struct is `Send + Sync` so the same
 /// instance serves every concurrent request.
 pub struct OidcAuth {
-    issuer: String,
-    audience: Vec<String>,
     algorithms: Vec<Algorithm>,
-    leeway: Duration,
     scope_claim: String,
     scope_map: BTreeMap<String, String>,
-    /// `None` means no allowlist (any client accepted). `Some(set)`
-    /// means the token's `azp` (preferred) or `client_id` must be in the set.
-    ///
-    /// Note: `principal_id` is taken from `sub` first (step 6 of the
-    /// verification flow), so an authenticated principal's `principal_id` may
-    /// differ from the client identifier that satisfied the allowlist. This is
-    /// intentional: `sub` identifies the end entity (human or service account)
-    /// while `azp`/`client_id` identifies the OAuth client application.
-    allowed_clients: Option<HashSet<String>>,
     /// Accepted JOSE `typ` values, normalised to lowercase for the
     /// case-insensitive match RFC 7515 prescribes.
     token_types: HashSet<String>,
     cache: Arc<JwksCache>,
+    verifier: TokenVerifier,
 }
 
 impl OidcAuth {
@@ -94,7 +85,7 @@ impl OidcAuth {
     /// that want to seed a cache and assert no extra fetches happen.
     #[must_use]
     pub fn with_cache(config: &OidcConfig, cache: Arc<JwksCache>) -> Self {
-        let algorithms = config
+        let algorithms: Vec<Algorithm> = config
             .algorithms
             .iter()
             .map(|alg| match alg {
@@ -103,26 +94,35 @@ impl OidcAuth {
                 OidcAlgorithm::EdDsa => Algorithm::EdDSA,
             })
             .collect();
-        let allowed_clients = if config.allowed_clients.is_empty() {
-            None
-        } else {
-            Some(config.allowed_clients.iter().cloned().collect())
-        };
         let token_types: HashSet<String> = config
             .token_types
             .iter()
             .map(|t| t.to_ascii_lowercase())
             .collect();
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: config.issuer.clone(),
+                audiences: config.audience.clone(),
+                allowed_algorithms: algorithms.clone(),
+                // Relay preserves its historical behavior where an absent
+                // `typ` is accepted when `JWT` is configured. We enforce token
+                // types before delegating to the platform verifier.
+                allowed_typ: Vec::new(),
+                scope_claim: config.scope_claim.clone(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients: config.allowed_clients.clone(),
+                leeway: config.leeway,
+            },
+            cache.platform_fetcher(),
+        );
         Self {
-            issuer: config.issuer.clone(),
-            audience: config.audience.clone(),
             algorithms,
-            leeway: config.leeway,
             scope_claim: config.scope_claim.clone(),
             scope_map: config.scope_map.clone(),
-            allowed_clients,
             token_types,
             cache,
+            verifier,
         }
     }
 
@@ -184,47 +184,8 @@ impl OidcAuth {
             AuthError::MalformedCredential
         })?;
 
-        let key = match self.cache.get(&kid).await {
-            Ok(k) => k,
-            Err(JwksError::UnknownKid) => {
-                tracing::debug!(
-                    target: "registry_relay::auth",
-                    kid = %kid,
-                    "oidc: kid not present in jwks",
-                );
-                return Err(AuthError::KidUnknown);
-            }
-            Err(JwksError::Unavailable(msg)) => {
-                tracing::warn!(
-                    target: "registry_relay::auth",
-                    error = %msg,
-                    "oidc: jwks unavailable; rejecting token",
-                );
-                return Err(AuthError::JwksUnavailable);
-            }
-        };
-
-        // jsonwebtoken 9.x requires every entry in `validation.algorithms`
-        // to belong to the same family as the decoding key (verify_signature
-        // in jsonwebtoken/src/decoding.rs iterates the vec and errors out
-        // on any family mismatch). Mixing RSA/EC/EdDSA in one Validation
-        // therefore always fails. We've already enforced the allowlist
-        // against `header.alg` above, so narrowing the validation to just
-        // that one algorithm is safe and is the only shape jsonwebtoken
-        // accepts when the configured allowlist spans multiple families.
-        let mut validation = Validation::new(header.alg);
-        validation.algorithms = vec![header.alg];
-        validation.set_issuer(&[&self.issuer]);
-        validation.set_audience(&self.audience);
-        validation.leeway = self.leeway.as_secs();
-        validation.validate_nbf = true;
-        validation.required_spec_claims = ["iss", "aud", "exp"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-
-        let token_data = decode::<Claims>(presented, &key, &validation).map_err(|err| {
-            let mapped = map_jwt_error(err.kind());
+        let verified = self.verifier.verify(presented).await.map_err(|err| {
+            let mapped = map_platform_error(&err, presented);
             tracing::debug!(
                 target: "registry_relay::auth",
                 error = %err,
@@ -233,23 +194,12 @@ impl OidcAuth {
             );
             mapped
         })?;
-        let claims = token_data.claims;
-
-        let matched_client = if let Some(allowed) = &self.allowed_clients {
-            let candidate = claims.azp.as_deref().or(claims.client_id.as_deref());
-            match candidate {
-                Some(c) if allowed.contains(c) => Some(c.to_string()),
-                _ => {
-                    tracing::debug!(
-                        target: "registry_relay::auth",
-                        "oidc: client not in allowed_clients",
-                    );
-                    return Err(AuthError::ClientNotAllowed);
-                }
-            }
-        } else {
-            None
-        };
+        self.cache_mark_observed(&kid).await;
+        let VerifiedToken {
+            claims,
+            matched_client,
+            scopes: _,
+        } = verified;
 
         let principal_id = claims
             .sub
@@ -286,6 +236,10 @@ impl OidcAuth {
             auth_mode: AuthMode::Oidc,
         })
     }
+
+    async fn cache_mark_observed(&self, kid: &str) {
+        let _ = self.cache.get(kid).await;
+    }
 }
 
 impl AuthProvider for OidcAuth {
@@ -300,24 +254,6 @@ impl AuthProvider for OidcAuth {
             self.verify(&token).await
         })
     }
-}
-
-/// Claims parsed off the JWT. Spec-defined claims that jsonwebtoken
-/// validates (`iss`, `aud`, `exp`, `nbf`, `iat`) end up in `extra`
-/// because they are not consumed structurally here; the validation
-/// step already enforced them. The struct only names the fields the
-/// provider reads directly: `sub`, `azp`, `client_id`, and the
-/// configured scope claim (resolved out of `extra`).
-#[derive(Debug, Deserialize)]
-struct Claims {
-    #[serde(default)]
-    sub: Option<String>,
-    #[serde(default)]
-    azp: Option<String>,
-    #[serde(default)]
-    client_id: Option<String>,
-    #[serde(flatten)]
-    extra: Map<String, Value>,
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
@@ -350,27 +286,53 @@ fn extract_bearer(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
     Ok(Zeroizing::new(token.to_string()))
 }
 
-/// Map a [`jsonwebtoken`] decode error into the closest stable
-/// [`AuthError`] variant. The mapping is intentionally explicit so the
-/// audit pipeline records a granular `error_code` per failure mode (e.g.
-/// `auth.token_expired` vs `auth.audience_mismatch`) instead of a
-/// generic `auth.invalid_credential`.
-fn map_jwt_error(kind: &JwtErrorKind) -> AuthError {
-    match kind {
-        JwtErrorKind::ExpiredSignature => AuthError::TokenExpired,
-        JwtErrorKind::ImmatureSignature => AuthError::TokenNotYetValid,
-        JwtErrorKind::InvalidSignature => AuthError::TokenSignatureInvalid,
-        JwtErrorKind::InvalidIssuer => AuthError::IssuerMismatch,
-        JwtErrorKind::InvalidAudience => AuthError::AudienceMismatch,
-        JwtErrorKind::InvalidAlgorithm | JwtErrorKind::InvalidAlgorithmName => {
-            AuthError::AlgorithmNotAllowed
-        }
-        JwtErrorKind::MissingRequiredClaim(_)
-        | JwtErrorKind::Json(_)
-        | JwtErrorKind::Base64(_)
-        | JwtErrorKind::Utf8(_) => AuthError::MalformedCredential,
-        _ => AuthError::InvalidCredential,
+fn map_platform_error(err: &PlatformOidcError, token: &str) -> AuthError {
+    match err {
+        PlatformOidcError::Transport(_)
+        | PlatformOidcError::BoundedRead(_)
+        | PlatformOidcError::FetchUrl(_)
+        | PlatformOidcError::HttpStatus(_)
+        | PlatformOidcError::InvalidUrl
+        | PlatformOidcError::Parse
+        | PlatformOidcError::InvalidJwk => AuthError::JwksUnavailable,
+        PlatformOidcError::IssuerMismatch { .. } => AuthError::IssuerMismatch,
+        PlatformOidcError::MalformedToken
+        | PlatformOidcError::TokenTypeNotAllowed
+        | PlatformOidcError::MissingKid => AuthError::MalformedCredential,
+        PlatformOidcError::AlgorithmNotAllowed => AuthError::AlgorithmNotAllowed,
+        PlatformOidcError::UnknownKid => AuthError::KidUnknown,
+        PlatformOidcError::TokenExpired => AuthError::TokenExpired,
+        PlatformOidcError::TokenNotYetValid => AuthError::TokenNotYetValid,
+        PlatformOidcError::AudienceMismatch => AuthError::AudienceMismatch,
+        PlatformOidcError::SignatureInvalid => AuthError::TokenSignatureInvalid,
+        PlatformOidcError::ClientNotAllowed => AuthError::ClientNotAllowed,
+        PlatformOidcError::InvalidToken => classify_invalid_token(token),
     }
+}
+
+fn classify_invalid_token(token: &str) -> AuthError {
+    let Some(claims) = unverified_payload(token) else {
+        return AuthError::MalformedCredential;
+    };
+    if !claims.is_object()
+        || claims.get("iss").is_none()
+        || claims.get("aud").is_none()
+        || claims.get("exp").is_none()
+    {
+        return AuthError::MalformedCredential;
+    }
+    AuthError::InvalidCredential
+}
+
+fn unverified_payload(token: &str) -> Option<Value> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    if parts.next().is_none() || parts.next().is_some() {
+        return None;
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Read scopes off the configured claim. Three shapes are accepted so the
@@ -414,6 +376,7 @@ mod tests {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use rand_core::OsRng;
     use serde_json::json;
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const TEST_ISSUER: &str = "https://idp.example.test/realms/demo";

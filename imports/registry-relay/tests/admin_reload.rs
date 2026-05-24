@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use datafusion::execution::context::SessionContext;
-use registry_relay::audit::{AuditSink, InMemorySink};
+use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::ScopeSet;
 use registry_relay::config::{self, Config};
@@ -164,6 +164,7 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
+  hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET
 "#,
         cache_dir = cache_dir.to_string_lossy(),
     );
@@ -193,6 +194,13 @@ fn build_auth() -> Arc<ApiKeyAuth> {
 fn build_fixture() -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
+    #[allow(unused_unsafe)]
+    unsafe {
+        std::env::set_var(
+            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+            "relay-admin-reload-audit-secret-32-bytes",
+        );
+    }
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let df_ctx = Arc::new(SessionContext::new());
     let ingest = Arc::new(
@@ -205,7 +213,7 @@ fn build_fixture() -> AdminFixture {
         .expect("ingest registry builds"),
     );
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ingest.snapshot());
-    let sink: Arc<dyn AuditSink> = Arc::new(InMemorySink::new());
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let app = build_admin_app(
         config,
         build_auth(),
@@ -213,7 +221,8 @@ fn build_fixture() -> AdminFixture {
         readiness_rx,
         readiness_tx,
         ingest,
-    );
+    )
+    .expect("admin app builds");
 
     AdminFixture {
         _tmp: tmp,

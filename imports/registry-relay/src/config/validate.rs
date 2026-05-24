@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::claim_verification::{decode_binding_key, ClaimVerificationKeyError};
 use crate::error::{ConfigError, Error, RuntimeBindingError};
 use registry_manifest_core::CompiledMetadata;
+use registry_platform_crypto::{validate_did, DidMethod};
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -913,6 +914,20 @@ fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), 
             "issuer DID is empty",
         );
         return Err(ConfigError::ProvenanceMissingIssuer);
+    }
+    if validate_did(issuer_did, &[DidMethod::Web]).is_err() {
+        tracing::error!(
+            code = "provenance.config.issuer_did_invalid",
+            "issuer DID must be a valid did:web identifier",
+        );
+        return Err(ConfigError::ProvenanceIssuerDidMismatch);
+    }
+    if validate_did(vm_id, &[DidMethod::Web]).is_err() {
+        tracing::error!(
+            code = "provenance.config.verification_method_invalid",
+            "verification_method_id must be a valid did:web fragment",
+        );
+        return Err(ConfigError::ProvenanceVerificationMethodMismatch);
     }
     // `verification_method_id` must start with `<did>#`.
     let prefix = format!("{issuer_did}#");
