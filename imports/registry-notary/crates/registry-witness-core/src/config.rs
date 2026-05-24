@@ -597,6 +597,11 @@ pub struct SourceConnectionConfig {
     /// fetches stay on the strict outbound URL policy by default.
     #[serde(default)]
     pub allow_insecure_localhost: bool,
+    /// Development escape hatch for Docker Compose and other private-network
+    /// demos. This permits HTTP and private RFC1918 targets, while still
+    /// blocking cloud metadata endpoints. Leave false for production.
+    #[serde(default)]
+    pub allow_insecure_private_network: bool,
     pub token_env: String,
     #[serde(default)]
     pub dci: DciSourceConnectionConfig,
@@ -1373,6 +1378,7 @@ auth:
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
                 allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
                 token_env: "UPSTREAM_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 0,
@@ -1398,7 +1404,20 @@ token_env: SRC_TOKEN
         let connection: SourceConnectionConfig =
             serde_norway::from_str(yaml).expect("connection YAML parses");
         assert!(!connection.allow_insecure_localhost);
+        assert!(!connection.allow_insecure_private_network);
         assert_eq!(connection.max_in_flight, 8);
+    }
+
+    #[test]
+    fn source_connection_private_network_escape_hatch_deserializes() {
+        let yaml = r#"
+base_url: http://registry-relay:8080
+allow_insecure_private_network: true
+token_env: SRC_TOKEN
+"#;
+        let connection: SourceConnectionConfig =
+            serde_norway::from_str(yaml).expect("connection YAML parses");
+        assert!(connection.allow_insecure_private_network);
     }
 
     // -----------------------------------------------------------------------
@@ -1448,6 +1467,7 @@ token_env: SRC_TOKEN
         let connection: SourceConnectionConfig =
             serde_norway::from_str(yaml).expect("connection YAML parses");
         assert!(!connection.allow_insecure_localhost);
+        assert!(!connection.allow_insecure_private_network);
         assert_eq!(connection.bulk_mode, BulkMode::None);
         assert!(!connection.bulk_mode_lookup_unique);
         assert_eq!(connection.bulk_timeout_max_ms, 30_000);
@@ -1477,6 +1497,7 @@ bulk_mode: unsupported_mode
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
                 allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1510,6 +1531,7 @@ bulk_mode: unsupported_mode
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
                 allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1549,6 +1571,7 @@ bulk_mode: unsupported_mode
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
                 allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1588,6 +1611,7 @@ bulk_mode: unsupported_mode
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
                 allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
@@ -1612,6 +1636,7 @@ bulk_mode: unsupported_mode
             SourceConnectionConfig {
                 base_url: "https://upstream.example".to_string(),
                 allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,

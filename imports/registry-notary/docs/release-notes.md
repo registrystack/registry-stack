@@ -1,5 +1,12 @@
 # Release Notes
 
+## 0.2.1
+
+- Added `evidence.source_connections[].allow_insecure_private_network` for
+  Docker Compose and private-network demos that need HTTP source registries.
+  The escape hatch is opt-in, keeps cloud metadata endpoints blocked, and
+  leaves the strict HTTPS policy as the default.
+
 ## 0.2.0 (rename)
 
 - Renamed: `evidence-server` → `registry-witness`. No backward compatibility; no aliases.

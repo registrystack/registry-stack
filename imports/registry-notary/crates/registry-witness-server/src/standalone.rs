@@ -34,7 +34,7 @@ use registry_witness_core::sd_jwt::EvidenceIssuer;
 use registry_witness_core::{
     BulkMode, DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceConfig,
     EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, SourceBindingConfig,
-    SourceConnectorKind, StandaloneRegistryWitnessConfig, SubjectRequest,
+    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryWitnessConfig, SubjectRequest,
 };
 use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
@@ -172,11 +172,7 @@ impl HttpEvidenceSources {
                     id: id.clone(),
                     base_url: connection.base_url.clone(),
                     bearer_token,
-                    fetch_url_policy: if connection.allow_insecure_localhost {
-                        FetchUrlPolicy::dev()
-                    } else {
-                        FetchUrlPolicy::strict()
-                    },
+                    fetch_url_policy: source_fetch_url_policy(connection),
                     dci: connection.dci.clone(),
                     semaphore: Arc::new(Semaphore::new(connection.max_in_flight)),
                     max_in_flight: connection.max_in_flight,
@@ -204,6 +200,22 @@ impl HttpEvidenceSources {
             .connection
             .as_deref()
             .and_then(|connection| self.source_connections.get(connection))
+    }
+}
+
+fn source_fetch_url_policy(connection: &SourceConnectionConfig) -> FetchUrlPolicy {
+    if connection.allow_insecure_private_network {
+        FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string()],
+            allow_localhost: true,
+            allow_http_private_network: true,
+            deny_private_ranges: false,
+            deny_cloud_metadata: true,
+        }
+    } else if connection.allow_insecure_localhost {
+        FetchUrlPolicy::dev()
+    } else {
+        FetchUrlPolicy::strict()
     }
 }
 
@@ -1701,6 +1713,7 @@ mod tests {
                 SourceConnectionConfig {
                     base_url: base_url.to_string(),
                     allow_insecure_localhost,
+                    allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_POLICY_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
@@ -1711,6 +1724,39 @@ mod tests {
             )]),
             ..EvidenceConfig::default()
         }
+    }
+
+    #[test]
+    fn source_fetch_url_policy_private_network_escape_hatch_keeps_metadata_denial() {
+        let config = test_source_config("http://registry-relay:8080", false);
+        let mut connection = config
+            .source_connections
+            .get("registry")
+            .expect("source connection")
+            .clone();
+        connection.allow_insecure_private_network = true;
+
+        let policy = source_fetch_url_policy(&connection);
+
+        assert_eq!(policy.allowed_schemes, ["http", "https"]);
+        assert!(policy.allow_localhost);
+        assert!(policy.allow_http_private_network);
+        assert!(!policy.deny_private_ranges);
+        assert!(policy.deny_cloud_metadata);
+    }
+
+    #[test]
+    fn source_fetch_url_policy_defaults_to_strict() {
+        let config = test_source_config("https://registry.example.test", false);
+        let connection = config
+            .source_connections
+            .get("registry")
+            .expect("source connection");
+
+        assert_eq!(
+            source_fetch_url_policy(connection),
+            FetchUrlPolicy::strict()
+        );
     }
 
     #[tokio::test]
@@ -1919,6 +1965,7 @@ mod tests {
                         .expect("HTTP transport exposes upstream address")
                         .to_string(),
                     allow_insecure_localhost: true,
+                    allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
@@ -2015,6 +2062,7 @@ mod tests {
                 registry_witness_core::SourceConnectionConfig {
                     base_url: "https://registry.example.test".to_string(),
                     allow_insecure_localhost: false,
+                    allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
