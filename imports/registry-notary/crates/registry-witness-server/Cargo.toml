@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Standalone Registry Witness routes, runtime, auth, audit, and HTTP source connectors."
-readme.workspace = true
+readme = "README.md"
 repository.workspace = true
 publish = false
 

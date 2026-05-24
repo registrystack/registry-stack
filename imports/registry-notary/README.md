@@ -10,13 +10,16 @@ but Registry Witness does not import or link Registry Relay code.
 
 ## Layout
 
-- `crates/registry-witness-core`: portable Registry Witness domain, config, auth, audit,
-  request, response, and SD-JWT VC contracts.
-- `crates/registry-witness-server`: Axum routes, runtime evaluation, renderers,
-  credential issuance wiring, HTTP Registry Data API and DCI source connectors,
-  auth middleware, audit emission, and standalone app assembly.
-- `crates/registry-witness-bin`: process startup, config loading, bind address,
-  tracing, and graceful shutdown.
+- [`crates/registry-witness-core`](crates/registry-witness-core/README.md):
+  portable Registry Witness domain, config, auth, audit, request, response, and
+  SD-JWT VC contracts.
+- [`crates/registry-witness-server`](crates/registry-witness-server/README.md):
+  Axum routes, runtime evaluation, renderers, credential issuance wiring, HTTP
+  Registry Data API and DCI source connectors, auth middleware, audit emission,
+  and standalone app assembly.
+- [`crates/registry-witness-bin`](crates/registry-witness-bin/README.md):
+  process startup, config loading, bind address, tracing, graceful shutdown, and
+  OpenAPI generation.
 - `demo/config/registry-witness.yaml`: split demo config used by
   `registry-relay`'s narrated Registry Witness walkthrough.
 
