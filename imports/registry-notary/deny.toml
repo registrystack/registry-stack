@@ -1,5 +1,5 @@
 [graph]
-all-features = false
+all-features = true
 no-default-features = false
 targets = []
 
@@ -9,10 +9,30 @@ feature-depth = 1
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# Advisory ignores must include a scoped rationale and a review trigger.
 ignore = [
+    # RUSTSEC-2023-0071: `rsa` is pulled in through `jsonwebtoken`, but the
+    # workspace performs platform-owned signing with EdDSA/Ed25519 only.
+    # OIDC JWT verification remains caller-configurable for provider
+    # compatibility; enabling RS*/PS* verification accepts public provider keys
+    # and should be reassessed against this advisory before production use.
+    # Review this ignore when `jsonwebtoken` no longer depends on rsa 0.9.x or
+    # before adding any platform-owned RS*/PS* signing support.
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2023-0089: `atomic-polyfill` is pulled transitively by
+    # `cel-mapper-core` through phonenumber's build dependency stack in
+    # consumers. Review when `cel-mapper-core` or phonenumber removes this
+    # path, or before making CEL mapping part of a hardened default runtime.
     "RUSTSEC-2023-0089",
+    # RUSTSEC-2024-0436: `paste` is pulled transitively by DataFusion in Relay.
+    # It is unmaintained, but remains compile-time/runtime macro plumbing, not
+    # request-facing parsing. Review when DataFusion moves off `paste` or when
+    # upgrading the DataFusion major version.
     "RUSTSEC-2024-0436",
+    # RUSTSEC-2025-0068: retained for consumers that still carry `serde_yml`.
+    # New platform code should use maintained YAML crates such as
+    # `serde-saphyr` or `serde_norway`; review when consumer lockfiles no
+    # longer contain serde_yml.
     "RUSTSEC-2025-0068",
 ]
 
