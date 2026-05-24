@@ -163,6 +163,7 @@ pub mod url {
 pub struct FetchUrlPolicy {
     pub allowed_schemes: Vec<String>,
     pub allow_localhost: bool,
+    pub allow_http_private_network: bool,
     pub deny_private_ranges: bool,
     pub deny_cloud_metadata: bool,
 }
@@ -175,6 +176,7 @@ impl FetchUrlPolicy {
         Self {
             allowed_schemes: vec!["https".to_string()],
             allow_localhost: false,
+            allow_http_private_network: false,
             deny_private_ranges: true,
             deny_cloud_metadata: true,
         }
@@ -188,6 +190,7 @@ impl FetchUrlPolicy {
         Self {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: true,
+            allow_http_private_network: false,
             deny_private_ranges: true,
             deny_cloud_metadata: true,
         }
@@ -247,8 +250,12 @@ impl FetchUrlPolicy {
             }
         }
 
-        if url.scheme() == "http" && !localhost_allowed {
-            return Err(FetchUrlError::HttpRequiresLoopback);
+        if url.scheme() == "http" {
+            let http_private_network_allowed = self.allow_http_private_network
+                && resolved.iter().all(|ip| is_private_or_link_local_ip(*ip));
+            if !(localhost_allowed || http_private_network_allowed) {
+                return Err(FetchUrlError::HttpRequiresLoopback);
+            }
         }
 
         Ok(ValidatedFetchUrl {
@@ -616,6 +623,45 @@ mod tests {
                 "strict policy must reject {raw}"
             );
         }
+    }
+
+    #[test]
+    fn private_network_policy_accepts_http_private_ip_only_when_enabled() {
+        let private_url = reqwest::Url::parse("http://10.0.0.1/jwks").expect("url parses");
+        let public_url = reqwest::Url::parse("http://93.184.216.34/jwks").expect("url parses");
+        let policy = FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string()],
+            allow_localhost: false,
+            allow_http_private_network: true,
+            deny_private_ranges: false,
+            deny_cloud_metadata: true,
+        };
+
+        policy
+            .validate(&private_url)
+            .expect("private-network HTTP is explicitly accepted");
+        let err = policy
+            .validate(&public_url)
+            .expect_err("public HTTP is still rejected");
+        assert!(matches!(err, FetchUrlError::HttpRequiresLoopback));
+    }
+
+    #[test]
+    fn private_network_policy_still_rejects_cloud_metadata() {
+        let url =
+            reqwest::Url::parse("http://169.254.169.254/latest/meta-data/").expect("url parses");
+        let policy = FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string()],
+            allow_localhost: false,
+            allow_http_private_network: true,
+            deny_private_ranges: false,
+            deny_cloud_metadata: true,
+        };
+
+        let err = policy
+            .validate(&url)
+            .expect_err("cloud metadata target rejected");
+        assert!(matches!(err, FetchUrlError::CloudMetadataDenied { .. }));
     }
 
     #[test]
