@@ -22,14 +22,14 @@ registry-witness-server = { version = "0.2.0", path = "crates/registry-witness-s
 cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "32679bb78c969b8f33129113e31465dbe54b0ea0" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
-registry-platform-audit = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-audit" }
-registry-platform-authcommon = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-authcommon" }
-registry-platform-crypto = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-crypto" }
-registry-platform-httpsec = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-httpsec" }
-registry-platform-httputil = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-httputil" }
-registry-platform-oidc = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-oidc" }
-registry-platform-sdjwt = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-sdjwt" }
-registry-platform-testing = { version = "0.1.0", path = "../registry-platform/crates/registry-platform-testing" }
+registry-platform-audit = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-audit" }
+registry-platform-authcommon = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-authcommon" }
+registry-platform-crypto = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-crypto" }
+registry-platform-httpsec = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-httpsec" }
+registry-platform-httputil = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-httputil" }
+registry-platform-oidc = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-sdjwt = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-sdjwt" }
+registry-platform-testing = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-testing" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
