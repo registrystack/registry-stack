@@ -1578,7 +1578,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "sha2 0.11.0",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1624,7 +1624,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "http",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "bytes",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "getrandom 0.4.2",
@@ -1682,7 +1682,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
