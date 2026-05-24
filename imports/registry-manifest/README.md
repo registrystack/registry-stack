@@ -6,8 +6,10 @@ It owns metadata manifests, compiled metadata models, validation, vocabulary pre
 
 ## Workspace
 
-- `crates/registry-manifest-core`: manifest contracts, validation, compilation, and renderers.
-- `crates/registry-manifest-cli`: command-line validation, rendering, static publication, and profile fixture validation.
+- [`crates/registry-manifest-core`](crates/registry-manifest-core/README.md):
+  manifest contracts, validation, compilation, and renderers.
+- [`crates/registry-manifest-cli`](crates/registry-manifest-cli/README.md):
+  command-line validation, rendering, static publication, and profile fixture validation.
 - `profiles/`: non-normative profile descriptors and metadata fixtures.
 - `examples/`: runnable static publication examples and notes.
 - `docs/`: repository-level design and release notes.
