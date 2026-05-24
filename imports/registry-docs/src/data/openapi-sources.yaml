@@ -10,5 +10,5 @@
   owner: registry-witness
   source: "`cargo run -p registry-witness-bin -- openapi`"
   artifact: openapi/registry-witness.openapi.json
-  status: pinned generated snapshot; generator currently omits public probe routes and the admin no-op route
+  status: pinned generated snapshot from the local Registry Witness workspace
   redoc_path: /registry-legend/api/registry-witness.html

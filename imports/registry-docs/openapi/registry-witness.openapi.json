@@ -1,179 +1,18 @@
 {
-  "components": {
-    "schemas": {
-      "BatchEvaluateRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "claims": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "disclosure": {
-            "type": "string"
-          },
-          "format": {
-            "type": "string"
-          },
-          "prefer": {
-            "type": "string"
-          },
-          "purpose": {
-            "type": "string"
-          },
-          "subjects": {
-            "items": {
-              "$ref": "#/components/schemas/SubjectRequest"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "subjects",
-          "claims"
-        ],
-        "type": "object"
-      },
-      "CredentialIssueRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "claims": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "credential_profile": {
-            "type": "string"
-          },
-          "disclosure": {
-            "type": "string"
-          },
-          "evaluation_id": {
-            "type": "string"
-          },
-          "format": {
-            "type": "string"
-          },
-          "holder": {
-            "additionalProperties": false,
-            "properties": {
-              "binding": {
-                "type": "string"
-              },
-              "id": {
-                "type": "string"
-              },
-              "proof": {
-                "type": "string"
-              }
-            },
-            "type": "object"
-          }
-        },
-        "required": [
-          "evaluation_id"
-        ],
-        "type": "object"
-      },
-      "EvaluateRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "claims": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "disclosure": {
-            "type": "string"
-          },
-          "format": {
-            "type": "string"
-          },
-          "purpose": {
-            "type": "string"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SubjectRequest"
-          }
-        },
-        "required": [
-          "subject",
-          "claims"
-        ],
-        "type": "object"
-      },
-      "RenderRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "claims": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "disclosure": {
-            "type": "string"
-          },
-          "evaluation_id": {
-            "type": "string"
-          },
-          "format": {
-            "type": "string"
-          },
-          "purpose": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "evaluation_id",
-          "format"
-        ],
-        "type": "object"
-      },
-      "SubjectRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "id_type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "type": "object"
-      }
-    },
-    "securitySchemes": {
-      "apiKeyAuth": {
-        "in": "header",
-        "name": "x-api-key",
-        "type": "apiKey"
-      },
-      "bearerAuth": {
-        "scheme": "bearer",
-        "type": "http"
-      }
-    }
-  },
+  "openapi": "3.1.0",
   "info": {
+    "title": "Registry Witness API",
     "description": "Standalone claim evaluation, rendering, and credential issuance API.",
     "license": {
-      "identifier": "Apache-2.0",
-      "name": "Apache-2.0"
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
     },
-    "title": "Registry Witness API",
-    "version": "0.1.0"
+    "version": "0.2.1"
   },
-  "openapi": "3.1.0",
   "paths": {
     "/.well-known/evidence-service": {
       "get": {
+        "summary": "Discover Registry Witness capabilities",
         "operationId": "getEvidenceService",
         "responses": {
           "200": {
@@ -182,12 +21,12 @@
           "401": {
             "description": "Missing or invalid credential"
           }
-        },
-        "summary": "Discover Registry Witness capabilities"
+        }
       }
     },
     "/.well-known/evidence/jwks.json": {
       "get": {
+        "summary": "Fetch public issuer verification keys",
         "operationId": "getEvidenceJwks",
         "responses": {
           "200": {
@@ -196,12 +35,29 @@
           "401": {
             "description": "Missing or invalid credential"
           }
-        },
-        "summary": "Fetch public issuer verification keys"
+        }
+      }
+    },
+    "/admin/reload": {
+      "post": {
+        "summary": "Request a standalone config reload",
+        "operationId": "adminReload",
+        "responses": {
+          "200": {
+            "description": "Reload request accepted; standalone router currently returns a no-op response"
+          },
+          "401": {
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "description": "Authenticated principal lacks the admin scope"
+          }
+        }
       }
     },
     "/claims": {
       "get": {
+        "summary": "List claims visible to the caller",
         "operationId": "listClaims",
         "responses": {
           "200": {
@@ -210,17 +66,17 @@
           "401": {
             "description": "Missing or invalid credential"
           }
-        },
-        "summary": "List claims visible to the caller"
+        }
       }
     },
     "/claims/batch-evaluate": {
       "post": {
+        "summary": "Evaluate claims for multiple subjects inline",
         "operationId": "batchEvaluateClaims",
         "parameters": [
           {
-            "in": "header",
             "name": "Idempotency-Key",
+            "in": "header",
             "required": false,
             "schema": {
               "type": "string"
@@ -250,12 +106,12 @@
           "403": {
             "description": "Not authorized for requested claim, purpose, disclosure, or format"
           }
-        },
-        "summary": "Evaluate claims for multiple subjects inline"
+        }
       }
     },
     "/claims/evaluate": {
       "post": {
+        "summary": "Evaluate claims for one subject",
         "operationId": "evaluateClaims",
         "requestBody": {
           "content": {
@@ -280,17 +136,17 @@
           "403": {
             "description": "Not authorized for requested claim, purpose, disclosure, or format"
           }
-        },
-        "summary": "Evaluate claims for one subject"
+        }
       }
     },
     "/claims/{claim_id}": {
       "get": {
+        "summary": "Get one claim definition",
         "operationId": "getClaim",
         "parameters": [
           {
-            "in": "path",
             "name": "claim_id",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string"
@@ -307,12 +163,12 @@
           "404": {
             "description": "Claim not found"
           }
-        },
-        "summary": "Get one claim definition"
+        }
       }
     },
     "/credentials/issue": {
       "post": {
+        "summary": "Issue a credential from a stored evaluation",
         "operationId": "issueCredential",
         "requestBody": {
           "content": {
@@ -337,12 +193,12 @@
           "404": {
             "description": "Evaluation not found"
           }
-        },
-        "summary": "Issue a credential from a stored evaluation"
+        }
       }
     },
     "/evidence/render": {
       "post": {
+        "summary": "Render a stored evaluation",
         "operationId": "renderEvidence",
         "requestBody": {
           "content": {
@@ -367,12 +223,12 @@
           "404": {
             "description": "Evaluation not found"
           }
-        },
-        "summary": "Render a stored evaluation"
+        }
       }
     },
     "/formats": {
       "get": {
+        "summary": "List supported output formats",
         "operationId": "listFormats",
         "responses": {
           "200": {
@@ -381,12 +237,24 @@
           "401": {
             "description": "Missing or invalid credential"
           }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Fetch liveness status",
+        "operationId": "getHealthz",
+        "responses": {
+          "200": {
+            "description": "Service is alive"
+          }
         },
-        "summary": "List supported output formats"
+        "security": []
       }
     },
     "/openapi.json": {
       "get": {
+        "summary": "Fetch this OpenAPI document",
         "operationId": "getOpenApi",
         "responses": {
           "200": {
@@ -395,8 +263,242 @@
           "401": {
             "description": "Missing or invalid credential"
           }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Fetch readiness status",
+        "operationId": "getReady",
+        "responses": {
+          "200": {
+            "description": "Service is ready"
+          },
+          "503": {
+            "description": "Service is not ready"
+          }
         },
-        "summary": "Fetch this OpenAPI document"
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BatchEvaluateRequest": {
+        "type": "object",
+        "required": [
+          "subjects",
+          "claims"
+        ],
+        "properties": {
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "disclosure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubjectRequest"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CredentialIssueRequest": {
+        "type": "object",
+        "required": [
+          "evaluation_id"
+        ],
+        "properties": {
+          "claims": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "credential_profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disclosure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "holder": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HolderRequest"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvaluateRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "claims"
+        ],
+        "properties": {
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "disclosure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SubjectRequest"
+          }
+        },
+        "additionalProperties": false
+      },
+      "HolderRequest": {
+        "type": "object",
+        "properties": {
+          "binding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RenderRequest": {
+        "type": "object",
+        "required": [
+          "evaluation_id",
+          "format"
+        ],
+        "properties": {
+          "claims": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "disclosure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubjectRequest": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "id_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   },

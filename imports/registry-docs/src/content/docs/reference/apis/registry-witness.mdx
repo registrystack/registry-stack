@@ -23,7 +23,7 @@ The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, what disclosure profiles the specification exposes, and what is not in scope.
 
-Evidence source: [Registry Witness](../../../projects/registry-witness/) commit `412c162a85c9b99491a7a4c32704063628eb824a`, reviewed 2026-05-24.
+Evidence source: [Registry Witness](../../../projects/registry-witness/) commit `813c1870a1e8611e78c5740a9ccf4954e98c20b4`, reviewed 2026-05-24.
 
 Generate or refresh the artifact:
 
@@ -31,9 +31,7 @@ Generate or refresh the artifact:
 cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.json
 ```
 
-{/* The pinned artifact has an `info.license` block (Apache-2.0) added locally so Redocly
-    `info-license` validation passes. When refreshing the artifact, preserve the license
-    block or add it upstream in the registry-witness OpenAPI generator. */}
+{/* The upstream generator includes the Apache-2.0 info.license block required by Redocly. */}
 
 ## API surface
 
@@ -41,10 +39,9 @@ Registry Witness is a standalone Rust workspace for claim evaluation, disclosure
 credential issuance, and audit.
 Registry Witness runs independently; it does not require Registry Relay to be running.
 
-The pinned OpenAPI document is titled "Registry Witness API" at version `0.1.0`.
-The current workspace version is `0.2.0`; the OpenAPI info version has not yet caught up.
+The pinned OpenAPI document is titled "Registry Witness API" at version `0.2.1`.
 Routes are defined in `crates/registry-witness-server/src/api.rs`.
-The generated OpenAPI artifact covers the protected API routes, while source also mounts public probe routes and a protected admin no-op route.
+The generated OpenAPI artifact covers public probe routes, protected API routes, and the protected admin no-op route.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
