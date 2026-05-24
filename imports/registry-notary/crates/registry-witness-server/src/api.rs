@@ -1034,7 +1034,7 @@ mod tests {
     }
 
     fn proof_payload(holder_id: &str, aud: &str) -> Value {
-        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let now = OffsetDateTime::now_utc().unix_timestamp() + 10;
         json!({
             "sub": holder_id,
             "aud": aud,
