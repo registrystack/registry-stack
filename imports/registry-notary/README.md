@@ -20,6 +20,9 @@ but Registry Witness does not import or link Registry Relay code.
 - [`crates/registry-witness-bin`](crates/registry-witness-bin/README.md):
   process startup, config loading, bind address, tracing, graceful shutdown, and
   OpenAPI generation.
+- [`crates/registry-witness-openfn-sidecar`](crates/registry-witness-openfn-sidecar/README.md):
+  synchronous Registry Data API-shaped sidecar for running pinned OpenFn adaptor
+  jobs behind Registry Witness source lookups.
 - `demo/config/registry-witness.yaml`: split demo config used by
   `registry-relay`'s narrated Registry Witness walkthrough.
 

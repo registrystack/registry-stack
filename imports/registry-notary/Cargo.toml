@@ -3,6 +3,7 @@ members = [
     "crates/registry-witness-core",
     "crates/registry-witness-server",
     "crates/registry-witness-bin",
+    "crates/registry-witness-openfn-sidecar",
 ]
 resolver = "2"
 

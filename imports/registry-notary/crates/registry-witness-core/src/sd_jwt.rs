@@ -20,6 +20,8 @@ pub struct SignedSdJwtVc {
     pub issuer: String,
     pub expires_at: String,
     pub compact: String,
+    pub issuer_signed_jwt: String,
+    pub disclosures: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -117,12 +119,29 @@ pub fn issue(
             disclosures,
         })
         .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+    let (issuer_signed_jwt, disclosures) = split_sd_jwt_compact(&signed.jwt)?;
     Ok(SignedSdJwtVc {
         credential_id: signed.credential_id,
         issuer: profile.issuer.clone(),
         expires_at: format_time(expires_at),
         compact: signed.jwt,
+        issuer_signed_jwt,
+        disclosures,
     })
+}
+
+fn split_sd_jwt_compact(compact: &str) -> Result<(String, Vec<String>), EvidenceError> {
+    let mut parts = compact.split('~');
+    let issuer_signed_jwt = parts
+        .next()
+        .filter(|jwt| !jwt.is_empty())
+        .ok_or(EvidenceError::CredentialIssuanceFailed)?
+        .to_string();
+    let disclosures = parts
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    Ok((issuer_signed_jwt, disclosures))
 }
 
 fn holder_confirmation(holder_id: &str) -> Result<HolderConfirmation, EvidenceError> {
@@ -199,6 +218,35 @@ mod tests {
 
         assert_eq!(payload["jti"], signed.credential_id);
         assert_eq!(payload["id"], signed.credential_id);
+    }
+
+    #[test]
+    fn issued_credential_exposes_verifiable_jwt_separately_from_disclosures() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("first")],
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+
+        assert_eq!(
+            signed.issuer_signed_jwt,
+            signed.compact.split('~').next().expect("sd-jwt has jwt")
+        );
+        assert!(!signed.issuer_signed_jwt.contains('~'));
+        let segments = signed.issuer_signed_jwt.split('.').collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3);
+        for segment in segments {
+            URL_SAFE_NO_PAD
+                .decode(segment)
+                .expect("JWT segment is base64url without SD-JWT disclosure tail");
+        }
+        assert_eq!(signed.disclosures.len(), 1);
+        assert!(signed.compact.ends_with('~'));
     }
 
     #[test]

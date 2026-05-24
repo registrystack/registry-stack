@@ -126,6 +126,7 @@ struct ResolvedEvidenceSourceConnection {
     /// upstream cannot temporarily exceed the politeness cap by quick retry.
     semaphore: Arc<Semaphore>,
     max_in_flight: usize,
+    retry_on_5xx: bool,
     /// Bulk-read mode for this connection. See `BulkMode` for the available
     /// strategies. `None` disables bulk specialization and the runtime never
     /// invokes the specialized `read_many` path for this connection.
@@ -143,6 +144,7 @@ impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
             .field("fetch_url_policy", &self.fetch_url_policy)
             .field("dci", &self.dci)
             .field("max_in_flight", &self.max_in_flight)
+            .field("retry_on_5xx", &self.retry_on_5xx)
             .field("bulk_mode", &self.bulk_mode)
             .field("bulk_timeout_max", &self.bulk_timeout_max)
             .finish()
@@ -176,6 +178,7 @@ impl HttpEvidenceSources {
                     dci: connection.dci.clone(),
                     semaphore: Arc::new(Semaphore::new(connection.max_in_flight)),
                     max_in_flight: connection.max_in_flight,
+                    retry_on_5xx: connection.retry_on_5xx,
                     bulk_mode: connection.bulk_mode,
                     bulk_timeout_max: Duration::from_millis(connection.bulk_timeout_max_ms),
                 },
@@ -1352,7 +1355,7 @@ async fn send_request_with_retry(
     );
     let start = Instant::now();
     let mut attempt: u32 = 0;
-    let max_attempts: u32 = 2; // 1 initial + 1 retry
+    let max_attempts = if connection.retry_on_5xx { 2 } else { 1 };
     let result = loop {
         attempt += 1;
         let outcome = build_request().send().await;
@@ -1657,7 +1660,14 @@ mod tests {
     use axum::response::Redirect;
     use axum::routing::get;
     use axum_test::TestServer;
-    use registry_witness_core::{SourceConnectionConfig, SourceLookupConfig};
+    use registry_witness_core::{
+        EvaluateRequest, SourceConnectionConfig, SourceLookupConfig, FORMAT_CLAIM_RESULT_JSON,
+    };
+    use registry_witness_openfn_sidecar::{sidecar_router, SidecarConfig};
+
+    const OPENFN_SIDECAR_TOKEN_ENV: &str = "TEST_OPENFN_SIDECAR_TOKEN";
+    const OPENFN_SIDECAR_TOKEN: &str = "openfn-sidecar-token";
+    const OPENFN_SPIKE_PURPOSE: &str = "https://purpose.example.test/eligibility";
 
     fn audit_event() -> EvidenceAuditEvent {
         EvidenceAuditEvent {
@@ -1717,6 +1727,7 @@ mod tests {
                     token_env: "TEST_EVIDENCE_SOURCE_POLICY_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
+                    retry_on_5xx: true,
                     bulk_mode: registry_witness_core::BulkMode::None,
                     bulk_mode_lookup_unique: false,
                     bulk_timeout_max_ms: 30_000,
@@ -1724,6 +1735,109 @@ mod tests {
             )]),
             ..EvidenceConfig::default()
         }
+    }
+
+    fn openfn_sidecar_spike_config(base_url: &str) -> EvidenceConfig {
+        let raw = format!(
+            r#"
+enabled: true
+service_id: spike.registry-witness
+source_connections:
+  openfn_crvs:
+    base_url: "{base_url}"
+    allow_insecure_localhost: true
+    retry_on_5xx: false
+    token_env: {OPENFN_SIDECAR_TOKEN_ENV}
+claims:
+  - id: date-of-birth
+    title: Date of birth
+    version: 2026-05
+    subject_type: person
+    value:
+      type: date
+    inputs:
+      - name: subject_id
+        type: string
+    source_bindings:
+      crvs:
+        connector: registry_data_api
+        connection: openfn_crvs
+        required_scope: civil_registry:evidence_verification
+        dataset: civil_registry
+        entity: civil_person
+        lookup:
+          input: subject_id
+          field: national_id
+          op: eq
+          cardinality: one
+        fields:
+          birth_date:
+            field: birth_date
+            type: date
+            required: true
+    rule:
+      type: extract
+      source: crvs
+      field: birth_date
+    disclosure:
+      default: value
+      allowed:
+        - value
+        - redacted
+    formats:
+      - "{FORMAT_CLAIM_RESULT_JSON}"
+"#
+        );
+        serde_norway::from_str(&raw).expect("spike config parses")
+    }
+
+    fn openfn_sidecar_test_config(attempt_log: std::path::PathBuf) -> SidecarConfig {
+        let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../registry-witness-openfn-sidecar");
+        let worker = sidecar_root.join("tests/fixtures/contract_worker.sh");
+        let job = sidecar_root.join("tests/fixtures/jobs/opencrvs-person-lookup.js");
+        let raw = format!(
+            r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: witness
+      token: "{OPENFN_SIDECAR_TOKEN}"
+limits:
+  max_workers: 2
+  worker_timeout_ms: 250
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  max_worker_memory_mb: 256
+openfn:
+  cli_build_tool: "1.36.0"
+  runtime: "1.36.0"
+worker:
+  command: "/bin/sh"
+  args:
+    - "{}"
+    - "{}"
+sources:
+  openfn_crvs:
+    dataset: civil_registry
+    entity: civil_person
+    job: "{}"
+    adaptor: "@openfn/language-http@7.2.0"
+    credential_env: TEST_OPENCRVS_READER_CREDENTIAL_JSON
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+            worker.display(),
+            attempt_log.display(),
+            job.display()
+        );
+        serde_norway::from_str(&raw).expect("sidecar test config parses")
     }
 
     #[test]
@@ -1786,6 +1900,113 @@ mod tests {
         assert!(line["record"].get("principal_id").is_none());
         assert!(line["record"].get("fields").is_none());
         assert!(line["record"].get("audit").is_none());
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_rda_facade_can_source_single_item_attestation() {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        std::env::set_var(
+            "TEST_OPENCRVS_READER_CREDENTIAL_JSON",
+            r#"{"apiToken":"fixture-token"}"#,
+        );
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let sidecar = sidecar_router(openfn_sidecar_test_config(
+            tmp.path().join("attempts.jsonl"),
+        ))
+        .await
+        .expect("sidecar router builds");
+        let server = TestServer::builder().http_transport().build(sidecar);
+        let evidence = Arc::new(openfn_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        ));
+        let source = Arc::new(HttpEvidenceSources::from_config(&evidence).expect("source config"));
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+        };
+
+        let results = crate::RegistryWitnessRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source,
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    subject: SubjectRequest {
+                        id: "person-123".to_string(),
+                        id_type: None,
+                    },
+                    claims: vec!["date-of-birth".to_string()],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("OpenFn sidecar facade sources the claim");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_id, "date-of-birth");
+        assert_eq!(results[0].value, Some(json!("1990-01-01")));
+        assert_eq!(results[0].provenance.source_count, 1);
+    }
+
+    #[tokio::test]
+    async fn openfn_sidecar_rda_failures_are_not_retried_by_witness() {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        std::env::set_var(
+            "TEST_OPENCRVS_READER_CREDENTIAL_JSON",
+            r#"{"apiToken":"fixture-token"}"#,
+        );
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let attempt_log = tmp.path().join("attempts.jsonl");
+        let sidecar = sidecar_router(openfn_sidecar_test_config(attempt_log.clone()))
+            .await
+            .expect("sidecar router builds");
+        let server = TestServer::builder().http_transport().build(sidecar);
+        let evidence = Arc::new(openfn_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        ));
+        let source = Arc::new(HttpEvidenceSources::from_config(&evidence).expect("source config"));
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+        };
+
+        let result = crate::RegistryWitnessRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source,
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    subject: SubjectRequest {
+                        id: "retry-sentinel".to_string(),
+                        id_type: None,
+                    },
+                    claims: vec!["date-of-birth".to_string()],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await;
+
+        assert!(result.is_err());
+        let attempts = std::fs::read_to_string(attempt_log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("retry-sentinel"))
+            .count();
+        assert_eq!(attempts, 1, "Witness must not retry sidecar failures");
     }
 
     #[tokio::test]
@@ -1867,6 +2088,7 @@ mod tests {
             dci: DciSourceConnectionConfig::default(),
             semaphore: Arc::new(Semaphore::new(8)),
             max_in_flight: 8,
+            retry_on_5xx: true,
             bulk_mode: BulkMode::None,
             bulk_timeout_max: Duration::from_secs(30),
         };
@@ -1969,6 +2191,7 @@ mod tests {
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
+                    retry_on_5xx: true,
                     bulk_mode: registry_witness_core::BulkMode::None,
                     bulk_mode_lookup_unique: false,
                     bulk_timeout_max_ms: 30_000,
@@ -2066,6 +2289,7 @@ mod tests {
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
+                    retry_on_5xx: true,
                     bulk_mode: registry_witness_core::BulkMode::None,
                     bulk_mode_lookup_unique: false,
                     bulk_timeout_max_ms: 30_000,

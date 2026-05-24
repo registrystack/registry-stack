@@ -610,6 +610,10 @@ pub struct SourceConnectionConfig {
     /// regardless of inbound load. Must be >= 1.
     #[serde(default = "default_max_in_flight")]
     pub max_in_flight: usize,
+    /// Retry one time on transport errors or HTTP 5xx responses. Disable this
+    /// for synchronous sidecars whose worker executions must not be repeated.
+    #[serde(default = "default_retry_on_5xx")]
+    pub retry_on_5xx: bool,
     /// Bulk-read mode for this connection. `none` (default) keeps the wire
     /// behavior of pre-Stage-3 deployments; `rda_in_filter` and
     /// `dci_batched_search` are connector-specific specializations.
@@ -629,6 +633,10 @@ pub struct SourceConnectionConfig {
 
 const fn default_max_in_flight() -> usize {
     8
+}
+
+const fn default_retry_on_5xx() -> bool {
+    true
 }
 
 const fn default_bulk_timeout_max_ms() -> u64 {
@@ -1382,6 +1390,7 @@ auth:
                 token_env: "UPSTREAM_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 0,
+                retry_on_5xx: true,
                 bulk_mode: BulkMode::None,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
@@ -1501,6 +1510,7 @@ bulk_mode: unsupported_mode
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
+                retry_on_5xx: true,
                 bulk_mode: BulkMode::RdaInFilter,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
@@ -1535,6 +1545,7 @@ bulk_mode: unsupported_mode
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
+                retry_on_5xx: true,
                 bulk_mode: BulkMode::RdaInFilter,
                 bulk_mode_lookup_unique: true,
                 bulk_timeout_max_ms: 30_000,
@@ -1575,6 +1586,7 @@ bulk_mode: unsupported_mode
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
+                retry_on_5xx: true,
                 bulk_mode: BulkMode::DciBatchedSearch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
@@ -1615,6 +1627,7 @@ bulk_mode: unsupported_mode
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
+                retry_on_5xx: true,
                 bulk_mode: BulkMode::DciBatchedSearch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
@@ -1640,6 +1653,7 @@ bulk_mode: unsupported_mode
                 token_env: "SRC_TOKEN".to_string(),
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
+                retry_on_5xx: true,
                 bulk_mode: BulkMode::RdaInFilter,
                 bulk_mode_lookup_unique: true,
                 bulk_timeout_max_ms: 30_000,

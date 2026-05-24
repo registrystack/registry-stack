@@ -1016,7 +1016,9 @@ fn credential_issue_example() -> Value {
         "format": "application/dc+sd-jwt",
         "issuer": "did:web:agriculture.demo.example.gov",
         "expires_at": "2026-05-25T12:00:00Z",
-        "credential": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YifQ.signature~disclosure"
+        "credential": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YifQ.c2lnbmF0dXJl~ZGlzY2xvc3VyZQ~",
+        "issuer_signed_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YifQ.c2lnbmF0dXJl",
+        "disclosures": ["ZGlzY2xvc3VyZQ"]
     })
 }
 

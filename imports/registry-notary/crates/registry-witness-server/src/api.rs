@@ -547,6 +547,8 @@ async fn issue_credential(
         "issuer": signed.issuer,
         "expires_at": signed.expires_at,
         "credential": signed.compact,
+        "issuer_signed_jwt": signed.issuer_signed_jwt,
+        "disclosures": signed.disclosures,
     }))
     .into_response();
     response.headers_mut().insert(

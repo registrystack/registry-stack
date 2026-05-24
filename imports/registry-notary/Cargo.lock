@@ -2506,6 +2506,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-witness-openfn-sidecar"
+version = "0.2.1"
+dependencies = [
+ "axum",
+ "axum-test",
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "registry-witness-server"
 version = "0.2.1"
 dependencies = [
@@ -2524,6 +2543,7 @@ dependencies = [
  "registry-platform-sdjwt",
  "registry-platform-testing",
  "registry-witness-core",
+ "registry-witness-openfn-sidecar",
  "reqwest",
  "serde",
  "serde_json",
