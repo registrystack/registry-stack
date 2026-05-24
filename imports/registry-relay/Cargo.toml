@@ -77,13 +77,13 @@ humantime-serde = { version = "1" }
 registry-manifest-core = { version = "0.1.1", git = "https://github.com/jeremi/registry-manifest", tag = "v0.1.2" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
-registry-platform-authcommon = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-authcommon" }
-registry-platform-audit = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-audit" }
-registry-platform-crypto = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-crypto" }
-registry-platform-httpsec = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-httpsec" }
-registry-platform-httputil = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-httputil" }
-registry-platform-oidc = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-oidc" }
-registry-platform-sdjwt = { version = "0.1.1", path = "../registry-platform/crates/registry-platform-sdjwt" }
+registry-platform-authcommon = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-authcommon" }
+registry-platform-audit = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-audit" }
+registry-platform-crypto = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-crypto" }
+registry-platform-httpsec = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httpsec" }
+registry-platform-httputil = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httputil" }
+registry-platform-oidc = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-sdjwt = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-sdjwt" }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }
 sha2 = { version = "0.11" }

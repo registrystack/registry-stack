@@ -18,7 +18,7 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: v0.1.1
+  REGISTRY_PLATFORM_REF: v0.1.2
 
 # Default the GITHUB_TOKEN granted to each job to read-only on contents.
 # Individual jobs can widen this when they truly need write access.
