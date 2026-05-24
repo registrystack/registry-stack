@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: openfn_civil_evidence_client
+      hash_env: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+      scopes:
+        - civil_registry:evidence_verification
+  bearer_tokens:
+    - id: openfn_civil_evidence_client
+      hash_env: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+      scopes:
+        - civil_registry:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: openfn-civil-witness
+  api_base_url: http://openfn-civil-witness:8080
+  inline_batch_limit: 20
+  source_connections:
+    openfn_civil:
+      base_url: http://openfn-civil-sidecar:8080
+      allow_insecure_private_network: true
+      retry_on_5xx: false
+      token_env: OPENFN_SIDECAR_TOKEN_RAW
+  credential_profiles:
+    openfn_civil_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:openfn-civil-witness.demo.example
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_kid: did:web:openfn-civil-witness.demo.example#openfn-civil-demo-key-1
+      vct: https://demo.example/credentials/openfn-civil/date-of-birth/v1
+      validity_seconds: 86400
+      allowed_claims:
+        - date-of-birth
+      disclosure:
+        allowed:
+          - value
+          - redacted
+  claims:
+    - id: date-of-birth
+      title: Date of birth through OpenFn sidecar
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        civil:
+          connector: registry_data_api
+          connection: openfn_civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: subject_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: civil
+        field: birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openfn_civil_sd_jwt

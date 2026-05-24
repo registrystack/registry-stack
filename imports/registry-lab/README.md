@@ -14,6 +14,9 @@ OpenIMIS, MOSIP, or other product integrations.
 - `civil-witness`: civil evidence verifier on host port `4321`.
 - `social-protection-witness`: social protection verifier on host port `4322`.
 - `shared-eligibility-witness`: cross-authority civil, social, and health verifier on host port `4323`.
+- `openfn-civil-witness`: optional OpenFn sidecar-backed civil verifier on host port `4324`.
+- `openfn-civil-sidecar`: optional OpenFn adaptor sidecar on host port `4341`.
+- `openfn-mock-registry`: optional registry-like HTTP API on host port `4340`.
 - `static-metadata-publisher`: generated static metadata on host port `4331`.
 
 Inside Compose, services use DNS names like
@@ -54,6 +57,44 @@ The same path is wrapped by:
 
 ```bash
 scripts/release-check.sh
+```
+
+## Optional OpenFn Sidecar Demo
+
+The OpenFn profile proves the Registry Witness `registry_data_api` connector can
+source one-item civil lookups from an OpenFn HTTP adaptor sidecar:
+
+```bash
+uv run scripts/generate-fixtures.py
+scripts/generate-demo-secrets.py
+
+REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
+REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
+docker compose -f compose.yaml --profile openfn build openfn-mock-registry openfn-civil-sidecar openfn-civil-witness
+
+REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
+REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
+scripts/smoke-openfn.sh
+```
+
+Use the sibling `../registry-witness` checkout until the vendored Witness pin
+contains `crates/registry-witness-openfn-sidecar`.
+
+The smoke writes `output/smoke-openfn-sidecar-rda.json` and
+`output/smoke-openfn-witness-evaluation.json`. The direct Witness request is:
+
+```bash
+set -a
+. ./.env
+set +a
+
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
+  http://127.0.0.1:4324/claims/evaluate \
+  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-witness.claim-result+json"}' | jq
 ```
 
 Generated artifacts are written to `output/`. Generated static publication

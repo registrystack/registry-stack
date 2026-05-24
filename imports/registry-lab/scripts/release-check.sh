@@ -25,4 +25,9 @@ docker compose -f compose.yaml up -d
 scripts/smoke.sh
 docker compose -f compose.yaml --profile client run --rm demo-client
 
+if [[ "${REGISTRY_LAB_CHECK_OPENFN:-0}" == "1" ]]; then
+  docker compose -f compose.yaml --profile openfn build openfn-mock-registry openfn-civil-sidecar openfn-civil-witness
+  scripts/smoke-openfn.sh
+fi
+
 echo "release check OK"

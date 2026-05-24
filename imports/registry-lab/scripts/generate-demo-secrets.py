@@ -72,6 +72,7 @@ def generate_env() -> dict[str, str]:
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
+        "OPENFN_SIDECAR_TOKEN_RAW": generate_raw_key(),
     }
     for name in TOKEN_NAMES:
         raw = generate_raw_key()

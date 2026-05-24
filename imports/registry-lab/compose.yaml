@@ -88,6 +88,75 @@ services:
     volumes:
       - ./config/witness/shared-eligibility-witness.yaml:/etc/registry-witness/shared-eligibility-witness.yaml:ro
 
+  openfn-mock-registry:
+    profiles: ["openfn"]
+    image: registry-witness-openfn-sidecar:demo
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-witness-openfn-sidecar
+      additional_contexts:
+        witness_src: ${REGISTRY_WITNESS_SOURCE_DIR:-./vendor/registry-witness}
+        registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+    entrypoint: ["node", "/opt/openfn/mock-registry-server.mjs"]
+    environment:
+      MOCK_REGISTRY_HOST: 0.0.0.0
+      MOCK_REGISTRY_PORT: "8080"
+      MOCK_REGISTRY_TOKEN: demo-target-token
+    ports:
+      - "4340:8080"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          fetch("http://127.0.0.1:8080/people/person-123", { headers: { Authorization: "Bearer demo-target-token" } }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  openfn-civil-sidecar:
+    profiles: ["openfn"]
+    image: registry-witness-openfn-sidecar:demo
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-witness-openfn-sidecar
+      additional_contexts:
+        witness_src: ${REGISTRY_WITNESS_SOURCE_DIR:-./vendor/registry-witness}
+        registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+    env_file:
+      - .env
+    environment:
+      RUST_LOG: info
+      OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
+      OPENFN_HTTP_DEMO_CREDENTIAL_JSON: '{"baseUrl":"http://openfn-mock-registry:8080","apiToken":"demo-target-token"}'
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed "s/__OPENFN_SIDECAR_TOKEN_RAW__/$${OPENFN_SIDECAR_TOKEN_RAW}/g" /etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template > /tmp/openfn-civil-sidecar.yaml
+        exec registry-witness-openfn-sidecar --config /tmp/openfn-civil-sidecar.yaml
+    ports:
+      - "4341:8080"
+    volumes:
+      - ./config/openfn/openfn-civil-sidecar.yaml.template:/etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template:ro
+    depends_on:
+      openfn-mock-registry:
+        condition: service_healthy
+
+  openfn-civil-witness:
+    <<: *witness-common
+    profiles: ["openfn"]
+    command: ["--config", "/etc/registry-witness/openfn-civil-witness.yaml"]
+    environment:
+      RUST_LOG: info
+      OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
+    ports:
+      - "4324:8080"
+    volumes:
+      - ./config/witness/openfn-civil-witness.yaml:/etc/registry-witness/openfn-civil-witness.yaml:ro
+    depends_on:
+      - openfn-civil-sidecar
+
   static-metadata-publisher:
     image: python:3.12.3-slim-bookworm
     command: ["python", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/static"]

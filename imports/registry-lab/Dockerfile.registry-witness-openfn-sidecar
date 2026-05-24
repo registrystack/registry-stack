@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1-bookworm AS builder
+
+WORKDIR /workspace/registry-witness
+COPY --from=registry_platform_src Cargo.toml README.md LICENSE /workspace/registry-platform/
+COPY --from=registry_platform_src crates /workspace/registry-platform/crates
+COPY --from=witness_src . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/workspace/target \
+    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-witness-openfn-sidecar \
+    && cp /workspace/target/release/registry-witness-openfn-sidecar /usr/local/bin/registry-witness-openfn-sidecar
+
+FROM node:22-bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/openfn
+COPY --from=witness_src crates/registry-witness-openfn-sidecar/workers/package.json ./package.json
+COPY --from=witness_src crates/registry-witness-openfn-sidecar/workers/package-lock.json ./package-lock.json
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+COPY --from=builder /usr/local/bin/registry-witness-openfn-sidecar /usr/local/bin/registry-witness-openfn-sidecar
+COPY --from=witness_src crates/registry-witness-openfn-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
+COPY --from=witness_src crates/registry-witness-openfn-sidecar/examples/jobs/http-person-lookup.js ./jobs/http-person-lookup.js
+COPY --from=witness_src crates/registry-witness-openfn-sidecar/examples/mock-registry-server.mjs ./mock-registry-server.mjs
+
+USER node
+EXPOSE 8080
+
+ENTRYPOINT ["registry-witness-openfn-sidecar"]
