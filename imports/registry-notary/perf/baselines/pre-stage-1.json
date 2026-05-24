@@ -1,0 +1,55 @@
+{
+  "tag": "pre-stage-1",
+  "captured_at": "2026-05-23T23:35:27.621496+00:00",
+  "git_describe": "v0.1.1-12-g7c01088-dirty",
+  "stub_profile": "small",
+  "stub_latency_ms": 0.0,
+  "stub_jitter_ms": 0.0,
+  "duration_per_scenario": "20s",
+  "scenarios": {
+    "evaluate_extract": {
+      "p50_ms": 3.985,
+      "p99_ms": 10.309,
+      "p95_ms": 10.309,
+      "avg_ms": 4.482437327854781,
+      "requests_per_sec": 2213.5537112106495,
+      "iterations": 44294,
+      "check_pass_rate": 1,
+      "stub_peak_in_flight": 1,
+      "k6_exit_code": 0
+    },
+    "batch_evaluate_10": {
+      "p50_ms": 54.8365,
+      "p99_ms": 90.5698,
+      "p95_ms": 90.5698,
+      "avg_ms": 60.861831707317144,
+      "requests_per_sec": 81.92769880580389,
+      "iterations": 1640,
+      "check_pass_rate": 1,
+      "stub_peak_in_flight": 1,
+      "k6_exit_code": 0
+    },
+    "batch_evaluate_100": {
+      "p50_ms": 334.24350000000004,
+      "p99_ms": 374.6906,
+      "p95_ms": 374.6906,
+      "avg_ms": 335.8117166666667,
+      "requests_per_sec": 5.937178124546363,
+      "iterations": 120,
+      "check_pass_rate": 1,
+      "stub_peak_in_flight": 1,
+      "k6_exit_code": 0
+    },
+    "politeness_concurrent": {
+      "p50_ms": 34.049,
+      "p99_ms": 43.3089,
+      "p95_ms": 43.3089,
+      "avg_ms": 24.73958142414857,
+      "requests_per_sec": 80.65685746100404,
+      "iterations": 1076,
+      "check_pass_rate": 1,
+      "stub_peak_in_flight": 1,
+      "k6_exit_code": 0
+    }
+  }
+}

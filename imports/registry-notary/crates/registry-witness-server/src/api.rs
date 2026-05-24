@@ -19,6 +19,7 @@ use registry_witness_core::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::{
@@ -240,8 +241,8 @@ async fn evaluate(
     let requested_claims = request.claims.clone();
     match runtime
         .evaluate(
-            evidence,
-            state.source.as_ref(),
+            Arc::clone(&state.evidence),
+            Arc::clone(&state.source),
             &state.store,
             &principal,
             request,
@@ -291,14 +292,15 @@ async fn batch_evaluate(
     let requested_subject_count = request.subjects.len();
     match runtime
         .batch_evaluate(
-            evidence,
-            state.source.as_ref(),
+            Arc::clone(&state.evidence),
+            Arc::clone(&state.source),
             &state.store,
             &principal,
             request,
             BatchEvaluateOptions {
                 header_purpose: purpose_header(&headers),
                 idempotency_key: idempotency_key(&headers),
+                memo_observer: None,
             },
         )
         .await
@@ -468,7 +470,12 @@ async fn issue_credential(
         Ok(issuer) => issuer,
         Err(error) => return evidence_error_response(error),
     };
-    let signed = match sd_jwt::issue(profile, &issuer, &evaluation.results, holder_id) {
+    // Anchor the signed JWT `iat` to the earliest claim `issued_at` so two
+    // re-issuances of the same evaluation produce identical `iat`. When claims
+    // shared a memoized upstream read, all `issued_at` are equal and the JWT
+    // `iat` matches the disclosure timestamps.
+    let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
+    let signed = match sd_jwt::issue(profile, &issuer, &evaluation.results, holder_id, iat) {
         Ok(signed) => signed,
         Err(error) => return evidence_error_response(error),
     };
@@ -500,6 +507,18 @@ async fn issue_credential(
         Some(evaluation.results.len() as u64),
     );
     response
+}
+
+/// Pick the earliest `issued_at` from a set of claim results to use as the
+/// signed JWT `iat`. Returns `None` if there are no results or none parse,
+/// in which case the caller falls back to `OffsetDateTime::now_utc()`.
+fn earliest_issued_at(
+    results: &[registry_witness_core::ClaimResultView],
+) -> Option<OffsetDateTime> {
+    results
+        .iter()
+        .filter_map(|r| OffsetDateTime::parse(&r.issued_at, &Rfc3339).ok())
+        .min()
 }
 
 #[derive(Debug)]

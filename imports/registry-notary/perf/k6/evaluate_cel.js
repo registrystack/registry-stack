@@ -9,15 +9,16 @@
 // Compared with evaluate_extract this isolates the dependency + CEL cost.
 
 import http from 'k6/http';
-import { check, vu } from 'k6';
+import { check } from 'k6';
 import {
   commonOptions,
   baseUrl,
   bearerToken,
   bearerHeaders,
+  CLAIM_RESULT_ACCEPT,
   celClaim,
   nextSubjectId,
-  handleSummaryFor,
+  handleResultsFor,
   trackResponse,
   logScenarioStart,
 } from './lib/common.js';
@@ -41,7 +42,7 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const subjectId = nextSubjectId(vu.idInTest, vu.iterationInScenario);
+  const subjectId = nextSubjectId(__VU, __ITER);
   const payload = JSON.stringify({
     subject: { id: subjectId, id_type: 'NATIONAL_ID' },
     claims: [ctx.claim],
@@ -49,7 +50,7 @@ export default function (ctx) {
   });
 
   const res = http.post(`${baseUrl()}/claims/evaluate`, payload, {
-    headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf' }),
+    headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 
   check(res, {
@@ -69,5 +70,5 @@ export default function (ctx) {
 }
 
 export function handleSummary(data) {
-  return handleSummaryFor('evaluate_cel', data);
+  return handleResultsFor('evaluate_cel', data);
 }

@@ -26,6 +26,58 @@ impl StandaloneRegistryWitnessConfig {
         if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
             return Err(EvidenceConfigError::NoCredentialsConfigured);
         }
+        self.evidence.concurrency.validate()?;
+        for connection in self.evidence.source_connections.values() {
+            if connection.max_in_flight < 1 {
+                return Err(EvidenceConfigError::InvalidConcurrency);
+            }
+        }
+        // bulk_mode preconditions are enforced at config load so the runtime
+        // never observes a misconfigured combination. rda_in_filter requires
+        // operator attestation + cardinality=one on every binding pointing
+        // at this connection. dci_batched_search requires the dci connector.
+        for (connection_id, connection) in &self.evidence.source_connections {
+            match connection.bulk_mode {
+                BulkMode::None => {}
+                BulkMode::RdaInFilter => {
+                    if !connection.bulk_mode_lookup_unique {
+                        return Err(EvidenceConfigError::BulkModeRequiresUniqueLookup {
+                            connection: connection_id.clone(),
+                        });
+                    }
+                    for claim in &self.evidence.claims {
+                        for (binding_id, binding) in &claim.source_bindings {
+                            if binding.connection.as_deref() != Some(connection_id.as_str()) {
+                                continue;
+                            }
+                            if binding.lookup.cardinality != "one" {
+                                return Err(EvidenceConfigError::BulkModeRequiresCardinalityOne {
+                                    connection: connection_id.clone(),
+                                    claim: claim.id.clone(),
+                                    binding: binding_id.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+                BulkMode::DciBatchedSearch => {
+                    for claim in &self.evidence.claims {
+                        for (binding_id, binding) in &claim.source_bindings {
+                            if binding.connection.as_deref() != Some(connection_id.as_str()) {
+                                continue;
+                            }
+                            if binding.connector != SourceConnectorKind::Dci {
+                                return Err(EvidenceConfigError::BulkModeRequiresDciConnector {
+                                    connection: connection_id.clone(),
+                                    claim: claim.id.clone(),
+                                    binding: binding_id.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for claim in &self.evidence.claims {
             if claim.id.trim().is_empty() {
                 return Err(EvidenceConfigError::InvalidClaim);
@@ -210,6 +262,11 @@ pub enum EvidenceConfigError {
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
     MissingSourceConnection,
+    #[error(
+        "concurrency.subjects, concurrency.bindings, and source_connection.max_in_flight \
+         must all be >= 1"
+    )]
+    InvalidConcurrency,
     /// proof_of_possession = "required" only works with did:jwk because
     /// holder_jwk() only implements did:jwk resolution. Restrict
     /// allowed_did_methods to ["did:jwk"] or remove proof_of_possession.
@@ -239,6 +296,41 @@ pub enum EvidenceConfigError {
          claim; an empty list would permit any claim at issuance"
     )]
     EmptyAllowedClaims { profile: String },
+    /// `rda_in_filter` requires the operator to attest that lookup values are
+    /// unique per subject. Without this we cannot disambiguate per-subject
+    /// rows from a single collection response.
+    #[error(
+        "source_connection '{connection}': bulk_mode = rda_in_filter requires \
+         bulk_mode_lookup_unique = true (operator attestation that each \
+         subject's lookup value yields at most one upstream row)"
+    )]
+    BulkModeRequiresUniqueLookup { connection: String },
+    /// `rda_in_filter` requires every binding pointing at this connection to
+    /// have `lookup.cardinality = one`. Bindings expecting many rows per
+    /// subject cannot be batched into a single collection response.
+    #[error(
+        "source_connection '{connection}': bulk_mode = rda_in_filter requires \
+         every binding (claim '{claim}', binding '{binding}') to set \
+         lookup.cardinality = one"
+    )]
+    BulkModeRequiresCardinalityOne {
+        connection: String,
+        claim: String,
+        binding: String,
+    },
+    /// `dci_batched_search` is DCI-specific. Bindings using the RDA connector
+    /// against the same connection cannot be batched through the DCI search
+    /// envelope.
+    #[error(
+        "source_connection '{connection}': bulk_mode = dci_batched_search \
+         requires all bindings to use connector = dci (binding '{binding}' \
+         in claim '{claim}' uses a different connector)"
+    )]
+    BulkModeRequiresDciConnector {
+        connection: String,
+        claim: String,
+        binding: String,
+    },
 }
 
 /// Registry Witness configuration. Disabled by default so existing
@@ -266,6 +358,10 @@ pub struct EvidenceConfig {
     pub credential_profiles: BTreeMap<String, CredentialProfileConfig>,
     #[serde(default)]
     pub source_connections: BTreeMap<String, SourceConnectionConfig>,
+    /// Per-request fan-out caps. Setting both `subjects=1` and `bindings=1`
+    /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
+    #[serde(default)]
+    pub concurrency: ConcurrencyConfig,
 }
 
 fn default_service_id() -> String {
@@ -361,6 +457,82 @@ pub struct SourceConnectionConfig {
     pub token_env: String,
     #[serde(default)]
     pub dci: DciSourceConnectionConfig,
+    /// Process-global cap on concurrent outbound requests to this connection.
+    /// Enforced by a shared `Semaphore` so the witness cannot DOS an upstream
+    /// regardless of inbound load. Must be >= 1.
+    #[serde(default = "default_max_in_flight")]
+    pub max_in_flight: usize,
+    /// Bulk-read mode for this connection. `none` (default) keeps the wire
+    /// behavior of pre-Stage-3 deployments; `rda_in_filter` and
+    /// `dci_batched_search` are connector-specific specializations.
+    #[serde(default)]
+    pub bulk_mode: BulkMode,
+    /// Operator attestation that, for `rda_in_filter`, every subject's
+    /// lookup value yields at most one upstream row. The runtime still
+    /// guards against violations and falls back to per-subject reads if
+    /// detected.
+    #[serde(default)]
+    pub bulk_mode_lookup_unique: bool,
+    /// Upper bound on the per-call timeout for bulk `read_many` requests.
+    /// The actual budget scales with batch size up to this cap.
+    #[serde(default = "default_bulk_timeout_max_ms")]
+    pub bulk_timeout_max_ms: u64,
+}
+
+const fn default_max_in_flight() -> usize {
+    8
+}
+
+const fn default_bulk_timeout_max_ms() -> u64 {
+    30_000
+}
+
+/// Per-connection bulk-read mode. Default `None` preserves the existing wire
+/// behavior; the other variants enable connector-specific request batching.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum BulkMode {
+    #[default]
+    None,
+    RdaInFilter,
+    DciBatchedSearch,
+}
+
+/// Per-request fan-out caps. `subjects=1, bindings=1` reproduces the strictly
+/// sequential behavior that existed before Stage 1 of the scalability spec.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConcurrencyConfig {
+    #[serde(default = "default_concurrency_subjects")]
+    pub subjects: usize,
+    #[serde(default = "default_concurrency_bindings")]
+    pub bindings: usize,
+}
+
+impl Default for ConcurrencyConfig {
+    fn default() -> Self {
+        Self {
+            subjects: default_concurrency_subjects(),
+            bindings: default_concurrency_bindings(),
+        }
+    }
+}
+
+impl ConcurrencyConfig {
+    pub fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.subjects < 1 || self.bindings < 1 {
+            return Err(EvidenceConfigError::InvalidConcurrency);
+        }
+        Ok(())
+    }
+}
+
+const fn default_concurrency_subjects() -> usize {
+    16
+}
+
+const fn default_concurrency_bindings() -> usize {
+    8
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -374,6 +546,13 @@ pub struct DciSourceConnectionConfig {
     pub query_type: String,
     #[serde(default = "default_dci_records_path")]
     pub records_path: String,
+    /// JSON-pointer to the records array INSIDE one `search_response[i]`
+    /// entry, used by `read_many` for `dci_batched_search`. The default
+    /// matches the shape produced by registry-relay (`/data/reg_records`).
+    /// `read_one` continues to use `records_path` which addresses the full
+    /// envelope and is hardcoded to index 0.
+    #[serde(default = "default_dci_bulk_records_path")]
+    pub bulk_records_path: String,
     #[serde(default = "default_dci_max_results")]
     pub max_results: usize,
     #[serde(default)]
@@ -391,6 +570,7 @@ impl Default for DciSourceConnectionConfig {
             sender_id: default_dci_sender_id(),
             query_type: default_dci_query_type(),
             records_path: default_dci_records_path(),
+            bulk_records_path: default_dci_bulk_records_path(),
             max_results: default_dci_max_results(),
             registry_type: None,
             record_type: None,
@@ -413,6 +593,10 @@ fn default_dci_query_type() -> String {
 
 fn default_dci_records_path() -> String {
     "/message/search_response/0/data/reg_records".to_string()
+}
+
+fn default_dci_bulk_records_path() -> String {
+    "/data/reg_records".to_string()
 }
 
 const fn default_dci_max_results() -> usize {
@@ -913,6 +1097,312 @@ vct: https://vct.example/test
             }
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 1: concurrency config and the kill-switch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_concurrency_has_documented_defaults() {
+        let cfg = ConcurrencyConfig::default();
+        assert_eq!(cfg.subjects, 16);
+        assert_eq!(cfg.bindings, 8);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn concurrency_zero_subjects_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.concurrency = ConcurrencyConfig {
+            subjects: 0,
+            bindings: 1,
+        };
+        let err = config
+            .validate()
+            .expect_err("subjects=0 must fail validation");
+        assert!(matches!(err, EvidenceConfigError::InvalidConcurrency));
+    }
+
+    #[test]
+    fn concurrency_zero_bindings_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.concurrency = ConcurrencyConfig {
+            subjects: 1,
+            bindings: 0,
+        };
+        let err = config
+            .validate()
+            .expect_err("bindings=0 must fail validation");
+        assert!(matches!(err, EvidenceConfigError::InvalidConcurrency));
+    }
+
+    #[test]
+    fn kill_switch_subjects_one_bindings_one_validates() {
+        // The documented kill switch: concurrency.subjects=1 and
+        // concurrency.bindings=1 reproduces today's strictly-sequential
+        // behavior. Must validate successfully.
+        let mut config = minimal_config();
+        config.evidence.concurrency = ConcurrencyConfig {
+            subjects: 1,
+            bindings: 1,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn source_connection_max_in_flight_zero_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "src".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                token_env: "UPSTREAM_TOKEN".to_string(),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 0,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let err = config
+            .validate()
+            .expect_err("max_in_flight=0 must fail validation");
+        assert!(matches!(err, EvidenceConfigError::InvalidConcurrency));
+    }
+
+    #[test]
+    fn source_connection_max_in_flight_defaults_to_eight() {
+        // The YAML default for `max_in_flight` must be 8; operators do not
+        // need to set it explicitly to get the documented politeness cap.
+        let yaml = r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+"#;
+        let connection: SourceConnectionConfig =
+            serde_yml::from_str(yaml).expect("connection YAML parses");
+        assert_eq!(connection.max_in_flight, 8);
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 3: bulk_mode validation
+    // -----------------------------------------------------------------------
+
+    fn rda_binding(connection: &str, cardinality: &str) -> SourceBindingConfig {
+        SourceBindingConfig {
+            connector: SourceConnectorKind::RegistryDataApi,
+            connection: Some(connection.to_string()),
+            required_scope: None,
+            dataset: "farmer_registry".to_string(),
+            entity: "farmer".to_string(),
+            lookup: SourceLookupConfig {
+                input: "subject_id".to_string(),
+                field: "id".to_string(),
+                op: "eq".to_string(),
+                cardinality: cardinality.to_string(),
+            },
+            fields: BTreeMap::new(),
+        }
+    }
+
+    fn dci_binding(connection: &str) -> SourceBindingConfig {
+        SourceBindingConfig {
+            connector: SourceConnectorKind::Dci,
+            connection: Some(connection.to_string()),
+            required_scope: None,
+            dataset: "farmer_registry".to_string(),
+            entity: "farmer".to_string(),
+            lookup: SourceLookupConfig {
+                input: "subject_id".to_string(),
+                field: "id_type".to_string(),
+                op: "eq".to_string(),
+                cardinality: "one".to_string(),
+            },
+            fields: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn bulk_mode_default_is_none_and_round_trips() {
+        let yaml = r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+"#;
+        let connection: SourceConnectionConfig =
+            serde_yml::from_str(yaml).expect("connection YAML parses");
+        assert_eq!(connection.bulk_mode, BulkMode::None);
+        assert!(!connection.bulk_mode_lookup_unique);
+        assert_eq!(connection.bulk_timeout_max_ms, 30_000);
+    }
+
+    #[test]
+    fn bulk_mode_unknown_variant_is_rejected_at_deserialize() {
+        let yaml = r#"
+base_url: https://upstream.example
+token_env: SRC_TOKEN
+bulk_mode: unsupported_mode
+"#;
+        let err =
+            serde_yml::from_str::<SourceConnectionConfig>(yaml).expect_err("unknown variant fails");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsupported_mode") || msg.contains("variant") || msg.contains("unknown"),
+            "deserialize error mentions the bad variant: {msg}"
+        );
+    }
+
+    #[test]
+    fn rda_in_filter_without_unique_attestation_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                token_env: "SRC_TOKEN".to_string(),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                bulk_mode: BulkMode::RdaInFilter,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("a-claim");
+        claim
+            .source_bindings
+            .insert("farmer".to_string(), rda_binding("farmer_registry", "one"));
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("rda_in_filter without unique attestation must fail");
+        match &err {
+            EvidenceConfigError::BulkModeRequiresUniqueLookup { connection } => {
+                assert_eq!(connection, "farmer_registry");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn rda_in_filter_with_many_cardinality_binding_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                token_env: "SRC_TOKEN".to_string(),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                bulk_mode: BulkMode::RdaInFilter,
+                bulk_mode_lookup_unique: true,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("a-claim");
+        claim
+            .source_bindings
+            .insert("farmer".to_string(), rda_binding("farmer_registry", "many"));
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("rda_in_filter with many-cardinality binding must fail");
+        match &err {
+            EvidenceConfigError::BulkModeRequiresCardinalityOne {
+                connection,
+                claim,
+                binding,
+            } => {
+                assert_eq!(connection, "farmer_registry");
+                assert_eq!(claim, "a-claim");
+                assert_eq!(binding, "farmer");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn dci_batched_search_on_rda_binding_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                token_env: "SRC_TOKEN".to_string(),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                bulk_mode: BulkMode::DciBatchedSearch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("a-claim");
+        claim
+            .source_bindings
+            .insert("farmer".to_string(), rda_binding("registry", "one"));
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("dci_batched_search on RDA binding must fail");
+        match &err {
+            EvidenceConfigError::BulkModeRequiresDciConnector {
+                connection,
+                claim,
+                binding,
+            } => {
+                assert_eq!(connection, "registry");
+                assert_eq!(claim, "a-claim");
+                assert_eq!(binding, "farmer");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn dci_batched_search_with_dci_bindings_validates() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                token_env: "SRC_TOKEN".to_string(),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                bulk_mode: BulkMode::DciBatchedSearch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("a-claim");
+        claim
+            .source_bindings
+            .insert("record".to_string(), dci_binding("registry"));
+        config.evidence.claims = vec![claim];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn rda_in_filter_with_unique_and_cardinality_one_validates() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                token_env: "SRC_TOKEN".to_string(),
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                bulk_mode: BulkMode::RdaInFilter,
+                bulk_mode_lookup_unique: true,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("a-claim");
+        claim
+            .source_bindings
+            .insert("farmer".to_string(), rda_binding("farmer_registry", "one"));
+        config.evidence.claims = vec![claim];
+        assert!(config.validate().is_ok());
     }
 
     #[test]

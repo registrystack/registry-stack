@@ -7,7 +7,9 @@ use std::future::Future;
 use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use tokio::sync::Semaphore;
 
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
@@ -16,9 +18,9 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use registry_witness_core::sd_jwt::EvidenceIssuer;
 use registry_witness_core::{
-    DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig,
-    EvidenceError, EvidencePrincipal, SourceBindingConfig, SourceConnectorKind,
-    StandaloneRegistryWitnessConfig, SubjectRequest,
+    BulkMode, DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceConfig,
+    EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, SourceBindingConfig,
+    SourceConnectorKind, StandaloneRegistryWitnessConfig, SubjectRequest,
 };
 use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
@@ -74,17 +76,33 @@ pub enum StandaloneServerError {
 
 #[derive(Clone)]
 struct ResolvedEvidenceSourceConnection {
+    id: String,
     base_url: String,
     bearer_token: String,
     dci: DciSourceConnectionConfig,
+    /// Process-global cap on concurrent outbound calls to this connection.
+    /// Permits are acquired in `read_one` and held across retries so a flaky
+    /// upstream cannot temporarily exceed the politeness cap by quick retry.
+    semaphore: Arc<Semaphore>,
+    max_in_flight: usize,
+    /// Bulk-read mode for this connection. See `BulkMode` for the available
+    /// strategies. `None` disables bulk specialization and the runtime never
+    /// invokes the specialized `read_many` path for this connection.
+    bulk_mode: BulkMode,
+    /// Upper bound for the per-call timeout used by `read_many`.
+    bulk_timeout_max: Duration,
 }
 
 impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedEvidenceSourceConnection")
+            .field("id", &self.id)
             .field("base_url", &self.base_url)
             .field("bearer_token", &"<redacted>")
             .field("dci", &self.dci)
+            .field("max_in_flight", &self.max_in_flight)
+            .field("bulk_mode", &self.bulk_mode)
+            .field("bulk_timeout_max", &self.bulk_timeout_max)
             .finish()
     }
 }
@@ -109,9 +127,14 @@ impl HttpEvidenceSources {
             source_connections.insert(
                 id.clone(),
                 ResolvedEvidenceSourceConnection {
+                    id: id.clone(),
                     base_url: connection.base_url.clone(),
                     bearer_token,
                     dci: connection.dci.clone(),
+                    semaphore: Arc::new(Semaphore::new(connection.max_in_flight)),
+                    max_in_flight: connection.max_in_flight,
+                    bulk_mode: connection.bulk_mode,
+                    bulk_timeout_max: Duration::from_millis(connection.bulk_timeout_max_ms),
                 },
             );
         }
@@ -161,6 +184,68 @@ impl SourceReader for HttpEvidenceSources {
         })
     }
 
+    fn read_many<'a>(
+        &'a self,
+        bindings: Vec<(SourceBindingConfig, SubjectRequest)>,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+        Box::pin(async move {
+            if bindings.is_empty() {
+                return Vec::new();
+            }
+            // Determine the bulk mode from the first binding's connection.
+            // The runtime guarantees every binding in this batch shares the
+            // same (connection_id, dataset, entity, lookup_field, fields)
+            // tuple, so they share `bulk_mode` too.
+            let connection = match self.source_connection(&bindings[0].0) {
+                Some(c) => c,
+                None => {
+                    return bindings
+                        .iter()
+                        .map(|_| Err(EvidenceError::SourceUnavailable))
+                        .collect();
+                }
+            };
+            tracing::info!(
+                target: "registry_witness_server::bulk",
+                connection_id = %connection.id,
+                bulk_mode = ?connection.bulk_mode,
+                bulk_request_size = bindings.len(),
+                "bulk_request_size",
+            );
+            let outcome: Vec<Result<Value, EvidenceError>> = match connection.bulk_mode {
+                BulkMode::None => {
+                    tracing::info!(
+                        target: "registry_witness_server::bulk",
+                        connection_id = %connection.id,
+                        path = "fallback",
+                        "bulk_vs_fallback",
+                    );
+                    fallback_concurrent_read_one(self, &bindings, purpose).await
+                }
+                BulkMode::RdaInFilter => {
+                    tracing::info!(
+                        target: "registry_witness_server::bulk",
+                        connection_id = %connection.id,
+                        path = "bulk",
+                        "bulk_vs_fallback",
+                    );
+                    read_remote_registry_data_api_many(self, connection, &bindings, purpose).await
+                }
+                BulkMode::DciBatchedSearch => {
+                    tracing::info!(
+                        target: "registry_witness_server::bulk",
+                        connection_id = %connection.id,
+                        path = "bulk",
+                        "bulk_vs_fallback",
+                    );
+                    read_external_dci_http_many(self, connection, &bindings, purpose).await
+                }
+            };
+            outcome
+        })
+    }
+
     fn required_scopes(
         &self,
         evidence: &EvidenceConfig,
@@ -172,6 +257,65 @@ impl SourceReader for HttpEvidenceSources {
         scopes.dedup();
         Ok(scopes)
     }
+}
+
+/// Run `read_one` concurrently for each binding (collision-fallback path for
+/// bulk specializations and the BulkMode::None branch).
+async fn fallback_concurrent_read_one(
+    sources: &HttpEvidenceSources,
+    bindings: &[(SourceBindingConfig, SubjectRequest)],
+    purpose: &str,
+) -> Vec<Result<Value, EvidenceError>> {
+    use std::task::{Context, Poll};
+
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+    #[allow(clippy::type_complexity)]
+    let mut futures: Vec<
+        Option<Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + '_>>>,
+    > = bindings
+        .iter()
+        .map(|(binding, subject)| Some(sources.read_one(binding, subject, purpose)))
+        .collect();
+    let mut results: Vec<Option<Result<Value, EvidenceError>>> =
+        (0..futures.len()).map(|_| None).collect();
+    std::future::poll_fn(move |cx: &mut Context<'_>| {
+        let mut all_done = true;
+        for (idx, slot) in futures.iter_mut().enumerate() {
+            if let Some(fut) = slot.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(value) => {
+                        results[idx] = Some(value);
+                        *slot = None;
+                    }
+                    Poll::Pending => {
+                        all_done = false;
+                    }
+                }
+            }
+        }
+        if all_done {
+            Poll::Ready(std::mem::take(&mut results))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+    .into_iter()
+    .map(|slot| slot.expect("every slot populated"))
+    .collect()
+}
+
+/// Batch-aware timeout budget: scale the per-call timeout with N up to a
+/// configured cap. Default RDA/DCI single-call timeout is
+/// `SOURCE_REQUEST_TIMEOUT` (10s); a 100-subject bulk call gets 10 * ceil(100/10)
+/// = 100s, capped at `bulk_timeout_max` (30s by default).
+fn bulk_timeout(connection: &ResolvedEvidenceSourceConnection, batch_size: usize) -> Duration {
+    let base = SOURCE_REQUEST_TIMEOUT.as_millis() as u64;
+    let factor = batch_size.div_ceil(10).max(1) as u64;
+    let scaled = Duration::from_millis(base.saturating_mul(factor));
+    scaled.min(connection.bulk_timeout_max)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -207,11 +351,16 @@ impl EvidenceIssuerResolver for EvidenceIssuerRegistry {
     }
 }
 
+/// Bench-internal: exposed only so `benches/auth_bench.rs` can construct
+/// fixtures. Production code goes through `resolve_credentials`, which reads
+/// the token from `EvidenceCredentialConfig::token_env`. Not part of the
+/// public API; do not depend on this shape from outside the workspace.
+#[doc(hidden)]
 #[derive(Clone)]
-struct ResolvedCredential {
-    id: String,
-    token: String,
-    scopes: Vec<String>,
+pub struct ResolvedCredential {
+    pub id: String,
+    pub token: String,
+    pub scopes: Vec<String>,
 }
 
 impl std::fmt::Debug for ResolvedCredential {
@@ -402,7 +551,10 @@ fn resolve_credentials(
         .collect()
 }
 
-fn find_credential<'a>(
+/// Bench-internal: exposed only for `benches/auth_bench.rs`. Not part of the
+/// public API.
+#[doc(hidden)]
+pub fn find_credential<'a>(
     credentials: &'a [ResolvedCredential],
     token: &str,
 ) -> Option<&'a ResolvedCredential> {
@@ -422,7 +574,10 @@ fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
 }
 
-fn bearer_auth_token(raw: &str) -> Option<&str> {
+/// Bench-internal: exposed only for `benches/auth_bench.rs`. Not part of the
+/// public API.
+#[doc(hidden)]
+pub fn bearer_auth_token(raw: &str) -> Option<&str> {
     let mut parts = raw.split_whitespace();
     let scheme = parts.next()?;
     let token = parts.next()?;
@@ -467,25 +622,22 @@ async fn read_remote_registry_data_api_one(
     let lookup_value = lookup_value(binding, subject)?;
     let fields = projected_source_fields_with_lookup(binding, &lookup_field);
     let url = registry_data_api_url(&connection.base_url, binding)?;
-    let response = sources
-        .client
-        .get(url)
-        .timeout(sources.request_timeout)
-        .bearer_auth(&connection.bearer_token)
-        .header("accept", "application/json")
-        .header("data-purpose", purpose)
-        .query(&[
-            ("limit", "2".to_string()),
-            ("fields", fields.join(",")),
-            (lookup_field.as_str(), value_query_string(&lookup_value)?),
-        ])
-        .send()
-        .await
-        .map_err(|_| EvidenceError::SourceUnavailable)?;
-    if !response.status().is_success() {
-        return Err(EvidenceError::SourceUnavailable);
-    }
-    let body = read_source_json(response).await?;
+    let query_pairs = vec![
+        ("limit".to_string(), "2".to_string()),
+        ("fields".to_string(), fields.join(",")),
+        (lookup_field.clone(), value_query_string(&lookup_value)?),
+    ];
+    let body = send_request_with_retry(sources, connection, "rda", move || {
+        sources
+            .client
+            .get(url.clone())
+            .timeout(sources.request_timeout)
+            .bearer_auth(&connection.bearer_token)
+            .header("accept", "application/json")
+            .header("data-purpose", purpose)
+            .query(&query_pairs)
+    })
+    .await?;
     let rows = body
         .get("data")
         .and_then(Value::as_array)
@@ -510,22 +662,18 @@ async fn read_external_dci_http_one(
     let lookup_value = lookup_value(binding, subject)?;
     let url = source_url(&connection.base_url, &connection.dci.search_path)?;
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
-    let response = sources
-        .client
-        .post(url)
-        .timeout(sources.request_timeout)
-        .bearer_auth(&connection.bearer_token)
-        .header("accept", "application/json")
-        .header("content-type", "application/json")
-        .header("data-purpose", purpose)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|_| EvidenceError::SourceUnavailable)?;
-    if !response.status().is_success() {
-        return Err(EvidenceError::SourceUnavailable);
-    }
-    let body = read_source_json(response).await?;
+    let body = send_request_with_retry(sources, connection, "dci", move || {
+        sources
+            .client
+            .post(url.clone())
+            .timeout(sources.request_timeout)
+            .bearer_auth(&connection.bearer_token)
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header("data-purpose", purpose)
+            .json(&request_body)
+    })
+    .await?;
     let rows = get_json_path(&body, &connection.dci.records_path)
         .and_then(Value::as_array)
         .ok_or(EvidenceError::SourceUnavailable)?;
@@ -534,6 +682,463 @@ async fn read_external_dci_http_one(
         1 => project_dci_record(connection, binding, &lookup_value, &rows[0]),
         _ => Err(EvidenceError::SourceAmbiguous),
     }
+}
+
+/// RDA bulk specialization: one collection GET with an `.in` filter carrying
+/// all subjects' lookup values, then split rows back to subjects by lookup
+/// field equality.
+///
+/// If the response exceeds N rows we fall back to per-subject `read_one` for
+/// the whole batch (a `bulk_collision_fallback` tracing event flags the
+/// misconfiguration). This preserves correctness when an operator has
+/// attested uniqueness but the upstream data violates it.
+async fn read_remote_registry_data_api_many(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    bindings: &[(SourceBindingConfig, SubjectRequest)],
+    purpose: &str,
+) -> Vec<Result<Value, EvidenceError>> {
+    let first_binding = &bindings[0].0;
+    let lookup_field = first_binding.lookup.field.clone();
+    let fields = projected_source_fields_with_lookup(first_binding, &lookup_field);
+    let url = match registry_data_api_url(&connection.base_url, first_binding) {
+        Ok(url) => url,
+        Err(_) => {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect()
+        }
+    };
+    // Compute per-subject lookup values up front. If any subject's lookup
+    // cannot be derived (e.g. unsupported op), surface that error for that
+    // position and exclude it from the bulk request.
+    let mut lookup_values: Vec<Result<String, EvidenceError>> = Vec::with_capacity(bindings.len());
+    for (binding, subject) in bindings {
+        let lv = lookup_value(binding, subject)
+            .and_then(|v| value_query_string(&v).map_err(|_| EvidenceError::InvalidRequest));
+        lookup_values.push(lv);
+    }
+    // Build the in-filter CSV from the successfully-derived lookup values.
+    let in_values: Vec<String> = lookup_values
+        .iter()
+        .filter_map(|r| r.as_ref().ok().cloned())
+        .collect();
+    if in_values.is_empty() {
+        // Every position carries an Err already; preserve it. We can't run
+        // a bulk request against an empty `.in` set.
+        return lookup_values
+            .into_iter()
+            .map(|r| match r {
+                Err(invalid) => Err(invalid),
+                Ok(_) => Err(EvidenceError::InvalidRequest),
+            })
+            .collect();
+    }
+    let n = in_values.len();
+    // Relay parses `<field>.in=v1,v2,...` (see registry-relay/src/api/entity.rs
+    // parse_filter_name). We replicate that wire format rather than the
+    // value-prefix variant.
+    let filter_name = format!("{}.in", lookup_field);
+    let query_pairs = vec![
+        ("limit".to_string(), (n + 1).to_string()),
+        ("fields".to_string(), fields.join(",")),
+        (filter_name, in_values.join(",")),
+    ];
+    let timeout_budget = bulk_timeout(connection, n);
+    let body_result = send_request_with_retry(sources, connection, "rda_bulk", move || {
+        sources
+            .client
+            .get(url.clone())
+            .timeout(timeout_budget)
+            .bearer_auth(&connection.bearer_token)
+            .header("accept", "application/json")
+            .header("data-purpose", purpose)
+            .query(&query_pairs)
+    })
+    .await;
+    let body = match body_result {
+        Ok(body) => body,
+        Err(e) => {
+            // Bulk call failed: log the underlying error once and surface
+            // SourceUnavailable for every subject with a valid lookup;
+            // preserve per-subject InvalidRequest for lookups that could
+            // not be derived. We can't fan the same EvidenceError value
+            // out (it isn't Clone), but the bulk failure mode is always
+            // wire-level for connection scope, so SourceUnavailable is
+            // the right discriminant for each affected position.
+            tracing::warn!(
+                target: "registry_witness_server::bulk",
+                connection_id = %connection.id,
+                error = %e,
+                "rda_bulk_request_failed",
+            );
+            return lookup_values
+                .into_iter()
+                .map(|r| match r {
+                    Err(invalid) => Err(invalid),
+                    Ok(_) => Err(EvidenceError::SourceUnavailable),
+                })
+                .collect();
+        }
+    };
+    let rows: Vec<Value> = body
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Collision fallback: more rows than subjects means the upstream data
+    // violates the operator's uniqueness attestation. Switch to per-subject
+    // reads so each subject can still surface its own ambiguity error.
+    if rows.len() > n {
+        tracing::warn!(
+            target: "registry_witness_server::bulk",
+            connection_id = %connection.id,
+            batch_size = n,
+            row_count = rows.len(),
+            "bulk_collision_fallback",
+        );
+        return fallback_concurrent_read_one(sources, bindings, purpose).await;
+    }
+    // Bucket rows by lookup field equality against each subject's lookup
+    // value. The `data[i][lookup_field]` is compared against the string
+    // form of the subject's lookup value.
+    let mut results: Vec<Result<Value, EvidenceError>> = Vec::with_capacity(bindings.len());
+    for lv_result in lookup_values {
+        match lv_result {
+            Err(e) => results.push(Err(e)),
+            Ok(lv) => {
+                let mut matching: Vec<&Value> = rows
+                    .iter()
+                    .filter(|row| {
+                        row.get(&lookup_field)
+                            .map(|val| value_query_string(val).ok().as_deref() == Some(lv.as_str()))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                let outcome = match matching.len() {
+                    0 => Err(EvidenceError::SourceNotFound),
+                    1 => Ok(matching.remove(0).clone()),
+                    _ => Err(EvidenceError::SourceAmbiguous),
+                };
+                results.push(outcome);
+            }
+        }
+    }
+    results
+}
+
+/// DCI bulk specialization: one POST with N `search_request` entries, each
+/// carrying a unique `reference_id`. Responses are matched back to subjects
+/// by `reference_id`; per-entry projection runs through
+/// `dci.bulk_records_path` (defaults to `/data/reg_records` inside one
+/// `search_response[i]` entry).
+async fn read_external_dci_http_many(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    bindings: &[(SourceBindingConfig, SubjectRequest)],
+    purpose: &str,
+) -> Vec<Result<Value, EvidenceError>> {
+    let url = match source_url(&connection.base_url, &connection.dci.search_path) {
+        Ok(url) => url,
+        Err(_) => {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect()
+        }
+    };
+    // Resolve per-subject lookup values; subjects with bad lookups produce
+    // an Err in the corresponding position and are excluded from the wire
+    // request.
+    let mut lookup_values: Vec<Result<Value, EvidenceError>> = Vec::with_capacity(bindings.len());
+    for (binding, subject) in bindings {
+        lookup_values.push(lookup_value(binding, subject));
+    }
+    // Build (reference_id, search_criteria) entries for each valid subject.
+    let mut entry_ids: Vec<Option<String>> = Vec::with_capacity(bindings.len());
+    let mut search_request: Vec<Value> = Vec::new();
+    let n_valid = lookup_values.iter().filter(|r| r.is_ok()).count();
+    let timestamp = match OffsetDateTime::now_utc().format(&Rfc3339) {
+        Ok(ts) => ts,
+        Err(_) => {
+            return bindings
+                .iter()
+                .map(|_| Err(EvidenceError::SourceUnavailable))
+                .collect()
+        }
+    };
+    for (idx, lv_result) in lookup_values.iter().enumerate() {
+        match lv_result {
+            Err(_) => entry_ids.push(None),
+            Ok(lv) => {
+                let binding = &bindings[idx].0;
+                let reference_id = Ulid::new().to_string();
+                let criteria = match dci_search_criteria(&connection.dci, binding, lv, n_valid) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        entry_ids.push(None);
+                        continue;
+                    }
+                };
+                search_request.push(json!({
+                    "reference_id": reference_id,
+                    "timestamp": timestamp,
+                    "search_criteria": criteria,
+                }));
+                entry_ids.push(Some(reference_id));
+            }
+        }
+    }
+    if search_request.is_empty() {
+        return lookup_values
+            .into_iter()
+            .map(|r| match r {
+                Err(e) => Err(e),
+                Ok(_) => Err(EvidenceError::SourceUnavailable),
+            })
+            .collect();
+    }
+    let message_id = Ulid::new().to_string();
+    let request_body = json!({
+        "header": {
+            "message_id": message_id,
+            "message_ts": timestamp,
+            "action": "search",
+            "sender_id": connection.dci.sender_id,
+            "total_count": search_request.len(),
+            "is_msg_encrypted": false,
+        },
+        "message": {
+            "transaction_id": message_id,
+            "search_request": search_request,
+        },
+    });
+    let timeout_budget = bulk_timeout(connection, n_valid);
+    let body_result = send_request_with_retry(sources, connection, "dci_bulk", move || {
+        sources
+            .client
+            .post(url.clone())
+            .timeout(timeout_budget)
+            .bearer_auth(&connection.bearer_token)
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header("data-purpose", purpose)
+            .json(&request_body)
+    })
+    .await;
+    let body = match body_result {
+        Ok(body) => body,
+        Err(e) => {
+            tracing::warn!(
+                target: "registry_witness_server::bulk",
+                connection_id = %connection.id,
+                error = %e,
+                "dci_bulk_request_failed",
+            );
+            return lookup_values
+                .into_iter()
+                .map(|r| match r {
+                    Err(invalid) => Err(invalid),
+                    Ok(_) => Err(EvidenceError::SourceUnavailable),
+                })
+                .collect();
+        }
+    };
+    // Walk message.search_response[] and index by reference_id.
+    let response_entries = body
+        .pointer("/message/search_response")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut by_ref: BTreeMap<String, &Value> = BTreeMap::new();
+    for entry in &response_entries {
+        if let Some(rid) = entry.get("reference_id").and_then(Value::as_str) {
+            by_ref.insert(rid.to_string(), entry);
+        }
+    }
+    let mut results: Vec<Result<Value, EvidenceError>> = Vec::with_capacity(bindings.len());
+    for (idx, lv_result) in lookup_values.into_iter().enumerate() {
+        match (lv_result, entry_ids.get(idx).cloned().flatten()) {
+            (Err(e), _) => results.push(Err(e)),
+            (Ok(_), None) => results.push(Err(EvidenceError::SourceUnavailable)),
+            (Ok(lookup_value_for_subject), Some(reference_id)) => {
+                let binding = &bindings[idx].0;
+                let entry = match by_ref.get(reference_id.as_str()) {
+                    Some(e) => *e,
+                    None => {
+                        results.push(Err(EvidenceError::SourceNotFound));
+                        continue;
+                    }
+                };
+                let rows = get_json_path(entry, &connection.dci.bulk_records_path)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let outcome = match rows.len() {
+                    0 => Err(EvidenceError::SourceNotFound),
+                    1 => {
+                        project_dci_record(connection, binding, &lookup_value_for_subject, &rows[0])
+                    }
+                    _ => Err(EvidenceError::SourceAmbiguous),
+                };
+                results.push(outcome);
+            }
+        }
+    }
+    results
+}
+
+/// Shared helper for building one DCI `search_criteria` object. Extracted
+/// from `dci_search_request_body` so the batched path can produce N entries
+/// without duplicating the query-shape logic. `page_size` is set to
+/// `max(dci.max_results, batch_size)` so the upstream does not truncate
+/// N-subject responses.
+fn dci_search_criteria(
+    dci: &DciSourceConnectionConfig,
+    binding: &SourceBindingConfig,
+    lookup_value: &Value,
+    batch_size: usize,
+) -> Result<Value, EvidenceError> {
+    let query = match dci.query_type.as_str() {
+        "idtype-value" => json!({
+            "type": binding.lookup.field,
+            "value": lookup_value,
+        }),
+        "expression" => json!({
+            binding.lookup.field.clone(): {
+                binding.lookup.op.clone(): lookup_value,
+            },
+        }),
+        "predicate" => json!([{
+            "expression1": {
+                "attribute_name": binding.lookup.field,
+                "operator": binding.lookup.op,
+                "attribute_value": lookup_value,
+            },
+        }]),
+        _ => return Err(EvidenceError::InvalidRequest),
+    };
+    let mut search_criteria = Map::from_iter([
+        (
+            "query_type".to_string(),
+            Value::String(dci.query_type.clone()),
+        ),
+        ("query".to_string(), query),
+        (
+            "pagination".to_string(),
+            json!({ "page_size": dci.max_results.max(batch_size) }),
+        ),
+    ]);
+    if let Some(registry_type) = &dci.registry_type {
+        search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
+    }
+    if let Some(record_type) = &dci.record_type {
+        search_criteria.insert(
+            "reg_record_type".to_string(),
+            Value::String(record_type.clone()),
+        );
+    }
+    Ok(Value::Object(search_criteria))
+}
+
+/// Send an outbound HTTP request to a `source_connection`, holding the
+/// connection's process-global semaphore permit for the full duration of the
+/// call including any retries. Single retry on transport error or HTTP 5xx,
+/// with 50-150ms jittered backoff. Reads the response body into a JSON value
+/// on success; treats >=400 responses as `SourceUnavailable`.
+async fn send_request_with_retry(
+    _sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    connector: &'static str,
+    build_request: impl Fn() -> reqwest::RequestBuilder,
+) -> Result<Value, EvidenceError> {
+    let permit = connection
+        .semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| EvidenceError::SourceUnavailable)?;
+    let available = connection.semaphore.available_permits();
+    let in_flight = connection.max_in_flight.saturating_sub(available);
+    tracing::info!(
+        target: "registry_witness_server::outbound",
+        connection_id = %connection.id,
+        connector = connector,
+        in_flight = in_flight,
+        max_in_flight = connection.max_in_flight,
+        "outbound permit acquired",
+    );
+    let start = Instant::now();
+    let mut attempt: u32 = 0;
+    let max_attempts: u32 = 2; // 1 initial + 1 retry
+    let result = loop {
+        attempt += 1;
+        let outcome = build_request().send().await;
+        let retryable = match &outcome {
+            Err(_) => true,
+            Ok(response) => response.status().is_server_error(),
+        };
+        if attempt < max_attempts && retryable {
+            tracing::info!(
+                target: "registry_witness_server::outbound",
+                connection_id = %connection.id,
+                connector = connector,
+                attempt = attempt,
+                "retry_attempted",
+            );
+            tokio::time::sleep(retry_backoff()).await;
+            continue;
+        }
+        match outcome {
+            Err(_) => break Err(EvidenceError::SourceUnavailable),
+            Ok(response) => {
+                if !response.status().is_success() {
+                    break Err(EvidenceError::SourceUnavailable);
+                }
+                break read_source_json(response).await;
+            }
+        }
+    };
+    let latency_ms = start.elapsed().as_millis() as u64;
+    let status = match &result {
+        Ok(_) => "ok",
+        Err(_) => "err",
+    };
+    tracing::debug!(
+        target: "registry_witness_server::outbound",
+        connection_id = %connection.id,
+        connector = connector,
+        latency_ms = latency_ms,
+        attempts = attempt,
+        outcome = status,
+        "outbound completed",
+    );
+    drop(permit);
+    let available_after = connection.semaphore.available_permits();
+    let in_flight_after = connection.max_in_flight.saturating_sub(available_after);
+    tracing::info!(
+        target: "registry_witness_server::outbound",
+        connection_id = %connection.id,
+        connector = connector,
+        in_flight = in_flight_after,
+        max_in_flight = connection.max_in_flight,
+        "outbound permit released",
+    );
+    result
+}
+
+/// Backoff duration for the single permitted retry. Uniform jitter in
+/// [50ms, 150ms) to spread retries across concurrent failures.
+fn retry_backoff() -> Duration {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    // Hash to a value in [0, 100ms) then offset by 50ms.
+    let jitter_ms = (nanos as u64) % 100;
+    Duration::from_millis(50 + jitter_ms)
 }
 
 async fn read_source_json(response: reqwest::Response) -> Result<Value, EvidenceError> {
@@ -961,9 +1566,14 @@ mod tests {
             scopes: vec!["farmer_registry:evidence_verification".to_string()],
         };
         let connection = ResolvedEvidenceSourceConnection {
+            id: "registry".to_string(),
             base_url: "https://registry.example.test".to_string(),
             bearer_token: "source-token".to_string(),
             dci: DciSourceConnectionConfig::default(),
+            semaphore: Arc::new(Semaphore::new(8)),
+            max_in_flight: 8,
+            bulk_mode: BulkMode::None,
+            bulk_timeout_max: Duration::from_secs(30),
         };
 
         let debug = format!("{credential:?} {connection:?}");
@@ -1060,6 +1670,10 @@ mod tests {
                         .to_string(),
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
+                    max_in_flight: 8,
+                    bulk_mode: registry_witness_core::BulkMode::None,
+                    bulk_mode_lookup_unique: false,
+                    bulk_timeout_max_ms: 30_000,
                 },
             )]),
             ..EvidenceConfig::default()
@@ -1103,6 +1717,10 @@ mod tests {
                     base_url: "https://registry.example.test".to_string(),
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
                     dci: DciSourceConnectionConfig::default(),
+                    max_in_flight: 8,
+                    bulk_mode: registry_witness_core::BulkMode::None,
+                    bulk_mode_lookup_unique: false,
+                    bulk_timeout_max_ms: 30_000,
                 },
             )]),
             ..EvidenceConfig::default()

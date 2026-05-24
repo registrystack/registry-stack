@@ -2,8 +2,8 @@
 
 Scaffolding for local, CI, and scheduled performance runs against the
 `registry-witness` HTTP service. Goals: measure authenticated claim evaluation
-latency, CEL-derived claim cost, batch evaluate throughput, and the catalog
-read path on small (1k subjects) and medium (100k subjects) synthetic datasets.
+latency, CEL-derived claim cost, batch evaluate throughput, peak outbound
+concurrency, and the correctness of the politeness cap (Stage 1 DoD).
 
 Witness's claim evaluation calls an upstream source over HTTP (DCI). To
 isolate witness latency from any specific upstream, this harness ships a small
@@ -33,7 +33,11 @@ tracked separately.
    cargo build --release -p registry-witness-bin
    ```
 
+   The binary is written to `target/release/registry-witness`.
+
 3. Install `k6` (see [k6 docs](https://k6.io/docs/get-started/installation/)).
+   k6 v2.x is supported. Note: k6 v2 removed the `vu` export from `k6`; all
+   scenarios in this harness use the globals `__VU` and `__ITER` instead.
 
 ---
 
@@ -81,6 +85,36 @@ The stub is intentionally minimal: it implements the response shape witness
 parses (`message.search_response[0].data.reg_records`) and nothing else. It
 is not a registry-relay replacement.
 
+### Stub flags
+
+| Flag                  | Default | Description                                                       |
+|-----------------------|---------|-------------------------------------------------------------------|
+| `--profile`           | medium  | Subject pool size (`small`=1k, `medium`=100k).                    |
+| `--bind`              | 127.0.0.1:14256 | Listen address.                                         |
+| `--median-latency-ms` | 0       | Artificial median latency added to every search response (ms).    |
+| `--jitter-ms`         | 0       | Uniform random jitter applied around the median (ms). The actual delay is `median + U(-jitter, +jitter)`, floored at 0. |
+
+Example with simulated upstream latency:
+
+```bash
+uv run perf/stub/source_stub.py --profile small \
+    --median-latency-ms 100 --jitter-ms 20
+```
+
+### Stub observability endpoints
+
+| Endpoint              | Method | Description                                                         |
+|-----------------------|--------|---------------------------------------------------------------------|
+| `GET  /_stats`        | GET    | Returns `{"in_flight": N, "peak_in_flight": M, "total": T}`.       |
+| `POST /_stats/reset`  | POST   | Resets all counters to 0. Returns `{"reset": true}`.               |
+| `GET  /health`        | GET    | Returns `{"status": "ok"}`.                                         |
+
+`peak_in_flight` is the assertion surface for Stage 1 DoD. After the
+process-global semaphore lands, two concurrent `batch_evaluate` calls against
+the same `source_connection` must observe combined inbound concurrency at the
+stub capped at `max_in_flight`. The `/_stats` endpoint makes this observable
+without a proxy or network tap.
+
 ---
 
 ## Start the witness server
@@ -89,7 +123,7 @@ With [1Password CLI](https://developer.1password.com/docs/cli/):
 
 ```bash
 op run --env-file=target/perf/perf.env -- \
-  target/release/registry-witness-bin --config perf/config/medium.yaml
+  target/release/registry-witness --config perf/config/medium.yaml
 ```
 
 Without 1Password (source the env file directly):
@@ -98,7 +132,7 @@ Without 1Password (source the env file directly):
 set -a
 . target/perf/perf.env
 set +a
-target/release/registry-witness-bin --config perf/config/medium.yaml
+target/release/registry-witness --config perf/config/medium.yaml
 ```
 
 Witness has no `/ready` endpoint. Probe with an authenticated `GET /claims`
@@ -114,15 +148,75 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ## Run k6 scenarios
 
+All scenarios require `Accept: application/vnd.registry-witness.claim-result+json`
+for evaluate and batch-evaluate requests. The scenarios set this automatically.
+Generic `Accept: application/json` returns 406.
+
 ```bash
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/evaluate_extract.js
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/evaluate_cel.js
-op run --env-file=target/perf/perf.env -- k6 run perf/k6/batch_evaluate.js
+op run --env-file=target/perf/perf.env -- k6 run perf/k6/batch_evaluate_10.js
+op run --env-file=target/perf/perf.env -- k6 run perf/k6/batch_evaluate_100.js
+op run --env-file=target/perf/perf.env -- k6 run perf/k6/batch_evaluate_1000.js
+op run --env-file=target/perf/perf.env -- k6 run perf/k6/politeness_concurrent.js
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/list_claims.js
 op run --env-file=target/perf/perf.env -- k6 run perf/k6/auth_deny.js
 ```
 
-Or source the env file and call `k6 run` directly.
+Or source the env file and call `k6 run` directly. Each scenario writes its
+result to `target/perf/results/<scenario>.json` so baselines can be diffed.
+
+---
+
+## Capture a performance baseline
+
+`perf/scripts/capture_baseline.py` starts the stub and witness, runs the full
+scenario set, and writes a composite JSON to `perf/baselines/<tag>.json`. This
+is the recommended way to produce a baseline for regression comparisons.
+
+```bash
+uv run perf/scripts/capture_baseline.py \
+  --env-file target/perf/perf.env \
+  --tag pre-stage-1 \
+  --stub-profile small \
+  --duration 20s \
+  --skip-1000
+```
+
+To capture a baseline with simulated latency (better politeness numbers):
+
+```bash
+uv run perf/scripts/capture_baseline.py \
+  --env-file target/perf/perf.env \
+  --tag pre-stage-1-100ms-stub \
+  --stub-profile small \
+  --stub-latency-ms 100 \
+  --stub-jitter-ms 10 \
+  --duration 30s \
+  --skip-1000
+```
+
+The baseline file records:
+
+- `p50_ms` / `p95_ms` (p99 if available) per scenario
+- `requests_per_sec` and `iterations` per scenario
+- `stub_peak_in_flight`: peak concurrent in-flight requests at the stub
+- `k6_exit_code`: 0 = all thresholds passed
+
+Baselines live in `perf/baselines/`. Committed baselines represent the state
+at a specific git commit. Do not commit baselines produced by a dirty tree for
+regression purposes; use the git tag from `--tag` to identify the snapshot.
+
+### Reading baselines for Stage 1 assertions
+
+After Stage 1 lands, re-capture the baseline and assert:
+
+- `stub_peak_in_flight <= max_in_flight` (default 8) for all batch scenarios.
+- `batch_evaluate_100.p50_ms < pre_stage_1.batch_evaluate_100.p50_ms / concurrency.subjects`
+  approximately (i.e., concurrency actually reduces wall-clock time).
+
+The `/_stats/reset` call in `capture_baseline.py` ensures each scenario's
+`stub_peak_in_flight` is independent.
 
 ---
 
@@ -138,6 +232,11 @@ exactly one record per request, so witness memory is flat across profiles.
 The profile influences only how widely k6 spreads its subject ids and so how
 much cache locality the stub can exploit.
 
+**Important**: set `REGISTRY_WITNESS_SUBJECT_COUNT` to match the stub profile.
+The default env file sets it to 100000 (medium). For `--profile small`, pass
+`-e REGISTRY_WITNESS_SUBJECT_COUNT=1000` to k6 or use `capture_baseline.py`
+which does this automatically.
+
 There is no `large` profile. Witness does not scan datasets: per-request work
 is bounded by claim depth, source latency, and signing cost. Adding a 1M-row
 tier would not exercise additional witness behavior.
@@ -146,16 +245,25 @@ tier would not exercise additional witness behavior.
 
 ## Scenarios
 
-| Scenario              | Endpoint                        | What it measures                                                  |
-|-----------------------|---------------------------------|-------------------------------------------------------------------|
-| `evaluate_extract`    | POST /claims/evaluate           | Hot path: auth, single source fetch, extract rule, audit emit     |
-| `evaluate_cel`        | POST /claims/evaluate           | CEL-derived claim (`farmer-under-4ha` depends on `farmed-land-size`) |
-| `batch_evaluate`      | POST /claims/batch-evaluate     | Bulk path; subjects per batch governed by `REGISTRY_WITNESS_BATCH_SIZE` |
-| `list_claims`         | GET /claims                     | Catalog read, no source IO                                        |
-| `auth_deny`           | mixed                           | 401 (missing/invalid token) and 403 (deny-path identity) only     |
+| Scenario                  | Endpoint                        | What it measures                                                          |
+|---------------------------|---------------------------------|---------------------------------------------------------------------------|
+| `evaluate_extract`        | POST /claims/evaluate           | Hot path: auth, single source fetch, extract rule, audit emit             |
+| `evaluate_cel`            | POST /claims/evaluate           | CEL-derived claim (`farmer-under-4ha` depends on `farmed-land-size`)      |
+| `batch_evaluate_10`       | POST /claims/batch-evaluate     | Batch of 10 subjects; baseline for Stage 1 concurrency comparison         |
+| `batch_evaluate_100`      | POST /claims/batch-evaluate     | Batch of 100 subjects (equals `inline_batch_limit`); Stage 1 key scenario |
+| `batch_evaluate_1000`     | POST /claims/batch-evaluate     | Batch of 1000 subjects; expects 413 today (see Known Gaps)                |
+| `batch_evaluate`          | POST /claims/batch-evaluate     | Dynamic batch size via `REGISTRY_WITNESS_BATCH_SIZE`                      |
+| `politeness_concurrent`   | POST /claims/batch-evaluate     | Two concurrent batch calls; asserts `stub_peak_in_flight` (Stage 1 DoD)  |
+| `list_claims`             | GET /claims                     | Catalog read, no source IO                                                |
+| `auth_deny`               | mixed                           | 401 (missing/invalid token) and 403 (deny-path identity) only             |
 
 All scenarios pass `data-purpose: perf` so witness's purpose-required check is
 satisfied.
+
+Each scenario's `handleSummary` writes to two locations:
+
+- `target/perf/reports/<scenario>-<timestamp>.{json,txt}` (timestamped archive)
+- `target/perf/results/<scenario>.{json,txt}` (stable path for baseline script)
 
 ---
 
@@ -173,6 +281,27 @@ uv run perf/scripts/run_scenario.py \
   --stub-profile medium \
   --env-file target/perf/perf.env
 ```
+
+Note: `run_scenario.py` does not pass stub latency flags. Use
+`capture_baseline.py` for baseline runs with latency simulation.
+
+---
+
+## Python test suite
+
+`perf/tests/` contains pytest tests for the stub itself. Run with:
+
+```bash
+cd perf && uv run pytest tests/test_stub_inflight.py -v
+```
+
+Tests cover:
+
+- `/_stats` shape: `in_flight`, `peak_in_flight`, `total` present and integer.
+- `POST /_stats/reset` zeros all counters.
+- Concurrent requests: `peak_in_flight >= N` for N concurrent requests (with
+  `--median-latency-ms` ensuring they overlap in time).
+- Latency simulation: single request takes at least `median - jitter` ms.
 
 ---
 
@@ -196,3 +325,34 @@ uv run perf/scripts/run_scenario.py \
 
 All bearer + API-key tokens are raw strings (subject to constant-time
 comparison server-side); witness does not use hashed fingerprints.
+
+---
+
+## Known Gaps
+
+1. **`batch_evaluate_1000` returns 413**: the perf config sets
+   `inline_batch_limit: 100` and each claim's `max_subjects: 100`. Sending
+   1000 subjects in one request hits the limit check before any source IO.
+   The scenario is included as a forward reference for when the limit is
+   relaxed. Expect 413 responses and a note in the result file.
+
+2. **Credential issuance (`POST /credentials/issue`) not covered**: requires a
+   holder DID and a fresh Ed25519 proof of possession per request. k6 does not
+   have an Ed25519 library out of the box. Tracked separately.
+
+3. **`run_scenario.py` uses the wrong binary name**: the script defaults to
+   `target/release/registry-witness-bin` but the actual binary produced by
+   `cargo build --release -p registry-witness-bin` is
+   `target/release/registry-witness`. Pass `--witness-binary
+   target/release/registry-witness` when using `run_scenario.py`.
+
+4. **`stub_peak_in_flight = 1` at zero stub latency**: when the stub has no
+   added latency, it responds fast enough that sequential witness fan-out
+   completes each request before the next one is dispatched. The counter still
+   records correctly; you just need `--stub-latency-ms >= 50` to observe
+   meaningful overlap. The `pre-stage-1-100ms-stub.json` baseline uses 100ms
+   latency and is the recommended reference for Stage 1 politeness assertions.
+
+5. **No hot-reload of stub config**: changing `--median-latency-ms` requires a
+   full restart of the stub. Baselines that mix latency settings need separate
+   stub processes (which `capture_baseline.py` handles automatically).

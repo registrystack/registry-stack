@@ -34,3 +34,18 @@ utoipa.workspace = true
 axum-test = { version = "20" }
 serde_yml.workspace = true
 tempfile = { version = "3" }
+# Criterion drives the microbenchmarks under `benches/`. The benches are
+# manually invoked via `cargo bench`; CI smoke-checks `cargo bench --no-run`.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "auth_bench"
+harness = false
+
+[[bench]]
+name = "sd_jwt_bench"
+harness = false
+
+[[bench]]
+name = "json_bench"
+harness = false

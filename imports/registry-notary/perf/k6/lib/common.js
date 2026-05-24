@@ -90,11 +90,15 @@ export function invalidToken() {
   return token;
 }
 
+// Accept header for claim evaluate / batch-evaluate responses.
+// Witness requires this specific media type; generic application/json returns 406.
+export const CLAIM_RESULT_ACCEPT = 'application/vnd.registry-witness.claim-result+json';
+
 export function bearerHeaders(token, opts) {
   const o = opts || {};
   const headers = {
     'Authorization': `Bearer ${token}`,
-    'Accept': 'application/json',
+    'Accept': o.accept || 'application/json',
   };
   if (o.json) {
     headers['Content-Type'] = 'application/json';
@@ -104,6 +108,7 @@ export function bearerHeaders(token, opts) {
   }
   return headers;
 }
+
 
 export function apiKeyHeaders(token, opts) {
   const o = opts || {};
@@ -264,6 +269,21 @@ export function handleSummaryFor(scenarioName, data) {
   return {
     [`${base}.json`]: JSON.stringify(data, null, 2),
     [`${base}.txt`]: textSummary(data, { indent: ' ', enableColors: false }),
+  };
+}
+
+// Write a stable (non-timestamped) result file consumed by the baseline
+// capture script. Each scenario overwrites its own slot so the latest run is
+// always available at a predictable path.
+export function handleResultsFor(scenarioName, data) {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0] + 'Z';
+  const base = `target/perf/reports/${scenarioName}-${ts}`;
+  const stable = `target/perf/results/${scenarioName}`;
+  return {
+    [`${base}.json`]: JSON.stringify(data, null, 2),
+    [`${base}.txt`]: textSummary(data, { indent: ' ', enableColors: false }),
+    [`${stable}.json`]: JSON.stringify(data, null, 2),
+    [`${stable}.txt`]: textSummary(data, { indent: ' ', enableColors: false }),
   };
 }
 

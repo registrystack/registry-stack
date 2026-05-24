@@ -6,16 +6,17 @@
 // directly comparable to evaluate_extract.
 
 import http from 'k6/http';
-import { check, vu } from 'k6';
+import { check } from 'k6';
 import {
   commonOptions,
   baseUrl,
   bearerToken,
   bearerHeaders,
+  CLAIM_RESULT_ACCEPT,
   extractClaim,
   batchSize,
   nextSubjectId,
-  handleSummaryFor,
+  handleResultsFor,
   trackResponse,
   logScenarioStart,
 } from './lib/common.js';
@@ -51,14 +52,14 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const subjects = buildSubjects(vu.idInTest, vu.iterationInScenario, ctx.size);
+  const subjects = buildSubjects(__VU, __ITER, ctx.size);
   const payload = JSON.stringify({
     subjects,
     claims: [ctx.claim],
   });
 
   const res = http.post(`${baseUrl()}/claims/batch-evaluate`, payload, {
-    headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf' }),
+    headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 
   check(res, {
@@ -78,5 +79,5 @@ export default function (ctx) {
 }
 
 export function handleSummary(data) {
-  return handleSummaryFor('batch_evaluate', data);
+  return handleResultsFor('batch_evaluate', data);
 }

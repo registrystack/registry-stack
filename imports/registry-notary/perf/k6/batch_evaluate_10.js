@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Scenario: single-claim extract evaluation.
+// Scenario: batch_evaluate with a fixed batch size of 10 subjects.
 //
-// POST /claims/evaluate with the extract claim (default: date-of-birth).
-// Hot path: auth, single DCI POST to the stub, extract rule, audit emit.
+// Uses the extract claim. Batch size is hardcoded to 10 so each of the
+// three batch scenarios (10/100/1000) produces independent baselines that
+// can be compared directly without re-running with different env vars.
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -19,17 +20,30 @@ import {
   logScenarioStart,
 } from './lib/common.js';
 
+const BATCH_SIZE = 10;
+
 export const options = commonOptions({
-  scenario: 'evaluate_extract',
-  defaultVus: 10,
+  scenario: 'batch_evaluate_10',
+  defaultVus: 5,
   defaultDuration: '30s',
 });
+
+function buildSubjects(vuId, iter) {
+  const subjects = new Array(BATCH_SIZE);
+  for (let i = 0; i < BATCH_SIZE; i++) {
+    subjects[i] = {
+      id: nextSubjectId(vuId, iter * BATCH_SIZE + i),
+      id_type: 'NATIONAL_ID',
+    };
+  }
+  return subjects;
+}
 
 export function setup() {
   const token = bearerToken();
   const claim = extractClaim();
   logScenarioStart({
-    scenario: 'evaluate_extract',
+    scenario: 'batch_evaluate_10',
     expectedResponse: '200',
     vus: options.vus,
     duration: options.duration,
@@ -38,23 +52,20 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const subjectId = nextSubjectId(__VU, __ITER);
-  const payload = JSON.stringify({
-    subject: { id: subjectId, id_type: 'NATIONAL_ID' },
-    claims: [ctx.claim],
-  });
+  const subjects = buildSubjects(__VU, __ITER);
+  const payload = JSON.stringify({ subjects, claims: [ctx.claim] });
 
-  const res = http.post(`${baseUrl()}/claims/evaluate`, payload, {
+  const res = http.post(`${baseUrl()}/claims/batch-evaluate`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'has results array': (r) => {
+    'items count matches': (r) => {
       if (!r.body) return false;
       try {
         const parsed = JSON.parse(r.body);
-        return Array.isArray(parsed.results) && parsed.results.length === 1;
+        return Array.isArray(parsed.items) && parsed.items.length === BATCH_SIZE;
       } catch (_) {
         return false;
       }
@@ -65,5 +76,5 @@ export default function (ctx) {
 }
 
 export function handleSummary(data) {
-  return handleResultsFor('evaluate_extract', data);
+  return handleResultsFor('batch_evaluate_10', data);
 }

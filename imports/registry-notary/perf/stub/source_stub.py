@@ -46,19 +46,30 @@ the envelope is left empty / minimal.
 Auth: Authorization: Bearer <EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN> is
 required on every search path. Any other header returns 401.
 
+Latency simulation:
+    --median-latency-ms N  Artificial delay added to every search response (default: 0).
+    --jitter-ms J          Uniform random jitter in [-J, +J] ms around the median (default: 0).
+
+Observability:
+    GET  /_stats        Returns {"in_flight": N, "peak_in_flight": M, "total": T}.
+    POST /_stats/reset  Resets in_flight, peak_in_flight, and total to 0.
+
 Run:
     uv run perf/stub/source_stub.py --profile medium
-    uv run perf/stub/source_stub.py --profile small --bind 127.0.0.1:14256
+    uv run perf/stub/source_stub.py --profile small --bind 127.0.0.1:14256 \\
+        --median-latency-ms 100 --jitter-ms 20
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import logging
 import os
+import random
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from aiohttp import web
 
@@ -83,11 +94,58 @@ LAND_SIZE_MIN_DECILITRES = 0  # 0.0 ha
 LAND_SIZE_MAX_DECILITRES = 80  # 8.0 ha
 
 
+@dataclass
+class InFlightCounter:
+    """Thread-safe (asyncio) in-flight request counter.
+
+    Tracks:
+      in_flight       -- requests currently being processed.
+      peak_in_flight  -- highest in_flight value observed since last reset.
+      total           -- cumulative requests started since last reset.
+
+    Used by Stage 1 DoD as the assertion surface: "two concurrent
+    batch_evaluate calls observe combined inbound concurrency capped at
+    max_in_flight."
+    """
+
+    _in_flight: int = field(default=0, init=False)
+    _peak_in_flight: int = field(default=0, init=False)
+    _total: int = field(default=0, init=False)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+
+    async def enter(self) -> None:
+        async with self._lock:
+            self._in_flight += 1
+            self._total += 1
+            if self._in_flight > self._peak_in_flight:
+                self._peak_in_flight = self._in_flight
+
+    async def exit(self) -> None:
+        async with self._lock:
+            self._in_flight -= 1
+
+    async def snapshot(self) -> dict:
+        async with self._lock:
+            return {
+                "in_flight": self._in_flight,
+                "peak_in_flight": self._peak_in_flight,
+                "total": self._total,
+            }
+
+    async def reset(self) -> None:
+        async with self._lock:
+            self._in_flight = 0
+            self._peak_in_flight = 0
+            self._total = 0
+
+
 @dataclass(frozen=True)
 class StubConfig:
     bind: str
     subject_count: int
     bearer_token: str
+    median_latency_ms: float
+    jitter_ms: float
 
 
 def _digest(*parts: str) -> bytes:
@@ -121,7 +179,7 @@ def is_known_subject(subject_id: str, subject_count: int) -> bool:
     """Subject ids match the deterministic pool `subj-{0..N-1}` (zero-padded)."""
     if not subject_id.startswith(SUBJECT_PREFIX):
         return False
-    suffix = subject_id[len(SUBJECT_PREFIX) :]
+    suffix = subject_id[len(SUBJECT_PREFIX):]
     if not suffix.isdigit():
         return False
     return 0 <= int(suffix) < subject_count
@@ -170,32 +228,57 @@ async def _require_bearer(request: web.Request) -> str | None:
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         return "missing bearer"
-    if header[len("Bearer ") :] != expected:
+    if header[len("Bearer "):] != expected:
         return "invalid bearer"
     return None
+
+
+def _simulate_delay(config: StubConfig) -> float:
+    """Return a latency in seconds to sleep, derived from median and jitter."""
+    if config.median_latency_ms <= 0 and config.jitter_ms <= 0:
+        return 0.0
+    jitter = 0.0
+    if config.jitter_ms > 0:
+        jitter = random.uniform(-config.jitter_ms, config.jitter_ms)
+    delay_ms = max(0.0, config.median_latency_ms + jitter)
+    return delay_ms / 1000.0
 
 
 async def _handle_search(
     request: web.Request, value_field: str, value_fn
 ) -> web.Response:
     config: StubConfig = request.app["config"]
+    counter: InFlightCounter = request.app["counter"]
+
     err = await _require_bearer(request)
     if err is not None:
         return _unauthorized(err)
+
+    await counter.enter()
     try:
-        payload = await request.json()
-    except ValueError:
-        return web.json_response({"code": "invalid_request"}, status=400)
-    subject_id = _extract_subject_id(payload)
-    if subject_id is None:
-        return web.json_response({"code": "invalid_request"}, status=400)
-    if not is_known_subject(subject_id, config.subject_count):
-        return web.json_response(_envelope([]))
-    record = {
-        "NATIONAL_ID": subject_id,
-        value_field: value_fn(subject_id),
-    }
-    return web.json_response(_envelope([record]))
+        try:
+            payload = await request.json()
+        except ValueError:
+            return web.json_response({"code": "invalid_request"}, status=400)
+
+        subject_id = _extract_subject_id(payload)
+        if subject_id is None:
+            return web.json_response({"code": "invalid_request"}, status=400)
+
+        delay = _simulate_delay(config)
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+        if not is_known_subject(subject_id, config.subject_count):
+            return web.json_response(_envelope([]))
+
+        record = {
+            "NATIONAL_ID": subject_id,
+            value_field: value_fn(subject_id),
+        }
+        return web.json_response(_envelope([record]))
+    finally:
+        await counter.exit()
 
 
 async def handle_crvs(request: web.Request) -> web.Response:
@@ -210,12 +293,28 @@ async def handle_health(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_stats(request: web.Request) -> web.Response:
+    """GET /_stats -- return current in-flight and peak counters."""
+    counter: InFlightCounter = request.app["counter"]
+    return web.json_response(await counter.snapshot())
+
+
+async def handle_stats_reset(request: web.Request) -> web.Response:
+    """POST /_stats/reset -- zero all counters."""
+    counter: InFlightCounter = request.app["counter"]
+    await counter.reset()
+    return web.json_response({"reset": True})
+
+
 def build_app(config: StubConfig) -> web.Application:
     app = web.Application()
     app["config"] = config
+    app["counter"] = InFlightCounter()
     app.router.add_post("/dci/crvs/registry/sync/search", handle_crvs)
     app.router.add_post("/dci/fr/registry/sync/search", handle_farmer)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/_stats", handle_stats)
+    app.router.add_post("/_stats/reset", handle_stats_reset)
     return app
 
 
@@ -247,6 +346,26 @@ def main() -> None:
         default="EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN",
         help="Env var holding the bearer token the stub will accept.",
     )
+    parser.add_argument(
+        "--median-latency-ms",
+        type=float,
+        default=0.0,
+        metavar="MS",
+        help=(
+            "Artificial median latency added to every search response in milliseconds "
+            "(default: 0, i.e. no added delay). Combines with --jitter-ms."
+        ),
+    )
+    parser.add_argument(
+        "--jitter-ms",
+        type=float,
+        default=0.0,
+        metavar="MS",
+        help=(
+            "Uniform random jitter applied around --median-latency-ms in milliseconds "
+            "(default: 0). The actual delay is median + U(-jitter, +jitter), floored at 0."
+        ),
+    )
     args = parser.parse_args()
 
     token = os.environ.get(args.token_env, "")
@@ -262,6 +381,8 @@ def main() -> None:
         bind=args.bind,
         subject_count=PROFILES[args.profile],
         bearer_token=token,
+        median_latency_ms=args.median_latency_ms,
+        jitter_ms=args.jitter_ms,
     )
 
     logging.basicConfig(
@@ -269,13 +390,16 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     LOGGER.info(
-        "starting source stub: bind=%s profile=%s subjects=%d",
+        "starting source stub: bind=%s profile=%s subjects=%d "
+        "median_latency_ms=%.1f jitter_ms=%.1f",
         args.bind,
         args.profile,
         config.subject_count,
+        config.median_latency_ms,
+        config.jitter_ms,
     )
 
-    web.run_app(build_app(config), host=host, port=port, print=lambda _msg: None)
+    web.run_app(build_app(config), host=host, port=port, print=lambda _: None)
 
 
 if __name__ == "__main__":

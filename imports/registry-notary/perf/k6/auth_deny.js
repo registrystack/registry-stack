@@ -19,7 +19,7 @@ import {
   apiKeyHeaders,
   invalidToken,
   noScopeToken,
-  handleSummaryFor,
+  handleResultsFor,
   trackExpectedDenyResponse,
   logScenarioStart,
 } from './lib/common.js';
@@ -85,5 +85,5 @@ export default function (ctx) {
 }
 
 export function handleSummary(data) {
-  return handleSummaryFor('auth_deny', data);
+  return handleResultsFor('auth_deny', data);
 }

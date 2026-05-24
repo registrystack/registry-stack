@@ -1,12 +1,176 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Witness evaluation runtime.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 #[cfg(feature = "registry-witness-cel")]
 use std::time::Duration;
+
+// ---------------------------------------------------------------------------
+// Per-batch fetch memoization (Stage 2)
+// ---------------------------------------------------------------------------
+
+/// One cached upstream result: the raw JSON record and the timestamp at which
+/// the upstream call was observed. The timestamp propagates to `iat` so that
+/// subjects sharing a memoized read produce credentials with identical iat.
+#[derive(Clone)]
+struct MemoEntry {
+    value: Value,
+    observed_at: OffsetDateTime,
+}
+
+/// A slot in the memoization table.
+///
+/// `Pending` means one task is already in-flight for this key. The semaphore
+/// starts at 0 permits; waiters `acquire` and block until the owner signals.
+/// The owner signals by calling `add_permits(usize::MAX / 2)` on completion
+/// (whether success or error). After signalling, the owner either upgrades the
+/// slot to `Ready` (success) or removes it (error). Waiters then re-check the
+/// table under the lock to see which outcome occurred.
+///
+/// This implements "single-flight": at most one in-flight upstream request per
+/// cache key at any point in time, across all concurrent claim tasks within the
+/// same `batch_evaluate` call.
+enum MemoSlot {
+    Pending(Arc<tokio::sync::Semaphore>),
+    Ready(MemoEntry),
+}
+
+/// Memoization state scoped to a single `batch_evaluate` call.
+///
+/// `slots`: SHA-256 hex of the canonical upstream request to a slot that is
+/// either in-flight (`Pending`) or complete (`Ready`). Errors are never left
+/// in the table; a transient failure must not poison other subjects.
+///
+/// `hits` / `misses`: process-cheap counters bumped from the memo coordination
+/// paths so tests and operators can observe dedup effectiveness without
+/// scraping the `tracing` stream (whose format is not part of the contract).
+pub struct MemoState {
+    slots: Mutex<HashMap<String, MemoSlot>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+impl MemoState {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            slots: Mutex::new(HashMap::new()),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, MemoSlot>> {
+        self.slots.lock().expect("fetch_memo mutex is not poisoned")
+    }
+
+    fn record_hit(&self) {
+        self.hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_miss(&self) {
+        self.misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn misses(&self) -> u64 {
+        self.misses.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for MemoState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for MemoState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoState")
+            .field("hits", &self.hits.load(Ordering::Relaxed))
+            .field("misses", &self.misses.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+type FetchMemo = Arc<MemoState>;
+
+/// Result of loading a single source binding: the row value plus, when the
+/// value came from the batch memo, the original observation timestamp so the
+/// caller can pin `iat` to the upstream read time.
+type BindingFetchResult = Result<(Value, Option<OffsetDateTime>), EvidenceError>;
+
+/// Build the canonical cache key for one (binding, purpose) pair.
+///
+/// We include every field that determines the upstream wire request:
+/// - connection_id (which upstream server)
+/// - connector kind (RDA vs DCI)
+/// - dataset, entity (RDA path segments / DCI search domain)
+/// - lookup_field, lookup_op, lookup_value (the query predicate)
+/// - projected_fields_set (sorted; determines which columns the upstream returns)
+/// - purpose (sent as a request header; may affect server-side filtering)
+/// - DCI-specific: query_type, registry_type, record_type, field_paths (sorted)
+///
+/// We serialize to a `serde_json::Value` with sorted keys, then SHA-256 the
+/// bytes. This is collision-resistant enough for a single-request lifetime.
+fn cache_key_for_binding(
+    binding: &registry_witness_core::SourceBindingConfig,
+    lookup_value: &Value,
+    purpose: &str,
+) -> String {
+    use registry_witness_core::SourceConnectorKind;
+    let connector = match binding.connector {
+        SourceConnectorKind::RegistryDataApi => "rda",
+        SourceConnectorKind::Dci => "dci",
+    };
+    // Sorted projected fields set (what the upstream is asked to return).
+    let mut fields: Vec<String> = binding.fields.values().map(|f| f.field.clone()).collect();
+    fields.sort();
+    fields.dedup();
+    // Include the lookup field itself since it is always projected.
+    if !fields.contains(&binding.lookup.field) {
+        fields.push(binding.lookup.field.clone());
+        fields.sort();
+    }
+
+    // For DCI we include the connection-level query shaping fields, because
+    // two connections with identical binding fields but different query_type
+    // will produce distinct wire requests. These are carried by the connection
+    // config, not the binding, so callers that need DCI separation must use
+    // different connection IDs.
+    //
+    // The connection_id itself is already included below and differentiates
+    // two connections. Including it is sufficient; we do not need to
+    // separately hash the DCI sub-fields because the connection_id is a
+    // stable proxy for the full connection config. This is by design: the
+    // cache key only needs to cover what varies per-call, and two calls to
+    // the same connection with the same binding/lookup/purpose are identical.
+
+    let key_obj = serde_json::json!({
+        "connection_id": binding.connection,
+        "connector": connector,
+        "dataset": binding.dataset,
+        "entity": binding.entity,
+        "lookup_field": binding.lookup.field,
+        "lookup_op": binding.lookup.op,
+        "lookup_value": lookup_value,
+        "projected_fields": fields,
+        "purpose": purpose,
+    });
+    // Serialize with sorted keys (serde_json sorts object keys by default) and
+    // hash the bytes.
+    let bytes = serde_json::to_vec(&key_obj).unwrap_or_default();
+    sha256_hex(&bytes)
+}
 
 #[cfg(feature = "registry-witness-cel")]
 use cel_mapper_core::{
@@ -14,7 +178,7 @@ use cel_mapper_core::{
 };
 use registry_witness_core::{
     BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
-    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, CelBindingsConfig,
+    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BulkMode, CelBindingsConfig,
     ClaimDefinition, ClaimProvenance, ClaimResultView, CredentialProfileConfig,
     DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceError,
     EvidenceFormat, EvidencePrincipal, RenderRequest, RuleConfig, SourceBindingConfig,
@@ -25,8 +189,9 @@ use serde_json::Map;
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-#[cfg(feature = "registry-witness-cel")]
+use tokio::sync::Semaphore;
 use tokio::task;
+use tokio::task::JoinSet;
 #[cfg(feature = "registry-witness-cel")]
 use tokio::time::timeout;
 use ulid::Ulid;
@@ -50,11 +215,221 @@ pub trait SourceReader: Send + Sync {
         purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>>;
 
+    /// Read N bindings as a single batch.
+    ///
+    /// The default implementation runs `read_one` concurrently with a bounded
+    /// `JoinSet`, preserving the input order. Implementations may override
+    /// this to take advantage of bulk-capable upstreams (e.g. RDA `in:`
+    /// filter, DCI batched search).
+    ///
+    /// Results are returned in the same order as the input bindings. A
+    /// per-subject failure is surfaced as `Err(EvidenceError)` for that
+    /// position only; sibling subjects in the same batch are not affected.
+    #[allow(clippy::type_complexity)]
+    fn read_many<'a>(
+        &'a self,
+        bindings: Vec<(SourceBindingConfig, SubjectRequest)>,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+        Box::pin(default_read_many(self, bindings, purpose))
+    }
+
     fn required_scopes(
         &self,
         evidence: &EvidenceConfig,
         claim_id: &str,
     ) -> Result<Vec<String>, EvidenceError>;
+}
+
+/// Group bindings across (subject, claim, binding) by their bulk-eligible
+/// connection, dispatch one `SourceReader::read_many` per group, and seed
+/// the per-batch memo with the resulting values.
+///
+/// This runs at the start of `batch_evaluate`. Bindings on connections with
+/// `bulk_mode = None` are skipped here and handled by the per-subject
+/// evaluation path as before (the trait default `read_many` is never called
+/// for them).
+///
+/// Errors from `read_many` are NOT inserted into the memo (matching Stage 2
+/// error-not-cached semantics). A subject whose bulk read failed will fall
+/// through to a fresh per-subject `read_one` call.
+async fn prefetch_bulk_bindings(
+    evidence: Arc<EvidenceConfig>,
+    source: Arc<dyn SourceReader>,
+    subjects: &[SubjectRequest],
+    requested_claims: &[String],
+    purpose: &str,
+    fetch_memo: FetchMemo,
+) {
+    if subjects.is_empty() || requested_claims.is_empty() {
+        return;
+    }
+    // Closure of claims (requested + transitive deps) so we cover bindings
+    // that only show up under depends_on edges.
+    let levels = match build_claim_levels(&evidence, requested_claims) {
+        Ok(levels) => levels,
+        Err(_) => return,
+    };
+    let claim_closure: Vec<String> = levels.into_iter().flatten().collect();
+
+    // Group key: (connection_id, dataset, entity, lookup_field, projected_fields_sorted).
+    // Two bindings in different claims that share this tuple AND target the
+    // same connection produce identical wire requests and may be batched
+    // together. The lookup_op and purpose are uniform within a batch.
+    type GroupKey = (String, String, String, String, Vec<String>);
+    let mut groups: BTreeMap<GroupKey, Vec<(SourceBindingConfig, SubjectRequest, String)>> =
+        BTreeMap::new();
+    for claim_id in &claim_closure {
+        let Ok(claim) = find_claim(&evidence, claim_id) else {
+            continue;
+        };
+        for binding in claim.source_bindings.values() {
+            let Some(connection_id) = binding.connection.as_deref() else {
+                continue;
+            };
+            let Some(connection_cfg) = evidence.source_connections.get(connection_id) else {
+                continue;
+            };
+            if connection_cfg.bulk_mode == BulkMode::None {
+                continue;
+            }
+            let mut fields: Vec<String> =
+                binding.fields.values().map(|f| f.field.clone()).collect();
+            if !fields.iter().any(|f| f == &binding.lookup.field) {
+                fields.push(binding.lookup.field.clone());
+            }
+            fields.sort();
+            fields.dedup();
+            let group_key: GroupKey = (
+                connection_id.to_string(),
+                binding.dataset.clone(),
+                binding.entity.clone(),
+                binding.lookup.field.clone(),
+                fields,
+            );
+            for subject in subjects {
+                // Compute the per-subject cache key and ensure the same
+                // (binding, subject) pair is not enqueued twice (e.g. two
+                // claims sharing a binding).
+                let lookup_value = match binding_lookup_value(binding, subject) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let cache_key = cache_key_for_binding(binding, &lookup_value, purpose);
+                let bucket = groups.entry(group_key.clone()).or_default();
+                if bucket.iter().any(|(_, _, k)| k == &cache_key) {
+                    continue;
+                }
+                bucket.push((binding.clone(), subject.clone(), cache_key));
+            }
+        }
+    }
+    if groups.is_empty() {
+        return;
+    }
+    // Dispatch each group as one read_many call. Keep results in input order
+    // so cache_keys line up. Run groups sequentially to avoid contending on
+    // the same connection's outbound semaphore across groups; within a group
+    // the connector decides whether to issue one bulk request or fall back
+    // to N concurrent read_one calls.
+    for (group_key, entries) in groups {
+        let pairs: Vec<(SourceBindingConfig, SubjectRequest)> = entries
+            .iter()
+            .map(|(b, s, _)| (b.clone(), s.clone()))
+            .collect();
+        tracing::info!(
+            target: "registry_witness_server::bulk",
+            connection_id = %group_key.0,
+            dataset = %group_key.1,
+            entity = %group_key.2,
+            batch_size = pairs.len(),
+            "bulk_prefetch_dispatch",
+        );
+        let results = source.read_many(pairs, purpose).await;
+        let observed_at = OffsetDateTime::now_utc();
+        for (entry, result) in entries.into_iter().zip(results) {
+            let (_, _, cache_key) = entry;
+            match result {
+                Ok(value) => {
+                    let mut guard = fetch_memo.lock();
+                    // Insert Ready directly. No Pending phase is needed: the
+                    // memo is empty at this point and subject tasks have not
+                    // started yet, so there is nothing to coordinate with.
+                    guard.insert(cache_key, MemoSlot::Ready(MemoEntry { value, observed_at }));
+                }
+                Err(_) => {
+                    // Errors are not cached. The per-subject task will retry
+                    // through its own read_one path on cache miss.
+                }
+            }
+        }
+    }
+}
+
+/// Default `read_many` implementation: drive `read_one` futures concurrently
+/// and collect results in input order.
+///
+/// We use a manual poll loop instead of `JoinSet` because the trait borrows
+/// `&self` (`JoinSet::spawn` would require `'static`). Each `read_one` future
+/// already acquires the per-connection outbound semaphore, so the effective
+/// outbound fan-out is naturally bounded; we do not add a second cap here.
+async fn default_read_many<'a, R: SourceReader + ?Sized>(
+    reader: &'a R,
+    bindings: Vec<(SourceBindingConfig, SubjectRequest)>,
+    purpose: &'a str,
+) -> Vec<Result<Value, EvidenceError>> {
+    use std::task::{Context, Poll};
+
+    if bindings.is_empty() {
+        return Vec::new();
+    }
+
+    // Each `read_one` future borrows from a `(binding, subject)` entry in
+    // `owned`, so the futures cannot outlive `owned`. We allocate the
+    // futures with a local (shorter-than-'a) lifetime and rely on
+    // higher-rank reborrowing through `reader.read_one(...)`.
+    let owned: Vec<(SourceBindingConfig, SubjectRequest)> = bindings;
+    let len = owned.len();
+    // Local lifetime trick: `slice` is &'b owned with 'b shorter than 'a.
+    let slice: &[(SourceBindingConfig, SubjectRequest)] = owned.as_slice();
+    #[allow(clippy::type_complexity)]
+    let mut futures: Vec<
+        Option<Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + '_>>>,
+    > = Vec::with_capacity(len);
+    for (binding, subject) in slice.iter() {
+        futures.push(Some(reader.read_one(binding, subject, purpose)));
+    }
+    let mut results: Vec<Option<Result<Value, EvidenceError>>> = (0..len).map(|_| None).collect();
+
+    std::future::poll_fn(|cx: &mut Context<'_>| {
+        let mut all_done = true;
+        for (idx, slot) in futures.iter_mut().enumerate() {
+            if let Some(fut) = slot.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(value) => {
+                        results[idx] = Some(value);
+                        *slot = None;
+                    }
+                    Poll::Pending => {
+                        all_done = false;
+                    }
+                }
+            }
+        }
+        if all_done {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+    // Drop futures before `owned` to satisfy borrow-checker drop order.
+    drop(futures);
+    drop(owned);
+    results
+        .into_iter()
+        .map(|slot| slot.expect("every slot populated when poll_fn returns Ready"))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -93,15 +468,30 @@ pub struct EvidenceStore {
 pub struct BatchEvaluateOptions<'a> {
     pub header_purpose: Option<&'a str>,
     pub idempotency_key: Option<&'a str>,
+    /// Test-only observer: when set, the runtime uses this `MemoState` as the
+    /// per-batch memo instead of constructing its own, letting tests read
+    /// `hits()` / `misses()` after the call returns. Production callers leave
+    /// this `None`.
+    pub memo_observer: Option<&'a Arc<MemoState>>,
 }
 
-struct ClaimEvaluationContext<'a, R: SourceReader + ?Sized> {
-    evidence: &'a EvidenceConfig,
-    source: &'a R,
-    subject: &'a SubjectRequest,
-    purpose: &'a str,
-    evaluation_id: &'a str,
+struct ClaimEvaluationContext {
+    evidence: Arc<EvidenceConfig>,
+    source: Arc<dyn SourceReader>,
+    subject: SubjectRequest,
+    purpose: String,
+    evaluation_id: String,
     now: OffsetDateTime,
+    // Per-request cap on parallel source bindings. Acquired only inside
+    // `load_sources`, never at the claim level: sibling claims fan out
+    // without permits (pure CPU), and only the actual upstream-bound
+    // bindings consume permits. Acquiring at both levels with one shared
+    // semaphore would deadlock when `bindings <= concurrent claims`.
+    binding_concurrency: Arc<Semaphore>,
+    // Per-batch memoization table. Present only during `batch_evaluate`;
+    // `None` for single-subject `evaluate` calls where there are no sibling
+    // subjects to share results with.
+    fetch_memo: Option<FetchMemo>,
 }
 
 #[cfg_attr(not(feature = "registry-witness-cel"), allow(dead_code))]
@@ -293,10 +683,10 @@ impl RegistryWitnessRuntime {
         formats(evidence)
     }
 
-    pub async fn evaluate<R: SourceReader + ?Sized>(
+    pub async fn evaluate(
         &self,
-        evidence: &EvidenceConfig,
-        source: &R,
+        evidence: Arc<EvidenceConfig>,
+        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: EvaluateRequest,
@@ -306,7 +696,7 @@ impl RegistryWitnessRuntime {
             return Err(EvidenceError::InvalidRequest);
         }
         for claim_id in &request.claims {
-            require_claim_access(evidence, source, principal, claim_id)?;
+            require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
         }
         let purpose = resolve_purpose(header_purpose, request.purpose.as_deref())?;
         let format = request
@@ -314,30 +704,31 @@ impl RegistryWitnessRuntime {
             .clone()
             .unwrap_or_else(|| FORMAT_CLAIM_RESULT_JSON.to_string());
         for claim_id in &request.claims {
-            require_claim_format(evidence, claim_id, &format)?;
+            require_claim_format(&evidence, claim_id, &format)?;
         }
-        let disclosure = requested_disclosure(evidence, &request.claims, &request.disclosure)?;
+        let disclosure = requested_disclosure(&evidence, &request.claims, &request.disclosure)?;
         let request_hash = hash_json(&request)?;
         let evaluation_id = Ulid::new().to_string();
         let now = OffsetDateTime::now_utc();
-        let mut internal = BTreeMap::new();
-        for claim_id in &request.claims {
-            let ctx = ClaimEvaluationContext {
-                evidence,
-                source,
-                subject: &request.subject,
-                purpose: &purpose,
-                evaluation_id: &evaluation_id,
+        let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
+        let internal = self
+            .evaluate_claims_dag(
+                Arc::clone(&evidence),
+                Arc::clone(&source),
+                request.subject.clone(),
+                purpose.clone(),
+                evaluation_id.clone(),
                 now,
-            };
-            let result = self.evaluate_claim(&ctx, claim_id, &mut internal).await?;
-            internal.insert(claim_id.clone(), result);
-        }
+                request.claims.clone(),
+                binding_concurrency,
+                None, // single-subject evaluate: no cross-subject memo needed
+            )
+            .await?;
         let views = request
             .claims
             .iter()
             .map(|claim_id| {
-                let claim = find_claim(evidence, claim_id)?;
+                let claim = find_claim(&evidence, claim_id)?;
                 let result = internal
                     .get(claim_id)
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
@@ -359,10 +750,10 @@ impl RegistryWitnessRuntime {
         Ok(views)
     }
 
-    pub async fn batch_evaluate<R: SourceReader + ?Sized>(
+    pub async fn batch_evaluate(
         &self,
-        evidence: &EvidenceConfig,
-        source: &R,
+        evidence: Arc<EvidenceConfig>,
+        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: BatchEvaluateRequest,
@@ -371,7 +762,7 @@ impl RegistryWitnessRuntime {
         if request.claims.is_empty() || request.subjects.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
-        let max_subjects = max_batch_subjects(evidence, &request.claims)?;
+        let max_subjects = max_batch_subjects(&evidence, &request.claims)?;
         if request.subjects.len() > max_subjects {
             return Err(EvidenceError::BatchTooLarge);
         }
@@ -391,29 +782,125 @@ impl RegistryWitnessRuntime {
         let purpose = resolve_purpose(options.header_purpose, request.purpose.as_deref())?;
         let batch_id = Ulid::new().to_string();
         let claims = request.claims.clone();
-        let mut items = Vec::with_capacity(request.subjects.len());
-        let mut succeeded = 0;
-        let mut failed = 0;
+        let subject_count = request.subjects.len();
+        let mut items: Vec<Option<BatchItemResponse>> = (0..subject_count).map(|_| None).collect();
+        let mut succeeded = 0usize;
+        let mut failed = 0usize;
+        let subject_concurrency = Arc::new(Semaphore::new(evidence.concurrency.subjects));
+        // Per-batch memoization table shared across all concurrent subject
+        // tasks. Scoped to this `batch_evaluate` call; dropped when the call
+        // returns, so no state leaks between batches. Tests can pre-create the
+        // table via `options.memo_observer` to read counters after the call.
+        let fetch_memo: FetchMemo = options
+            .memo_observer
+            .map(Arc::clone)
+            .unwrap_or_else(|| Arc::new(MemoState::new()));
+        // Stage 3: when a connection declares `bulk_mode != None`, prefetch
+        // all bindings across all subjects via `SourceReader::read_many` and
+        // seed the memo with the results. The per-subject evaluation pipeline
+        // then naturally hits the memo and skips its own per-subject upstream
+        // call. We do this before the JoinSet so the bulk request runs
+        // exactly once per group instead of being raced by N sibling subject
+        // tasks.
+        prefetch_bulk_bindings(
+            Arc::clone(&evidence),
+            Arc::clone(&source),
+            &request.subjects,
+            &request.claims,
+            purpose.as_str(),
+            Arc::clone(&fetch_memo),
+        )
+        .await;
+        let mut join_set: JoinSet<(usize, Result<Vec<ClaimResultView>, EvidenceError>)> =
+            JoinSet::new();
         for (input_index, subject) in request.subjects.clone().into_iter().enumerate() {
-            let eval = EvaluateRequest {
-                subject: subject.clone(),
-                claims: request.claims.clone(),
-                disclosure: request.disclosure.clone(),
-                format: request.format.clone(),
-                purpose: Some(purpose.clone()),
+            let runtime = self.clone();
+            let evidence = Arc::clone(&evidence);
+            let source = Arc::clone(&source);
+            let permit_semaphore = Arc::clone(&subject_concurrency);
+            let claims_list = request.claims.clone();
+            let disclosure = request.disclosure.clone();
+            let format = request.format.clone();
+            let purpose_for_task = purpose.clone();
+            let principal_id = principal.principal_id.clone();
+            let principal_scopes = principal.scopes.clone();
+            let memo_for_task = Arc::clone(&fetch_memo);
+            join_set.spawn(async move {
+                let _permit = match permit_semaphore.acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(_) => return (input_index, Err(EvidenceError::RuleEvaluationFailed)),
+                };
+                let eval = EvaluateRequest {
+                    subject,
+                    claims: claims_list,
+                    disclosure,
+                    format,
+                    purpose: Some(purpose_for_task.clone()),
+                };
+                let principal = EvidencePrincipal {
+                    principal_id,
+                    scopes: principal_scopes,
+                };
+                let result = runtime
+                    .evaluate_subject_for_batch(
+                        evidence,
+                        source,
+                        &principal,
+                        eval,
+                        purpose_for_task.as_str(),
+                        memo_for_task,
+                    )
+                    .await;
+                (input_index, result)
+            });
+        }
+        // Collect results and surface panics as request-level errors. Drop
+        // semantics for `JoinSet` cancel remaining tasks if we early-return.
+        while let Some(joined) = join_set.join_next().await {
+            let (input_index, result) = match joined {
+                Ok(pair) => pair,
+                Err(join_error) if join_error.is_panic() => {
+                    tracing::error!(
+                        target: "registry_witness_server::runtime",
+                        error = %join_error,
+                        "subject task panicked",
+                    );
+                    return Err(EvidenceError::RuleEvaluationFailed);
+                }
+                Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
             };
-            match self
-                .evaluate(evidence, source, store, principal, eval, Some(&purpose))
-                .await
-            {
+            match result {
                 Ok(results) => {
                     let evaluation_id = results.first().map(|result| result.evaluation_id.clone());
                     let claim_results = results
                         .iter()
-                        .map(|result| batch_claim_result(evidence, result))
+                        .map(|result| batch_claim_result(&evidence, result))
                         .collect::<Result<Vec<_>, EvidenceError>>()?;
+                    // Surface the per-subject evaluation in the store after we
+                    // have the result. Doing this inside the task would require
+                    // an Arc<EvidenceStore>; instead we walk results here on the
+                    // calling task which still owns the &EvidenceStore.
+                    if let Some(first) = results.first() {
+                        let now_parsed = OffsetDateTime::parse(&first.issued_at, &Rfc3339)
+                            .unwrap_or(OffsetDateTime::now_utc());
+                        let expires_at = now_parsed + time::Duration::minutes(15);
+                        store.insert(registry_witness_core::StoredEvaluation {
+                            client_id: principal.principal_id.clone(),
+                            purpose: purpose.clone(),
+                            claim_ids: request.claims.clone(),
+                            disclosure: stored_disclosure(&results),
+                            format: results
+                                .first()
+                                .map(|view| view.format.clone())
+                                .unwrap_or_default(),
+                            results: results.clone(),
+                            created_at: first.issued_at.clone(),
+                            expires_at: format_time(expires_at),
+                            request_hash: request_hash.clone(),
+                        });
+                    }
                     succeeded += 1;
-                    items.push(BatchItemResponse {
+                    items[input_index] = Some(BatchItemResponse {
                         input_index,
                         subject_ref: batch_subject_ref(input_index),
                         evaluation_id,
@@ -424,7 +911,7 @@ impl RegistryWitnessRuntime {
                 }
                 Err(error) => {
                     failed += 1;
-                    items.push(BatchItemResponse {
+                    items[input_index] = Some(BatchItemResponse {
                         input_index,
                         subject_ref: batch_subject_ref(input_index),
                         evaluation_id: None,
@@ -435,6 +922,10 @@ impl RegistryWitnessRuntime {
                 }
             }
         }
+        let items: Vec<BatchItemResponse> = items
+            .into_iter()
+            .map(|slot| slot.ok_or(EvidenceError::RuleEvaluationFailed))
+            .collect::<Result<Vec<_>, _>>()?;
         let response = BatchEvaluateResponse {
             batch_id,
             status: BatchStatus::Completed,
@@ -446,6 +937,144 @@ impl RegistryWitnessRuntime {
             store.insert_idempotent_batch(key, request_hash, response.clone());
         }
         Ok(response)
+    }
+
+    /// Like `evaluate` but without writing the per-subject evaluation to the
+    /// store (the caller is responsible). Used by `batch_evaluate` so that
+    /// store inserts happen on the calling task that owns `&EvidenceStore`.
+    /// Accepts the per-batch memoization table so sibling subjects can share
+    /// upstream reads.
+    async fn evaluate_subject_for_batch(
+        &self,
+        evidence: Arc<EvidenceConfig>,
+        source: Arc<dyn SourceReader>,
+        principal: &EvidencePrincipal,
+        request: EvaluateRequest,
+        purpose_override: &str,
+        fetch_memo: FetchMemo,
+    ) -> Result<Vec<ClaimResultView>, EvidenceError> {
+        if request.claims.is_empty() {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        for claim_id in &request.claims {
+            require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
+        }
+        let format = request
+            .format
+            .clone()
+            .unwrap_or_else(|| FORMAT_CLAIM_RESULT_JSON.to_string());
+        for claim_id in &request.claims {
+            require_claim_format(&evidence, claim_id, &format)?;
+        }
+        let disclosure = requested_disclosure(&evidence, &request.claims, &request.disclosure)?;
+        let evaluation_id = Ulid::new().to_string();
+        let now = OffsetDateTime::now_utc();
+        let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
+        let internal = self
+            .evaluate_claims_dag(
+                Arc::clone(&evidence),
+                Arc::clone(&source),
+                request.subject.clone(),
+                purpose_override.to_string(),
+                evaluation_id.clone(),
+                now,
+                request.claims.clone(),
+                binding_concurrency,
+                Some(fetch_memo),
+            )
+            .await?;
+        request
+            .claims
+            .iter()
+            .map(|claim_id| {
+                let claim = find_claim(&evidence, claim_id)?;
+                let result = internal
+                    .get(claim_id)
+                    .ok_or(EvidenceError::RuleEvaluationFailed)?;
+                view_claim(result, claim, disclosure, &format)
+            })
+            .collect::<Result<Vec<_>, EvidenceError>>()
+    }
+
+    /// Walk the claim `depends_on` DAG in topological levels, running all
+    /// sibling claims at one level concurrently bounded by
+    /// `concurrency.bindings`. Returns the populated `prior` map.
+    #[allow(clippy::too_many_arguments)]
+    async fn evaluate_claims_dag(
+        &self,
+        evidence: Arc<EvidenceConfig>,
+        source: Arc<dyn SourceReader>,
+        subject: SubjectRequest,
+        purpose: String,
+        evaluation_id: String,
+        now: OffsetDateTime,
+        requested: Vec<String>,
+        binding_concurrency: Arc<Semaphore>,
+        fetch_memo: Option<FetchMemo>,
+    ) -> Result<BTreeMap<String, ClaimResultInternal>, EvidenceError> {
+        let levels = build_claim_levels(&evidence, &requested)?;
+        let prior: Arc<Mutex<BTreeMap<String, ClaimResultInternal>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
+        for level in levels {
+            // Spawn one task per claim in this level. All deps are already in
+            // `prior` because previous levels finished.
+            let mut tasks: JoinSet<(String, Result<ClaimResultInternal, EvidenceError>)> =
+                JoinSet::new();
+            for claim_id in level {
+                if prior
+                    .lock()
+                    .expect("prior mutex is not poisoned")
+                    .contains_key(&claim_id)
+                {
+                    continue;
+                }
+                let ctx = ClaimEvaluationContext {
+                    evidence: Arc::clone(&evidence),
+                    source: Arc::clone(&source),
+                    subject: subject.clone(),
+                    purpose: purpose.clone(),
+                    evaluation_id: evaluation_id.clone(),
+                    now,
+                    binding_concurrency: Arc::clone(&binding_concurrency),
+                    fetch_memo: fetch_memo.as_ref().map(Arc::clone),
+                };
+                let prior_for_task = Arc::clone(&prior);
+                // We do not acquire a permit here. The `bindings` cap applies to
+                // outbound source reads (the actual upstream work) and is taken
+                // inside `load_sources`. Acquiring at this level too would
+                // deadlock when bindings <= sibling claims, since each spawned
+                // task would hold a permit and then block waiting for one inside
+                // load_sources.
+                tasks.spawn(async move {
+                    let result = evaluate_claim_task(ctx, &claim_id, prior_for_task).await;
+                    (claim_id, result)
+                });
+            }
+            while let Some(joined) = tasks.join_next().await {
+                let (claim_id, result) = match joined {
+                    Ok(pair) => pair,
+                    Err(join_error) if join_error.is_panic() => {
+                        tracing::error!(
+                            target: "registry_witness_server::runtime",
+                            error = %join_error,
+                            "claim task panicked",
+                        );
+                        return Err(EvidenceError::RuleEvaluationFailed);
+                    }
+                    Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
+                };
+                let value = result?;
+                prior
+                    .lock()
+                    .expect("prior mutex is not poisoned")
+                    .insert(claim_id, value);
+            }
+        }
+        let map = Arc::try_unwrap(prior)
+            .map_err(|_| EvidenceError::RuleEvaluationFailed)?
+            .into_inner()
+            .map_err(|_| EvidenceError::RuleEvaluationFailed)?;
+        Ok(map)
     }
 
     pub fn render(
@@ -483,82 +1112,152 @@ impl RegistryWitnessRuntime {
         }
         render_results(evidence, &evaluation.results, &request.format)
     }
+}
 
-    fn evaluate_claim<'a, R: SourceReader + ?Sized>(
-        &'a self,
-        ctx: &'a ClaimEvaluationContext<'a, R>,
-        claim_id: &'a str,
-        prior: &'a mut BTreeMap<String, ClaimResultInternal>,
-    ) -> Pin<Box<dyn Future<Output = Result<ClaimResultInternal, EvidenceError>> + Send + 'a>> {
-        Box::pin(async move {
-            if let Some(existing) = prior.get(claim_id) {
-                return Ok(existing.clone());
-            }
-            let claim = find_claim(ctx.evidence, claim_id)?;
-            if !claim.operations.evaluate.enabled {
-                return Err(EvidenceError::OperationUnsupported);
-            }
-            for dep in &claim.depends_on {
-                let dep_result = self.evaluate_claim(ctx, dep, prior).await?;
-                prior.insert(dep.clone(), dep_result);
-            }
-            let sources = load_sources(ctx.source, claim, ctx.subject, ctx.purpose).await?;
-            let value = match &claim.rule {
-                RuleConfig::Extract { source, field } => {
-                    let record = sources
-                        .get(source)
-                        .ok_or(EvidenceError::SourceUnavailable)?;
-                    crate::standalone::get_json_path(record, field)
-                        .cloned()
-                        .ok_or(EvidenceError::SourceNotFound)?
-                }
-                RuleConfig::Exists { source } => Value::Bool(sources.contains_key(source)),
-                RuleConfig::Cel {
-                    expression,
-                    bindings,
-                } => {
-                    evaluate_cel_expression(&CelEvaluationContext {
-                        evidence: ctx.evidence,
-                        claim,
-                        expression,
-                        bindings,
-                        claims: prior,
-                        sources: &sources,
-                        subject: ctx.subject,
-                        purpose: ctx.purpose,
-                    })
-                    .await?
-                }
-                RuleConfig::Plugin { .. } => return Err(EvidenceError::OperationUnsupported),
-            };
-            // The source_count for this claim is the number of direct sources it
-            // read, plus the accumulated source_count from any dependency claims
-            // that were evaluated to satisfy depends_on. This ensures predicate
-            // and CEL claims that have no source_bindings of their own still
-            // report the registry reads performed by their dependencies.
-            let dep_source_count: usize = claim
-                .depends_on
-                .iter()
-                .filter_map(|dep_id| prior.get(dep_id))
-                .map(|dep| dep.provenance.source_count)
-                .sum();
-            Ok(ClaimResultInternal {
-                evaluation_id: ctx.evaluation_id.to_string(),
-                claim_id: claim.id.clone(),
-                claim_version: claim.version.clone(),
-                subject_type: claim.subject_type.clone(),
-                subject_ref: evaluation_subject_ref(ctx.evaluation_id),
-                value,
-                issued_at: ctx.now,
-                expires_at: None,
-                provenance: ClaimProvenance {
-                    source_count: sources.len() + dep_source_count,
-                    source_versions: BTreeMap::new(),
-                    computed_by: ctx.evidence.service_id.clone(),
-                },
-            })
-        })
+async fn evaluate_claim_task(
+    ctx: ClaimEvaluationContext,
+    claim_id: &str,
+    prior: Arc<Mutex<BTreeMap<String, ClaimResultInternal>>>,
+) -> Result<ClaimResultInternal, EvidenceError> {
+    if let Some(existing) = prior
+        .lock()
+        .expect("prior mutex is not poisoned")
+        .get(claim_id)
+        .cloned()
+    {
+        return Ok(existing);
     }
+    let claim = find_claim(&ctx.evidence, claim_id)?.clone();
+    if !claim.operations.evaluate.enabled {
+        return Err(EvidenceError::OperationUnsupported);
+    }
+    let (sources, observed_at) = load_sources(
+        Arc::clone(&ctx.source),
+        Arc::clone(&claim_arc(&claim)),
+        ctx.subject.clone(),
+        ctx.purpose.clone(),
+        Arc::clone(&ctx.binding_concurrency),
+        ctx.fetch_memo.clone(),
+    )
+    .await?;
+    // When a memoized entry was used, `observed_at` carries the timestamp of
+    // the original upstream read. Use that as `iat` so sibling subjects that
+    // share a read produce credentials with identical issued_at values.
+    let issued_at = observed_at.unwrap_or(ctx.now);
+    let value = match &claim.rule {
+        RuleConfig::Extract { source, field } => {
+            let record = sources
+                .get(source)
+                .ok_or(EvidenceError::SourceUnavailable)?;
+            crate::standalone::get_json_path(record, field)
+                .cloned()
+                .ok_or(EvidenceError::SourceNotFound)?
+        }
+        RuleConfig::Exists { source } => Value::Bool(sources.contains_key(source)),
+        RuleConfig::Cel {
+            expression,
+            bindings,
+        } => {
+            let snapshot = prior.lock().expect("prior mutex is not poisoned").clone();
+            evaluate_cel_expression(&CelEvaluationContext {
+                evidence: &ctx.evidence,
+                claim: &claim,
+                expression,
+                bindings,
+                claims: &snapshot,
+                sources: &sources,
+                subject: &ctx.subject,
+                purpose: ctx.purpose.as_str(),
+            })
+            .await?
+        }
+        RuleConfig::Plugin { .. } => return Err(EvidenceError::OperationUnsupported),
+    };
+    // The source_count for this claim is the number of direct sources it
+    // read, plus the accumulated source_count from any dependency claims
+    // that were evaluated to satisfy depends_on. This ensures predicate
+    // and CEL claims that have no source_bindings of their own still
+    // report the registry reads performed by their dependencies.
+    let dep_source_count: usize = {
+        let snapshot = prior.lock().expect("prior mutex is not poisoned");
+        claim
+            .depends_on
+            .iter()
+            .filter_map(|dep_id| snapshot.get(dep_id))
+            .map(|dep| dep.provenance.source_count)
+            .sum()
+    };
+    Ok(ClaimResultInternal {
+        evaluation_id: ctx.evaluation_id.clone(),
+        claim_id: claim.id.clone(),
+        claim_version: claim.version.clone(),
+        subject_type: claim.subject_type.clone(),
+        subject_ref: evaluation_subject_ref(&ctx.evaluation_id),
+        value,
+        issued_at,
+        expires_at: None,
+        provenance: ClaimProvenance {
+            source_count: sources.len() + dep_source_count,
+            source_versions: BTreeMap::new(),
+            computed_by: ctx.evidence.service_id.clone(),
+        },
+    })
+}
+
+fn claim_arc(claim: &ClaimDefinition) -> Arc<ClaimDefinition> {
+    Arc::new(claim.clone())
+}
+
+/// Topological levels of the DAG closure over `requested`. Each level is the
+/// set of claims whose dependencies all appear in earlier levels. Claims at
+/// the same level are independent and safe to evaluate concurrently.
+///
+/// Cycle and unknown-dep validation already happened at config load; we still
+/// guard with bounded iterations so a malformed config cannot infinite-loop.
+fn build_claim_levels(
+    evidence: &EvidenceConfig,
+    requested: &[String],
+) -> Result<Vec<Vec<String>>, EvidenceError> {
+    // Closure: starting from `requested`, accumulate every transitive dep.
+    let mut closure: BTreeSet<String> = BTreeSet::new();
+    let mut frontier: Vec<String> = requested.to_vec();
+    while let Some(claim_id) = frontier.pop() {
+        if !closure.insert(claim_id.clone()) {
+            continue;
+        }
+        let claim = find_claim(evidence, &claim_id)?;
+        for dep in &claim.depends_on {
+            if !closure.contains(dep) {
+                frontier.push(dep.clone());
+            }
+        }
+    }
+    // Kahn-style level construction: a claim is ready when all its deps are
+    // already in earlier levels.
+    let mut placed: BTreeSet<String> = BTreeSet::new();
+    let mut levels: Vec<Vec<String>> = Vec::new();
+    let total = closure.len();
+    while placed.len() < total {
+        let mut next_level: Vec<String> = Vec::new();
+        for claim_id in &closure {
+            if placed.contains(claim_id) {
+                continue;
+            }
+            let claim = find_claim(evidence, claim_id)?;
+            if claim.depends_on.iter().all(|dep| placed.contains(dep)) {
+                next_level.push(claim_id.clone());
+            }
+        }
+        if next_level.is_empty() {
+            // Should never happen: cycle detection runs at config load.
+            return Err(EvidenceError::RuleEvaluationFailed);
+        }
+        for claim_id in &next_level {
+            placed.insert(claim_id.clone());
+        }
+        levels.push(next_level);
+    }
+    Ok(levels)
 }
 
 pub fn find_claim<'a>(
@@ -709,25 +1408,337 @@ fn max_batch_subjects(config: &EvidenceConfig, claims: &[String]) -> Result<usiz
     Ok(max)
 }
 
-async fn load_sources<R: SourceReader + ?Sized>(
-    source: &R,
-    claim: &ClaimDefinition,
+/// Load all source bindings for a claim. Returns the resolved source map and an
+/// optional observation timestamp.
+///
+/// The observation timestamp is `Some(t)` when at least one binding was served
+/// from the memo (i.e., a previous sibling already read the same upstream record
+/// in this batch). In that case `t` is the earliest memo entry timestamp, so
+/// the caller can propagate it as `iat`. When all bindings were freshly read,
+/// returns `None` and the caller falls back to `ctx.now`.
+///
+/// Implements single-flight: if two concurrent sibling tasks need the same
+/// binding key at the same time, one of them fires the upstream request and the
+/// other waits for the result via the `Pending` semaphore in the memo slot.
+/// Errors are never left in the table; a failed fetch allows the next caller to
+/// retry against upstream without poisoning other subjects.
+async fn load_sources(
+    source: Arc<dyn SourceReader>,
+    claim: Arc<ClaimDefinition>,
+    subject: SubjectRequest,
+    purpose: String,
+    binding_concurrency: Arc<Semaphore>,
+    fetch_memo: Option<FetchMemo>,
+) -> Result<(BTreeMap<String, Value>, Option<OffsetDateTime>), EvidenceError> {
+    if claim.source_bindings.is_empty() {
+        return Ok((BTreeMap::new(), None));
+    }
+
+    // Bindings within a claim are independent: each owns its own memo key and
+    // takes its own `binding_concurrency` permit only when it actually needs
+    // to hit upstream. We spawn one task per binding so the upstream waits
+    // overlap up to the configured `concurrency.bindings` cap. Memo waiters
+    // do not hold a permit, so the cap remains a fan-out bound on outbound
+    // calls, not on intra-claim parallelism.
+    let mut tasks: JoinSet<(String, BindingFetchResult)> = JoinSet::new();
+    for (id, binding) in &claim.source_bindings {
+        let id = id.clone();
+        let binding = binding.clone();
+        let source = Arc::clone(&source);
+        let subject = subject.clone();
+        let purpose = purpose.clone();
+        let binding_concurrency = Arc::clone(&binding_concurrency);
+        let fetch_memo = fetch_memo.clone();
+        tasks.spawn(async move {
+            let result = load_one_binding(
+                source,
+                &binding,
+                &subject,
+                &purpose,
+                binding_concurrency,
+                fetch_memo.as_ref(),
+            )
+            .await;
+            (id, result)
+        });
+    }
+
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    let mut oldest_memo_ts: Option<OffsetDateTime> = None;
+    while let Some(joined) = tasks.join_next().await {
+        let (id, result) = match joined {
+            Ok(pair) => pair,
+            Err(join_error) if join_error.is_panic() => {
+                tracing::error!(
+                    target: "registry_witness_server::runtime",
+                    error = %join_error,
+                    "binding task panicked",
+                );
+                return Err(EvidenceError::RuleEvaluationFailed);
+            }
+            Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
+        };
+        let (value, memo_ts) = result?;
+        if let Some(ts) = memo_ts {
+            oldest_memo_ts = Some(match oldest_memo_ts {
+                None => ts,
+                Some(prev) => prev.min(ts),
+            });
+        }
+        out.insert(id, value);
+    }
+    Ok((out, oldest_memo_ts))
+}
+
+/// Load a single source binding, consulting and updating the batch memo.
+///
+/// Returns `(value, Some(observed_at))` when the result came from the memo
+/// (so the caller can pin `iat` to the original read time), or
+/// `(value, None)` when the value was freshly fetched.
+///
+/// Single-flight protocol:
+/// 1. Lock the memo; check for a `Ready` entry (cache hit) or a `Pending` slot
+///    (another task is in-flight for the same key).
+/// 2. If neither exists, insert a `Pending` slot and become the owner.
+/// 3. Owner fetches upstream (outside the lock), then under the lock upgrades
+///    to `Ready` on success or removes the slot on error; in both cases signals
+///    the pending semaphore so waiting tasks can proceed.
+/// 4. Waiters re-check the table after the semaphore fires; if `Ready` they
+///    return the cached value; if the slot was removed they fall through and
+///    attempt a fresh fetch themselves.
+async fn load_one_binding(
+    source: Arc<dyn SourceReader>,
+    binding: &registry_witness_core::SourceBindingConfig,
     subject: &SubjectRequest,
     purpose: &str,
-) -> Result<BTreeMap<String, Value>, EvidenceError> {
-    let mut out = BTreeMap::new();
-    for (id, binding) in &claim.source_bindings {
-        let mapped_subject = source.map_subject(binding, subject).await?;
-        let row = source.read_one(binding, &mapped_subject, purpose).await?;
-        for field in binding.fields.values().filter(|field| field.required) {
-            match crate::standalone::get_json_path(&row, &field.field) {
-                Some(value) if !value.is_null() => {}
-                _ => return Err(EvidenceError::SourceNotFound),
+    binding_concurrency: Arc<Semaphore>,
+    fetch_memo: Option<&FetchMemo>,
+) -> Result<(Value, Option<OffsetDateTime>), EvidenceError> {
+    // Compute the lookup value to build the cache key. If this fails (e.g.
+    // unsupported lookup op) we skip the memo entirely and fall through to a
+    // direct fetch; the connector will surface the same error there.
+    let lookup_value_for_key = binding_lookup_value(binding, subject).ok();
+
+    if let (Some(memo), Some(ref lv)) = (fetch_memo, &lookup_value_for_key) {
+        let key = cache_key_for_binding(binding, lv, purpose);
+
+        // --- Phase 1: check under lock, decide action (no await while locked) ---
+        enum Action {
+            Hit(Value, OffsetDateTime),
+            Owner(Arc<tokio::sync::Semaphore>), // we inserted Pending; now fetch
+            Wait(Arc<tokio::sync::Semaphore>),  // another task is fetching; wait
+        }
+        let action = {
+            let mut guard = memo.lock();
+            match guard.get(&key) {
+                Some(MemoSlot::Ready(entry)) => Action::Hit(entry.value.clone(), entry.observed_at),
+                Some(MemoSlot::Pending(sem)) => Action::Wait(Arc::clone(sem)),
+                None => {
+                    let sem = Arc::new(tokio::sync::Semaphore::new(0));
+                    guard.insert(key.clone(), MemoSlot::Pending(Arc::clone(&sem)));
+                    Action::Owner(sem)
+                }
+            }
+            // guard is dropped here, before any await
+        };
+        match action {
+            Action::Hit(value, ts) => {
+                memo.record_hit();
+                tracing::info!(
+                    target: "registry_witness_server::memo",
+                    "memo_hit",
+                );
+                return Ok((value, Some(ts)));
+            }
+            Action::Owner(sem) => {
+                return fetch_and_signal(
+                    source,
+                    binding,
+                    subject,
+                    purpose,
+                    binding_concurrency,
+                    memo,
+                    key,
+                    sem,
+                )
+                .await;
+            }
+            Action::Wait(sem) => {
+                // --- Phase 2: wait for the in-flight owner to finish ---
+                let _ = sem.acquire().await;
+                // Re-check: if the owner succeeded we now see Ready.
+                let hit = {
+                    let guard = memo.lock();
+                    if let Some(MemoSlot::Ready(entry)) = guard.get(&key) {
+                        Some((entry.value.clone(), entry.observed_at))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((value, ts)) = hit {
+                    memo.record_hit();
+                    tracing::info!(
+                        target: "registry_witness_server::memo",
+                        "memo_hit",
+                    );
+                    return Ok((value, Some(ts)));
+                }
+                // Owner failed; fall through to an unconditional fresh fetch.
             }
         }
-        out.insert(id.clone(), row);
     }
-    Ok(out)
+
+    // No memo (single-subject evaluate) or lookup derivation failed or the
+    // previous owner failed: fetch directly without memoizing.
+    fetch_binding_direct(source, binding, subject, purpose, binding_concurrency).await
+}
+
+/// Signal-all permit count used when waking memo waiters. Matches tokio's
+/// documented cap so a single `add_permits` releases every parked acquirer.
+const MEMO_SIGNAL_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+
+/// Drop guard for the `Pending` memo slot owned by `fetch_and_signal`.
+///
+/// On drop (return-by-error OR panic during the upstream fetch), removes the
+/// Pending slot from the memo and signals all waiters so they wake up and
+/// fall through to a fresh fetch instead of blocking forever on `acquire`.
+///
+/// The Owner's success path calls `disarm()` before installing the `Ready`
+/// entry so this guard becomes a no-op for the happy path.
+struct PendingGuard<'a> {
+    memo: Option<&'a FetchMemo>,
+    key: String,
+    sem: Arc<tokio::sync::Semaphore>,
+}
+
+impl<'a> PendingGuard<'a> {
+    fn new(memo: &'a FetchMemo, key: String, sem: Arc<tokio::sync::Semaphore>) -> Self {
+        Self {
+            memo: Some(memo),
+            key,
+            sem,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.memo = None;
+    }
+}
+
+impl<'a> Drop for PendingGuard<'a> {
+    fn drop(&mut self) {
+        if let Some(memo) = self.memo.take() {
+            // Remove only if the slot is still our Pending entry. If the
+            // Owner already installed a Ready value before bailing for some
+            // other reason, we must not clobber it.
+            let mut guard = memo.lock();
+            if let Some(MemoSlot::Pending(slot_sem)) = guard.get(&self.key) {
+                if Arc::ptr_eq(slot_sem, &self.sem) {
+                    guard.remove(&self.key);
+                }
+            }
+            drop(guard);
+            self.sem.add_permits(MEMO_SIGNAL_PERMITS);
+        }
+    }
+}
+
+/// Fetch a binding from upstream and, on success, upgrade the Pending slot in
+/// the memo to Ready and signal all waiters.
+///
+/// On error or panic, the `PendingGuard` drop runs: it removes the Pending slot
+/// so the next caller can retry, and signals waiters so they are not stuck.
+/// Waiters re-check the slot after waking and fall through to a fresh fetch
+/// when they find it absent (matching the existing "owner failed" branch in
+/// `load_one_binding`).
+#[allow(clippy::too_many_arguments)]
+async fn fetch_and_signal(
+    source: Arc<dyn SourceReader>,
+    binding: &registry_witness_core::SourceBindingConfig,
+    subject: &SubjectRequest,
+    purpose: &str,
+    binding_concurrency: Arc<Semaphore>,
+    memo: &FetchMemo,
+    key: String,
+    pending_sem: Arc<tokio::sync::Semaphore>,
+) -> Result<(Value, Option<OffsetDateTime>), EvidenceError> {
+    let mut guard = PendingGuard::new(memo, key.clone(), Arc::clone(&pending_sem));
+
+    let (value, _fresh_ts) = fetch_binding_direct(
+        Arc::clone(&source),
+        binding,
+        subject,
+        purpose,
+        binding_concurrency,
+    )
+    .await?;
+    let observed_at = OffsetDateTime::now_utc();
+
+    // Success path: install the Ready entry and signal waiters explicitly,
+    // then disarm the guard so it does not also clear the slot we just wrote.
+    {
+        let mut memo_guard = memo.lock();
+        memo_guard.insert(
+            key,
+            MemoSlot::Ready(MemoEntry {
+                value: value.clone(),
+                observed_at,
+            }),
+        );
+    }
+    pending_sem.add_permits(MEMO_SIGNAL_PERMITS);
+    guard.disarm();
+    memo.record_miss();
+    tracing::info!(
+        target: "registry_witness_server::memo",
+        "memo_miss",
+    );
+    // Return observed_at so the owner's issued_at matches the memo entry's
+    // timestamp. Sibling claims that hit the memo will see the same
+    // observed_at, giving all claims for this binding an identical iat.
+    Ok((value, Some(observed_at)))
+}
+
+/// Unconditionally fetch a single binding from upstream (no memo interaction).
+/// Returns `(value, None)` since the observation time is managed by the caller.
+async fn fetch_binding_direct(
+    source: Arc<dyn SourceReader>,
+    binding: &registry_witness_core::SourceBindingConfig,
+    subject: &SubjectRequest,
+    purpose: &str,
+    binding_concurrency: Arc<Semaphore>,
+) -> Result<(Value, Option<OffsetDateTime>), EvidenceError> {
+    let _permit = match binding_concurrency.acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
+    };
+    let mapped_subject = source.map_subject(binding, subject).await?;
+    let row = source.read_one(binding, &mapped_subject, purpose).await?;
+    for field in binding.fields.values().filter(|field| field.required) {
+        match crate::standalone::get_json_path(&row, &field.field) {
+            Some(value) if !value.is_null() => {}
+            _ => return Err(EvidenceError::SourceNotFound),
+        }
+    }
+    Ok((row, None))
+}
+
+/// Derive the lookup value for a binding from the subject request.
+///
+/// This mirrors the derivation in `standalone::lookup_value` but is placed here
+/// so `load_sources` can compute cache keys without depending on `standalone`
+/// internals. Only the "eq" operator with a subject-scoped input is supported.
+fn binding_lookup_value(
+    binding: &registry_witness_core::SourceBindingConfig,
+    subject: &SubjectRequest,
+) -> Result<Value, EvidenceError> {
+    if binding.lookup.op != "eq" {
+        return Err(EvidenceError::InvalidRequest);
+    }
+    match binding.lookup.input.as_str() {
+        "subject_id" | "subject.id" => Ok(Value::String(subject.id.clone())),
+        _ => Err(EvidenceError::InvalidRequest),
+    }
 }
 
 async fn evaluate_cel_expression(ctx: &CelEvaluationContext<'_>) -> Result<Value, EvidenceError> {

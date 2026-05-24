@@ -131,18 +131,18 @@ pub fn issue(
     issuer: &EvidenceIssuer,
     results: &[ClaimResultView],
     holder_id: Option<&str>,
+    iat: OffsetDateTime,
 ) -> Result<SignedSdJwtVc, EvidenceError> {
     if profile.holder_binding.mode != "none" && holder_id.is_none() {
         return Err(EvidenceError::HolderProofRequired);
     }
-    let now = OffsetDateTime::now_utc();
-    let expires_at = now + time::Duration::seconds(profile.validity_seconds);
+    let expires_at = iat + time::Duration::seconds(profile.validity_seconds);
     let credential_id = format!("urn:ulid:{}", Ulid::new());
     let mut payload = Map::new();
     payload.insert("iss".to_string(), Value::String(profile.issuer.clone()));
     payload.insert(
         "iat".to_string(),
-        Value::Number(now.unix_timestamp().into()),
+        Value::Number(iat.unix_timestamp().into()),
     );
     payload.insert(
         "exp".to_string(),
@@ -289,12 +289,60 @@ mod tests {
     fn issued_credential_payload_includes_jti() {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
-        let signed = issue(&test_profile(), &issuer, &[claim_result("first")], None)
-            .expect("credential issues");
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("first")],
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
         let payload = payload(&signed);
 
         assert_eq!(payload["jti"], signed.credential_id);
         assert_eq!(payload["id"], signed.credential_id);
+    }
+
+    #[test]
+    fn issued_credential_iat_is_threaded_through_issue_not_recomputed() {
+        // Two re-issuances of the same evaluation must produce identical JWT
+        // `iat` because the caller threads `result.issued_at` through. The
+        // signed JWT payload `iat` is the load-bearing assertion: prior to
+        // the fix it was `OffsetDateTime::now_utc()` per call and drifted.
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let results = vec![claim_result("first"), claim_result("second")];
+        // Pin iat to a fixed instant in the past so wall-clock drift between
+        // the two issue() calls cannot accidentally produce equal values.
+        let pinned_iat =
+            OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("valid unix timestamp");
+
+        let signed_1 =
+            issue(&test_profile(), &issuer, &results, None, pinned_iat).expect("first issue");
+        // Force a measurable wall-clock gap between calls.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let signed_2 =
+            issue(&test_profile(), &issuer, &results, None, pinned_iat).expect("second issue");
+
+        let iat_1 = payload(&signed_1)["iat"]
+            .as_i64()
+            .expect("iat decodes as i64");
+        let iat_2 = payload(&signed_2)["iat"]
+            .as_i64()
+            .expect("iat decodes as i64");
+        assert_eq!(
+            iat_1, iat_2,
+            "JWT iat must be pinned to the threaded value, not OffsetDateTime::now_utc() per call",
+        );
+        assert_eq!(
+            iat_1,
+            pinned_iat.unix_timestamp(),
+            "JWT iat must equal the threaded OffsetDateTime",
+        );
+        // exp is derived from iat + validity, so it must also match.
+        let exp_1 = payload(&signed_1)["exp"].as_i64().expect("exp decodes");
+        let exp_2 = payload(&signed_2)["exp"].as_i64().expect("exp decodes");
+        assert_eq!(exp_1, exp_2, "exp must be derived from the threaded iat");
     }
 
     #[test]
@@ -320,7 +368,14 @@ mod tests {
             claim_result("second"),
             claim_result("fourth"),
         ];
-        let signed = issue(&test_profile(), &issuer, &results, None).expect("credential issues");
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &results,
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
 
         let sd = payload_sd(&signed);
         let mut sorted_disclosure_digests = disclosure_digests(&signed);

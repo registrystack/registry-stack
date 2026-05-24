@@ -12,7 +12,7 @@ import {
   baseUrl,
   bearerToken,
   bearerHeaders,
-  handleSummaryFor,
+  handleResultsFor,
   trackResponse,
   logScenarioStart,
 } from './lib/common.js';
@@ -56,5 +56,5 @@ export default function (ctx) {
 }
 
 export function handleSummary(data) {
-  return handleSummaryFor('list_claims', data);
+  return handleResultsFor('list_claims', data);
 }
