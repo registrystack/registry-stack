@@ -12,9 +12,7 @@ use std::collections::BTreeMap;
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use registry_witness_core::model::{
-    ClaimProvenance, ClaimResultView, EvidenceAuditEvent,
-};
+use registry_witness_core::model::{ClaimProvenance, ClaimResultView, EvidenceAuditEvent};
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
@@ -31,7 +29,9 @@ fn build_audit_event() -> EvidenceAuditEvent {
         path: "/claims/evaluate".to_string(),
         status: 200,
         verification_id: Some("01HWQZPJ3VXKM8N2BF5CSRTE4E".to_string()),
-        claim_hash: Some("sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string()),
+        claim_hash: Some(
+            "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+        ),
         row_count: None,
         error_code: None,
     }

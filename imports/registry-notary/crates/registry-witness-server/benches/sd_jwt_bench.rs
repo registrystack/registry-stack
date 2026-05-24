@@ -88,8 +88,7 @@ fn benchmark_evidence_issuer_from_jwk_str(c: &mut Criterion) {
             // `from_jwk_str` takes the verification-method id by value, so a
             // fresh `String` allocation per call is part of the measured path.
             let vm_id = black_box(VM_ID).to_string();
-            EvidenceIssuer::from_jwk_str(black_box(TEST_ISSUER_JWK), vm_id)
-                .expect("JWK must load")
+            EvidenceIssuer::from_jwk_str(black_box(TEST_ISSUER_JWK), vm_id).expect("JWK must load")
         });
     });
 }

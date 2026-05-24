@@ -14,9 +14,7 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use registry_witness_server::standalone::{
-    bearer_auth_token, find_credential, ResolvedCredential,
-};
+use registry_witness_server::standalone::{bearer_auth_token, find_credential, ResolvedCredential};
 
 const VALID_TOKEN: &str = "perf-bench-bearer-token-abcdef-0123456789-xyz";
 const WRONG_TOKEN: &str = "perf-bench-bearer-token-wrong-000000000000-000";
