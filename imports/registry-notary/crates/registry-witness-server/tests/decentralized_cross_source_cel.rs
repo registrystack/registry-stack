@@ -202,7 +202,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("shared config deserializes")
+    serde_norway::from_str(&raw).expect("shared config deserializes")
 }
 
 #[tokio::test]
@@ -297,7 +297,7 @@ fn decentralized_demo_evidence_configs_load_validate_and_build_router() {
             continue;
         }
         let config: StandaloneRegistryWitnessConfig =
-            serde_yml::from_str(&raw).expect("config deserializes");
+            serde_norway::from_str(&raw).expect("config deserializes");
         config.validate().expect("config validates");
         let _ = standalone_router(config).expect("config builds standalone router");
     }

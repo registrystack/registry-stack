@@ -40,7 +40,7 @@ utoipa.workspace = true
 axum-test = { version = "20" }
 registry-platform-crypto.workspace = true
 registry-platform-testing.workspace = true
-serde_yml.workspace = true
+serde_norway.workspace = true
 tempfile = { version = "3" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI smoke-checks `cargo bench --no-run`.

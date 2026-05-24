@@ -2216,7 +2216,7 @@ mod tests {
         // A caller-supplied credential_profile must be in the requested claim's
         // own credential_profiles allow-list. Otherwise a client could mint a
         // credential against a profile the claim never opted in to.
-        let evidence: EvidenceConfig = serde_yml::from_str(
+        let evidence: EvidenceConfig = serde_norway::from_str(
             r#"
 enabled: true
 service_id: test.witness

@@ -204,7 +204,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("config deserializes")
+    serde_norway::from_str(&raw).expect("config deserializes")
 }
 
 fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConfig {
@@ -282,7 +282,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("config deserializes")
+    serde_norway::from_str(&raw).expect("config deserializes")
 }
 
 fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {

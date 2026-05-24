@@ -194,7 +194,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("rda config deserializes")
+    serde_norway::from_str(&raw).expect("rda config deserializes")
 }
 
 /// Build a config with TWO claims sharing the SAME binding (same connection /
@@ -305,7 +305,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("two-claims config deserializes")
+    serde_norway::from_str(&raw).expect("two-claims config deserializes")
 }
 
 /// Three claims all sharing the same binding, for the 50-subject batch dedup test.
@@ -449,7 +449,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("three-claims config deserializes")
+    serde_norway::from_str(&raw).expect("three-claims config deserializes")
 }
 
 /// Two claims with DIFFERENT lookup.op to verify they are NOT memoized together.
@@ -553,7 +553,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("different-fields config deserializes")
+    serde_norway::from_str(&raw).expect("different-fields config deserializes")
 }
 
 /// DCI config with two claims using different query_type values.
@@ -670,7 +670,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("dci different query_type config deserializes")
+    serde_norway::from_str(&raw).expect("dci different query_type config deserializes")
 }
 
 // ---------------------------------------------------------------------------

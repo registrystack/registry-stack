@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let raw = tokio::fs::read_to_string(&config_path).await?;
-    let config: StandaloneRegistryWitnessConfig = serde_yml::from_str(&raw)?;
+    let config: StandaloneRegistryWitnessConfig = serde_norway::from_str(&raw)?;
     config.validate()?;
 
     let bind = config.server.bind;

@@ -21,7 +21,7 @@ axum.workspace = true
 clap.workspace = true
 registry-witness-core.workspace = true
 registry-witness-server = { workspace = true, default-features = false }
-serde_yml.workspace = true
+serde_norway.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true

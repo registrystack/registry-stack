@@ -990,7 +990,7 @@ mod tests {
 
     /// Builds a minimal valid config from which individual tests can deviate.
     fn minimal_config() -> StandaloneRegistryWitnessConfig {
-        serde_yml::from_str(
+        serde_norway::from_str(
             r#"
 evidence:
   enabled: true
@@ -1005,7 +1005,7 @@ auth:
     }
 
     fn minimal_claim(id: &str) -> ClaimDefinition {
-        serde_yml::from_str(&format!(
+        serde_norway::from_str(&format!(
             r#"
 id: {id}
 title: Test Claim
@@ -1026,7 +1026,7 @@ rule:
     #[test]
     fn proof_of_possession_required_with_only_did_jwk_is_valid() {
         let mut config = minimal_config();
-        let profile: CredentialProfileConfig = serde_yml::from_str(
+        let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: sd_jwt_vc
 issuer: https://issuer.example
@@ -1055,7 +1055,7 @@ allowed_claims:
     #[test]
     fn proof_of_possession_required_with_non_jwk_method_is_rejected() {
         let mut config = minimal_config();
-        let profile: CredentialProfileConfig = serde_yml::from_str(
+        let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: sd_jwt_vc
 issuer: https://issuer.example
@@ -1099,7 +1099,7 @@ allowed_claims:
     #[test]
     fn proof_of_possession_not_required_allows_any_did_methods() {
         let mut config = minimal_config();
-        let profile: CredentialProfileConfig = serde_yml::from_str(
+        let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: sd_jwt_vc
 issuer: https://issuer.example
@@ -1218,7 +1218,7 @@ allowed_claims:
         // accept every claim at issue time (see api.rs `is_empty()` short
         // circuit). Reject at config-load time so the operator must opt in.
         let mut config = minimal_config();
-        let profile: CredentialProfileConfig = serde_yml::from_str(
+        let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: sd_jwt_vc
 issuer: https://issuer.example
@@ -1331,7 +1331,7 @@ vct: https://vct.example/test
 
     #[test]
     fn api_key_plaintext_is_never_loaded_only_fingerprint() {
-        let err = serde_yml::from_str::<StandaloneRegistryWitnessConfig>(
+        let err = serde_norway::from_str::<StandaloneRegistryWitnessConfig>(
             r#"
 evidence:
   enabled: true
@@ -1396,7 +1396,7 @@ base_url: https://upstream.example
 token_env: SRC_TOKEN
 "#;
         let connection: SourceConnectionConfig =
-            serde_yml::from_str(yaml).expect("connection YAML parses");
+            serde_norway::from_str(yaml).expect("connection YAML parses");
         assert!(!connection.allow_insecure_localhost);
         assert_eq!(connection.max_in_flight, 8);
     }
@@ -1446,7 +1446,7 @@ base_url: https://upstream.example
 token_env: SRC_TOKEN
 "#;
         let connection: SourceConnectionConfig =
-            serde_yml::from_str(yaml).expect("connection YAML parses");
+            serde_norway::from_str(yaml).expect("connection YAML parses");
         assert!(!connection.allow_insecure_localhost);
         assert_eq!(connection.bulk_mode, BulkMode::None);
         assert!(!connection.bulk_mode_lookup_unique);
@@ -1460,8 +1460,8 @@ base_url: https://upstream.example
 token_env: SRC_TOKEN
 bulk_mode: unsupported_mode
 "#;
-        let err =
-            serde_yml::from_str::<SourceConnectionConfig>(yaml).expect_err("unknown variant fails");
+        let err = serde_norway::from_str::<SourceConnectionConfig>(yaml)
+            .expect_err("unknown variant fails");
         let msg = err.to_string();
         assert!(
             msg.contains("unsupported_mode") || msg.contains("variant") || msg.contains("unknown"),
@@ -1634,7 +1634,7 @@ bulk_mode: unsupported_mode
         // fail every issuance with EvaluationBindingMismatch. Treat blank-only
         // lists the same as empty so operators see the error at config load.
         let mut config = minimal_config();
-        let profile: CredentialProfileConfig = serde_yml::from_str(
+        let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: sd_jwt_vc
 issuer: https://issuer.example

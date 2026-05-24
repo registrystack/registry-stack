@@ -159,7 +159,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("config deserializes")
+    serde_norway::from_str(&raw).expect("config deserializes")
 }
 
 #[tokio::test]

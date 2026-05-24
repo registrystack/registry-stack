@@ -321,7 +321,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("rda bulk config deserializes")
+    serde_norway::from_str(&raw).expect("rda bulk config deserializes")
 }
 
 fn dci_bulk_config(
@@ -399,7 +399,7 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
 "#
     );
-    serde_yml::from_str(&raw).expect("dci bulk config deserializes")
+    serde_norway::from_str(&raw).expect("dci bulk config deserializes")
 }
 
 // ---------------------------------------------------------------------------

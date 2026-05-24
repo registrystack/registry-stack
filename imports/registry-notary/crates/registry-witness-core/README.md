@@ -20,7 +20,7 @@ and downstream tooling.
 use registry_witness_core::StandaloneRegistryWitnessConfig;
 
 fn load(raw_yaml: &str) -> Result<StandaloneRegistryWitnessConfig, Box<dyn std::error::Error>> {
-    let config: StandaloneRegistryWitnessConfig = serde_yml::from_str(raw_yaml)?;
+    let config: StandaloneRegistryWitnessConfig = serde_norway::from_str(raw_yaml)?;
     config.validate()?;
     Ok(config)
 }

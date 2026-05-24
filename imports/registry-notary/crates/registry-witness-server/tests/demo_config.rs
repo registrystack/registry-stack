@@ -40,7 +40,7 @@ fn split_demo_config_loads_validates_and_builds_router() {
         .join("demo/config/registry-witness.yaml");
     let raw = std::fs::read_to_string(config_path).expect("demo config is readable");
     let mut config: StandaloneRegistryWitnessConfig =
-        serde_yml::from_str(&raw).expect("demo config deserializes");
+        serde_norway::from_str(&raw).expect("demo config deserializes");
     let temp = tempfile::TempDir::new().expect("tempdir");
     config.audit.path = Some(
         temp.path()
