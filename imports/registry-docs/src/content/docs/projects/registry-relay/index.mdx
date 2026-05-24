@@ -171,7 +171,8 @@ The [Run Registry Relay locally](./run-locally/) guide walks through every step 
 
 ## Status and v0 caveats
 
-Registry Relay is at v0.1.0.
+Registry Relay's current release tag is `v0.1.1`.
+The Cargo package version remains `0.1.0` at that tag.
 The following capabilities are not yet supported:
 
 - **Live keyring reload.** Key and JWKS reloads require a process restart.
@@ -184,7 +185,7 @@ The following capabilities are not yet supported:
   software Ed25519. The `kms` signer kind is reserved and rejected by v1 config validation.
 
 The rename from the legacy underscore form `registry_relay` to the hyphenated
-`registry-relay` is complete in v0.1.0.
+`registry-relay` is complete in the current release line.
 No legacy underscore references appear in the API, config surface, binary name,
 or Cargo.toml.
 

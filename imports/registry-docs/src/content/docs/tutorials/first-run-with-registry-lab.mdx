@@ -5,9 +5,10 @@ status: current
 owner: registry-legend
 source_repos:
   - registry-lab
+  - registry-platform
   - registry-relay
   - registry-witness
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-24"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -15,14 +16,16 @@ standards_referenced:
 ---
 
 [Registry Lab](../../projects/registry-lab/) is the compose-based local demo for the registry family.
-It wires three [Registry Relay](../../projects/registry-relay/) instances, three [Registry Witness](../../projects/registry-witness/) instances,
-a static metadata publisher, and a narrated demo client into a single topology you can run on a laptop.
+It wires Registry Platform source crates, three [Registry Relay](../../projects/registry-relay/) instances,
+three [Registry Witness](../../projects/registry-witness/) instances, a static metadata publisher,
+and a narrated demo client into a single topology you can run on a laptop.
 
 ## Prerequisites
 
 - Docker with Compose v2.20 or later (required for `additional_contexts` support in the Dockerfiles).
 - `uv` CLI installed (used to run `scripts/generate-fixtures.py`, which is a PEP 723 inline-dependency script).
 - `python3` and `openssl` on your PATH (used by `scripts/generate-demo-secrets.py` and `scripts/demo-flow.py`).
+- GitHub SSH access for submodules, or equivalent local Git configuration for the `vendor/*` submodule URLs.
 - No production secrets in the demo environment. The generated `.env` uses inert local credentials only.
 
 ## Steps
@@ -98,16 +101,18 @@ Atlas is not in the compose topology at v0.1; it is run separately when needed f
 ## Expected output
 
 After step 5, all Relay and Witness services start in the background.
-`scripts/smoke.sh` runs approximately 30 checks, including:
+`scripts/smoke.sh` runs more than 30 checks, including:
 
 - Health and readiness endpoints (`/health`, `/ready`) on all three Relay instances.
-- Discovery endpoint (`/.well-known/evidence-service`) on all three Witness instances.
+- Discovery endpoint (`/.well-known/evidence-service`) on all three Witness instances,
+  with bearer-token and `x-api-key` coverage.
 - OpenAPI endpoints (`/openapi.json`) on all Relay and Witness instances.
 - Authorization scope denial responses (403 with `auth.scope_denied`) for out-of-scope credentials.
 - Positive row-read and aggregate-read responses on the social protection Relay.
 - Evidence evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility witnesses.
 - A cross-authority claim result with `source_count >= 2` on the shared eligibility witness.
 - Credential-bound evaluation returning `application/dc+sd-jwt`.
+- Audit log assertions, including a check that generated raw secrets are not emitted in service logs.
 
 The demo client (step 7) runs three narrated scenarios and writes artifacts to `output/`.
 All requests use the correlation ID `decentralized-demo-correlation-001` by default
@@ -116,7 +121,7 @@ All requests use the correlation ID `decentralized-demo-correlation-001` by defa
 ## Verify
 
 Run `scripts/smoke.sh` as the primary verification command.
-A passing smoke run means all 30+ authorization and endpoint checks pass.
+A passing smoke run means all endpoint, authorization, audit, and credential checks pass.
 
 To manually spot-check the static metadata publisher:
 

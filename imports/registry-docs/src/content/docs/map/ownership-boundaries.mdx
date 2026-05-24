@@ -60,7 +60,7 @@ No HTTP serving, no database queries, no authorization scoping. The manifest com
 
 Registry Relay exposes protected read-only APIs over registry sources. It does not own:
 
-- Record provisioning or writes. The README explicitly states write operations are out of scope for v1. {/* Evidence: registry-relay README line 14, commit aec4394. */}
+- Record provisioning or writes. The README explicitly states write operations are out of scope for v1. {/* Evidence: registry-relay README line 14, commit 85d32f0. */}
 - Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are owned by Registry Manifest. Registry Relay may serve compiled artifacts over HTTP and scope them for callers, but the schema is defined and versioned in Registry Manifest. {/* Evidence: registry-manifest README lines 88-92; registry-relay evidence packet, metadata publication section. */}
 - Standalone claim service internals owned by Registry Witness. Registry Relay can declare evidence offerings and route clients to a Registry Witness endpoint, but claim evaluation, disclosure policy, and credential issuance run in Registry Witness. {/* Evidence: registry-relay evidence packet, evidence offering verification section. */}
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives owned by Registry Platform. Registry Relay owns how those primitives are configured and enforced on Relay routes.

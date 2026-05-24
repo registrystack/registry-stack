@@ -5,7 +5,7 @@ status: draft
 owner: registry-witness
 source_repos:
   - registry-witness
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-24"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -44,6 +44,9 @@ evidence:
 ```
 
 The `source_connections` entry declares a base URL and token variable.
+Use HTTPS for production source registries.
+For a local Docker Compose source registry on a private network, add
+`allow_insecure_private_network: true`; leave it unset for production.
 The connector kind is set per binding, not per connection: each `source_bindings` entry carries
 an explicit `connector` field (`registry_data_api` or `dci`) that determines which HTTP client
 path the runtime uses.
@@ -60,6 +63,7 @@ evidence:
   source_connections:
     crvs:
       base_url: http://my-relay.example.com
+      allow_insecure_private_network: true
       token_env: CRVS_SOURCE_TOKEN
       dci:
         search_path: /dci/crvs/registry/sync/search

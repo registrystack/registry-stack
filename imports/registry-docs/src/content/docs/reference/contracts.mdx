@@ -47,7 +47,6 @@ The table is generated from `src/data/contracts.yaml`.
   - `current-source` means the artifact is actively maintained and production-ready.
   - `pinned-generated-snapshot` means the artifact was generated from the owning repo and pinned here for stable publication.
   - `pinned-demo-snapshot` means the artifact is pinned from a demo run, not a release export; treat it as a preview.
-  - `pre-rename-source` means the artifact exists but the owning repo is mid-rename; use for demo acceptance only.
 - **Source of truth** links to the module, file, or CLI that produces the artifact.
 - **Consumer note** records the current limitation or regeneration path.
 
@@ -72,5 +71,5 @@ The table is generated from `src/data/contracts.yaml`.
 - The [Registry Relay](../../projects/registry-relay/) OpenAPI artifact is a pinned civil demo snapshot (`pinned-demo-snapshot`).
   Registry Relay exposes OpenAPI through an auth-gated runtime route (`GET /openapi.json`).
   A release-grade export path or published artifact does not yet exist.
-  {/* TODO[evidence]: no standalone Relay OpenAPI export command found at commit aec4394. Confirm whether a `cargo run -- openapi` subcommand is planned. */}
+  {/* TODO[evidence]: no standalone Relay OpenAPI export command found at commit 85d32f0. Confirm whether a `cargo run -- openapi` subcommand is planned. */}
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.

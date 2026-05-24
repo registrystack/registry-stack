@@ -139,7 +139,9 @@ Registry Witness fetches source data over HTTP using one of two connector kinds:
   Defaults: search path `/registry/sync/search`, records path
   `/message/search_response/0/data/reg_records`, max results `2`.
 
-Both connectors use an HTTP client with a 10-second timeout.
+Both connectors use an HTTP client with a 10-second timeout and strict outbound URL policy by default.
+Private-network HTTP source registries are allowed only when a source connection sets
+`allow_insecure_private_network: true`; the opt-in still blocks cloud metadata endpoints.
 Source connection credentials are bearer tokens loaded from environment variables named
 by the `token_env` field on each `source_connections` entry.
 No source credentials appear in the YAML config file itself.

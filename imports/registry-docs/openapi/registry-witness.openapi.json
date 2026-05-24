@@ -3,11 +3,7 @@
   "info": {
     "title": "Registry Witness API",
     "description": "Standalone claim evaluation, rendering, and credential issuance API.",
-    "license": {
-      "name": "Apache-2.0",
-      "identifier": "Apache-2.0"
-    },
-    "version": "0.2.1"
+    "version": "0.1.0"
   },
   "paths": {
     "/.well-known/evidence-service": {
@@ -34,23 +30,6 @@
           },
           "401": {
             "description": "Missing or invalid credential"
-          }
-        }
-      }
-    },
-    "/admin/reload": {
-      "post": {
-        "summary": "Request a standalone config reload",
-        "operationId": "adminReload",
-        "responses": {
-          "200": {
-            "description": "Reload request accepted; standalone router currently returns a no-op response"
-          },
-          "401": {
-            "description": "Missing or invalid credential"
-          },
-          "403": {
-            "description": "Authenticated principal lacks the admin scope"
           }
         }
       }
@@ -240,18 +219,6 @@
         }
       }
     },
-    "/healthz": {
-      "get": {
-        "summary": "Fetch liveness status",
-        "operationId": "getHealthz",
-        "responses": {
-          "200": {
-            "description": "Service is alive"
-          }
-        },
-        "security": []
-      }
-    },
     "/openapi.json": {
       "get": {
         "summary": "Fetch this OpenAPI document",
@@ -264,21 +231,6 @@
             "description": "Missing or invalid credential"
           }
         }
-      }
-    },
-    "/ready": {
-      "get": {
-        "summary": "Fetch readiness status",
-        "operationId": "getReady",
-        "responses": {
-          "200": {
-            "description": "Service is ready"
-          },
-          "503": {
-            "description": "Service is not ready"
-          }
-        },
-        "security": []
       }
     }
   },

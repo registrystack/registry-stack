@@ -5,7 +5,7 @@ status: draft
 owner: registry-lab
 source_repos:
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-24"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -34,6 +34,8 @@ scripts/release-check.sh
 
 `release-check.sh` runs fixture generation, credential generation, static metadata publication,
 compose build, compose up, smoke checks, demo client, and compose down in one pass.
+The submodules use GitHub SSH URLs; configure SSH access or a Git URL rewrite before cloning
+with `--recurse-submodules`.
 
 ## Compose topology
 
@@ -44,7 +46,8 @@ Three are Relay instances; three are Witness instances; one is the static metada
 one is the narrated demo client (started on demand only, via `--profile client`).
 
 All Relay and Witness images are built locally from the `registry-relay:demo` and `registry-witness:demo`
-images using the submodule sources under `vendor/`.
+images using the `vendor/registry-platform`, `vendor/registry-relay`, and `vendor/registry-witness`
+submodule sources.
 The static metadata publisher and demo client both use the public `python:3.12.3-slim-bookworm` image.
 
 Host-to-container port assignments are fixed in `compose.yaml`.
@@ -95,15 +98,16 @@ The static bundle is generated from the portable metadata config, not scraped fr
 ## Smoke checks
 
 [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)
-runs approximately 30 checks against the live compose topology.
+runs more than 30 checks against the live compose topology.
 The checks cover health and readiness on all three Relay instances,
-discovery endpoints on all three Witness instances,
+discovery endpoints on all three Witness instances with bearer-token and `x-api-key` credentials,
 OpenAPI endpoints on every service,
 authorization scope denial responses (403 with `auth.scope_denied`),
 positive row-read and aggregate-read responses on the social protection Relay,
 claim evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility witnesses,
 a cross-authority result with `source_count >= 2` on the shared eligibility witness,
-and credential-bound evaluation returning `application/dc+sd-jwt`.
+credential-bound evaluation returning `application/dc+sd-jwt`,
+and service-log assertions that generated raw secrets are not emitted.
 
 All smoke requests carry the correlation ID `decentralized-demo-correlation-001` by default,
 overridable via the `DEMO_CORRELATION_ID` environment variable.

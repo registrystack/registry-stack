@@ -268,3 +268,19 @@ Fields under `auth.oidc`.
 | `claims` | `[]` | Array of claim definitions. |
 | `credential_profiles` | `{}` | Map of profile ID to `CredentialProfileConfig`. |
 | `source_connections` | `{}` | Map of connection ID to `SourceConnectionConfig`. |
+
+### `evidence.source_connections`
+
+Fields of `SourceConnectionConfig`.
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `base_url` | None | Upstream source registry base URL. Required. |
+| `allow_insecure_localhost` | `false` | Development-only opt-in for HTTP localhost source registries. |
+| `allow_insecure_private_network` | `false` | Development/demo opt-in for HTTP private-network source registries, while cloud metadata endpoints remain blocked. |
+| `token_env` | None | Environment variable containing the outbound bearer token used when Witness calls the source registry. Required. |
+| `dci` | DCI defaults | Optional DCI connector settings such as `search_path`, `query_type`, `records_path`, and `field_paths`. |
+| `max_in_flight` | `8` | Per-connection cap on concurrent outbound source requests. |
+| `bulk_mode` | `none` | Connector-specific bulk-read mode. Values include `none`, `rda_in_filter`, and `dci_batched_search`. |
+| `bulk_mode_lookup_unique` | `false` | Required operator attestation for `rda_in_filter`. |
+| `bulk_timeout_max_ms` | `30000` | Upper bound on the per-call timeout for bulk source reads. |

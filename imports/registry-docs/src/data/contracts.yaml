@@ -55,9 +55,9 @@
 - id: registry-lab.release-check
   name: Registry Lab Release Check
   owner: registry-lab
-  status: pre-rename-source
-  surface: Compose build, fixture generation, secret generation, smoke checks, and narrated demo flow.
+  status: current-source
+  surface: Compose build, fixture generation, secret generation, static metadata publication, smoke checks, raw-secret log checks, and narrated demo flow.
   source_of_truth:
-    label: Pre-rename demo README
+    label: Registry Lab README
     url: https://github.com/jeremi/registry-lab/blob/main/README.md
   consumer_note: Use as a demo acceptance path only; production contracts remain in the owning repos.

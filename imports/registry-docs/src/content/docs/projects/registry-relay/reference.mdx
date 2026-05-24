@@ -1,6 +1,6 @@
 ---
 title: Registry Relay reference
-description: Config schema keys, source binding types, metadata routes, auth modes, and audit record shape for Registry Relay v0.1.0.
+description: Config schema keys, source binding types, metadata routes, auth modes, and audit record shape for Registry Relay release tag v0.1.1.
 status: draft
 owner: registry-relay
 source_repos:
@@ -22,7 +22,7 @@ standards_referenced:
 ---
 
 Use this page to look up config keys, source binding options, API routes, auth fields,
-audit record fields, environment variables, and startup error codes for Registry Relay v0.1.0.
+audit record fields, environment variables, and startup error codes for Registry Relay release tag `v0.1.1`.
 This reference is hand-maintained against the upstream source; check linked upstream files
 for the latest detail. Relay owns the config schema and route behavior, while shared auth, audit, OIDC, HTTP security, outbound HTTP, crypto, and SD-JWT primitives live in Registry Platform.
 
@@ -32,7 +32,7 @@ Jump to: [Environment variables](#environment-variables) | [Auth failure codes](
 
 The config file is a single YAML document.
 Unknown fields are rejected for most blocks.
-Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md) (root shape; all keys below are documented there unless otherwise noted).
+Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md) (root shape; all keys below are documented there unless otherwise noted).
 
 | Key | Type | Required | Purpose |
 | --- | --- | --- | --- |
@@ -41,7 +41,7 @@ Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/ae
 | `auth` | object | yes | Auth mode (`api_key` or `oidc`) and credentials |
 | `datasets` | array | yes | Dataset and entity configurations |
 | `audit` | object | yes | Audit sink (`stdout`, `file`, `syslog`) and format |
-| `metadata` | object | no | Path to a portable `metadata.yaml` manifest (split config); see [docs/metadata.md](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md) |
+| `metadata` | object | no | Path to a portable `metadata.yaml` manifest (split config); see [docs/metadata.md](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/metadata.md) |
 | `vocabularies` | object | no | Custom vocabulary prefix mappings (compact IRIs) |
 | `claim_verification` | object | no | HMAC binding key for submitted claim hashing |
 | `evidence_verification` | object | no | Per-principal, per-offering rate-limit settings |
@@ -65,7 +65,7 @@ Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/ae
 
 All source bindings are table-level.
 Table IDs are private and never appear in public API paths.
-[Source: docs/configuration.md sources section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md sources section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 ### File sources (CSV, XLSX, Parquet)
 
@@ -84,7 +84,7 @@ Supported refresh modes: `mtime`, `interval`, `manual`.
 
 Set `source.type: postgres`.
 Credentials are loaded from the environment variable named by `source.connection_env`.
-[Source: docs/configuration.md PostgreSQL sources section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md PostgreSQL sources section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 | Config key | Purpose |
 | --- | --- |
@@ -109,7 +109,7 @@ only).
 | `postgres` table or query | `snapshot` | gateway-side | gateway-side | yes |
 | `postgres` table | `live` | gateway-side | Postgres column pushdown (filter-free scans only) | no |
 
-[Source: docs/configuration.md datasource capability matrix table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md datasource capability matrix table.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 ## `metadata/*` route inventory
 
@@ -117,7 +117,7 @@ All `/metadata/*` routes require the caller's `<dataset_id>:metadata` scope.
 They expose caller-scoped views filtered by the authenticated principal's metadata
 scopes.
 They do not grant row, aggregate, evidence-verification, or admin access.
-[Source: docs/metadata.md relay endpoints section; docs/api.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
+[Source: docs/metadata.md relay endpoints section; docs/api.md.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/metadata.md)
 
 {/* Standard abbreviations used in the table: DCAT = Data Catalog Vocabulary,
     BRegDCAT-AP = SEMIC Business Register DCAT Application Profile,
@@ -147,14 +147,14 @@ They do not grant row, aggregate, evidence-verification, or admin access.
 | `GET /metadata/evidence-offerings` | JSON | n/a | List of evidence offerings |
 | `GET /metadata/evidence-offerings/{offering_id}` | JSON | n/a | One evidence offering |
 
-[Source: docs/api.md auth-gated routes; docs/metadata.md relay endpoints.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+[Source: docs/api.md auth-gated routes; docs/metadata.md relay endpoints.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/api.md)
 
 ## Auth modes
 
 Registry Relay supports two modes: API key and OpenID Connect / OAuth 2.0 (OIDC)
 resource-server.
 Exactly one mode is active per deployment.
-[Source: docs/api.md authentication section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+[Source: docs/api.md authentication section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/api.md)
 
 ### API key authentication
 
@@ -203,7 +203,7 @@ Exactly one mode is active per deployment.
 | `auth.invalid_credential` | 401 | JWT decode failure not covered by a more specific variant |
 | `auth.jwks_unavailable` | 503 | JWKS fetch failed; the relay cannot verify any token |
 
-[Source: docs/configuration.md granular failure codes table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md granular failure codes table.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 ## Audit record shape
 
@@ -260,17 +260,18 @@ Each audit record is wrapped in a Registry Platform audit envelope with addition
 | `RUST_LOG` | Tracing filter level (defaults to `info`) |
 | `<auth.api_keys[].hash_env>` | `sha256:<64 hex>` fingerprint of one API key |
 | `<source.connection_env>` | PostgreSQL connection string for a database source |
+| `<audit.hash_secret_env>` | Deployment-specific audit hash secret with at least 32 bytes of random material |
 | `CLAIM_VERIFICATION_BINDING_KEY` | HMAC key for claim hashing; format `hex:<64+ hex chars>` |
 | `<provenance.issuer.signer.jwk_env>` | JSON-encoded private JWK for VC signing (provenance feature) |
 
-[Source: .research/registry-relay.md environment variables section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: .research/registry-relay.md environment variables section; docs/configuration.md.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 ## Split metadata startup error codes
 
 When `metadata.manifest_path` is set, startup validates the manifest and all runtime
 bindings.
 Failures produce stable log codes.
-[Source: docs/metadata.md validation table; docs/api.md startup codes.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/metadata.md)
+[Source: docs/metadata.md validation table; docs/api.md startup codes.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/metadata.md)
 
 | Code | Meaning |
 | --- | --- |

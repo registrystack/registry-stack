@@ -1,11 +1,11 @@
 ---
 title: Registry Lab reference
-description: Hand-maintained inventory of Registry Lab compose services, fixture files, smoke-check scripts, generated credentials, and static metadata publisher endpoints as of 2026-05-23.
+description: Hand-maintained inventory of Registry Lab compose services, fixture files, smoke-check scripts, generated credentials, and static metadata publisher endpoints as of 2026-05-24.
 status: draft
 owner: registry-lab
 source_repos:
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-24"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -30,6 +30,8 @@ Full Compose file: [`compose.yaml`](https://github.com/jeremi/registry-lab/blob/
 | `static-metadata-publisher` | `python:3.12.3-slim-bookworm` (pulled) | Python HTTP server serving the portable metadata static bundle at `/srv/static` | 4331 |
 | `demo-client` | `python:3.12.3-slim-bookworm` (pulled) | Narrated demo client (one-shot, `--profile client` only); runs `scripts/demo-flow.py` | None |
 
+Relay and Witness build contexts include `vendor/registry-platform` plus the owning service source
+submodule, `vendor/registry-relay` or `vendor/registry-witness`.
 All Relay and Witness services use `env_file: .env`, `RUST_LOG: info`, and `restart: unless-stopped`.
 Relay services have a healthcheck (`registry-relay --help`, 30 s interval, 10 s timeout, 3 retries).
 Witness services have no healthcheck in the compose file.
@@ -63,10 +65,10 @@ All smoke requests use the correlation ID `decentralized-demo-correlation-001`
 
 Source: [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)
 
-Approximately 30 checks:
+More than 30 checks:
 
 - Health and ready endpoints on all Relay services
-- Discovery endpoints on all Witness services
+- Discovery endpoints on all Witness services with bearer-token and `x-api-key` credentials
 - OpenAPI endpoints on all services
 - Evidence-offering endpoints
 - Authorization scope denial (403 `auth.scope_denied`)
@@ -76,6 +78,7 @@ Approximately 30 checks:
 - Credential-bound SD-JWT VC evaluation
 - Demo-client artifact presence
 - Audit event log entries
+- Absence of generated raw secrets in service logs
 
 ### release-check.sh
 
@@ -105,14 +108,20 @@ The committed `.env.example` contains inert placeholder values only.
 | Evidence-only token (health) | `HEALTH_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
 | Row-reader token (social) | `SOCIAL_ROW_READER_RAW` | Protected row read in scenario 2 and scope denial checks |
 | Aggregate-reader token (social) | `SOCIAL_AGGREGATE_READER_RAW` | Aggregate consultation in scenario 2 and scope denial checks |
+| Witness client API key (civil) | `CIVIL_EVIDENCE_CLIENT_TOKEN` / `CIVIL_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `civil-witness` |
+| Witness client API key (social) | `SOCIAL_EVIDENCE_CLIENT_TOKEN` / `SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `social-protection-witness` |
+| Witness client API key (shared) | `SHARED_EVIDENCE_CLIENT_TOKEN` / `SHARED_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `shared-eligibility-witness` |
 | Witness client bearer (civil) | `CIVIL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `civil-witness` |
 | Witness client bearer (social) | `SOCIAL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `social-protection-witness` |
 | Witness client bearer (shared) | `SHARED_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `shared-eligibility-witness` |
+| Audit hash secret (Relay) | `REGISTRY_RELAY_AUDIT_HASH_SECRET` | Relay audit redaction and keyed hashes |
+| Audit hash secret (Witness) | `REGISTRY_WITNESS_AUDIT_HASH_SECRET` | Witness audit redaction and keyed hashes |
 | Issuer JWK (all Witnesses) | `REGISTRY_WITNESS_ISSUER_JWK` | SD-JWT VC signing key; all three Witness configs use `issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK` ([`config/witness/civil-witness.yaml` L43](https://github.com/jeremi/registry-lab/blob/main/config/witness/civil-witness.yaml#L43)) |
 
 :::note[How credentials flow]
 Relay configs reference only `*_HASH` env vars (SHA-256 fingerprints of the raw tokens).
-Witness configs reference `token_env` names that map to `*_RAW` or `*_BEARER` env vars.
+Witness auth configs reference `*_HASH` env vars for client credentials.
+Witness upstream source connections still reference `token_env` names for outbound calls to Relay.
 No raw token is committed to the repository.
 :::
 
@@ -148,7 +157,7 @@ Source: [`config/`](https://github.com/jeremi/registry-lab/blob/main/config/).
 | `config/relay/civil-registry-relay.metadata.yaml` | Portable metadata for the civil Relay (separate from runtime binding) |
 | `config/relay/social-protection-registry-relay.metadata.yaml` | Portable metadata for the social protection Relay |
 | `config/relay/health-registry-relay.metadata.yaml` | Portable metadata for the health Relay |
-| `config/witness/civil-witness.yaml` | Civil Witness: claim definitions, source connector URL, disclosure policy |
-| `config/witness/social-protection-witness.yaml` | Social protection Witness: claim definitions, source connector URL, disclosure policy |
-| `config/witness/shared-eligibility-witness.yaml` | Shared eligibility Witness: cross-authority claim definitions, multiple source connectors |
+| `config/witness/civil-witness.yaml` | Civil Witness: hashed client auth, claim definitions, source connector URL, private-network source opt-in, disclosure policy |
+| `config/witness/social-protection-witness.yaml` | Social protection Witness: hashed client auth, claim definitions, source connector URL, private-network source opt-in, disclosure policy |
+| `config/witness/shared-eligibility-witness.yaml` | Shared eligibility Witness: hashed client auth, cross-authority claim definitions, multiple private-network source connectors |
 | `config/static-metadata/metadata.yaml` | Portable metadata manifest (`registry-manifest/v1`) used by the static publisher |

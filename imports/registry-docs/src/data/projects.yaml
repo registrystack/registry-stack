@@ -107,7 +107,7 @@
   name: Registry Lab
   repo_path: ../registry-lab
   target_repo_path: ../registry-lab
-  role: Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, three Witness instances, a static metadata publisher, and a narrated demo client together with fixtures and smoke tests.
+  role: Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, three Witness instances, a static metadata publisher, and a narrated demo client together with Registry Platform, Relay, and Witness submodule pins, fixtures, and smoke tests.
   owns:
     - End-to-end local topology for Relay, Witness, the static metadata publisher, and demo-client fixtures (Atlas is run separately and is not in the compose topology at v0.1).
     - Demo scripts, smoke checks, generated local credentials, and narrated client flow.
@@ -121,4 +121,4 @@
       url: https://github.com/jeremi/registry-lab/blob/main/README.md
     - label: Rename plan
       url: https://github.com/jeremi/registry-legend/blob/main/rename-plan-2026-05-23.md
-  rename_status: Local checkout renamed to `registry-lab`; some scripts and fixtures may still reference the old `decentralized-evidence-demo` name.
+  rename_status: Local checkout renamed to `registry-lab`; stable demo identifiers may still contain `decentralized-demo` as protocol and artifact values.

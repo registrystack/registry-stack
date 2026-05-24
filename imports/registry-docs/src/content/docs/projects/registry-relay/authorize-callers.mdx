@@ -26,7 +26,7 @@ Use OIDC mode when callers already hold JWTs issued by a central IdP and you nee
 integrate Registry Relay into that trust fabric.
 
 A given deployment runs in exactly one mode; mixed-mode operation is not supported.
-[Source: docs/configuration.md OIDC section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md OIDC section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 ## Prerequisites
 
@@ -48,10 +48,10 @@ Registry Relay loads fingerprints from environment variables at startup.
 It hashes any presented raw key with SHA-256 and compares against the loaded
 fingerprints.
 The raw key is never stored in YAML or logged.
-[Source: docs/configuration.md API keys section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md API keys section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 When both `Authorization: Bearer` and `X-Api-Key` are present, `Authorization` wins.
-[Source: docs/api.md authentication section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+[Source: docs/api.md authentication section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/api.md)
 
 ### Steps
 
@@ -83,7 +83,7 @@ auth:
 
 `hash_env` is the environment variable name, not the value.
 The value in that variable must start with `sha256:` followed by 64 lowercase hex characters.
-[Source: docs/configuration.md API keys section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md API keys section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 **3. Export the fingerprint environment variable and restart.**
 
@@ -94,7 +94,7 @@ just run
 
 Keyring changes take effect only after a process restart.
 Live keyring reload is not supported in v0.
-[Source: docs/ops.md key provisioning section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
+[Source: docs/ops.md key provisioning section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/ops.md)
 
 **4. Assign the narrowest scope that lets the caller do its job.**
 
@@ -106,7 +106,7 @@ Live keyring reload is not supported in v0.
 | `aggregate` | Aggregate discovery and configured aggregate execution |
 | `admin` | Admin listener operations (reload, metrics) |
 
-[Source: docs/api.md scopes table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+[Source: docs/api.md scopes table.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/api.md)
 
 {/* Audit fields for API-key auth (auth_mode, principal_id, scopes_used) are documented
     in the audit record shape table on the reference page. */}
@@ -121,7 +121,7 @@ it checks standard claims (`iss`, `aud`, `exp`, optional `nbf`), looks up the si
 key by `kid`, and verifies the signature.
 The `principal_id` is taken from the token's `sub` claim (preferred), then `client_id`,
 then `azp`.
-[Source: docs/api.md OIDC bearer JWT section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+[Source: docs/api.md OIDC bearer JWT section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/api.md)
 
 ### Steps
 
@@ -147,10 +147,10 @@ auth:
 
 Supply exactly one of `discovery_url` or `jwks_url`.
 Configs that supply both or neither are rejected at startup.
-[Source: docs/configuration.md OIDC field table.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md OIDC field table.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 A complete drop-in OIDC config targeting a local Zitadel IdP is available at
-[`config/example.oidc.yaml`](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/config/example.oidc.yaml).
+[`config/example.oidc.yaml`](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/config/example.oidc.yaml).
 
 **2. Map IdP roles to Relay scopes with `scope_map`.**
 
@@ -159,7 +159,7 @@ If the IdP issues tokens with role names that differ from Registry Relay's
 scope check.
 Registry Relay accepts scopes as a space-separated string, a JSON array, or an object
 whose keys are scope names (Zitadel format); `scope_claim` names the JWT field to read.
-[Source: docs/configuration.md scope_claim and scope_map.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md scope_claim and scope_map.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 **3. Restart with the OIDC config.**
 
@@ -169,7 +169,7 @@ whose keys are scope names (Zitadel format); `scope_claim` names the JWT field t
 
 `discovery_url` triggers a single discovery fetch at startup to resolve `jwks_uri`.
 A failure here aborts the process so you see the IdP wiring problem immediately.
-[Source: docs/configuration.md discovery vs explicit JWKS.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[Source: docs/configuration.md discovery vs explicit JWKS.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 
 **4. Mint a token from the IdP and call a protected endpoint.**
 
@@ -219,7 +219,7 @@ Expect `401` with a Problem Details body:
 }
 ```
 
-[Source: docs/api.md problem details section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/api.md)
+[Source: docs/api.md problem details section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/api.md)
 
 ### Confirm a key without the required scope is rejected
 
@@ -260,12 +260,12 @@ Add the scope to the key's `scopes` list (API-key mode) or to the token's claims
 
 **`401` after rotating an API key:** Keyring changes require a process restart.
 The old fingerprint remains active until the process is restarted with the new config.
-[Source: docs/ops.md key rotation section.](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/ops.md)
+[Source: docs/ops.md key rotation section.](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/ops.md)
 
 **OIDC: `503 auth.jwks_unavailable`:** The JWKS endpoint is unreachable.
 Registry Relay cannot verify any token in this state.
 Check IdP availability and network policy.
 
 **Granular OIDC failure codes** are documented in the
-[auth failure-code table](https://github.com/jeremi/registry-relay/blob/aec4394300c87e1f0e93b73580c9b12150552111/docs/configuration.md)
+[auth failure-code table](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md)
 in `docs/configuration.md`.
