@@ -7,6 +7,8 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::FORMAT_SD_JWT_VC;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StandaloneRegistryWitnessConfig {
@@ -16,6 +18,8 @@ pub struct StandaloneRegistryWitnessConfig {
     pub auth: EvidenceAuthConfig,
     #[serde(default)]
     pub audit: EvidenceAuditConfig,
+    #[serde(default)]
+    pub self_attestation: SelfAttestationConfig,
 }
 
 impl StandaloneRegistryWitnessConfig {
@@ -112,26 +116,30 @@ impl StandaloneRegistryWitnessConfig {
                 }
             }
         }
-        // Finding 3: when proof_of_possession is required, only did:jwk is
-        // supported by holder_jwk(). Reject configs that list any other method
-        // so the mismatch is caught at startup rather than at request time.
+        // Registry Witness currently resolves holder material only from
+        // did:jwk. Reject any other configured method so discovery metadata
+        // cannot advertise support that issuance cannot satisfy.
         for (profile_id, profile) in &self.evidence.credential_profiles {
-            if profile.holder_binding.proof_of_possession.as_deref() == Some("required") {
-                let unsupported: Vec<String> = profile
-                    .holder_binding
-                    .allowed_did_methods
-                    .iter()
-                    .filter(|m| m.as_str() != "did:jwk")
-                    .cloned()
-                    .collect();
-                if !unsupported.is_empty() {
-                    return Err(
-                        EvidenceConfigError::UnsupportedDidMethodsForProofOfPossession {
-                            profile: profile_id.clone(),
-                            methods: unsupported,
-                        },
-                    );
-                }
+            if profile.format != FORMAT_SD_JWT_VC {
+                return Err(EvidenceConfigError::UnsupportedCredentialProfileFormat {
+                    profile: profile_id.clone(),
+                    format: profile.format.clone(),
+                });
+            }
+            let unsupported: Vec<String> = profile
+                .holder_binding
+                .allowed_did_methods
+                .iter()
+                .filter(|m| m.as_str() != "did:jwk")
+                .cloned()
+                .collect();
+            if !unsupported.is_empty() {
+                return Err(
+                    EvidenceConfigError::UnsupportedCredentialProfileDidMethods {
+                        profile: profile_id.clone(),
+                        methods: unsupported,
+                    },
+                );
             }
             // An empty allowed_claims short-circuits the issuance-time filter
             // in api.rs (`is_empty()` means "any claim allowed"). Require
@@ -174,8 +182,694 @@ impl StandaloneRegistryWitnessConfig {
                 )?;
             }
         }
+        self.self_attestation.validate(&self.auth, &self.evidence)?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_self_attestation_required_auth_mode")]
+    pub requires_auth_mode: String,
+    #[serde(default)]
+    pub subject_binding: SelfAttestationSubjectBindingConfig,
+    #[serde(default)]
+    pub citizen_clients: SelfAttestationCitizenClientsConfig,
+    #[serde(default)]
+    pub token_policy: SelfAttestationTokenPolicyConfig,
+    #[serde(default)]
+    pub allowed_operations: SelfAttestationOperationsConfig,
+    #[serde(default)]
+    pub allowed_purposes: Vec<String>,
+    #[serde(default)]
+    pub allowed_claims: Vec<String>,
+    #[serde(default)]
+    pub allowed_formats: Vec<String>,
+    #[serde(default)]
+    pub allowed_disclosures: Vec<String>,
+    #[serde(default)]
+    pub required_scopes: Vec<String>,
+    #[serde(default)]
+    pub allowed_wallet_origins: Vec<String>,
+    #[serde(default)]
+    pub credential_profiles: Vec<String>,
+    #[serde(default)]
+    pub rate_limits: SelfAttestationRateLimitsConfig,
+}
+
+impl Default for SelfAttestationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            requires_auth_mode: default_self_attestation_required_auth_mode(),
+            subject_binding: SelfAttestationSubjectBindingConfig::default(),
+            citizen_clients: SelfAttestationCitizenClientsConfig::default(),
+            token_policy: SelfAttestationTokenPolicyConfig::default(),
+            allowed_operations: SelfAttestationOperationsConfig::default(),
+            allowed_purposes: Vec::new(),
+            allowed_claims: Vec::new(),
+            allowed_formats: Vec::new(),
+            allowed_disclosures: Vec::new(),
+            required_scopes: Vec::new(),
+            allowed_wallet_origins: Vec::new(),
+            credential_profiles: Vec::new(),
+            rate_limits: SelfAttestationRateLimitsConfig::default(),
+        }
+    }
+}
+
+fn default_self_attestation_required_auth_mode() -> String {
+    "oidc".to_string()
+}
+
+impl SelfAttestationConfig {
+    fn validate(
+        &self,
+        auth: &EvidenceAuthConfig,
+        evidence: &EvidenceConfig,
+    ) -> Result<(), EvidenceConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.requires_auth_mode != "oidc" {
+            return self.invalid("requires_auth_mode must be oidc");
+        }
+        if auth.mode != "oidc" {
+            return self.invalid("enabled self_attestation requires auth.mode = oidc");
+        }
+        let oidc = auth
+            .oidc
+            .as_ref()
+            .ok_or(EvidenceConfigError::MissingOidcConfig)?;
+
+        self.subject_binding.validate()?;
+        self.citizen_clients.validate(oidc)?;
+        self.token_policy.validate(oidc)?;
+        self.allowed_operations.validate()?;
+        validate_non_empty_entries("self_attestation.allowed_purposes", &self.allowed_purposes)?;
+        validate_non_empty_entries("self_attestation.allowed_claims", &self.allowed_claims)?;
+        validate_non_empty_entries("self_attestation.allowed_formats", &self.allowed_formats)?;
+        validate_non_empty_entries(
+            "self_attestation.allowed_disclosures",
+            &self.allowed_disclosures,
+        )?;
+        validate_non_empty_entries("self_attestation.required_scopes", &self.required_scopes)?;
+        validate_non_empty_entries(
+            "self_attestation.allowed_wallet_origins",
+            &self.allowed_wallet_origins,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.credential_profiles",
+            &self.credential_profiles,
+        )?;
+        self.rate_limits.validate()?;
+        validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
+
+        let claim_ids: HashSet<&str> = evidence
+            .claims
+            .iter()
+            .map(|claim| claim.id.as_str())
+            .collect();
+        let allowed_claim_ids: HashSet<&str> =
+            self.allowed_claims.iter().map(String::as_str).collect();
+        let allowed_purposes: HashSet<&str> =
+            self.allowed_purposes.iter().map(String::as_str).collect();
+        let allowed_formats: HashSet<&str> =
+            self.allowed_formats.iter().map(String::as_str).collect();
+        let allowed_disclosures: HashSet<&str> = self
+            .allowed_disclosures
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let allowed_profiles: HashSet<&str> = self
+            .credential_profiles
+            .iter()
+            .map(String::as_str)
+            .collect();
+
+        for claim_id in &self.allowed_claims {
+            if !claim_ids.contains(claim_id.as_str()) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!("allowed_claims references unknown claim '{claim_id}'"),
+                });
+            }
+        }
+
+        for profile_id in &self.credential_profiles {
+            if !evidence.credential_profiles.contains_key(profile_id) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "credential_profiles references unknown profile '{profile_id}'"
+                    ),
+                });
+            }
+        }
+
+        for profile_id in &self.credential_profiles {
+            let profile = evidence
+                .credential_profiles
+                .get(profile_id)
+                .expect("profile id was checked above");
+            validate_self_attestation_profile(
+                profile_id,
+                profile,
+                &claim_ids,
+                &allowed_claim_ids,
+                &allowed_formats,
+                self.token_policy.max_credential_validity_seconds,
+            )?;
+        }
+
+        for claim_id in &self.allowed_claims {
+            let claim = evidence
+                .claims
+                .iter()
+                .find(|claim| claim.id == *claim_id)
+                .expect("claim id was checked above");
+            validate_self_attestation_claim(
+                claim,
+                &allowed_purposes,
+                &allowed_formats,
+                &allowed_disclosures,
+                &allowed_profiles,
+                self.allowed_operations.issue_credential,
+            )?;
+        }
+
+        validate_self_attestation_allow_lists_are_supported(self, evidence)?;
+        validate_required_scopes_do_not_grant_source_access(self, oidc, evidence)?;
+        Ok(())
+    }
+
+    fn invalid<T>(&self, reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
+        Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+            reason: reason.into(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationSubjectBindingConfig {
+    #[serde(default)]
+    pub token_claim: String,
+    #[serde(default)]
+    pub request_field: SubjectId,
+    #[serde(default)]
+    pub id_type: String,
+    #[serde(default)]
+    pub normalize: SubjectBindingNormalize,
+    #[serde(default)]
+    pub allow_sub_as_civil_id: bool,
+}
+
+impl SelfAttestationSubjectBindingConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.token_claim.is_empty() {
+            return invalid_self_attestation("subject_binding.token_claim must not be empty");
+        }
+        if !self
+            .token_claim
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '/' | '.' | '-'))
+        {
+            return invalid_self_attestation(
+                "subject_binding.token_claim must match [A-Za-z0-9_:/\\.\\-]+",
+            );
+        }
+        if self.token_claim == "sub" && !self.allow_sub_as_civil_id {
+            return invalid_self_attestation(
+                "subject_binding.token_claim = sub requires allow_sub_as_civil_id = true",
+            );
+        }
+        if self.id_type.trim().is_empty() {
+            return invalid_self_attestation("subject_binding.id_type must not be empty");
+        }
+        if self.normalize != SubjectBindingNormalize::Exact {
+            return invalid_self_attestation("subject_binding.normalize must be exact");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum SubjectId {
+    #[default]
+    SubjectId,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubjectBindingNormalize {
+    #[default]
+    Exact,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationCitizenClientsConfig {
+    #[serde(default)]
+    pub allowed_client_ids: Vec<String>,
+    #[serde(default)]
+    pub allowed_audiences: Vec<String>,
+}
+
+impl SelfAttestationCitizenClientsConfig {
+    fn validate(&self, oidc: &EvidenceOidcAuthConfig) -> Result<(), EvidenceConfigError> {
+        if self.allowed_client_ids.is_empty() && self.allowed_audiences.is_empty() {
+            return invalid_self_attestation(
+                "citizen_clients must list at least one allowed client id or audience",
+            );
+        }
+        validate_entries(
+            "self_attestation.citizen_clients.allowed_client_ids",
+            &self.allowed_client_ids,
+        )?;
+        validate_entries(
+            "self_attestation.citizen_clients.allowed_audiences",
+            &self.allowed_audiences,
+        )?;
+        for audience in &self.allowed_audiences {
+            if !oidc.audiences.iter().any(|accepted| accepted == audience) {
+                return invalid_self_attestation(format!(
+                    "citizen audience '{audience}' is not listed in auth.oidc.audiences"
+                ));
+            }
+        }
+        if !oidc.allowed_clients.is_empty() {
+            for client_id in &self.allowed_client_ids {
+                if !oidc
+                    .allowed_clients
+                    .iter()
+                    .any(|accepted| accepted == client_id)
+                {
+                    return invalid_self_attestation(format!(
+                        "citizen client '{client_id}' is not listed in auth.oidc.allowed_clients"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationTokenPolicyConfig {
+    #[serde(default)]
+    pub required_acr_values: Vec<String>,
+    #[serde(default)]
+    pub max_auth_age_seconds: u64,
+    #[serde(default)]
+    pub max_access_token_lifetime_seconds: u64,
+    #[serde(default)]
+    pub max_evaluation_age_seconds: u64,
+    #[serde(default)]
+    pub max_credential_validity_seconds: u64,
+    #[serde(default)]
+    pub max_clock_leeway_seconds: u64,
+}
+
+impl SelfAttestationTokenPolicyConfig {
+    fn validate(&self, oidc: &EvidenceOidcAuthConfig) -> Result<(), EvidenceConfigError> {
+        validate_entries(
+            "self_attestation.token_policy.required_acr_values",
+            &self.required_acr_values,
+        )?;
+        if self.max_auth_age_seconds == 0 {
+            return invalid_self_attestation(
+                "token_policy.max_auth_age_seconds must be greater than zero",
+            );
+        }
+        if self.max_access_token_lifetime_seconds == 0 {
+            return invalid_self_attestation(
+                "token_policy.max_access_token_lifetime_seconds must be greater than zero",
+            );
+        }
+        if self.max_evaluation_age_seconds == 0 || self.max_evaluation_age_seconds > 600 {
+            return invalid_self_attestation(
+                "token_policy.max_evaluation_age_seconds must be between 1 and 600",
+            );
+        }
+        if self.max_credential_validity_seconds == 0 || self.max_credential_validity_seconds > 600 {
+            return invalid_self_attestation(
+                "token_policy.max_credential_validity_seconds must be between 1 and 600",
+            );
+        }
+        if self.max_clock_leeway_seconds == 0 || self.max_clock_leeway_seconds > 60 {
+            return invalid_self_attestation(
+                "token_policy.max_clock_leeway_seconds must be between 1 and 60",
+            );
+        }
+        if oidc.leeway_seconds > self.max_clock_leeway_seconds {
+            return invalid_self_attestation(
+                "auth.oidc.leeway_seconds must not exceed token_policy.max_clock_leeway_seconds",
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationOperationsConfig {
+    #[serde(default)]
+    pub evaluate: bool,
+    #[serde(default)]
+    pub render: bool,
+    #[serde(default)]
+    pub issue_credential: bool,
+    #[serde(default)]
+    pub batch_evaluate: bool,
+}
+
+impl SelfAttestationOperationsConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.batch_evaluate {
+            return invalid_self_attestation(
+                "allowed_operations.batch_evaluate must be false in v1",
+            );
+        }
+        if !self.evaluate && !self.render && !self.issue_credential {
+            return invalid_self_attestation(
+                "allowed_operations must enable at least one self-attestation operation",
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationRateLimitsConfig {
+    #[serde(default)]
+    pub mode: SelfAttestationRateLimitMode,
+    #[serde(default)]
+    pub invalid_token_per_client_address_per_minute: u32,
+    #[serde(default)]
+    pub per_principal_per_minute: u32,
+    #[serde(default)]
+    pub subject_mismatch_per_principal_per_hour: u32,
+    #[serde(default)]
+    pub per_holder_per_hour: u32,
+    #[serde(default)]
+    pub credential_issuance_per_principal_per_hour: u32,
+}
+
+impl SelfAttestationRateLimitsConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.mode != SelfAttestationRateLimitMode::InProcess {
+            return invalid_self_attestation("rate_limits.mode must be in_process");
+        }
+        if self.invalid_token_per_client_address_per_minute == 0
+            || self.per_principal_per_minute == 0
+            || self.subject_mismatch_per_principal_per_hour == 0
+            || self.per_holder_per_hour == 0
+            || self.credential_issuance_per_principal_per_hour == 0
+        {
+            return invalid_self_attestation("rate_limits values must all be greater than zero");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfAttestationRateLimitMode {
+    #[default]
+    InProcess,
+}
+
+fn validate_non_empty_entries(name: &str, values: &[String]) -> Result<(), EvidenceConfigError> {
+    if values.is_empty() {
+        return invalid_self_attestation(format!("{name} must not be empty"));
+    }
+    validate_entries(name, values)
+}
+
+fn validate_entries(name: &str, values: &[String]) -> Result<(), EvidenceConfigError> {
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return invalid_self_attestation(format!("{name} must not contain blank entries"));
+    }
+    Ok(())
+}
+
+fn validate_exact_wallet_origins(origins: &[String]) -> Result<(), EvidenceConfigError> {
+    for origin in origins {
+        if origin == "*" || origin.contains('*') {
+            return invalid_self_attestation(
+                "allowed_wallet_origins must contain exact origins, not wildcards",
+            );
+        }
+        if !origin.starts_with("https://") {
+            return invalid_self_attestation("allowed_wallet_origins must use https origins");
+        }
+    }
+    Ok(())
+}
+
+fn validate_self_attestation_claim(
+    claim: &ClaimDefinition,
+    allowed_purposes: &HashSet<&str>,
+    allowed_formats: &HashSet<&str>,
+    allowed_disclosures: &HashSet<&str>,
+    allowed_profiles: &HashSet<&str>,
+    issue_credential: bool,
+) -> Result<(), EvidenceConfigError> {
+    if !claim.operations.evaluate.enabled {
+        return invalid_self_attestation(format!(
+            "allowed claim '{}' must enable evaluate",
+            claim.id
+        ));
+    }
+    let purpose = claim.purpose.as_deref().ok_or_else(|| {
+        EvidenceConfigError::InvalidSelfAttestationConfig {
+            reason: format!("allowed claim '{}' must declare purpose", claim.id),
+        }
+    })?;
+    if !allowed_purposes.contains(purpose) {
+        return invalid_self_attestation(format!(
+            "allowed claim '{}' declares unallowed purpose '{}'",
+            claim.id, purpose
+        ));
+    }
+    if !claim
+        .formats
+        .iter()
+        .any(|format| allowed_formats.contains(format.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "allowed claim '{}' must support at least one allowed format",
+            claim.id
+        ));
+    }
+    if !claim
+        .disclosure
+        .allowed
+        .iter()
+        .any(|disclosure| allowed_disclosures.contains(disclosure.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "allowed claim '{}' must support at least one allowed disclosure",
+            claim.id
+        ));
+    }
+    if issue_credential
+        && !claim
+            .credential_profiles
+            .iter()
+            .any(|profile| allowed_profiles.contains(profile.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "allowed claim '{}' must reference an allowed credential profile",
+            claim.id
+        ));
+    }
+    Ok(())
+}
+
+fn validate_self_attestation_profile(
+    profile_id: &str,
+    profile: &CredentialProfileConfig,
+    claim_ids: &HashSet<&str>,
+    allowed_claim_ids: &HashSet<&str>,
+    allowed_formats: &HashSet<&str>,
+    max_credential_validity_seconds: u64,
+) -> Result<(), EvidenceConfigError> {
+    if profile.validity_seconds <= 0 {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' validity_seconds must be greater than zero"
+        ));
+    }
+    let validity_seconds = u64::try_from(profile.validity_seconds).map_err(|_| {
+        EvidenceConfigError::InvalidSelfAttestationConfig {
+            reason: format!(
+                "credential profile '{profile_id}' validity_seconds must be greater than zero"
+            ),
+        }
+    })?;
+    if validity_seconds > max_credential_validity_seconds || validity_seconds > 600 {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' validity_seconds must not exceed the self-attestation ceiling"
+        ));
+    }
+    if !allowed_formats.contains(profile.format.as_str()) {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' uses unallowed format '{}'",
+            profile.format
+        ));
+    }
+    for claim_id in &profile.allowed_claims {
+        if !claim_ids.contains(claim_id.as_str()) {
+            return invalid_self_attestation(format!(
+                "credential profile '{profile_id}' references unknown claim '{claim_id}'"
+            ));
+        }
+    }
+    if !profile
+        .allowed_claims
+        .iter()
+        .any(|claim_id| allowed_claim_ids.contains(claim_id.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' must allow at least one self-attestation claim"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_self_attestation_allow_lists_are_supported(
+    config: &SelfAttestationConfig,
+    evidence: &EvidenceConfig,
+) -> Result<(), EvidenceConfigError> {
+    let allowed_claims: Vec<&ClaimDefinition> = config
+        .allowed_claims
+        .iter()
+        .filter_map(|claim_id| evidence.claims.iter().find(|claim| claim.id == *claim_id))
+        .collect();
+    let allowed_profiles: Vec<&CredentialProfileConfig> = config
+        .credential_profiles
+        .iter()
+        .filter_map(|profile_id| evidence.credential_profiles.get(profile_id))
+        .collect();
+
+    for purpose in &config.allowed_purposes {
+        if !allowed_claims
+            .iter()
+            .any(|claim| claim.purpose.as_deref() == Some(purpose.as_str()))
+        {
+            return invalid_self_attestation(format!(
+                "allowed_purposes entry '{purpose}' is not used by any allowed claim"
+            ));
+        }
+    }
+
+    for format in &config.allowed_formats {
+        let supported_by_claim = allowed_claims
+            .iter()
+            .any(|claim| claim.formats.iter().any(|candidate| candidate == format));
+        let supported_by_profile = allowed_profiles
+            .iter()
+            .any(|profile| profile.format == *format);
+        if !supported_by_claim && !supported_by_profile {
+            return invalid_self_attestation(format!(
+                "allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+            ));
+        }
+    }
+
+    for disclosure in &config.allowed_disclosures {
+        let supported_by_claim = allowed_claims.iter().any(|claim| {
+            claim
+                .disclosure
+                .allowed
+                .iter()
+                .any(|candidate| candidate == disclosure)
+        });
+        let supported_by_profile = allowed_profiles.iter().any(|profile| {
+            profile
+                .disclosure
+                .allowed
+                .iter()
+                .any(|candidate| candidate == disclosure)
+        });
+        if !supported_by_claim && !supported_by_profile {
+            return invalid_self_attestation(format!(
+                "allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_required_scopes_do_not_grant_source_access(
+    config: &SelfAttestationConfig,
+    oidc: &EvidenceOidcAuthConfig,
+    evidence: &EvidenceConfig,
+) -> Result<(), EvidenceConfigError> {
+    let required_scopes: HashSet<&str> =
+        config.required_scopes.iter().map(String::as_str).collect();
+    let source_scopes = source_required_scopes(evidence);
+
+    for scope in &required_scopes {
+        if source_scopes.contains(*scope) {
+            return invalid_self_attestation(format!(
+                "required scope '{scope}' conflicts with a source required scope"
+            ));
+        }
+        if !oidc
+            .scope_map
+            .values()
+            .any(|mapped_scopes| mapped_scopes.iter().any(|mapped| mapped == scope))
+        {
+            return invalid_self_attestation(format!(
+                "required scope '{scope}' must be present in auth.oidc.scope_map"
+            ));
+        }
+    }
+
+    for (token_scope, mapped_scopes) in &oidc.scope_map {
+        let citizen_mapping = required_scopes.contains(token_scope.as_str())
+            || mapped_scopes
+                .iter()
+                .any(|mapped| required_scopes.contains(mapped.as_str()));
+        if !citizen_mapping {
+            continue;
+        }
+        for mapped_scope in mapped_scopes {
+            if source_scopes.contains(mapped_scope.as_str()) {
+                return invalid_self_attestation(format!(
+                    "citizen scope_map entry '{token_scope}' must not grant source scope '{mapped_scope}'"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn source_required_scopes(evidence: &EvidenceConfig) -> HashSet<String> {
+    let mut scopes = HashSet::new();
+    for claim in &evidence.claims {
+        for binding in claim.source_bindings.values() {
+            if let Some(scope) = binding.required_scope.as_deref() {
+                scopes.insert(scope.to_string());
+            } else {
+                scopes.insert(format!("{}:evidence_verification", binding.dataset));
+            }
+        }
+    }
+    scopes
+}
+
+fn invalid_self_attestation<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+        reason: reason.into(),
+    })
 }
 
 fn detect_depends_on_cycle(
@@ -397,6 +1091,8 @@ pub enum EvidenceConfigError {
     MissingOidcConfig,
     #[error("invalid auth.oidc config: {reason}")]
     InvalidOidcConfig { reason: String },
+    #[error("invalid self_attestation config: {reason}")]
+    InvalidSelfAttestationConfig { reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
@@ -406,16 +1102,16 @@ pub enum EvidenceConfigError {
          must all be >= 1"
     )]
     InvalidConcurrency,
-    /// proof_of_possession = "required" only works with did:jwk because
-    /// holder_jwk() only implements did:jwk resolution. Restrict
-    /// allowed_did_methods to ["did:jwk"] or remove proof_of_possession.
+    /// Credential holder binding only works with did:jwk because holder_jwk()
+    /// only implements did:jwk resolution. Restrict allowed_did_methods to
+    /// ["did:jwk"] or leave it empty when holder binding is disabled.
     #[error(
-        "credential profile '{profile}': proof_of_possession = \"required\" is only supported \
-         with did:jwk, but allowed_did_methods contains unsupported method(s): {methods}; \
-         restrict allowed_did_methods to [\"did:jwk\"] or remove proof_of_possession",
+        "credential profile '{profile}': holder binding is only supported with did:jwk, \
+         but allowed_did_methods contains unsupported method(s): {methods}; \
+         restrict allowed_did_methods to [\"did:jwk\"]",
         methods = methods.join(", ")
     )]
-    UnsupportedDidMethodsForProofOfPossession {
+    UnsupportedCredentialProfileDidMethods {
         profile: String,
         methods: Vec<String>,
     },
@@ -435,6 +1131,14 @@ pub enum EvidenceConfigError {
          claim; an empty list would permit any claim at issuance"
     )]
     EmptyAllowedClaims { profile: String },
+    /// Registry Witness currently issues only SD-JWT VC credentials using the
+    /// current `application/dc+sd-jwt` media type. Reject aliases and profile
+    /// labels so operator config cannot drift from the wire contract.
+    #[error(
+        "credential profile '{profile}': unsupported format '{format}'; \
+         supported credential format is application/dc+sd-jwt"
+    )]
+    UnsupportedCredentialProfileFormat { profile: String, format: String },
     /// `rda_in_filter` requires the operator to attest that lookup values are
     /// unique per subject. Without this we cannot disambiguate per-subject
     /// rows from a single collection response.
@@ -540,6 +1244,8 @@ pub struct ClaimDefinition {
     pub inputs: Vec<ClaimInputConfig>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub purpose: Option<String>,
     #[serde(default)]
     pub source_bindings: BTreeMap<String, SourceBindingConfig>,
     pub rule: RuleConfig,
@@ -1032,6 +1738,143 @@ rule:
         .expect("minimal claim is valid YAML")
     }
 
+    fn valid_self_attestation_config() -> StandaloneRegistryWitnessConfig {
+        serde_norway::from_str(
+            r#"
+evidence:
+  enabled: true
+  source_connections:
+    crvs:
+      base_url: https://registry.example/source
+      token_env: SOURCE_TOKEN
+  credential_profiles:
+    civil_status_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:issuer.example
+      issuer_key_env: ISSUER_KEY
+      vct: https://issuer.example/credentials/civil-status
+      validity_seconds: 600
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      allowed_claims:
+        - date-of-birth
+      disclosure:
+        allowed:
+          - value
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: "1.0"
+      subject_type: person
+      purpose: citizen_self_attestation
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        crvs:
+          connector: dci
+          connection: crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+      rule:
+        type: exists
+        source: crvs
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - civil_status_sd_jwt
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    jwks_uri: https://id.example.gov/oauth/v2/keys
+    audiences:
+      - registry-witness-citizen
+    allowed_clients:
+      - citizen-portal
+    scope_claim: scope
+    scope_map:
+      citizen_self_attestation:
+        - self_attestation
+    leeway_seconds: 30
+self_attestation:
+  enabled: true
+  requires_auth_mode: oidc
+  subject_binding:
+    token_claim: https://id.example.gov/claims/national_id
+    request_field: SubjectId
+    id_type: national_id
+    normalize: exact
+    allow_sub_as_civil_id: false
+  citizen_clients:
+    allowed_client_ids:
+      - citizen-portal
+    allowed_audiences:
+      - registry-witness-citizen
+  token_policy:
+    required_acr_values:
+      - urn:example:loa:substantial
+    max_auth_age_seconds: 900
+    max_access_token_lifetime_seconds: 900
+    max_evaluation_age_seconds: 600
+    max_credential_validity_seconds: 600
+    max_clock_leeway_seconds: 60
+  allowed_operations:
+    evaluate: true
+    render: true
+    issue_credential: true
+    batch_evaluate: false
+  allowed_purposes:
+    - citizen_self_attestation
+  allowed_claims:
+    - date-of-birth
+  allowed_formats:
+    - application/vnd.registry-witness.claim-result+json
+    - application/dc+sd-jwt
+  allowed_disclosures:
+    - value
+  required_scopes:
+    - self_attestation
+  allowed_wallet_origins:
+    - https://wallet.example.gov
+  credential_profiles:
+    - civil_status_sd_jwt
+  rate_limits:
+    mode: in_process
+    invalid_token_per_client_address_per_minute: 20
+    per_principal_per_minute: 10
+    subject_mismatch_per_principal_per_hour: 5
+    per_holder_per_hour: 10
+    credential_issuance_per_principal_per_hour: 5
+"#,
+        )
+        .expect("self-attestation config is valid YAML")
+    }
+
+    fn expect_self_attestation_error(config: &StandaloneRegistryWitnessConfig) -> String {
+        match config
+            .validate()
+            .expect_err("self-attestation config must fail validation")
+        {
+            EvidenceConfigError::InvalidSelfAttestationConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Finding 3: holder binding / did-method mismatch
     // -----------------------------------------------------------------------
@@ -1041,7 +1884,7 @@ rule:
         let mut config = minimal_config();
         let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
-format: sd_jwt_vc
+format: application/dc+sd-jwt
 issuer: https://issuer.example
 issuer_key_env: ISSUER_KEY
 vct: https://vct.example/test
@@ -1066,11 +1909,42 @@ allowed_claims:
     }
 
     #[test]
-    fn proof_of_possession_required_with_non_jwk_method_is_rejected() {
+    fn credential_profile_format_must_use_current_sd_jwt_vc_media_type() {
         let mut config = minimal_config();
         let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: sd_jwt_vc
+issuer: https://issuer.example
+issuer_key_env: ISSUER_KEY
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("legacy-alias".to_string(), profile);
+
+        let err = config
+            .validate()
+            .expect_err("legacy profile format alias must fail validation");
+        match err {
+            EvidenceConfigError::UnsupportedCredentialProfileFormat { profile, format } => {
+                assert_eq!(profile, "legacy-alias");
+                assert_eq!(format, "sd_jwt_vc");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn proof_of_possession_required_with_non_jwk_method_is_rejected() {
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
 issuer: https://issuer.example
 issuer_key_env: ISSUER_KEY
 vct: https://vct.example/test
@@ -1094,7 +1968,7 @@ allowed_claims:
             .validate()
             .expect_err("did:key with proof_of_possession required must fail");
         match &err {
-            EvidenceConfigError::UnsupportedDidMethodsForProofOfPossession { profile, methods } => {
+            EvidenceConfigError::UnsupportedCredentialProfileDidMethods { profile, methods } => {
                 assert_eq!(profile, "test-profile");
                 assert!(
                     methods.contains(&"did:key".to_string()),
@@ -1110,11 +1984,11 @@ allowed_claims:
     }
 
     #[test]
-    fn proof_of_possession_not_required_allows_any_did_methods() {
+    fn non_jwk_methods_are_rejected_even_without_proof_of_possession() {
         let mut config = minimal_config();
         let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
-format: sd_jwt_vc
+format: application/dc+sd-jwt
 issuer: https://issuer.example
 issuer_key_env: ISSUER_KEY
 vct: https://vct.example/test
@@ -1133,10 +2007,16 @@ allowed_claims:
             .evidence
             .credential_profiles
             .insert("test-profile".to_string(), profile);
-        assert!(
-            config.validate().is_ok(),
-            "proof_of_possession absent should allow any did method"
-        );
+        let err = config
+            .validate()
+            .expect_err("non-did:jwk holder methods must fail validation");
+        match &err {
+            EvidenceConfigError::UnsupportedCredentialProfileDidMethods { profile, methods } => {
+                assert_eq!(profile, "test-profile");
+                assert_eq!(methods, &vec!["did:key".to_string(), "did:web".to_string()]);
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1233,7 +2113,7 @@ allowed_claims:
         let mut config = minimal_config();
         let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
-format: sd_jwt_vc
+format: application/dc+sd-jwt
 issuer: https://issuer.example
 issuer_key_env: ISSUER_KEY
 vct: https://vct.example/test
@@ -1675,7 +2555,7 @@ bulk_mode: unsupported_mode
         let mut config = minimal_config();
         let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
-format: sd_jwt_vc
+format: application/dc+sd-jwt
 issuer: https://issuer.example
 issuer_key_env: ISSUER_KEY
 vct: https://vct.example/test
@@ -1697,5 +2577,300 @@ allowed_claims: ["", "   "]
             }
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    #[test]
+    fn self_attestation_is_disabled_by_default() {
+        let config = minimal_config();
+        assert!(!config.self_attestation.enabled);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_self_attestation_config_passes_validation() {
+        let config = valid_self_attestation_config();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn self_attestation_requires_oidc_auth_mode() {
+        let mut config = valid_self_attestation_config();
+        config.auth.mode = "api_key".to_string();
+        config.auth.api_keys.push(EvidenceCredentialConfig {
+            id: "api".to_string(),
+            hash_env: "API_HASH".to_string(),
+            scopes: Vec::new(),
+        });
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("auth.mode = oidc"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_unsafe_subject_claim_names() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.subject_binding.token_claim = "national id".to_string();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("token_claim"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_sub_without_explicit_civil_id_opt_in() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.subject_binding.token_claim = "sub".to_string();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("allow_sub_as_civil_id"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_allows_sub_with_explicit_civil_id_opt_in() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.subject_binding.token_claim = "sub".to_string();
+        config
+            .self_attestation
+            .subject_binding
+            .allow_sub_as_civil_id = true;
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn self_attestation_subject_request_field_only_accepts_subject_id() {
+        let err = serde_norway::from_str::<StandaloneRegistryWitnessConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    jwks_uri: https://id.example.gov/keys
+    audiences:
+      - registry-witness-citizen
+self_attestation:
+  enabled: true
+  subject_binding:
+    token_claim: https://id.example.gov/claims/national_id
+    request_field: SubjectHeader
+    id_type: national_id
+"#,
+        )
+        .expect_err("unsupported request_field variant must fail deserialization");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("SubjectHeader") || msg.contains("unknown variant"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_non_exact_normalization() {
+        let err = serde_norway::from_str::<StandaloneRegistryWitnessConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://id.example.gov
+    jwks_uri: https://id.example.gov/keys
+    audiences:
+      - registry-witness-citizen
+self_attestation:
+  enabled: true
+  subject_binding:
+    token_claim: https://id.example.gov/claims/national_id
+    request_field: SubjectId
+    id_type: national_id
+    normalize: lowercase
+"#,
+        )
+        .expect_err("unsupported normalize variant must fail deserialization");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("lowercase") || msg.contains("unknown variant"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_requires_nonempty_allow_lists() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.allowed_claims.clear();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("allowed_claims must not be empty"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_unused_allow_list_entries() {
+        let mut config = valid_self_attestation_config();
+        config
+            .self_attestation
+            .allowed_formats
+            .push("application/unsupported".to_string());
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("allowed_formats entry"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_batch_evaluate_operation() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.allowed_operations.batch_evaluate = true;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("batch_evaluate"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_wildcard_wallet_origins() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.allowed_wallet_origins = vec!["*".to_string()];
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("wildcards"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_zero_rate_limits() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.rate_limits.per_principal_per_minute = 0;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("rate_limits"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_requires_allowed_client_or_audience() {
+        let mut config = valid_self_attestation_config();
+        config
+            .self_attestation
+            .citizen_clients
+            .allowed_client_ids
+            .clear();
+        config
+            .self_attestation
+            .citizen_clients
+            .allowed_audiences
+            .clear();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("citizen_clients"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_requires_scopes_to_be_mapped() {
+        let mut config = valid_self_attestation_config();
+        config.auth.oidc.as_mut().unwrap().scope_map.clear();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("scope_map"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_citizen_scope_map_granting_source_scope() {
+        let mut config = valid_self_attestation_config();
+        config.auth.oidc.as_mut().unwrap().scope_map.insert(
+            "citizen_self_attestation".to_string(),
+            vec![
+                "self_attestation".to_string(),
+                "civil_registry:evidence_verification".to_string(),
+            ],
+        );
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("must not grant source scope"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_leeway_above_token_policy() {
+        let mut config = valid_self_attestation_config();
+        config.auth.oidc.as_mut().unwrap().leeway_seconds = 61;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("leeway_seconds"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_unknown_claim_references() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.allowed_claims = vec!["missing-claim".to_string()];
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("unknown claim 'missing-claim'"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_unallowed_claim_purpose() {
+        let mut config = valid_self_attestation_config();
+        config.evidence.claims[0].purpose = Some("machine_verification".to_string());
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("unallowed purpose"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_unknown_profile_references() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.credential_profiles = vec!["missing-profile".to_string()];
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("unknown profile 'missing-profile'"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_citizen_profile_validity_above_ceiling() {
+        let mut config = valid_self_attestation_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .validity_seconds = 601;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("validity_seconds"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_keeps_did_jwk_proof_of_possession_validation() {
+        let mut config = valid_self_attestation_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .holder_binding
+            .allowed_did_methods
+            .push("did:key".to_string());
+
+        let err = config
+            .validate()
+            .expect_err("did:key must still fail proof-of-possession validation");
+        assert!(matches!(
+            err,
+            EvidenceConfigError::UnsupportedCredentialProfileDidMethods { .. }
+        ));
     }
 }

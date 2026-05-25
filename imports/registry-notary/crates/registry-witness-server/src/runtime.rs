@@ -177,12 +177,15 @@ use cel_mapper_core::{
     MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
 };
 use registry_witness_core::{
-    BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
-    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BulkMode, CelBindingsConfig,
-    ClaimDefinition, ClaimProvenance, ClaimResultView, CredentialProfileConfig,
+    AccessMode, BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
+    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId, BulkMode,
+    CelBindingsConfig, ClaimDefinition, ClaimProvenance, ClaimResultView, CredentialProfileConfig,
     DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceError,
-    EvidenceFormat, EvidencePrincipal, RenderRequest, RuleConfig, SourceBindingConfig,
-    SubjectRequest, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    EvidenceFormat, EvidencePrincipal, Hashed, RenderRequest, RuleConfig, SelfAttestationConfig,
+    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
+    StoredSelfAttestationMetadata, SubjectBinding, SubjectRequest, FORMAT_CCCEV_JSONLD,
+    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD,
+    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-witness-cel")]
 use serde_json::Map;
@@ -214,6 +217,20 @@ pub trait SourceReader: Send + Sync {
         purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>>;
 
+    fn read_one_with_capability<'a>(
+        &'a self,
+        capability: &'a SourceCapability,
+        claim_id: &'a str,
+        binding: &'a SourceBindingConfig,
+        subject: &'a SubjectRequest,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+        Box::pin(async move {
+            require_source_read_capability(capability, claim_id)?;
+            self.read_one(binding, subject, purpose).await
+        })
+    }
+
     /// Read N bindings as a single batch.
     ///
     /// The default implementation runs `read_one` concurrently with a bounded
@@ -231,6 +248,27 @@ pub trait SourceReader: Send + Sync {
         purpose: &'a str,
     ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
         Box::pin(default_read_many(self, bindings, purpose))
+    }
+
+    fn read_many_with_capability<'a>(
+        &'a self,
+        capability: &'a SourceCapability,
+        bindings: Vec<(SourceBindingConfig, SubjectRequest)>,
+        purpose: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Vec<Result<Value, EvidenceError>>> + Send + 'a>> {
+        Box::pin(async move {
+            if let Err(err) = require_machine_source_capability(capability) {
+                let error_code = match err {
+                    EvidenceError::SelfAttestationDenied { reason } => reason,
+                    _ => SelfAttestationDenialCode::OperationDenied,
+                };
+                return bindings
+                    .into_iter()
+                    .map(|_| Err(EvidenceError::SelfAttestationDenied { reason: error_code }))
+                    .collect();
+            }
+            self.read_many(bindings, purpose).await
+        })
     }
 
     fn required_scopes(
@@ -255,6 +293,7 @@ pub trait SourceReader: Send + Sync {
 async fn prefetch_bulk_bindings(
     evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
+    source_capability: SourceCapability,
     subjects: &[SubjectRequest],
     requested_claims: &[String],
     purpose: &str,
@@ -344,7 +383,9 @@ async fn prefetch_bulk_bindings(
             batch_size = pairs.len(),
             "bulk_prefetch_dispatch",
         );
-        let results = source.read_many(pairs, purpose).await;
+        let results = source
+            .read_many_with_capability(&source_capability, pairs, purpose)
+            .await;
         let observed_at = OffsetDateTime::now_utc();
         for (entry, result) in entries.into_iter().zip(results) {
             let (_, _, cache_key) = entry;
@@ -477,6 +518,7 @@ pub struct BatchEvaluateOptions<'a> {
 struct ClaimEvaluationContext {
     evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
+    source_capability: SourceCapability,
     subject: SubjectRequest,
     purpose: String,
     evaluation_id: String,
@@ -640,6 +682,7 @@ impl RegistryWitnessRuntime {
             },
             "claims_url": evidence.claims_url,
             "formats_url": evidence.formats_url,
+            "credential_capabilities": Self::credential_capabilities(evidence),
             "batch": {
                 "max_inline_subjects": evidence.inline_batch_limit,
                 "idempotency_window": "PT15M",
@@ -650,6 +693,92 @@ impl RegistryWitnessRuntime {
             },
             "formats": formats(evidence),
         })
+    }
+
+    fn credential_capabilities(evidence: &EvidenceConfig) -> Value {
+        json!({
+            "formats": [FORMAT_SD_JWT_VC],
+            "sd_jwt_vc": {
+                "media_type": FORMAT_SD_JWT_VC,
+                "jwt_typ": SD_JWT_VC_JWT_TYP,
+                "signing_algs": [SD_JWT_VC_SIGNING_ALG],
+                "issuer_key_types": [SD_JWT_VC_ISSUER_KEY_TYPE],
+                "holder_binding_methods": [SD_JWT_VC_HOLDER_BINDING_METHOD],
+                "status_methods": [],
+                "credential_profiles": Self::credential_profile_capabilities(evidence),
+                "openid4vci": {
+                    "support": "not_full_issuer"
+                }
+            },
+            "unsupported_features": [
+                "application/vc+sd-jwt",
+                "json_ld_vc_issuance",
+                "data_integrity_proofs",
+                "credential_status",
+                "mso_mdoc",
+                "openid4vci_full_issuer"
+            ]
+        })
+    }
+
+    fn credential_profile_capabilities(evidence: &EvidenceConfig) -> Vec<Value> {
+        evidence
+            .credential_profiles
+            .iter()
+            .map(|(profile_id, profile)| {
+                json!({
+                    "id": profile_id,
+                    "format": profile.format.as_str(),
+                    "issuer": profile.issuer.as_str(),
+                    "vct": profile.vct.as_str(),
+                    "validity_seconds": profile.validity_seconds,
+                    "holder_binding": {
+                        "mode": profile.holder_binding.mode.as_str(),
+                        "proof_of_possession": profile.holder_binding.proof_of_possession.as_deref(),
+                        "allowed_did_methods": &profile.holder_binding.allowed_did_methods
+                    },
+                    "allowed_claims": &profile.allowed_claims,
+                    "disclosure": {
+                        "allowed": &profile.disclosure.allowed
+                    },
+                })
+            })
+            .collect()
+    }
+
+    pub fn service_document_with_self_attestation(
+        evidence: &EvidenceConfig,
+        self_attestation: &SelfAttestationConfig,
+        include_self_attestation_details: bool,
+    ) -> Value {
+        let mut document = Self::service_document(evidence);
+        if self_attestation.enabled {
+            let mut self_attestation_document = json!({
+                "enabled": true,
+            });
+            if include_self_attestation_details {
+                self_attestation_document = json!({
+                    "enabled": true,
+                    "allowed_operations": self_attestation.allowed_operations,
+                    "allowed_claim_ids": self_attestation.allowed_claims,
+                    "allowed_formats": self_attestation.allowed_formats,
+                    "allowed_disclosures": self_attestation.allowed_disclosures,
+                    "credential_profile_ids": self_attestation.credential_profiles,
+                    "subject_id_type": self_attestation.subject_binding.id_type,
+                    "token_claim_name": self_attestation.subject_binding.token_claim,
+                    "required_scopes": self_attestation.required_scopes,
+                    "max_evaluation_age_seconds": self_attestation
+                        .token_policy
+                        .max_evaluation_age_seconds,
+                    "max_credential_validity_seconds": self_attestation
+                        .token_policy
+                        .max_credential_validity_seconds,
+                    "rate_limit_mode": self_attestation.rate_limits.mode,
+                });
+            }
+            document["self_attestation"] = self_attestation_document;
+        }
+        document
     }
 
     pub fn list_claims<R: SourceReader + ?Sized>(
@@ -691,8 +820,37 @@ impl RegistryWitnessRuntime {
         request: EvaluateRequest,
         header_purpose: Option<&str>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
+        let source_capability = source_capability_for_principal(principal, &request.claims)?;
+        self.evaluate_with_source_capability(
+            evidence,
+            source,
+            store,
+            principal,
+            source_capability,
+            request,
+            header_purpose,
+            None,
+        )
+        .await
+    }
+
+    pub async fn evaluate_with_source_capability(
+        &self,
+        evidence: Arc<EvidenceConfig>,
+        source: Arc<dyn SourceReader>,
+        store: &EvidenceStore,
+        principal: &EvidencePrincipal,
+        source_capability: SourceCapability,
+        request: EvaluateRequest,
+        header_purpose: Option<&str>,
+        self_attestation: Option<StoredSelfAttestationMetadata>,
+    ) -> Result<Vec<ClaimResultView>, EvidenceError> {
+        ensure_source_capability_matches_principal(principal, &source_capability)?;
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
+        }
+        for claim_id in &request.claims {
+            require_source_read_capability(&source_capability, claim_id)?;
         }
         for claim_id in &request.claims {
             require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
@@ -720,6 +878,7 @@ impl RegistryWitnessRuntime {
                 now,
                 request.claims.clone(),
                 binding_concurrency,
+                source_capability,
                 None, // single-subject evaluate: no cross-subject memo needed
             )
             .await?;
@@ -734,9 +893,14 @@ impl RegistryWitnessRuntime {
                 view_claim(result, claim, disclosure, &format)
             })
             .collect::<Result<Vec<_>, EvidenceError>>()?;
-        let expires_at = now + time::Duration::minutes(15);
+        let expires_at = self_attestation
+            .as_ref()
+            .and_then(|metadata| metadata.evaluation_expires_at.as_deref())
+            .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+            .unwrap_or(now + time::Duration::minutes(15));
+        let client_id = stored_evaluation_client_id(principal, self_attestation.as_ref());
         store.insert(registry_witness_core::StoredEvaluation {
-            client_id: principal.principal_id.clone(),
+            client_id,
             purpose,
             claim_ids: request.claims,
             disclosure: stored_disclosure(&views),
@@ -745,6 +909,7 @@ impl RegistryWitnessRuntime {
             created_at: format_time(now),
             expires_at: format_time(expires_at),
             request_hash,
+            self_attestation,
         });
         Ok(views)
     }
@@ -758,9 +923,15 @@ impl RegistryWitnessRuntime {
         request: BatchEvaluateRequest,
         options: BatchEvaluateOptions<'_>,
     ) -> Result<BatchEvaluateResponse, EvidenceError> {
+        if principal.is_self_attestation() {
+            return Err(EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::BatchDenied,
+            });
+        }
         if request.claims.is_empty() || request.subjects.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
+        let source_capability = source_capability_for_principal(principal, &request.claims)?;
         let max_subjects = max_batch_subjects(&evidence, &request.claims)?;
         if request.subjects.len() > max_subjects {
             return Err(EvidenceError::BatchTooLarge);
@@ -804,6 +975,7 @@ impl RegistryWitnessRuntime {
         prefetch_bulk_bindings(
             Arc::clone(&evidence),
             Arc::clone(&source),
+            source_capability.clone(),
             &request.subjects,
             &request.claims,
             purpose.as_str(),
@@ -824,6 +996,7 @@ impl RegistryWitnessRuntime {
             let principal_id = principal.principal_id.clone();
             let principal_scopes = principal.scopes.clone();
             let memo_for_task = Arc::clone(&fetch_memo);
+            let source_capability = source_capability.clone();
             join_set.spawn(async move {
                 let _permit = match permit_semaphore.acquire_owned().await {
                     Ok(permit) => permit,
@@ -839,12 +1012,15 @@ impl RegistryWitnessRuntime {
                 let principal = EvidencePrincipal {
                     principal_id,
                     scopes: principal_scopes,
+                    access_mode: registry_witness_core::AccessMode::MachineClient,
+                    verified_claims: None,
                 };
                 let result = runtime
                     .evaluate_subject_for_batch(
                         evidence,
                         source,
                         &principal,
+                        source_capability,
                         eval,
                         purpose_for_task.as_str(),
                         memo_for_task,
@@ -896,6 +1072,7 @@ impl RegistryWitnessRuntime {
                             created_at: first.issued_at.clone(),
                             expires_at: format_time(expires_at),
                             request_hash: request_hash.clone(),
+                            self_attestation: None,
                         });
                     }
                     succeeded += 1;
@@ -948,12 +1125,17 @@ impl RegistryWitnessRuntime {
         evidence: Arc<EvidenceConfig>,
         source: Arc<dyn SourceReader>,
         principal: &EvidencePrincipal,
+        source_capability: SourceCapability,
         request: EvaluateRequest,
         purpose_override: &str,
         fetch_memo: FetchMemo,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
+        ensure_source_capability_matches_principal(principal, &source_capability)?;
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
+        }
+        for claim_id in &request.claims {
+            require_source_read_capability(&source_capability, claim_id)?;
         }
         for claim_id in &request.claims {
             require_claim_access(&evidence, source.as_ref(), principal, claim_id)?;
@@ -979,6 +1161,7 @@ impl RegistryWitnessRuntime {
                 now,
                 request.claims.clone(),
                 binding_concurrency,
+                source_capability,
                 Some(fetch_memo),
             )
             .await?;
@@ -1009,6 +1192,7 @@ impl RegistryWitnessRuntime {
         now: OffsetDateTime,
         requested: Vec<String>,
         binding_concurrency: Arc<Semaphore>,
+        source_capability: SourceCapability,
         fetch_memo: Option<FetchMemo>,
     ) -> Result<BTreeMap<String, ClaimResultInternal>, EvidenceError> {
         let levels = build_claim_levels(&evidence, &requested)?;
@@ -1030,6 +1214,7 @@ impl RegistryWitnessRuntime {
                 let ctx = ClaimEvaluationContext {
                     evidence: Arc::clone(&evidence),
                     source: Arc::clone(&source),
+                    source_capability: source_capability.clone(),
                     subject: subject.clone(),
                     purpose: purpose.clone(),
                     evaluation_id: evaluation_id.clone(),
@@ -1113,6 +1298,15 @@ impl RegistryWitnessRuntime {
     }
 }
 
+fn stored_evaluation_client_id(
+    principal: &EvidencePrincipal,
+    self_attestation: Option<&StoredSelfAttestationMetadata>,
+) -> String {
+    self_attestation
+        .map(|metadata| metadata.principal_hash.as_str().to_string())
+        .unwrap_or_else(|| principal.principal_id.clone())
+}
+
 async fn evaluate_claim_task(
     ctx: ClaimEvaluationContext,
     claim_id: &str,
@@ -1133,6 +1327,7 @@ async fn evaluate_claim_task(
     let (sources, observed_at) = load_sources(
         Arc::clone(&ctx.source),
         Arc::clone(&claim_arc(&claim)),
+        ctx.source_capability.clone(),
         ctx.subject.clone(),
         ctx.purpose.clone(),
         Arc::clone(&ctx.binding_concurrency),
@@ -1287,12 +1482,95 @@ fn require_claim_access<R: SourceReader + ?Sized>(
     principal: &EvidencePrincipal,
     claim_id: &str,
 ) -> Result<(), EvidenceError> {
+    if principal.is_self_attestation() {
+        return Ok(());
+    }
     for scope in source.required_scopes(evidence, claim_id)? {
         if !principal.has_scope(&scope) {
             return Err(EvidenceError::ScopeDenied { required: scope });
         }
     }
     Ok(())
+}
+
+fn source_capability_for_principal(
+    principal: &EvidencePrincipal,
+    requested_claims: &[String],
+) -> Result<SourceCapability, EvidenceError> {
+    match principal.access_mode() {
+        AccessMode::MachineClient => Ok(SourceCapability::Machine {
+            scopes: principal.scopes.iter().cloned().collect(),
+        }),
+        AccessMode::SelfAttestation => {
+            if requested_claims.len() != 1 {
+                return Err(EvidenceError::SelfAttestationDenied {
+                    reason: SelfAttestationDenialCode::ClaimDenied,
+                });
+            }
+            let claim_id = BoundedClaimId::new(requested_claims[0].clone())
+                .map_err(|_| EvidenceError::InvalidRequest)?;
+            let claims =
+                principal
+                    .verified_claims
+                    .as_ref()
+                    .ok_or(EvidenceError::SelfAttestationDenied {
+                        reason: SelfAttestationDenialCode::SubjectClaimMissing,
+                    })?;
+            let subject_binding_value = claims.subject_binding_value.as_ref().ok_or(
+                EvidenceError::SelfAttestationDenied {
+                    reason: SelfAttestationDenialCode::SubjectClaimMissing,
+                },
+            )?;
+            Ok(SourceCapability::SelfAttestation {
+                claim_id,
+                subject_binding_hash: Hashed::<SubjectBinding>::from_hash(format!(
+                    "sha256:{}",
+                    sha256_hex(subject_binding_value.as_str().as_bytes())
+                )),
+            })
+        }
+        AccessMode::Unknown => Err(EvidenceError::SelfAttestationInvalidToken),
+    }
+}
+
+fn ensure_source_capability_matches_principal(
+    principal: &EvidencePrincipal,
+    capability: &SourceCapability,
+) -> Result<(), EvidenceError> {
+    match (principal.access_mode(), capability.access_mode()) {
+        (AccessMode::MachineClient, AccessMode::MachineClient)
+        | (AccessMode::SelfAttestation, AccessMode::SelfAttestation) => Ok(()),
+        (AccessMode::SelfAttestation, AccessMode::MachineClient) => {
+            Err(EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied,
+            })
+        }
+        _ => Err(EvidenceError::SelfAttestationInvalidToken),
+    }
+}
+
+fn require_source_read_capability(
+    capability: &SourceCapability,
+    claim_id: &str,
+) -> Result<(), EvidenceError> {
+    match capability {
+        SourceCapability::Machine { .. } => Ok(()),
+        SourceCapability::SelfAttestation {
+            claim_id: allowed, ..
+        } if allowed.as_str() == claim_id => Ok(()),
+        SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::ClaimDenied,
+        }),
+    }
+}
+
+fn require_machine_source_capability(capability: &SourceCapability) -> Result<(), EvidenceError> {
+    match capability {
+        SourceCapability::Machine { .. } => Ok(()),
+        SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::OperationDenied,
+        }),
+    }
 }
 
 pub fn claim_summary(claim: &ClaimDefinition) -> Value {
@@ -1424,6 +1702,7 @@ fn max_batch_subjects(config: &EvidenceConfig, claims: &[String]) -> Result<usiz
 async fn load_sources(
     source: Arc<dyn SourceReader>,
     claim: Arc<ClaimDefinition>,
+    source_capability: SourceCapability,
     subject: SubjectRequest,
     purpose: String,
     binding_concurrency: Arc<Semaphore>,
@@ -1443,7 +1722,9 @@ async fn load_sources(
     for (id, binding) in &claim.source_bindings {
         let id = id.clone();
         let binding = binding.clone();
+        let claim_id = claim.id.clone();
         let source = Arc::clone(&source);
+        let source_capability = source_capability.clone();
         let subject = subject.clone();
         let purpose = purpose.clone();
         let binding_concurrency = Arc::clone(&binding_concurrency);
@@ -1451,6 +1732,8 @@ async fn load_sources(
         tasks.spawn(async move {
             let result = load_one_binding(
                 source,
+                &source_capability,
+                claim_id.as_str(),
                 &binding,
                 &subject,
                 &purpose,
@@ -1507,6 +1790,8 @@ async fn load_sources(
 ///    attempt a fresh fetch themselves.
 async fn load_one_binding(
     source: Arc<dyn SourceReader>,
+    source_capability: &SourceCapability,
+    claim_id: &str,
     binding: &registry_witness_core::SourceBindingConfig,
     subject: &SubjectRequest,
     purpose: &str,
@@ -1552,6 +1837,8 @@ async fn load_one_binding(
             Action::Owner(sem) => {
                 return fetch_and_signal(
                     source,
+                    source_capability,
+                    claim_id,
                     binding,
                     subject,
                     purpose,
@@ -1589,7 +1876,16 @@ async fn load_one_binding(
 
     // No memo (single-subject evaluate) or lookup derivation failed or the
     // previous owner failed: fetch directly without memoizing.
-    fetch_binding_direct(source, binding, subject, purpose, binding_concurrency).await
+    fetch_binding_direct(
+        source,
+        source_capability,
+        claim_id,
+        binding,
+        subject,
+        purpose,
+        binding_concurrency,
+    )
+    .await
 }
 
 /// Signal-all permit count used when waking memo waiters. Matches tokio's
@@ -1653,6 +1949,8 @@ impl<'a> Drop for PendingGuard<'a> {
 #[allow(clippy::too_many_arguments)]
 async fn fetch_and_signal(
     source: Arc<dyn SourceReader>,
+    source_capability: &SourceCapability,
+    claim_id: &str,
     binding: &registry_witness_core::SourceBindingConfig,
     subject: &SubjectRequest,
     purpose: &str,
@@ -1665,6 +1963,8 @@ async fn fetch_and_signal(
 
     let (value, _fresh_ts) = fetch_binding_direct(
         Arc::clone(&source),
+        source_capability,
+        claim_id,
         binding,
         subject,
         purpose,
@@ -1702,17 +2002,28 @@ async fn fetch_and_signal(
 /// Returns `(value, None)` since the observation time is managed by the caller.
 async fn fetch_binding_direct(
     source: Arc<dyn SourceReader>,
+    source_capability: &SourceCapability,
+    claim_id: &str,
     binding: &registry_witness_core::SourceBindingConfig,
     subject: &SubjectRequest,
     purpose: &str,
     binding_concurrency: Arc<Semaphore>,
 ) -> Result<(Value, Option<OffsetDateTime>), EvidenceError> {
+    require_source_read_capability(source_capability, claim_id)?;
     let _permit = match binding_concurrency.acquire_owned().await {
         Ok(permit) => permit,
         Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
     };
     let mapped_subject = source.map_subject(binding, subject).await?;
-    let row = source.read_one(binding, &mapped_subject, purpose).await?;
+    let row = source
+        .read_one_with_capability(
+            source_capability,
+            claim_id,
+            binding,
+            &mapped_subject,
+            purpose,
+        )
+        .await?;
     for field in binding.fields.values().filter(|field| field.required) {
         match crate::standalone::get_json_path(&row, &field.field) {
             Some(value) if !value.is_null() => {}
@@ -2162,6 +2473,151 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Default)]
+    struct CountingSource {
+        read_count: AtomicU64,
+    }
+
+    impl SourceReader for CountingSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.read_count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({
+                    "id": subject.id.clone(),
+                    "value": true,
+                }))
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn test_source_binding() -> SourceBindingConfig {
+        SourceBindingConfig {
+            connector: registry_witness_core::SourceConnectorKind::RegistryDataApi,
+            connection: None,
+            required_scope: None,
+            dataset: "people".to_string(),
+            entity: "person".to_string(),
+            lookup: registry_witness_core::SourceLookupConfig {
+                input: "subject_id".to_string(),
+                field: "id".to_string(),
+                op: "eq".to_string(),
+                cardinality: "one".to_string(),
+            },
+            fields: BTreeMap::from([(
+                "value".to_string(),
+                registry_witness_core::SourceFieldConfig {
+                    field: "value".to_string(),
+                    field_type: Some("boolean".to_string()),
+                    unit: None,
+                    required: true,
+                    semantic_term: None,
+                },
+            )]),
+        }
+    }
+
+    fn test_claim(id: &str, depends_on: Vec<&str>, has_source: bool) -> ClaimDefinition {
+        let source_bindings = if has_source {
+            BTreeMap::from([("src".to_string(), test_source_binding())])
+        } else {
+            BTreeMap::new()
+        };
+        ClaimDefinition {
+            id: id.to_string(),
+            title: id.to_string(),
+            version: "1.0".to_string(),
+            subject_type: "person".to_string(),
+            value: registry_witness_core::ClaimValueConfig {
+                value_type: "boolean".to_string(),
+                unit: None,
+            },
+            inputs: Vec::new(),
+            depends_on: depends_on.into_iter().map(str::to_string).collect(),
+            purpose: None,
+            source_bindings,
+            rule: if has_source {
+                RuleConfig::Extract {
+                    source: "src".to_string(),
+                    field: "value".to_string(),
+                }
+            } else {
+                RuleConfig::Exists {
+                    source: "src".to_string(),
+                }
+            },
+            operations: registry_witness_core::ClaimOperationsConfig::default(),
+            disclosure: registry_witness_core::DisclosureConfig {
+                default: "value".to_string(),
+                allowed: vec!["value".to_string(), "redacted".to_string()],
+                downgrade: "redacted".to_string(),
+            },
+            formats: vec![FORMAT_CLAIM_RESULT_JSON.to_string()],
+            credential_profiles: Vec::new(),
+            cccev: None,
+            oots: None,
+        }
+    }
+
+    fn test_evidence(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
+        Arc::new(EvidenceConfig {
+            enabled: true,
+            service_id: "runtime.test".to_string(),
+            claims,
+            ..EvidenceConfig::default()
+        })
+    }
+
+    fn test_request(claim: &str) -> EvaluateRequest {
+        EvaluateRequest {
+            subject: SubjectRequest {
+                id: "person-1".to_string(),
+                id_type: None,
+            },
+            claims: vec![claim.to_string()],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("test".to_string()),
+        }
+    }
+
+    fn machine_principal() -> EvidencePrincipal {
+        EvidencePrincipal {
+            principal_id: "machine".to_string(),
+            scopes: Vec::new(),
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        }
+    }
+
+    fn self_attestation_principal() -> EvidencePrincipal {
+        EvidencePrincipal {
+            principal_id: "citizen".to_string(),
+            scopes: vec!["self_attestation".to_string()],
+            access_mode: AccessMode::SelfAttestation,
+            verified_claims: None,
+        }
+    }
+
+    fn self_attestation_capability(claim_id: &str) -> SourceCapability {
+        SourceCapability::SelfAttestation {
+            claim_id: BoundedClaimId::new(claim_id).expect("claim id is bounded"),
+            subject_binding_hash: Hashed::from_hash("sha256:test"),
+        }
+    }
+
     #[test]
     fn service_document_advertises_api_key_and_bearer_auth() {
         let evidence = EvidenceConfig {
@@ -2184,11 +2640,386 @@ mod tests {
     }
 
     #[test]
+    fn service_document_advertises_sd_jwt_vc_conformance_capabilities() {
+        let mut credential_profiles = BTreeMap::new();
+        credential_profiles.insert(
+            "profile-a".to_string(),
+            CredentialProfileConfig {
+                format: FORMAT_SD_JWT_VC.to_string(),
+                issuer: "did:web:issuer.test".to_string(),
+                issuer_key_env: "ISSUER_JWK".to_string(),
+                issuer_kid: Some("did:web:issuer.test#key-1".to_string()),
+                vct: "https://issuer.test/credentials/profile-a".to_string(),
+                validity_seconds: 600,
+                holder_binding: registry_witness_core::HolderBindingConfig {
+                    mode: "did".to_string(),
+                    proof_of_possession: Some("required".to_string()),
+                    allowed_did_methods: vec![SD_JWT_VC_HOLDER_BINDING_METHOD.to_string()],
+                },
+                allowed_claims: vec!["claim-a".to_string()],
+                disclosure: registry_witness_core::CredentialDisclosureConfig {
+                    allowed: vec!["predicate".to_string()],
+                },
+            },
+        );
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "evidence.test".to_string(),
+            credential_profiles,
+            ..EvidenceConfig::default()
+        };
+
+        let document = RegistryWitnessRuntime::service_document(&evidence);
+        let capabilities = &document["credential_capabilities"]["sd_jwt_vc"];
+
+        assert_eq!(capabilities["media_type"], json!(FORMAT_SD_JWT_VC));
+        assert_eq!(capabilities["jwt_typ"], json!(SD_JWT_VC_JWT_TYP));
+        assert_eq!(capabilities["signing_algs"], json!([SD_JWT_VC_SIGNING_ALG]));
+        assert_eq!(
+            capabilities["issuer_key_types"],
+            json!([SD_JWT_VC_ISSUER_KEY_TYPE])
+        );
+        assert_eq!(
+            capabilities["holder_binding_methods"],
+            json!([SD_JWT_VC_HOLDER_BINDING_METHOD])
+        );
+        assert_eq!(capabilities["status_methods"], json!([]));
+        assert_eq!(capabilities["openid4vci"]["support"], "not_full_issuer");
+        assert_eq!(capabilities["credential_profiles"][0]["id"], "profile-a");
+        assert_eq!(
+            capabilities["credential_profiles"][0]["format"],
+            FORMAT_SD_JWT_VC
+        );
+        assert_eq!(
+            document["credential_capabilities"]["unsupported_features"],
+            json!([
+                "application/vc+sd-jwt",
+                "json_ld_vc_issuance",
+                "data_integrity_proofs",
+                "credential_status",
+                "mso_mdoc",
+                "openid4vci_full_issuer"
+            ])
+        );
+    }
+
+    #[test]
+    fn service_document_preserves_output_when_self_attestation_disabled() {
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "evidence.test".to_string(),
+            ..EvidenceConfig::default()
+        };
+
+        assert_eq!(
+            RegistryWitnessRuntime::service_document_with_self_attestation(
+                &evidence,
+                &SelfAttestationConfig::default(),
+                false,
+            ),
+            RegistryWitnessRuntime::service_document(&evidence),
+        );
+    }
+
+    #[test]
+    fn service_document_redacts_self_attestation_details_when_not_authorized() {
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "evidence.test".to_string(),
+            ..EvidenceConfig::default()
+        };
+        let self_attestation: SelfAttestationConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "subject_binding": {
+                "token_claim": "https://id.example.gov/claims/national_id",
+                "request_field": "SubjectId",
+                "id_type": "national_id",
+                "normalize": "exact"
+            },
+            "token_policy": {
+                "max_auth_age_seconds": 900,
+                "max_access_token_lifetime_seconds": 900,
+                "max_evaluation_age_seconds": 600,
+                "max_credential_validity_seconds": 300,
+                "max_clock_leeway_seconds": 60
+            },
+            "allowed_operations": {
+                "evaluate": true,
+                "render": true,
+                "issue_credential": false,
+                "batch_evaluate": false
+            },
+            "allowed_claims": ["person-is-alive"],
+            "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
+            "allowed_disclosures": ["predicate"],
+            "required_scopes": ["self_attestation"],
+            "credential_profiles": ["civil_status_sd_jwt"],
+            "rate_limits": {
+                "mode": "in_process",
+                "invalid_token_per_client_address_per_minute": 20,
+                "per_principal_per_minute": 10,
+                "subject_mismatch_per_principal_per_hour": 5,
+                "per_holder_per_hour": 10,
+                "credential_issuance_per_principal_per_hour": 5
+            }
+        }))
+        .expect("self-attestation config parses");
+
+        let document = RegistryWitnessRuntime::service_document_with_self_attestation(
+            &evidence,
+            &self_attestation,
+            false,
+        );
+
+        assert_eq!(document["self_attestation"]["enabled"], json!(true));
+        assert!(document["self_attestation"]["subject_id_type"].is_null());
+        assert!(document["self_attestation"]["token_claim_name"].is_null());
+        assert!(document["self_attestation"]["allowed_claim_ids"].is_null());
+        assert!(document["self_attestation"]["credential_profile_ids"].is_null());
+    }
+
+    #[test]
+    fn service_document_advertises_enabled_self_attestation_capabilities() {
+        let evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "evidence.test".to_string(),
+            ..EvidenceConfig::default()
+        };
+        let self_attestation: SelfAttestationConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "subject_binding": {
+                "token_claim": "https://id.example.gov/claims/national_id",
+                "request_field": "SubjectId",
+                "id_type": "national_id",
+                "normalize": "exact"
+            },
+            "token_policy": {
+                "max_auth_age_seconds": 900,
+                "max_access_token_lifetime_seconds": 900,
+                "max_evaluation_age_seconds": 600,
+                "max_credential_validity_seconds": 300,
+                "max_clock_leeway_seconds": 60
+            },
+            "allowed_operations": {
+                "evaluate": true,
+                "render": true,
+                "issue_credential": false,
+                "batch_evaluate": false
+            },
+            "allowed_claims": ["person-is-alive"],
+            "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
+            "allowed_disclosures": ["predicate"],
+            "required_scopes": ["self_attestation"],
+            "credential_profiles": ["civil_status_sd_jwt"],
+            "rate_limits": {
+                "mode": "in_process",
+                "invalid_token_per_client_address_per_minute": 20,
+                "per_principal_per_minute": 10,
+                "subject_mismatch_per_principal_per_hour": 5,
+                "per_holder_per_hour": 10,
+                "credential_issuance_per_principal_per_hour": 5
+            }
+        }))
+        .expect("self-attestation config parses");
+
+        let document = RegistryWitnessRuntime::service_document_with_self_attestation(
+            &evidence,
+            &self_attestation,
+            true,
+        );
+
+        assert_eq!(document["self_attestation"]["enabled"], json!(true));
+        assert_eq!(
+            document["self_attestation"]["allowed_operations"],
+            json!({
+                "evaluate": true,
+                "render": true,
+                "issue_credential": false,
+                "batch_evaluate": false
+            })
+        );
+        assert_eq!(
+            document["self_attestation"]["allowed_claim_ids"],
+            json!(["person-is-alive"])
+        );
+        assert_eq!(
+            document["self_attestation"]["allowed_formats"],
+            json!([FORMAT_CLAIM_RESULT_JSON])
+        );
+        assert_eq!(
+            document["self_attestation"]["allowed_disclosures"],
+            json!(["predicate"])
+        );
+        assert_eq!(
+            document["self_attestation"]["credential_profile_ids"],
+            json!(["civil_status_sd_jwt"])
+        );
+        assert_eq!(
+            document["self_attestation"]["subject_id_type"],
+            json!("national_id")
+        );
+        assert_eq!(
+            document["self_attestation"]["token_claim_name"],
+            json!("https://id.example.gov/claims/national_id")
+        );
+        assert_eq!(
+            document["self_attestation"]["required_scopes"],
+            json!(["self_attestation"])
+        );
+        assert_eq!(
+            document["self_attestation"]["max_evaluation_age_seconds"],
+            json!(600)
+        );
+        assert_eq!(
+            document["self_attestation"]["max_credential_validity_seconds"],
+            json!(300)
+        );
+        assert_eq!(
+            document["self_attestation"]["rate_limit_mode"],
+            json!("in_process")
+        );
+        assert!(document["self_attestation"]["rate_limits"].is_null());
+        assert!(document["self_attestation"]["allowed_wallet_origins"].is_null());
+        assert!(document["self_attestation"]["citizen_clients"].is_null());
+        assert!(document["self_attestation"]["token_policy"].is_null());
+    }
+
+    #[test]
     fn subject_ref_is_evaluation_scoped_not_subject_hash() {
         assert_eq!(
             evaluation_subject_ref("01KSARTEST"),
             "urn:subject:evaluation:01KSARTEST"
         );
+    }
+
+    #[tokio::test]
+    async fn self_attestation_capability_rejects_dependency_source_read_before_connector() {
+        let source = Arc::new(CountingSource::default());
+        let evidence = test_evidence(vec![
+            test_claim("selected", vec!["dependency"], false),
+            test_claim("dependency", Vec::new(), true),
+        ]);
+        let store = EvidenceStore::default();
+
+        let err = RegistryWitnessRuntime::new()
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &self_attestation_principal(),
+                self_attestation_capability("selected"),
+                test_request("selected"),
+                None,
+                None,
+            )
+            .await
+            .expect_err("dependency source read is not selected claim");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn self_attestation_capability_rejects_arbitrary_requested_claim() {
+        let source = Arc::new(CountingSource::default());
+        let evidence = test_evidence(vec![
+            test_claim("selected", Vec::new(), false),
+            test_claim("other", Vec::new(), false),
+        ]);
+        let store = EvidenceStore::default();
+
+        let err = RegistryWitnessRuntime::new()
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &self_attestation_principal(),
+                self_attestation_capability("selected"),
+                test_request("other"),
+                None,
+                None,
+            )
+            .await
+            .expect_err("self-attestation cannot switch claims after guard selection");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn machine_capability_preserves_dependency_source_read() {
+        let source = Arc::new(CountingSource::default());
+        let evidence = test_evidence(vec![
+            test_claim("selected", vec!["dependency"], false),
+            test_claim("dependency", Vec::new(), true),
+        ]);
+        let store = EvidenceStore::default();
+
+        let results = RegistryWitnessRuntime::new()
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                SourceCapability::Machine {
+                    scopes: BTreeSet::new(),
+                },
+                test_request("selected"),
+                None,
+                None,
+            )
+            .await
+            .expect("machine source reads keep existing behavior");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn self_attestation_batch_is_denied_before_source_reads() {
+        let source = Arc::new(CountingSource::default());
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let store = EvidenceStore::default();
+        let request = BatchEvaluateRequest {
+            subjects: vec![SubjectRequest {
+                id: "person-1".to_string(),
+                id_type: None,
+            }],
+            claims: vec!["selected".to_string()],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("test".to_string()),
+        };
+
+        let err = RegistryWitnessRuntime::new()
+            .batch_evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &self_attestation_principal(),
+                request,
+                BatchEvaluateOptions::default(),
+            )
+            .await
+            .expect_err("self-attestation batch is not supported");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::BatchDenied
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(feature = "registry-witness-cel")]
@@ -2232,14 +3063,14 @@ claims:
       - profile_a
 credential_profiles:
   profile_a:
-    format: sd_jwt_vc
+    format: application/dc+sd-jwt
     issuer: https://issuer.example
     issuer_key_env: ISSUER_KEY
     vct: https://vct.example/a
     allowed_claims:
       - claim-a
   profile_b:
-    format: sd_jwt_vc
+    format: application/dc+sd-jwt
     issuer: https://issuer.example
     issuer_key_env: ISSUER_KEY_B
     vct: https://vct.example/b
@@ -2259,6 +3090,7 @@ credential_profiles:
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
             request_hash: "h".to_string(),
+            self_attestation: None,
         };
 
         let err = credential_profile_for(&evidence, &evaluation, Some("profile_b"))

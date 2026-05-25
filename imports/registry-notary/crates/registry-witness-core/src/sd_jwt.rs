@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::config::CredentialProfileConfig;
 use crate::error::EvidenceError;
-use crate::model::ClaimResultView;
+use crate::model::{ClaimResultView, SD_JWT_VC_SIGNING_ALG};
 
 #[derive(Debug, Clone)]
 pub struct SignedSdJwtVc {
@@ -56,7 +56,9 @@ impl EvidenceIssuer {
         let jwk = PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
         let mut public = jwk.public();
         public.kid = Some(verification_method_id.clone());
-        public.alg.get_or_insert_with(|| "EdDSA".to_string());
+        public
+            .alg
+            .get_or_insert_with(|| SD_JWT_VC_SIGNING_ALG.to_string());
         let public_jwk =
             serde_json::to_value(public).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
         let issuer =
@@ -86,10 +88,8 @@ pub fn issue(
         return Err(EvidenceError::HolderProofRequired);
     }
     let expires_at = iat + time::Duration::seconds(profile.validity_seconds);
-    let subject_ref = results
-        .first()
-        .map(|result| result.subject_ref.as_str())
-        .or(holder_id)
+    let subject_ref = holder_id
+        .or_else(|| results.first().map(|result| result.subject_ref.as_str()))
         .unwrap_or(profile.issuer.as_str())
         .to_string();
     let disclosures = results
@@ -172,7 +172,7 @@ fn format_time(value: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ClaimProvenance;
+    use crate::model::{ClaimProvenance, FORMAT_SD_JWT_VC, SD_JWT_VC_JWT_TYP};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
@@ -198,8 +198,8 @@ mod tests {
                 .expect("header decodes as base64url"),
         )
         .expect("header decodes as JSON");
-        assert_eq!(header["alg"], "EdDSA");
-        assert_eq!(header["typ"], "dc+sd-jwt");
+        assert_eq!(header["alg"], SD_JWT_VC_SIGNING_ALG);
+        assert_eq!(header["typ"], SD_JWT_VC_JWT_TYP);
     }
 
     #[test]
@@ -218,6 +218,49 @@ mod tests {
 
         assert_eq!(payload["jti"], signed.credential_id);
         assert_eq!(payload["id"], signed.credential_id);
+    }
+
+    #[test]
+    fn golden_sd_jwt_vc_fixture_matches_conformance_profile() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let holder = holder_did_jwk();
+        let iat = OffsetDateTime::from_unix_timestamp(1_700_000_000)
+            .expect("test fixture timestamp is valid");
+        let mut result = claim_result("first");
+        result.subject_ref = "registry-subject-ref".to_string();
+        let signed = issue(
+            &holder_required_profile(),
+            &issuer,
+            &[result],
+            Some(&holder),
+            iat,
+        )
+        .expect("credential issues");
+
+        let header = header(&signed);
+        let payload = payload(&signed);
+
+        assert_eq!(header["alg"], SD_JWT_VC_SIGNING_ALG);
+        assert_eq!(header["typ"], SD_JWT_VC_JWT_TYP);
+        assert_eq!(header["kid"], "did:web:issuer.test#key-1");
+        assert_eq!(payload["iss"], "did:web:issuer.test");
+        assert_eq!(payload["sub"], holder);
+        assert_eq!(payload["iat"], iat.unix_timestamp());
+        assert_eq!(payload["exp"], iat.unix_timestamp() + 60);
+        assert_eq!(payload["vct"], "https://vct.example/test");
+        assert_eq!(payload["jti"], signed.credential_id);
+        assert_eq!(payload["id"], signed.credential_id);
+        assert_eq!(payload["cnf"]["kid"], holder);
+        assert_eq!(payload["cnf"]["jwk"]["kty"], "OKP");
+        assert_eq!(payload["cnf"]["jwk"]["crv"], "Ed25519");
+        assert!(payload["cnf"]["jwk"].get("d").is_none());
+        assert_eq!(payload_sd(&signed), disclosure_digests(&signed));
+        assert_eq!(signed.disclosures.len(), 1);
+        assert!(
+            !payload.to_string().contains("registry-subject-ref"),
+            "holder-bound payload must not expose the raw registry subject_ref",
+        );
     }
 
     #[test]
@@ -268,6 +311,77 @@ mod tests {
         assert_eq!(payload["cnf"]["jwk"]["kty"], "OKP");
         assert_eq!(payload["cnf"]["jwk"]["crv"], "Ed25519");
         assert!(payload["cnf"]["jwk"].get("d").is_none());
+    }
+
+    #[test]
+    fn holder_bound_credential_uses_holder_did_as_subject() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let holder = holder_did_jwk();
+        let mut result = claim_result("first");
+        result.subject_ref = "registry-subject-ref".to_string();
+
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[result],
+            Some(&holder),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+        let payload = payload(&signed);
+
+        assert_eq!(payload["sub"], holder);
+        assert!(
+            !payload.to_string().contains("registry-subject-ref"),
+            "holder-bound JWT payload must not expose the raw registry subject_ref",
+        );
+    }
+
+    #[test]
+    fn credential_without_holder_uses_registry_subject_ref() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let mut result = claim_result("first");
+        result.subject_ref = "registry-subject-ref".to_string();
+
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[result],
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+        let payload = payload(&signed);
+
+        assert_eq!(payload["sub"], "registry-subject-ref");
+    }
+
+    #[test]
+    fn holder_required_profile_rejects_missing_or_unsupported_holder_binding() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let profile = holder_required_profile();
+        let iat = OffsetDateTime::from_unix_timestamp(1_700_000_000)
+            .expect("test fixture timestamp is valid");
+
+        let missing_holder = issue(&profile, &issuer, &[claim_result("first")], None, iat)
+            .expect_err("holder-bound profile requires holder proof material");
+        assert!(matches!(missing_holder, EvidenceError::HolderProofRequired));
+
+        let unsupported_holder = issue(
+            &profile,
+            &issuer,
+            &[claim_result("first")],
+            Some("did:key:z6Mkunsupported"),
+            iat,
+        )
+        .expect_err("only did:jwk holder identifiers are supported");
+        assert!(matches!(
+            unsupported_holder,
+            EvidenceError::HolderProofRequired
+        ));
     }
 
     #[test]
@@ -353,7 +467,7 @@ mod tests {
 
     fn test_profile() -> CredentialProfileConfig {
         CredentialProfileConfig {
-            format: "sd_jwt_vc".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
             issuer: "did:web:issuer.test".to_string(),
             issuer_key_env: "REGISTRY_WITNESS_ISSUER_JWK".to_string(),
             issuer_kid: Some("did:web:issuer.test#key-1".to_string()),
@@ -363,6 +477,14 @@ mod tests {
             allowed_claims: Vec::new(),
             disclosure: Default::default(),
         }
+    }
+
+    fn holder_required_profile() -> CredentialProfileConfig {
+        let mut profile = test_profile();
+        profile.holder_binding.mode = "did".to_string();
+        profile.holder_binding.proof_of_possession = Some("required".to_string());
+        profile.holder_binding.allowed_did_methods = vec!["did:jwk".to_string()];
+        profile
     }
 
     fn claim_result(claim_id: &str) -> ClaimResultView {
@@ -423,6 +545,24 @@ mod tests {
                 .expect("payload decodes as base64url"),
         )
         .expect("payload decodes as JSON")
+    }
+
+    fn header(signed: &SignedSdJwtVc) -> Value {
+        let compact_jwt = signed
+            .compact
+            .split('~')
+            .next()
+            .expect("sd-jwt has compact jwt");
+        let header = compact_jwt
+            .split('.')
+            .next()
+            .expect("compact jwt has header");
+        serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(header)
+                .expect("header decodes as base64url"),
+        )
+        .expect("header decodes as JSON")
     }
 
     fn disclosure_digests(signed: &SignedSdJwtVc) -> Vec<String> {

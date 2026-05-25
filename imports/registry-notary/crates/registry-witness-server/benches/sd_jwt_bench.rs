@@ -25,7 +25,7 @@ const VM_ID: &str = "did:web:perf.registry-witness.example#perf-key-1";
 
 fn build_profile() -> CredentialProfileConfig {
     CredentialProfileConfig {
-        format: "smallholder_sd_jwt".to_string(),
+        format: registry_witness_core::FORMAT_SD_JWT_VC.to_string(),
         issuer: "did:web:perf.registry-witness.example".to_string(),
         issuer_key_env: "REGISTRY_WITNESS_ISSUER_JWK".to_string(),
         issuer_kid: Some(VM_ID.to_string()),
@@ -56,7 +56,7 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
         value: Some(value),
         satisfied: Some(true),
         disclosure: "value".to_string(),
-        format: "smallholder_sd_jwt".to_string(),
+        format: registry_witness_core::FORMAT_SD_JWT_VC.to_string(),
         issued_at: "2026-01-01T00:00:00Z".to_string(),
         expires_at: None,
         provenance: ClaimProvenance {

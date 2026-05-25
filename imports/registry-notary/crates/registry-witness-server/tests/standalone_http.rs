@@ -5,7 +5,7 @@ use axum::body::Bytes;
 use axum::extract::Query;
 #[cfg(feature = "registry-witness-cel")]
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 #[cfg(feature = "registry-witness-cel")]
@@ -23,8 +23,10 @@ use std::collections::BTreeMap;
 #[cfg(feature = "registry-witness-cel")]
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+use time::OffsetDateTime;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
@@ -55,6 +57,36 @@ async fn registry_data_api(
         "data": [{
             "id": "person-1",
             "total_farmed_area": 3.5
+        }]
+    }))
+    .into_response()
+}
+
+async fn self_attestation_registry_data_api(
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Response {
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some("Bearer source-token")
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if headers
+        .get("data-purpose")
+        .and_then(|value| value.to_str().ok())
+        != Some("citizen_self_attestation")
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if query.get("id").map(String::as_str) != Some("person-1") {
+        return Json(json!({ "data": [] })).into_response();
+    }
+    Json(json!({
+        "data": [{
+            "id": "person-1",
+            "alive": true
         }]
     }))
     .into_response()
@@ -214,6 +246,153 @@ fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneRegis
         "registry_data_api",
         "total_farmed_area",
     )
+}
+
+fn self_attestation_oidc_config(
+    base_url: &str,
+    audit_path: &str,
+    issuer: &str,
+    jwks_uri: &str,
+) -> StandaloneRegistryWitnessConfig {
+    set_audit_secret();
+    let raw = format!(
+        r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: oidc
+  oidc:
+    issuer: "{issuer}"
+    jwks_uri: "{jwks_uri}"
+    audiences:
+      - registry-witness-citizen
+    allowed_clients:
+      - citizen-portal
+    allowed_algorithms:
+      - EdDSA
+    allowed_typ:
+      - JWT
+    scope_claim: scope
+    scope_separator: " "
+    principal_claim: sub
+    leeway_seconds: 60
+    allow_insecure_localhost: true
+    scope_map:
+      self_attestation:
+        - self_attestation
+audit:
+  sink: file
+  path: "{audit_path}"
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+evidence:
+  enabled: true
+  service_id: evidence.test
+  api_base_url: https://evidence.example.test
+  credential_profiles:
+    civil_status_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:issuer.example
+      issuer_key_env: TEST_SELF_ATTESTATION_ISSUER_JWK
+      vct: https://issuer.example/credentials/civil-status
+      validity_seconds: 600
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      allowed_claims:
+        - person-is-alive
+      disclosure:
+        allowed:
+          - value
+  source_connections:
+    people:
+      base_url: "{base_url}"
+      allow_insecure_localhost: true
+      token_env: TEST_EVIDENCE_SOURCE_TOKEN
+  claims:
+    - id: person-is-alive
+      title: Person is alive
+      version: 2026-05
+      subject_type: person
+      purpose: citizen_self_attestation
+      value:
+        type: boolean
+      source_bindings:
+        person:
+          connector: registry_data_api
+          connection: people
+          required_scope: people:evidence_verification
+          dataset: people
+          entity: person
+          lookup:
+            input: subject_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            alive:
+              field: alive
+              type: boolean
+              required: true
+      rule:
+        type: extract
+        source: person
+        field: alive
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+      credential_profiles:
+        - civil_status_sd_jwt
+self_attestation:
+  enabled: true
+  subject_binding:
+    token_claim: national_id
+    id_type: national_id
+  citizen_clients:
+    allowed_client_ids:
+      - citizen-portal
+    allowed_audiences:
+      - registry-witness-citizen
+  token_policy:
+    max_auth_age_seconds: 900
+    max_access_token_lifetime_seconds: 900
+    max_evaluation_age_seconds: 600
+    max_credential_validity_seconds: 600
+    max_clock_leeway_seconds: 60
+  allowed_operations:
+    evaluate: true
+    render: true
+    issue_credential: false
+    batch_evaluate: false
+  allowed_purposes:
+    - citizen_self_attestation
+  allowed_claims:
+    - person-is-alive
+  allowed_formats:
+    - application/vnd.registry-witness.claim-result+json
+    - application/dc+sd-jwt
+  allowed_disclosures:
+    - value
+    - redacted
+  required_scopes:
+    - self_attestation
+  credential_profiles:
+    - civil_status_sd_jwt
+  allowed_wallet_origins:
+    - https://wallet.example.gov
+  rate_limits:
+    mode: in_process
+    invalid_token_per_client_address_per_minute: 20
+    per_principal_per_minute: 10
+    subject_mismatch_per_principal_per_hour: 5
+    per_holder_per_hour: 10
+    credential_issuance_per_principal_per_hour: 5
+"#
+    );
+    serde_norway::from_str(&raw).expect("self-attestation config deserializes")
 }
 
 #[cfg(feature = "registry-witness-cel")]
@@ -439,6 +618,118 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
 }
 
 #[tokio::test]
+async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/datasets/people/person",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-witness-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+
+    let evaluate = server
+        .post("/claims/evaluate")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "subject": {
+                "id": "person-1",
+                "id_type": "national_id"
+            },
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/vnd.registry-witness.claim-result+json"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluate_body: Value = evaluate.json();
+    assert_eq!(evaluate_body["results"][0]["value"], json!(true));
+    let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+
+    let render = server
+        .post("/evidence/render")
+        .add_header("authorization", authorization)
+        .json(&json!({
+            "evaluation_id": evaluation_id,
+            "disclosure": "value",
+            "format": "application/vnd.registry-witness.claim-result+json"
+        }))
+        .await;
+    render.assert_status_ok();
+    let render_body: Value = render.json();
+    assert_eq!(render_body["results"][0]["value"], json!(true));
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    assert!(!audit.contains(&token));
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    let evaluate_audit = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/claims/evaluate")
+                && record["decision"] == json!("evaluate")
+                && record["status"] == json!(200)
+        })
+        .expect("evaluate audit record exists");
+    assert_eq!(
+        evaluate_audit["access_mode"],
+        json!("self_attestation"),
+        "{evaluate_audit}"
+    );
+    assert!(evaluate_audit["policy_hash"].is_string());
+    assert!(evaluate_audit.get("principal_id").is_none());
+    assert!(evaluate_audit.get("principal_id_hash").is_some());
+
+    let render_audit = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/evidence/render")
+                && record["decision"] == json!("render")
+                && record["status"] == json!(200)
+        })
+        .expect("render audit record exists");
+    assert_eq!(render_audit["access_mode"], json!("self_attestation"));
+    assert!(render_audit["policy_hash"].is_string());
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn request_body_limit_returns_413_above_threshold() {
     set_audit_secret();
     std::env::set_var(
@@ -565,6 +856,112 @@ async fn cors_csp_corp_headers_present_and_corp_conditional() {
             .and_then(|value| value.to_str().ok()),
         Some("cross-origin")
     );
+}
+
+#[tokio::test]
+async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.server.cors.allowed_origins = vec!["https://ops.example.test".to_string()];
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let wallet = server
+        .get("/.well-known/evidence-service")
+        .add_header("origin", "https://wallet.example.gov")
+        .await;
+    wallet.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        wallet
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://wallet.example.gov")
+    );
+
+    let ops = server
+        .get("/.well-known/evidence-service")
+        .add_header("origin", "https://ops.example.test")
+        .await;
+    ops.assert_status(StatusCode::UNAUTHORIZED);
+    assert!(ops.headers().get("access-control-allow-origin").is_none());
+
+    let healthz = server
+        .get("/healthz")
+        .add_header("origin", "https://ops.example.test")
+        .await;
+    healthz.assert_status_ok();
+    assert_eq!(
+        healthz
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://ops.example.test")
+    );
+}
+
+#[tokio::test]
+async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.server.cors.allowed_origins = vec!["https://ops.example.test".to_string()];
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let wallet = server
+        .method(Method::OPTIONS, "/claims/evaluate")
+        .add_header("origin", "https://wallet.example.gov")
+        .add_header("access-control-request-method", "POST")
+        .add_header(
+            "access-control-request-headers",
+            "authorization, content-type",
+        )
+        .await;
+    wallet.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        wallet
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://wallet.example.gov")
+    );
+    assert_eq!(
+        wallet
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok()),
+        Some("authorization, content-type")
+    );
+
+    let ops = server
+        .method(Method::OPTIONS, "/claims/evaluate")
+        .add_header("origin", "https://ops.example.test")
+        .add_header("access-control-request-method", "POST")
+        .await;
+    ops.assert_status(StatusCode::NO_CONTENT);
+    assert!(ops.headers().get("access-control-allow-origin").is_none());
 }
 
 #[tokio::test]

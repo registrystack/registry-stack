@@ -19,11 +19,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_witness_core::sd_jwt::{issue as sd_jwt_issue, EvidenceIssuer};
 use registry_witness_core::{
-    BatchEvaluateRequest, ClaimDefinition, ClaimOperationsConfig, ClaimResultView,
+    AccessMode, BatchEvaluateRequest, ClaimDefinition, ClaimOperationsConfig, ClaimResultView,
     ClaimValueConfig, ConcurrencyConfig, CredentialProfileConfig, DisclosureConfig, EvidenceConfig,
     EvidenceError, EvidencePrincipal, RuleConfig, SourceBindingConfig, SourceConnectorKind,
     SourceFieldConfig, SourceLookupConfig, StandaloneRegistryWitnessConfig, SubjectRequest,
-    FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_witness_server::{
     standalone_router, BatchEvaluateOptions, EvidenceStore, MemoState, RegistryWitnessRuntime,
@@ -1228,7 +1228,7 @@ const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd
 
 fn test_credential_profile() -> CredentialProfileConfig {
     CredentialProfileConfig {
-        format: "sd_jwt_vc".to_string(),
+        format: FORMAT_SD_JWT_VC.to_string(),
         issuer: "did:web:issuer.test".to_string(),
         issuer_key_env: "TEST_MEMO_ISSUER_JWK".to_string(),
         issuer_kid: Some("did:web:issuer.test#key-1".to_string()),
@@ -1318,6 +1318,7 @@ fn shared_binding_claim(id: &str) -> ClaimDefinition {
         },
         inputs: Vec::new(),
         depends_on: Vec::new(),
+        purpose: None,
         source_bindings: bindings,
         rule: RuleConfig::Extract {
             source: "src".to_string(),
@@ -1386,6 +1387,8 @@ async fn memo_counters_record_hits_and_misses_on_shared_binding_batch() {
     let principal = EvidencePrincipal {
         principal_id: "test".to_string(),
         scopes: Vec::new(),
+        access_mode: AccessMode::MachineClient,
+        verified_claims: None,
     };
     let response = runtime
         .batch_evaluate(

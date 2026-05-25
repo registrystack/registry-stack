@@ -70,11 +70,11 @@ server:
 auth:
   bearer_tokens:
     - id: witness
-      token: "dev-sidecar-token"
+      hash_env: DEV_SIDECAR_TOKEN_HASH
 limits:
   max_workers: 2
   worker_timeout_ms: 10000
-  max_worker_memory_mb: 512
+  max_worker_memory_mb: 12288
   max_output_bytes: 1048576
   max_request_bytes: 16384
   max_query_parameter_bytes: 1024
@@ -101,6 +101,8 @@ sources:
     job: "$crate_dir/examples/jobs/http-person-lookup.js"
     adaptor: "@openfn/language-http@7.2.0"
     credential_env: OPENFN_HTTP_DEMO_CREDENTIAL_JSON
+    allowed_base_urls:
+      - "http://127.0.0.1:$registry_port"
     smoke_lookup:
       field: national_id
       value: person-123
@@ -133,6 +135,7 @@ if [ "$ready" -ne 1 ]; then
 fi
 
 export OPENFN_HTTP_DEMO_CREDENTIAL_JSON="{\"baseUrl\":\"http://127.0.0.1:$registry_port\",\"apiToken\":\"demo-target-token\"}"
+export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
 nohup cargo run -p registry-witness-openfn-sidecar --bin registry-witness-openfn-sidecar -- --config "$manifest" >"$sidecar_log" 2>&1 &
 sidecar_pid="$!"
 printf '%s\n' "$sidecar_pid" >"$sidecar_pid_file"

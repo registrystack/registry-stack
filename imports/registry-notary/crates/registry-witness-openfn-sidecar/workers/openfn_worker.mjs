@@ -9,6 +9,7 @@ import run from '@openfn/runtime';
 
 const require = createRequire(import.meta.url);
 let runCounter = 0;
+const compiledJobs = new Map();
 
 if (process.argv.includes('--version')) {
   await printVersionAndExit();
@@ -47,20 +48,7 @@ async function withStdoutRedirect(callback) {
 }
 
 async function executeLookup(request) {
-  const adaptor = resolveAdaptor(request.adaptor);
-  const expression = await readFile(request.job, 'utf8');
-  const adaptorExports = await preloadAdaptorExports(adaptor.path);
-  const { code } = compile(expression, {
-    'add-imports': {
-      adaptors: [
-        {
-          name: adaptor.name,
-          exports: adaptorExports,
-          exportAll: true,
-        },
-      ],
-    },
-  });
+  const compiled = await compiledJob(request.job, request.adaptor);
 
   const state = {
     data: {
@@ -79,8 +67,8 @@ async function executeLookup(request) {
         steps: [
           {
             id: 'lookup',
-            expression: code,
-            adaptors: [`${adaptor.name}=${adaptor.path}`],
+            expression: compiled.code,
+            adaptors: [`${compiled.adaptor.name}=${compiled.adaptor.path}`],
           },
         ],
       },
@@ -92,9 +80,9 @@ async function executeLookup(request) {
     {
       linker: {
         modules: {
-          [adaptor.name]: { path: adaptor.path },
+          [compiled.adaptor.name]: { path: compiled.adaptor.path },
         },
-        cacheKey: `${Date.now()}-${++runCounter}`,
+        cacheKey: compiled.cacheKey,
       },
       statePropsToRemove: ['configuration'],
     },
@@ -109,6 +97,36 @@ async function executeLookup(request) {
     return { error: { code: 'invalid_job_result' } };
   }
   return { data: records };
+}
+
+async function compiledJob(job, adaptorSpecifier) {
+  const cacheKey = `${job}\u0000${adaptorSpecifier}`;
+  const cached = compiledJobs.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const adaptor = resolveAdaptor(adaptorSpecifier);
+  const expression = await readFile(job, 'utf8');
+  const adaptorExports = await preloadAdaptorExports(adaptor.path);
+  const { code } = compile(expression, {
+    'add-imports': {
+      adaptors: [
+        {
+          name: adaptor.name,
+          exports: adaptorExports,
+          exportAll: true,
+        },
+      ],
+    },
+  });
+  const compiled = {
+    adaptor,
+    code,
+    cacheKey: `compiled-${++runCounter}`,
+  };
+  compiledJobs.set(cacheKey, compiled);
+  return compiled;
 }
 
 function extractTargetError(state) {

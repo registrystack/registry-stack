@@ -20,6 +20,7 @@ use tokio::{
     task::JoinHandle,
     time,
 };
+use tracing::error;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct WorkerCommand {
@@ -496,8 +497,13 @@ impl WorkerPoolInner {
     }
 
     async fn replace_worker(&self) {
-        if let Ok(worker) = self.spawn_worker().await {
-            self.idle.lock().await.push_back(worker);
+        match self.spawn_worker().await {
+            Ok(worker) => {
+                self.idle.lock().await.push_back(worker);
+            }
+            Err(error) => {
+                error!(error = ?error, "failed to replace OpenFn sidecar worker");
+            }
         }
     }
 

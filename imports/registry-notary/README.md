@@ -26,6 +26,13 @@ but Registry Witness does not import or link Registry Relay code.
 - `demo/config/registry-witness.yaml`: split demo config used by
   `registry-relay`'s narrated Registry Witness walkthrough.
 
+## Credential Conformance
+
+Registry Witness currently issues SD-JWT VC credentials using
+`application/dc+sd-jwt`, EdDSA over Ed25519 issuer keys, and `did:jwk` holder
+binding. The supported wire contract and explicit non-support list are defined
+in [`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
+
 ## Local Run
 
 ```bash

@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum_test::{TestResponse, TestServer};
 use registry_witness_openfn_sidecar::{sidecar_router, SidecarConfig};
 use serde_json::{json, Value};
+use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -12,6 +13,8 @@ const ENTITY: &str = "civil_person";
 const LOOKUP_FIELD: &str = "national_id";
 const PURPOSE: &str = "https://purpose.example.test/eligibility";
 const TOKEN: &str = "contract-sidecar-token";
+const TOKEN_HASH_ENV: &str = "OPENFN_CONTRACT_SIDECAR_TOKEN_HASH";
+const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
 const CREDENTIAL_ENV: &str = "OPENCRVS_READER_CREDENTIAL_JSON";
 
 struct ContractHarness {
@@ -40,6 +43,7 @@ impl Default for HarnessOptions {
 }
 
 async fn contract_harness(options: HarnessOptions) -> ContractHarness {
+    set_sidecar_token_hash();
     std::env::set_var(
         CREDENTIAL_ENV,
         r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
@@ -61,6 +65,7 @@ async fn contract_harness(options: HarnessOptions) -> ContractHarness {
 }
 
 fn manifest_yaml(options: &HarnessOptions, attempt_log: &Path) -> String {
+    set_sidecar_token_hash();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let worker = fixtures.join("contract_worker.sh");
     let job = fixtures.join("jobs/opencrvs-person-lookup.js");
@@ -72,7 +77,7 @@ server:
 auth:
   bearer_tokens:
     - id: witness-contract
-      token: {token}
+      hash_env: {token_hash_env}
 limits:
   max_workers: {max_workers}
   worker_timeout_ms: {worker_timeout_ms}
@@ -103,7 +108,7 @@ sources:
         - national_id
       purpose: startup-smoke
 "#,
-        token = yaml_string(TOKEN),
+        token_hash_env = yaml_string(TOKEN_HASH_ENV),
         max_workers = options.max_workers,
         worker_timeout_ms = options.worker_timeout_ms,
         max_output_bytes = options.max_output_bytes,
@@ -113,6 +118,10 @@ sources:
         job = yaml_path(&job),
         credential_env = yaml_string(CREDENTIAL_ENV),
     )
+}
+
+fn set_sidecar_token_hash() {
+    std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
 }
 
 fn yaml_path(path: &Path) -> String {
@@ -503,6 +512,120 @@ async fn startup_rejects_missing_adaptor_pin_before_readiness() {
 
     assert!(error.contains("@openfn/language-missing@0.0.1"));
     assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_rejects_missing_sidecar_token_hash_env() {
+    let missing_hash_env = "OPENFN_CONTRACT_MISSING_SIDECAR_TOKEN_HASH";
+    std::env::remove_var(missing_hash_env);
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = manifest_yaml(
+        &HarnessOptions::default(),
+        &tmp.path().join("attempts.jsonl"),
+    );
+    let manifest = manifest.replace(TOKEN_HASH_ENV, missing_hash_env);
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject a missing sidecar token hash env"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains(missing_hash_env));
+    assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_rejects_plaintext_sidecar_token_config() {
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = manifest_yaml(
+        &HarnessOptions::default(),
+        &tmp.path().join("attempts.jsonl"),
+    )
+    .replace(
+        &format!("      hash_env: {}\n", yaml_string(TOKEN_HASH_ENV)),
+        "      token: contract-sidecar-token\n",
+    );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject plaintext sidecar token config"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("plaintext token is not supported"));
+    assert!(!error.contains("contract-sidecar-token"));
+    assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_rejects_adaptor_installed_version_mismatch() {
+    set_sidecar_token_hash();
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let attempt_log = tmp.path().join("attempts.jsonl");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let worker = fixtures.join("contract_worker.sh");
+    let wrapper = tmp.path().join("version-mismatch-worker.sh");
+    fs::write(
+        &wrapper,
+        format!(
+            r#"if [ "${{1:-}}" = "--version" ] || [ "${{2:-}}" = "--version" ]; then
+  printf '%s\n' 'cli_build_tool=1.36.0 runtime=1.36.0 @openfn/language-http@7.2.0:7.3.0=/fixture'
+  exit 0
+fi
+exec /bin/sh {} "$@"
+"#,
+            worker.display()
+        ),
+    )
+    .expect("write wrapper worker");
+    let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log)
+        .replace(&yaml_path(&worker), &yaml_path(&wrapper));
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject adaptor installed version mismatch"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("resolved to version 7.3.0, expected 7.2.0"));
+    assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_rejects_credential_base_url_outside_allowlist() {
+    let credential_env = "OPENFN_CONTRACT_DISALLOWED_CREDENTIAL_JSON";
+    std::env::set_var(
+        credential_env,
+        r#"{"baseUrl":"https://unexpected.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = manifest_yaml(&HarnessOptions::default(), &tmp.path().join("attempts.jsonl"))
+        .replace(
+            &format!("    credential_env: {}\n", yaml_string(CREDENTIAL_ENV)),
+            &format!(
+                "    credential_env: {}\n    allowed_base_urls:\n      - https://opencrvs.example.test\n",
+                yaml_string(credential_env)
+            ),
+        );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject a credential baseUrl outside allowlist"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("baseUrl"));
+    assert!(!error.contains("fixture-token"));
+    assert!(!error.contains("unexpected.example.test"));
 }
 
 #[tokio::test]

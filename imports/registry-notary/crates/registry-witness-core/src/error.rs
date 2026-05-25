@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Witness stable error taxonomy.
 
+use crate::model::SelfAttestationDenialCode;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -48,6 +50,14 @@ pub enum EvidenceError {
     MissingCredential,
     #[error("required scope is missing")]
     ScopeDenied { required: String },
+    #[error("self-attestation request is denied")]
+    SelfAttestationDenied { reason: SelfAttestationDenialCode },
+    #[error("self-attestation request is rate limited")]
+    SelfAttestationRateLimited,
+    #[error("self-attestation token is invalid")]
+    SelfAttestationInvalidToken,
+    #[error("self-attestation assurance policy denied the request")]
+    SelfAttestationAssuranceDenied,
 }
 
 impl EvidenceError {
@@ -75,6 +85,49 @@ impl EvidenceError {
             Self::PurposeRequired => "auth.purpose_required",
             Self::MissingCredential => "auth.missing_credential",
             Self::ScopeDenied { .. } => "auth.scope_denied",
+            Self::SelfAttestationDenied { .. } => "self_attestation.denied",
+            Self::SelfAttestationRateLimited => "self_attestation.rate_limited",
+            Self::SelfAttestationInvalidToken => "self_attestation.invalid_token",
+            Self::SelfAttestationAssuranceDenied => "self_attestation.assurance_denied",
         }
+    }
+
+    #[must_use]
+    pub fn audit_code(&self) -> &'static str {
+        match self {
+            Self::SelfAttestationDenied { reason } => reason.as_str(),
+            _ => self.code(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_attestation_denial_keeps_generic_public_code_and_specific_audit_code() {
+        let error = EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::SubjectMismatch,
+        };
+
+        assert_eq!(error.code(), "self_attestation.denied");
+        assert_eq!(error.audit_code(), "self_attestation.subject_mismatch");
+    }
+
+    #[test]
+    fn self_attestation_specific_errors_have_stable_codes() {
+        assert_eq!(
+            EvidenceError::SelfAttestationRateLimited.code(),
+            "self_attestation.rate_limited"
+        );
+        assert_eq!(
+            EvidenceError::SelfAttestationInvalidToken.code(),
+            "self_attestation.invalid_token"
+        );
+        assert_eq!(
+            EvidenceError::SelfAttestationAssuranceDenied.code(),
+            "self_attestation.assurance_denied"
+        );
     }
 }

@@ -33,7 +33,7 @@ server:
 auth:
   bearer_tokens:
     - id: witness
-      token: "dev-sidecar-token"
+      hash_env: DEV_SIDECAR_TOKEN_HASH
 limits:
   max_workers: 2
   worker_timeout_ms: 10000
@@ -71,6 +71,7 @@ sources:
       purpose: startup-readiness-smoke
 YAML
 
+export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
 export EXAMPLE_PERSON_LOOKUP_CREDENTIAL_JSON='{"fixture_records":[{"national_id":"person-123","birth_date":"1990-01-01","extra":"sidecar-must-trim"},{"national_id":"person-456","birth_date":"1985-05-05"}],"apiToken":"redacted-placeholder"}'
 
 cargo run -p registry-witness-openfn-sidecar --bin registry-witness-openfn-sidecar -- --config "$manifest" >"$log" 2>&1 &

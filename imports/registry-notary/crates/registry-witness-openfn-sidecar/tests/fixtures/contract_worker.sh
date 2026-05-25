@@ -2,7 +2,7 @@
 set -eu
 
 if [ "${1:-}" = "--version" ] || [ "${2:-}" = "--version" ]; then
-  printf '%s\n' 'cli_build_tool=1.36.0 runtime=1.36.0 @openfn/language-http@7.2.0'
+  printf '%s\n' 'cli_build_tool=1.36.0 runtime=1.36.0 @openfn/language-http@7.2.0:7.2.0=/fixture'
   exit 0
 fi
 

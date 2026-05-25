@@ -3,7 +3,8 @@
 
 use registry_witness_core::model::{
     BatchEvaluateRequest, CredentialIssueRequest, EvaluateRequest, HolderRequest, RenderRequest,
-    SubjectRequest,
+    SubjectRequest, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE,
+    SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
 };
 use serde_json::{json, Value};
 use std::sync::OnceLock;
@@ -824,6 +825,46 @@ fn discovery_example() -> Value {
         },
         "claims_url": "/claims",
         "formats_url": "/formats",
+        "credential_capabilities": {
+            "formats": [FORMAT_SD_JWT_VC],
+            "sd_jwt_vc": {
+                "media_type": FORMAT_SD_JWT_VC,
+                "jwt_typ": SD_JWT_VC_JWT_TYP,
+                "signing_algs": [SD_JWT_VC_SIGNING_ALG],
+                "issuer_key_types": [SD_JWT_VC_ISSUER_KEY_TYPE],
+                "holder_binding_methods": [SD_JWT_VC_HOLDER_BINDING_METHOD],
+                "status_methods": [],
+                "credential_profiles": [
+                    {
+                        "id": "smallholder_sd_jwt",
+                        "format": FORMAT_SD_JWT_VC,
+                        "issuer": "did:web:agriculture.demo.example.gov",
+                        "vct": "https://demo.example.gov/credentials/smallholder-farmer/v1",
+                        "validity_seconds": 86400,
+                        "holder_binding": {
+                            "mode": "did",
+                            "proof_of_possession": "required",
+                            "allowed_did_methods": [SD_JWT_VC_HOLDER_BINDING_METHOD]
+                        },
+                        "allowed_claims": ["farmer-under-4ha"],
+                        "disclosure": {
+                            "allowed": ["predicate"]
+                        }
+                    }
+                ],
+                "openid4vci": {
+                    "support": "not_full_issuer"
+                }
+            },
+            "unsupported_features": [
+                "application/vc+sd-jwt",
+                "json_ld_vc_issuance",
+                "data_integrity_proofs",
+                "credential_status",
+                "mso_mdoc",
+                "openid4vci_full_issuer"
+            ]
+        },
         "batch": {
             "max_inline_subjects": 20,
             "idempotency_window": "PT15M"
@@ -1016,8 +1057,8 @@ fn credential_issue_example() -> Value {
         "format": "application/dc+sd-jwt",
         "issuer": "did:web:agriculture.demo.example.gov",
         "expires_at": "2026-05-25T12:00:00Z",
-        "credential": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YifQ.c2lnbmF0dXJl~ZGlzY2xvc3VyZQ~",
-        "issuer_signed_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YifQ.c2lnbmF0dXJl",
+        "credential": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YiLCJzdWIiOiJkaWQ6andrOmV5SnJkSGtpT2lKUFMxQWlMQ0pqY25ZaU9pSkZaREkxTlRFNUlpd2llQ0k2SWpFeGNWbEJXVXQ0UTNKbVZsTmZNMWhFWWxoS1F6SkJaMWxKTlRkeFdIcGpVemRRTUZjMVdUbG1ORmtpZlEiLCJpYXQiOjE3Nzk2MjQwMDAsImV4cCI6MTc3OTcxMDQwMCwidmN0IjoiaHR0cHM6Ly9kZW1vLmV4YW1wbGUuZ292L2NyZWRlbnRpYWxzL3NtYWxsaG9sZGVyLWZhcm1lci92MSIsImp0aSI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJpZCI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJfc2QiOlsia0ZxYXpKcDdleVhjS1ZIX0tiMzNnQ1lwMGM3dzFDLWd0WjVORkJxbDdYcyJdLCJjbmYiOnsia2lkIjoiZGlkOmp3azpleUpyZEhraU9pSlBTMUFpTENKamNuWWlPaUpGWkRJMU5URTVJaXdpZUNJNklqRXhjVmxCV1V0NFEzSm1WbE5mTTFoRVlsaEtRekpCWjFsSk5UZHhXSHBqVXpkUU1GYzFXVGxtTkZraWZRIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU18zWERiWEpDMkFnWUk1N3FYemNTN1AwVzVZOWY0WSJ9fX0.c2lnbmF0dXJl~ZGlzY2xvc3VyZQ~",
+        "issuer_signed_jwt": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YiLCJzdWIiOiJkaWQ6andrOmV5SnJkSGtpT2lKUFMxQWlMQ0pqY25ZaU9pSkZaREkxTlRFNUlpd2llQ0k2SWpFeGNWbEJXVXQ0UTNKbVZsTmZNMWhFWWxoS1F6SkJaMWxKTlRkeFdIcGpVemRRTUZjMVdUbG1ORmtpZlEiLCJpYXQiOjE3Nzk2MjQwMDAsImV4cCI6MTc3OTcxMDQwMCwidmN0IjoiaHR0cHM6Ly9kZW1vLmV4YW1wbGUuZ292L2NyZWRlbnRpYWxzL3NtYWxsaG9sZGVyLWZhcm1lci92MSIsImp0aSI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJpZCI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJfc2QiOlsia0ZxYXpKcDdleVhjS1ZIX0tiMzNnQ1lwMGM3dzFDLWd0WjVORkJxbDdYcyJdLCJjbmYiOnsia2lkIjoiZGlkOmp3azpleUpyZEhraU9pSlBTMUFpTENKamNuWWlPaUpGWkRJMU5URTVJaXdpZUNJNklqRXhjVmxCV1V0NFEzSm1WbE5mTTFoRVlsaEtRekpCWjFsSk5UZHhXSHBqVXpkUU1GYzFXVGxtTkZraWZRIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU18zWERiWEpDMkFnWUk1N3FYemNTN1AwVzVZOWY0WSJ9fX0.c2lnbmF0dXJl",
         "disclosures": ["ZGlzY2xvc3VyZQ"]
     })
 }

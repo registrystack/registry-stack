@@ -5,7 +5,7 @@ import http from 'node:http';
 
 const port = Number(process.env.MOCK_REGISTRY_PORT ?? 19192);
 const host = process.env.MOCK_REGISTRY_HOST ?? '127.0.0.1';
-const token = process.env.MOCK_REGISTRY_TOKEN ?? 'demo-target-token';
+const token = process.env.MOCK_REGISTRY_TOKEN || 'demo-target-token';
 
 const people = new Map([
   [

@@ -38,7 +38,7 @@ server:
 auth:
   bearer_tokens:
     - id: witness
-      token: "dev-sidecar-token"
+      hash_env: DEV_SIDECAR_TOKEN_HASH
 limits:
   max_workers: 4
   worker_timeout_ms: 10000
@@ -69,6 +69,8 @@ sources:
     job: /opt/openfn/jobs/opencrvs-person-lookup.js
     adaptor: "@openfn/language-http@7.2.0"
     credential_env: OPENCRVS_READER_CREDENTIAL_JSON
+    allowed_base_urls:
+      - https://example.test
     smoke_lookup:
       field: national_id
       value: smoke-person
@@ -76,11 +78,20 @@ sources:
       purpose: startup-readiness-smoke
 ```
 
-At startup the sidecar checks that the job file exists, credentials are present
-as JSON in `credential_env`, the worker version output contains the configured
-OpenFn compiler/build tool, runtime, and adaptor pins, and every source has a
-smoke lookup that can execute. Runtime execution must not fetch packages from
-the network.
+At startup the sidecar checks that bearer-token fingerprints are loaded from
+`hash_env`, the job file exists, credentials are present as JSON in
+`credential_env`, configured credential `baseUrl` values match
+`allowed_base_urls` when present, the worker version output contains the exact
+configured OpenFn compiler/build tool, runtime, and adaptor pins, and every
+source has a smoke lookup that can execute. `auth.bearer_tokens[].token` is
+rejected; keep the raw sidecar bearer in the caller's secret store and expose
+only its `sha256:<hex>` fingerprint through the configured `hash_env`. Runtime
+execution must not fetch packages from the network.
+
+The worker reports adaptor pins as
+`@openfn/language-http@7.2.0:7.2.0=/path/to/package`. The sidecar verifies that
+the configured adaptor specifier is present and that the installed package
+version exactly matches the configured pin.
 
 The production worker script is [workers/openfn_worker.mjs](workers/openfn_worker.mjs).
 Install its pinned dependencies from [workers/package.json](workers/package.json)
@@ -112,8 +123,20 @@ counts and truncation state, not captured content.
 
 ```bash
 export OPENCRVS_READER_CREDENTIAL_JSON='{"baseUrl":"https://example.test","apiToken":"dev"}'
+export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
 REGISTRY_WITNESS_OPENFN_SIDECAR_CONFIG=/path/to/sidecar.yaml \
   cargo run -p registry-witness-openfn-sidecar -- --config /path/to/sidecar.yaml
+```
+
+The example hash above is the SHA-256 fingerprint for the demo bearer
+`dev-sidecar-token`. For a new local token:
+
+```bash
+python3 - <<'PY'
+import hashlib
+token = "replace-with-local-token"
+print("sha256:" + hashlib.sha256(token.encode("ascii")).hexdigest())
+PY
 ```
 
 To try the full HTTP adaptor path locally:
@@ -130,7 +153,11 @@ crates/registry-witness-openfn-sidecar/scripts/run-openfn-http-demo.sh stop
 ```
 
 The sidecar is intended for localhost or private pod-network traffic from
-Registry Witness. Do not expose it publicly. It provides:
+Registry Witness. Do not expose it publicly. Its outbound target access should
+also be constrained by deployment networking, for example Kubernetes network
+policy or an internal Docker network. `allowed_base_urls` validates configured
+credential targets at startup, but it is not a general JavaScript egress
+sandbox. The sidecar provides:
 
 - `/datasets/{dataset}/{entity}` for synchronous RDA lookups.
 - `/ready` for startup readiness after manifest, credential, version, worker,

@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,8 +12,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{OnceCell, Semaphore};
 
 use axum::body::Body;
-use axum::extract::{Request, State};
-use axum::http::{header, StatusCode};
+use axum::extract::{ConnectInfo, Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -28,13 +29,15 @@ use registry_platform_httputil::{
     read_bounded, url as httputil_url, FetchUrlPolicy, OutboundClientBuilder,
 };
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    Audience, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig,
+    VerifiedToken,
 };
 use registry_witness_core::sd_jwt::EvidenceIssuer;
 use registry_witness_core::{
-    BulkMode, DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceConfig,
-    EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, SourceBindingConfig,
-    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryWitnessConfig, SubjectRequest,
+    AccessMode, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig, EvidenceAuditEvent,
+    EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, RateLimitBucket,
+    SelfAttestationDenialCode, SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind,
+    StandaloneRegistryWitnessConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
 };
 use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
@@ -43,18 +46,22 @@ use ulid::Ulid;
 
 use crate::{
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
-    RegistryWitnessApiState, SourceReader,
+    RegistryWitnessApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
+    SourceReader,
 };
 
 const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
+const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str = "authorization,content-type";
 
 pub fn standalone_router(
     config: StandaloneRegistryWitnessConfig,
 ) -> Result<Router, StandaloneServerError> {
     config.validate()?;
     let evidence = Arc::new(config.evidence.clone());
+    let self_attestation = Arc::new(config.self_attestation.clone());
     let source = Arc::new(HttpEvidenceSources::from_config(&config.evidence)?);
     let store = Arc::new(EvidenceStore::default());
     let issuers = Arc::new(EvidenceIssuerRegistry::from_config(&config.evidence)?);
@@ -65,10 +72,16 @@ pub fn standalone_router(
         allow_credentials: config.server.cors.allow_credentials,
     };
     cors_policy.validate()?;
-    let api_state = Arc::new(RegistryWitnessApiState::new(
-        evidence, source, store, issuers,
-    ));
+    let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config)?);
+    let api_state = Arc::new(RegistryWitnessApiState::new_with_self_attestation_hasher(
+        evidence,
+        self_attestation,
+        auth_state.audit.hasher.clone(),
+        source,
+        store,
+        issuers,
+    ));
 
     Ok(router()
         .layer(axum::Extension(api_state))
@@ -77,11 +90,141 @@ pub fn standalone_router(
             registry_platform_httpsec::CspBuilder::restrictive(),
         ))
         .layer(cors_policy.layer())
+        .layer(from_fn_with_state(
+            wallet_cors_policy,
+            self_attestation_wallet_cors_middleware,
+        ))
         .layer(registry_platform_httpsec::corp_conditional())
         .layer(registry_platform_httpsec::request_body_limit(
             MAX_INBOUND_REQUEST_BODY_BYTES,
         ))
         .layer(axum::middleware::from_fn(rewrite_payload_too_large_problem)))
+}
+
+#[derive(Debug, Clone)]
+struct SelfAttestationWalletCorsPolicy {
+    enabled: bool,
+    allowed_origins: Vec<String>,
+    allow_credentials: bool,
+}
+
+impl SelfAttestationWalletCorsPolicy {
+    fn from_config(config: &StandaloneRegistryWitnessConfig) -> Self {
+        Self {
+            enabled: config.self_attestation.enabled,
+            allowed_origins: config.self_attestation.allowed_wallet_origins.clone(),
+            allow_credentials: config.server.cors.allow_credentials,
+        }
+    }
+
+    fn allows_origin(&self, origin: &str) -> bool {
+        self.allowed_origins
+            .iter()
+            .any(|allowed| allowed.as_str() == origin)
+    }
+}
+
+async fn self_attestation_wallet_cors_middleware(
+    State(policy): State<SelfAttestationWalletCorsPolicy>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !policy.enabled || !is_self_attestation_wallet_cors_path(request.uri().path()) {
+        return next.run(request).await;
+    }
+
+    let origin = request.headers().get(header::ORIGIN).cloned();
+    let Some(origin) = origin else {
+        return next.run(request).await;
+    };
+    let origin_allowed = origin
+        .to_str()
+        .is_ok_and(|origin| policy.allows_origin(origin));
+    let requested_headers = request
+        .headers()
+        .get(header::ACCESS_CONTROL_REQUEST_HEADERS)
+        .cloned();
+    let is_preflight = request.method() == Method::OPTIONS
+        && request
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
+
+    if is_preflight {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        if origin_allowed {
+            apply_self_attestation_wallet_cors_headers(
+                response.headers_mut(),
+                origin,
+                requested_headers.as_ref(),
+                policy.allow_credentials,
+            );
+        }
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    if origin_allowed {
+        apply_self_attestation_wallet_cors_headers(
+            response.headers_mut(),
+            origin,
+            requested_headers.as_ref(),
+            policy.allow_credentials,
+        );
+    } else {
+        remove_access_control_headers(response.headers_mut());
+    }
+    response
+}
+
+fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/.well-known/evidence-service"
+            | "/.well-known/evidence/jwks.json"
+            | "/formats"
+            | "/evidence/render"
+            | "/credentials/issue"
+    ) || path == "/claims"
+        || path.starts_with("/claims/")
+}
+
+fn apply_self_attestation_wallet_cors_headers(
+    headers: &mut HeaderMap,
+    origin: HeaderValue,
+    requested_headers: Option<&HeaderValue>,
+    allow_credentials: bool,
+) {
+    remove_access_control_headers(headers);
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static(SELF_ATTESTATION_CORS_METHODS),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        requested_headers
+            .cloned()
+            .unwrap_or_else(|| HeaderValue::from_static(SELF_ATTESTATION_CORS_DEFAULT_HEADERS)),
+    );
+    if allow_credentials {
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
+    }
+    headers.insert(
+        header::VARY,
+        HeaderValue::from_static(
+            "origin, access-control-request-method, access-control-request-headers",
+        ),
+    );
+}
+
+fn remove_access_control_headers(headers: &mut HeaderMap) {
+    headers.remove(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+    headers.remove(header::ACCESS_CONTROL_ALLOW_METHODS);
+    headers.remove(header::ACCESS_CONTROL_ALLOW_HEADERS);
+    headers.remove(header::ACCESS_CONTROL_ALLOW_CREDENTIALS);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -438,6 +581,8 @@ impl std::fmt::Debug for ResolvedCredential {
 struct AuthAuditState {
     authenticator: Authenticator,
     audit: AuditPipeline,
+    self_attestation_invalid_token_limiter: Option<Arc<SelfAttestationRateLimiter>>,
+    self_attestation_rate_keys: Option<Arc<SelfAttestationRateLimitKeys>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -455,6 +600,7 @@ enum Authenticator {
     Oidc {
         verifier: Arc<TokenVerifier>,
         principal_claim: String,
+        subject_binding_claim: Option<String>,
     },
 }
 
@@ -462,9 +608,21 @@ impl AuthAuditState {
     fn from_config(
         config: &StandaloneRegistryWitnessConfig,
     ) -> Result<Self, StandaloneServerError> {
+        let audit = AuditPipeline::from_config(&config.audit)?;
+        let self_attestation_invalid_token_limiter = config.self_attestation.enabled.then(|| {
+            Arc::new(SelfAttestationRateLimiter::new(
+                config.self_attestation.rate_limits.clone(),
+            ))
+        });
+        let self_attestation_rate_keys = config
+            .self_attestation
+            .enabled
+            .then(|| Arc::new(SelfAttestationRateLimitKeys::new(audit.hasher.clone())));
         Ok(Self {
             authenticator: Authenticator::from_config(config)?,
-            audit: AuditPipeline::from_config(&config.audit)?,
+            audit,
+            self_attestation_invalid_token_limiter,
+            self_attestation_rate_keys,
         })
     }
 
@@ -539,6 +697,11 @@ impl Authenticator {
                 Ok(Self::Oidc {
                     verifier: Arc::new(verifier),
                     principal_claim: oidc.principal_claim.clone(),
+                    subject_binding_claim: config
+                        .self_attestation
+                        .enabled
+                        .then(|| config.self_attestation.subject_binding.token_claim.clone())
+                        .filter(|claim| !claim.is_empty()),
                 })
             }
             mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
@@ -559,7 +722,16 @@ impl Authenticator {
             Self::Oidc {
                 verifier,
                 principal_claim,
-            } => authenticate_oidc(&credentials, verifier, principal_claim).await,
+                subject_binding_claim,
+            } => {
+                authenticate_oidc(
+                    &credentials,
+                    verifier,
+                    principal_claim,
+                    subject_binding_claim.as_deref(),
+                )
+                .await
+            }
         }
     }
 }
@@ -647,9 +819,60 @@ async fn auth_audit_middleware(
         return next.run(request).await;
     }
     let credentials = request_credentials(&request);
-    let principal = match state.authenticate(credentials).await {
+    let client_address = client_address_identifier(&request);
+    if let Err(rate_error) =
+        maybe_rate_limit_invalid_token_before_auth(&state, &credentials, client_address.as_str())
+    {
+        let mut response = crate::api::evidence_error_response(rate_error.evidence_error());
+        response.extensions_mut().insert(EvidenceAuditContext {
+            verification_id: None,
+            verification_decision: Some("auth_rate_limited".to_string()),
+            claim_hash: None,
+            row_count: None,
+            access_mode: Some(AccessMode::Unknown),
+            denial_code: Some(SelfAttestationDenialCode::RateLimited),
+            credential_profile: None,
+            holder_binding_mode: None,
+            rate_limit_bucket: rate_error
+                .bucket()
+                .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
+            policy_hash: None,
+        });
+        let audit_event = build_audit_event(None, &method, &path, &response);
+        return match state.audit.emit(&audit_event).await {
+            Ok(()) => response,
+            Err(error) => audit_error_response(error),
+        };
+    }
+    let principal = match state.authenticate(credentials.clone()).await {
         Ok(principal) => principal,
         Err(error) => {
+            if let Err(rate_error) = consume_invalid_token_after_auth_failure(
+                &state,
+                &credentials,
+                client_address.as_str(),
+            ) {
+                let mut response = crate::api::evidence_error_response(rate_error.evidence_error());
+                response.extensions_mut().insert(EvidenceAuditContext {
+                    verification_id: None,
+                    verification_decision: Some("auth_rate_limited".to_string()),
+                    claim_hash: None,
+                    row_count: None,
+                    access_mode: Some(AccessMode::Unknown),
+                    denial_code: Some(SelfAttestationDenialCode::RateLimited),
+                    credential_profile: None,
+                    holder_binding_mode: None,
+                    rate_limit_bucket: rate_error
+                        .bucket()
+                        .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
+                    policy_hash: None,
+                });
+                let audit_event = build_audit_event(None, &method, &path, &response);
+                return match state.audit.emit(&audit_event).await {
+                    Ok(()) => response,
+                    Err(error) => audit_error_response(error),
+                };
+            }
             let response = crate::api::evidence_error_response(error);
             let audit_event = build_audit_event(None, &method, &path, &response);
             return match state.audit.emit(&audit_event).await {
@@ -667,6 +890,50 @@ async fn auth_audit_middleware(
     }
 }
 
+fn client_address_identifier(request: &Request) -> String {
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown-client-address".to_string())
+}
+
+fn maybe_rate_limit_invalid_token_before_auth(
+    state: &AuthAuditState,
+    credentials: &RequestCredentials,
+    client_address: &str,
+) -> Result<(), crate::SelfAttestationRateLimitError> {
+    if credentials.bearer_token.is_none() {
+        return Ok(());
+    }
+    let (Some(limiter), Some(keys)) = (
+        state.self_attestation_invalid_token_limiter.as_ref(),
+        state.self_attestation_rate_keys.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let client_address = keys.client_address(client_address)?;
+    limiter.check_invalid_token_for_client_address_available(&client_address)
+}
+
+fn consume_invalid_token_after_auth_failure(
+    state: &AuthAuditState,
+    credentials: &RequestCredentials,
+    client_address: &str,
+) -> Result<(), crate::SelfAttestationRateLimitError> {
+    if credentials.bearer_token.is_none() {
+        return Ok(());
+    }
+    let (Some(limiter), Some(keys)) = (
+        state.self_attestation_invalid_token_limiter.as_ref(),
+        state.self_attestation_rate_keys.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let client_address = keys.client_address(client_address)?;
+    limiter.check_invalid_token_for_client_address(&client_address)
+}
+
 fn is_public_probe_path(path: &str) -> bool {
     matches!(path, "/healthz" | "/ready")
 }
@@ -682,6 +949,14 @@ fn build_audit_event(
     let verification_id = audit.and_then(|context| context.verification_id.clone());
     let claim_hash = audit.and_then(|context| context.claim_hash.clone());
     let row_count = audit.and_then(|context| context.row_count);
+    let access_mode = audit
+        .and_then(|context| context.access_mode)
+        .or_else(|| principal.map(EvidencePrincipal::access_mode));
+    let denial_code = audit.and_then(|context| context.denial_code);
+    let credential_profile = audit.and_then(|context| context.credential_profile.clone());
+    let holder_binding_mode = audit.and_then(|context| context.holder_binding_mode.clone());
+    let rate_limit_bucket = audit.and_then(|context| context.rate_limit_bucket.clone());
+    let policy_hash = audit.and_then(|context| context.policy_hash.clone());
     let error_code = error.map(|context| context.0.clone());
     let decision = audit
         .and_then(|context| context.verification_decision.clone())
@@ -707,6 +982,14 @@ fn build_audit_event(
         claim_hash,
         row_count,
         error_code,
+        access_mode,
+        denial_code,
+        correlation_id: None,
+        credential_profile,
+        holder_binding_mode,
+        rate_limit_bucket,
+        policy_version: None,
+        policy_hash,
     }
 }
 
@@ -772,17 +1055,30 @@ async fn authenticate_oidc(
     credentials: &RequestCredentials,
     verifier: &TokenVerifier,
     principal_claim: &str,
+    subject_binding_claim: Option<&str>,
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let Some(token) = credentials.bearer_token.as_deref() else {
         return Err(EvidenceError::MissingCredential);
     };
     let verified = verifier.verify(token).await.map_err(oidc_auth_error)?;
-    principal_from_oidc(&verified, principal_claim).ok_or(EvidenceError::MissingCredential)
+    let token_type = jsonwebtoken::decode_header(token)
+        .ok()
+        .and_then(|header| header.typ)
+        .and_then(|typ| verified_claim_value(&typ));
+    principal_from_oidc(
+        &verified,
+        token_type,
+        principal_claim,
+        subject_binding_claim,
+    )
+    .ok_or(EvidenceError::MissingCredential)
 }
 
 fn principal_from_oidc(
     verified: &VerifiedToken,
+    token_type: Option<VerifiedClaimValue>,
     principal_claim: &str,
+    subject_binding_claim: Option<&str>,
 ) -> Option<EvidencePrincipal> {
     let principal_id = if principal_claim == "sub" {
         verified.claims.sub.clone()
@@ -798,12 +1094,143 @@ fn principal_from_oidc(
     Some(EvidencePrincipal {
         principal_id,
         scopes: verified.scopes.clone(),
+        access_mode: AccessMode::MachineClient,
+        verified_claims: bounded_verified_claims_from_oidc(
+            verified,
+            token_type,
+            subject_binding_claim,
+        ),
     })
 }
 
+fn bounded_verified_claims_from_oidc(
+    verified: &VerifiedToken,
+    token_type: Option<VerifiedClaimValue>,
+    subject_binding_claim: Option<&str>,
+) -> Option<BoundedVerifiedClaims> {
+    let issuer = verified
+        .claims
+        .iss
+        .as_deref()
+        .and_then(verified_claim_value)?;
+    let (subject_binding_claim, subject_binding_value) =
+        if let Some(subject_binding_claim) = subject_binding_claim {
+            let claim_name = VerifiedClaimName::new(subject_binding_claim).ok()?;
+            let claim_value =
+                claim_string(verified, claim_name.as_str()).and_then(verified_claim_value)?;
+            (Some(claim_name), Some(claim_value))
+        } else {
+            (None, None)
+        };
+    Some(BoundedVerifiedClaims {
+        issuer,
+        audiences: bounded_audience(verified.claims.aud.as_ref()),
+        client_id: verified_client(verified),
+        token_type,
+        scopes: bounded_scopes(&verified.scopes),
+        subject: verified
+            .claims
+            .sub
+            .as_deref()
+            .and_then(verified_claim_value),
+        subject_binding_claim,
+        subject_binding_value,
+        acr: verified
+            .claims
+            .extra
+            .get("acr")
+            .and_then(Value::as_str)
+            .and_then(verified_claim_value),
+        auth_time: numeric_claim(&verified.claims.extra, "auth_time"),
+        exp: verified.claims.exp,
+        iat: verified.claims.iat,
+        nbf: verified.claims.nbf,
+    })
+}
+
+fn claim_string<'a>(verified: &'a VerifiedToken, claim: &str) -> Option<&'a str> {
+    if claim == "sub" {
+        return verified.claims.sub.as_deref();
+    }
+    verified.claims.extra.get(claim).and_then(Value::as_str)
+}
+
+fn verified_claim_value(value: &str) -> Option<VerifiedClaimValue> {
+    VerifiedClaimValue::new(value).ok()
+}
+
+fn bounded_audience(audience: Option<&Audience>) -> Vec<VerifiedClaimValue> {
+    let values: Vec<&str> = match audience {
+        Some(Audience::One(value)) => vec![value.as_str()],
+        Some(Audience::Many(values)) => values.iter().map(String::as_str).collect(),
+        None => Vec::new(),
+    };
+    values
+        .into_iter()
+        .filter_map(verified_claim_value)
+        .collect()
+}
+
+fn verified_client(verified: &VerifiedToken) -> Option<VerifiedClaimValue> {
+    let client = verified
+        .claims
+        .azp
+        .as_deref()
+        .map(|azp| format!("azp:{azp}"))
+        .or_else(|| {
+            verified
+                .claims
+                .client_id
+                .as_deref()
+                .map(|client_id| format!("client_id:{client_id}"))
+        })
+        .or_else(|| verified.matched_client.clone())?;
+    verified_claim_value(&client)
+}
+
+fn bounded_scopes(scopes: &[String]) -> Vec<VerifiedClaimValue> {
+    scopes
+        .iter()
+        .filter_map(|scope| verified_claim_value(scope))
+        .collect()
+}
+
+fn numeric_claim(extra: &Map<String, Value>, claim: &str) -> Option<i64> {
+    extra.get(claim).and_then(Value::as_i64)
+}
+
 fn oidc_auth_error(error: OidcError) -> EvidenceError {
-    tracing::debug!(target: "registry_witness_server::auth", error = %error, "OIDC token verification failed");
+    tracing::debug!(
+        target: "registry_witness_server::auth",
+        error_code = oidc_internal_error_code(&error),
+        "OIDC token verification failed"
+    );
     EvidenceError::MissingCredential
+}
+
+fn oidc_internal_error_code(error: &OidcError) -> &'static str {
+    match error {
+        OidcError::Transport(_)
+        | OidcError::BoundedRead(_)
+        | OidcError::FetchUrl(_)
+        | OidcError::HttpStatus(_)
+        | OidcError::InvalidUrl
+        | OidcError::Parse
+        | OidcError::InvalidJwk => "auth.oidc_unavailable",
+        OidcError::IssuerMismatch { .. }
+        | OidcError::MalformedToken
+        | OidcError::AlgorithmNotAllowed
+        | OidcError::TokenTypeNotAllowed
+        | OidcError::MissingKid
+        | OidcError::KidTooLong
+        | OidcError::UnknownKid
+        | OidcError::TokenExpired
+        | OidcError::TokenNotYetValid
+        | OidcError::AudienceMismatch
+        | OidcError::SignatureInvalid
+        | OidcError::InvalidToken
+        | OidcError::ClientNotAllowed => "auth.invalid_token",
+    }
 }
 
 fn parse_oidc_algorithm(algorithm: &str) -> Result<Algorithm, StandaloneServerError> {
@@ -831,6 +1258,8 @@ fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincip
     EvidencePrincipal {
         principal_id: credential.id.clone(),
         scopes: credential.scopes.clone(),
+        access_mode: AccessMode::MachineClient,
+        verified_claims: None,
     }
 }
 
@@ -1661,12 +2090,16 @@ mod tests {
     use axum::routing::get;
     use axum_test::TestServer;
     use registry_witness_core::{
-        EvaluateRequest, SourceConnectionConfig, SourceLookupConfig, FORMAT_CLAIM_RESULT_JSON,
+        EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
+        SourceConnectionConfig, SourceLookupConfig, FORMAT_CLAIM_RESULT_JSON,
     };
     use registry_witness_openfn_sidecar::{sidecar_router, SidecarConfig};
 
     const OPENFN_SIDECAR_TOKEN_ENV: &str = "TEST_OPENFN_SIDECAR_TOKEN";
+    const OPENFN_SIDECAR_TOKEN_HASH_ENV: &str = "TEST_OPENFN_SIDECAR_TOKEN_HASH";
     const OPENFN_SIDECAR_TOKEN: &str = "openfn-sidecar-token";
+    const OPENFN_SIDECAR_TOKEN_HASH: &str =
+        "sha256:42f3b7ab760b221b8a166aad9d82b76286e310f878e2d6cbac7583586ca1e225";
     const OPENFN_SPIKE_PURPOSE: &str = "https://purpose.example.test/eligibility";
 
     fn audit_event() -> EvidenceAuditEvent {
@@ -1682,6 +2115,14 @@ mod tests {
             claim_hash: None,
             row_count: None,
             error_code: None,
+            access_mode: Some(AccessMode::MachineClient),
+            denial_code: None,
+            correlation_id: None,
+            credential_profile: None,
+            holder_binding_mode: None,
+            rate_limit_bucket: None,
+            policy_version: None,
+            policy_hash: None,
         }
     }
 
@@ -1696,7 +2137,42 @@ mod tests {
                 bearer_tokens: Vec::new(),
             },
             audit,
+            self_attestation_invalid_token_limiter: None,
+            self_attestation_rate_keys: None,
         })
+    }
+
+    #[test]
+    fn audit_event_carries_self_attestation_context_fields() {
+        let principal = EvidencePrincipal {
+            principal_id: "citizen".to_string(),
+            scopes: vec!["self_attestation".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+        let mut response = StatusCode::FORBIDDEN.into_response();
+        response.extensions_mut().insert(EvidenceAuditContext {
+            verification_id: None,
+            verification_decision: Some("evaluate_denied".to_string()),
+            claim_hash: Some("sha256:claim-hash".to_string()),
+            row_count: None,
+            access_mode: Some(AccessMode::SelfAttestation),
+            denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
+            credential_profile: None,
+            holder_binding_mode: None,
+            rate_limit_bucket: None,
+            policy_hash: None,
+        });
+
+        let event = build_audit_event(Some(&principal), "POST", "/claims/evaluate", &response);
+
+        assert_eq!(event.decision, "evaluate_denied");
+        assert_eq!(event.claim_hash.as_deref(), Some("sha256:claim-hash"));
+        assert_eq!(event.access_mode, Some(AccessMode::SelfAttestation));
+        assert_eq!(
+            event.denial_code,
+            Some(SelfAttestationDenialCode::SubjectMismatch)
+        );
     }
 
     fn test_binding(dataset: &str, entity: &str) -> SourceBindingConfig {
@@ -1792,6 +2268,7 @@ claims:
     }
 
     fn openfn_sidecar_test_config(attempt_log: std::path::PathBuf) -> SidecarConfig {
+        std::env::set_var(OPENFN_SIDECAR_TOKEN_HASH_ENV, OPENFN_SIDECAR_TOKEN_HASH);
         let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../registry-witness-openfn-sidecar");
         let worker = sidecar_root.join("tests/fixtures/contract_worker.sh");
@@ -1803,7 +2280,7 @@ server:
 auth:
   bearer_tokens:
     - id: witness
-      token: "{OPENFN_SIDECAR_TOKEN}"
+      hash_env: "{OPENFN_SIDECAR_TOKEN_HASH_ENV}"
 limits:
   max_workers: 2
   worker_timeout_ms: 250
@@ -1926,6 +2403,8 @@ sources:
         let principal = EvidencePrincipal {
             principal_id: "caseworker".to_string(),
             scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
         };
 
         let results = crate::RegistryWitnessRuntime::new()
@@ -1978,6 +2457,8 @@ sources:
         let principal = EvidencePrincipal {
             principal_id: "caseworker".to_string(),
             scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
         };
 
         let result = crate::RegistryWitnessRuntime::new()
@@ -2047,6 +2528,50 @@ sources:
     }
 
     #[tokio::test]
+    async fn invalid_bearer_tokens_are_rate_limited_when_self_attestation_is_enabled() {
+        let rate_limits = SelfAttestationRateLimitsConfig {
+            invalid_token_per_client_address_per_minute: 1,
+            per_principal_per_minute: 1,
+            subject_mismatch_per_principal_per_hour: 1,
+            per_holder_per_hour: 1,
+            credential_issuance_per_principal_per_hour: 1,
+            ..SelfAttestationRateLimitsConfig::default()
+        };
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new()));
+        let state = Arc::new(AuthAuditState {
+            authenticator: Authenticator::Static {
+                api_keys: Vec::new(),
+                bearer_tokens: Vec::new(),
+            },
+            audit: audit.clone(),
+            self_attestation_invalid_token_limiter: Some(Arc::new(
+                SelfAttestationRateLimiter::new(rate_limits),
+            )),
+            self_attestation_rate_keys: Some(Arc::new(SelfAttestationRateLimitKeys::new(
+                audit.hasher.clone(),
+            ))),
+        });
+        let app = Router::new()
+            .route("/ok", get(|| async { StatusCode::OK }))
+            .layer(from_fn_with_state(state, auth_audit_middleware));
+        let server = TestServer::builder().http_transport().build(app);
+
+        let first = server
+            .get("/ok")
+            .add_header(header::AUTHORIZATION, "Bearer invalid-token")
+            .await;
+        first.assert_status(StatusCode::UNAUTHORIZED);
+
+        let second = server
+            .get("/ok")
+            .add_header(header::AUTHORIZATION, "Bearer invalid-token")
+            .await;
+        second.assert_status(StatusCode::TOO_MANY_REQUESTS);
+        let body: Value = second.json();
+        assert_eq!(body["code"], json!("self_attestation.rate_limited"));
+    }
+
+    #[tokio::test]
     async fn auth_state_accepts_case_insensitive_bearer_scheme() {
         let state = AuthAuditState {
             authenticator: Authenticator::Static {
@@ -2058,6 +2583,8 @@ sources:
                 }],
             },
             audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
+            self_attestation_invalid_token_limiter: None,
+            self_attestation_rate_keys: None,
         };
         let request = Request::builder()
             .uri("/claims")
@@ -2071,6 +2598,187 @@ sources:
             .expect("bearer auth succeeds");
 
         assert_eq!(principal.principal_id, "caseworker");
+    }
+
+    #[test]
+    fn static_credentials_have_machine_access_and_no_verified_claims() {
+        let credential = ResolvedCredential {
+            id: "caseworker".to_string(),
+            fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+            scopes: vec!["farmer_registry:evidence_verification".to_string()],
+        };
+        let request = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            bearer_token: None,
+        };
+
+        let authenticated =
+            authenticate_static(&request, &[credential], &[]).expect("static auth succeeds");
+
+        assert_eq!(authenticated.access_mode, AccessMode::MachineClient);
+        assert_eq!(authenticated.principal_id, "caseworker");
+        assert_eq!(
+            authenticated.scopes,
+            vec!["farmer_registry:evidence_verification".to_string()]
+        );
+        assert!(authenticated.verified_claims.is_none());
+    }
+
+    #[test]
+    fn oidc_principal_carries_bounded_verified_claims() {
+        let subject_binding_claim = "https://id.example.gov/claims/national_id";
+        let mut extra = Map::new();
+        extra.insert("scope".to_string(), json!("openid evidence:self_attest"));
+        extra.insert(subject_binding_claim.to_string(), json!("NAT-123"));
+        extra.insert("acr".to_string(), json!("loa3"));
+        extra.insert("auth_time".to_string(), json!(1_700_000_000_i64));
+        let verified = VerifiedToken {
+            claims: registry_platform_oidc::Claims {
+                sub: Some("login-subject-123".to_string()),
+                iss: Some("https://issuer.example.test".to_string()),
+                aud: Some(Audience::Many(vec![
+                    "registry-witness".to_string(),
+                    "citizen-portal".to_string(),
+                ])),
+                exp: Some(1_700_003_600),
+                iat: Some(1_700_000_000),
+                nbf: Some(1_699_999_900),
+                azp: Some("citizen-client".to_string()),
+                client_id: Some("fallback-client".to_string()),
+                extra,
+            },
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: vec!["openid".to_string(), "evidence:self_attest".to_string()],
+        };
+
+        let authenticated = principal_from_oidc(
+            &verified,
+            verified_claim_value("JWT"),
+            subject_binding_claim,
+            Some(subject_binding_claim),
+        )
+        .expect("OIDC principal is derived");
+        let verified_claims = authenticated
+            .verified_claims
+            .expect("verified claims are transported");
+
+        assert_eq!(authenticated.access_mode, AccessMode::MachineClient);
+        assert_eq!(authenticated.principal_id, "NAT-123");
+        assert_eq!(
+            verified_claims.issuer.as_str(),
+            "https://issuer.example.test"
+        );
+        assert_eq!(
+            verified_claims
+                .audiences
+                .iter()
+                .map(VerifiedClaimValue::as_str)
+                .collect::<Vec<_>>(),
+            vec!["registry-witness", "citizen-portal"]
+        );
+        assert_eq!(
+            verified_claims
+                .client_id
+                .as_ref()
+                .map(VerifiedClaimValue::as_str),
+            Some("azp:citizen-client")
+        );
+        assert_eq!(
+            verified_claims
+                .token_type
+                .as_ref()
+                .map(VerifiedClaimValue::as_str),
+            Some("JWT")
+        );
+        assert_eq!(
+            verified_claims
+                .scopes
+                .iter()
+                .map(VerifiedClaimValue::as_str)
+                .collect::<Vec<_>>(),
+            vec!["openid", "evidence:self_attest"]
+        );
+        assert_eq!(
+            verified_claims
+                .subject
+                .as_ref()
+                .map(VerifiedClaimValue::as_str),
+            Some("login-subject-123")
+        );
+        assert_eq!(
+            verified_claims
+                .subject_binding_claim
+                .as_ref()
+                .map(VerifiedClaimName::as_str),
+            Some(subject_binding_claim)
+        );
+        assert_eq!(
+            verified_claims
+                .subject_binding_value
+                .as_ref()
+                .map(VerifiedClaimValue::as_str),
+            Some("NAT-123")
+        );
+        assert_eq!(
+            verified_claims.acr.as_ref().map(VerifiedClaimValue::as_str),
+            Some("loa3")
+        );
+        assert_eq!(verified_claims.auth_time, Some(1_700_000_000));
+        assert_eq!(verified_claims.exp, Some(1_700_003_600));
+        assert_eq!(verified_claims.iat, Some(1_700_000_000));
+        assert_eq!(verified_claims.nbf, Some(1_699_999_900));
+    }
+
+    #[test]
+    fn oidc_verified_claims_fail_closed_without_string_subject_binding_claim() {
+        let subject_binding_claim = "https://id.example.gov/claims/national_id";
+        let verified = VerifiedToken {
+            claims: registry_platform_oidc::Claims {
+                sub: Some("login-subject-123".to_string()),
+                iss: Some("https://issuer.example.test".to_string()),
+                aud: Some(Audience::One("registry-witness".to_string())),
+                exp: Some(1_700_003_600),
+                iat: Some(1_700_000_000),
+                nbf: Some(1_699_999_900),
+                azp: Some("citizen-client".to_string()),
+                client_id: None,
+                extra: Map::new(),
+            },
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: vec!["evidence:self_attest".to_string()],
+        };
+
+        assert!(bounded_verified_claims_from_oidc(
+            &verified,
+            verified_claim_value("JWT"),
+            Some(subject_binding_claim)
+        )
+        .is_none());
+
+        let mut verified = verified;
+        verified
+            .claims
+            .extra
+            .insert(subject_binding_claim.to_string(), json!(12345));
+
+        assert!(bounded_verified_claims_from_oidc(
+            &verified,
+            verified_claim_value("JWT"),
+            Some(subject_binding_claim)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn oidc_validation_errors_are_internal_invalid_token_auth_failures() {
+        assert_eq!(
+            oidc_internal_error_code(&OidcError::TokenExpired),
+            "auth.invalid_token"
+        );
+        assert!(matches!(
+            oidc_auth_error(OidcError::TokenExpired),
+            EvidenceError::MissingCredential
+        ));
     }
 
     #[test]

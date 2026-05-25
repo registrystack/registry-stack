@@ -6,6 +6,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{
@@ -17,7 +18,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -46,7 +46,10 @@ pub struct AuthConfig {
 #[derive(Clone, Deserialize)]
 pub struct BearerTokenConfig {
     pub id: String,
-    pub token: String,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub hash_env: Option<String>,
 }
 
 impl fmt::Debug for BearerTokenConfig {
@@ -54,6 +57,7 @@ impl fmt::Debug for BearerTokenConfig {
         f.debug_struct("BearerTokenConfig")
             .field("id", &self.id)
             .field("token", &"<redacted>")
+            .field("hash_env", &self.hash_env)
             .finish()
     }
 }
@@ -95,6 +99,8 @@ pub struct SourceConfig {
     pub adaptor: String,
     pub credential_env: String,
     #[serde(default)]
+    pub allowed_base_urls: Vec<String>,
+    #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
 }
 
@@ -125,6 +131,12 @@ pub enum SidecarError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("credential env {env} for source {source_id} has disallowed or missing baseUrl")]
+    CredentialBaseUrl { source_id: String, env: String },
+    #[error("auth token hash env {env} for bearer token {token_id} is missing")]
+    MissingTokenHashEnv { token_id: String, env: String },
+    #[error("auth token hash env {env} for bearer token {token_id} is invalid")]
+    InvalidTokenHashEnv { token_id: String, env: String },
     #[error("startup check failed: {0}")]
     StartupCheck(String),
     #[error("smoke lookup for source {source_id} failed: {reason}")]
@@ -134,9 +146,15 @@ pub enum SidecarError {
 #[derive(Clone)]
 struct AppState {
     config: SidecarConfig,
+    auth_tokens: Arc<Vec<ResolvedBearerToken>>,
     pool: Arc<WorkerPool>,
     credentials: Arc<BTreeMap<String, Value>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
+}
+
+#[derive(Clone)]
+struct ResolvedBearerToken {
+    fingerprint: String,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -154,6 +172,7 @@ struct MetricValue {
 pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarError> {
     validate_config(&config)?;
     verify_openfn_runtime(&config).await?;
+    let auth_tokens = resolve_auth_tokens(&config)?;
 
     let mut command = WorkerCommand::new(config.worker.command.clone());
     for arg in &config.worker.args {
@@ -177,6 +196,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     let credentials = load_credentials(&config)?;
     let state = Arc::new(AppState {
         config,
+        auth_tokens: Arc::new(auth_tokens),
         pool: Arc::new(pool),
         credentials: Arc::new(credentials),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
@@ -204,6 +224,29 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
         return Err(SidecarError::Config(
             "at least one sidecar bearer token is required".to_string(),
         ));
+    }
+    for token in &config.auth.bearer_tokens {
+        match (&token.token, &token.hash_env) {
+            (None, Some(hash_env)) if !hash_env.trim().is_empty() => {}
+            (Some(_), _) => {
+                return Err(SidecarError::Config(format!(
+                    "bearer token {} must use hash_env; plaintext token is not supported",
+                    token.id
+                )));
+            }
+            (None, None) => {
+                return Err(SidecarError::Config(format!(
+                    "bearer token {} must set hash_env",
+                    token.id
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(SidecarError::Config(format!(
+                    "bearer token {} hash_env must be non-empty",
+                    token.id
+                )));
+            }
+        }
     }
     if config.sources.is_empty() {
         return Err(SidecarError::Config(
@@ -258,6 +301,20 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
                 "source {source_id} adaptor must be pinned"
             )));
         }
+        adaptor_pin_version(&source.adaptor).ok_or_else(|| {
+            SidecarError::Config(format!(
+                "source {source_id} adaptor must include a version pin"
+            ))
+        })?;
+        if source
+            .allowed_base_urls
+            .iter()
+            .any(|url| url.trim().is_empty())
+        {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} allowed_base_urls must not contain empty values"
+            )));
+        }
         let Some(smoke) = &source.smoke_lookup else {
             return Err(SidecarError::Config(format!(
                 "source {source_id} smoke_lookup is required for readiness"
@@ -271,6 +328,40 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
         }
     }
     Ok(())
+}
+
+fn resolve_auth_tokens(config: &SidecarConfig) -> Result<Vec<ResolvedBearerToken>, SidecarError> {
+    let mut tokens = Vec::with_capacity(config.auth.bearer_tokens.len());
+    for token in &config.auth.bearer_tokens {
+        let Some(hash_env) = &token.hash_env else {
+            return Err(SidecarError::Config(format!(
+                "bearer token {} must set hash_env",
+                token.id
+            )));
+        };
+        let fingerprint =
+            std::env::var(hash_env).map_err(|_| SidecarError::MissingTokenHashEnv {
+                token_id: token.id.clone(),
+                env: hash_env.clone(),
+            })?;
+        parse_fingerprint(&fingerprint).map_err(|_| SidecarError::InvalidTokenHashEnv {
+            token_id: token.id.clone(),
+            env: hash_env.clone(),
+        })?;
+        tokens.push(ResolvedBearerToken { fingerprint });
+    }
+    Ok(tokens)
+}
+
+fn adaptor_pin_version(adaptor: &str) -> Option<&str> {
+    let module_specifier = adaptor
+        .split_once('=')
+        .map_or(adaptor, |(module, _)| module);
+    let (name, version) = module_specifier.rsplit_once('@')?;
+    if name.is_empty() || version.trim().is_empty() {
+        return None;
+    }
+    Some(version)
 }
 
 async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarError> {
@@ -301,21 +392,41 @@ async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarErro
 
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    let reported = combined.split_whitespace().collect::<Vec<_>>();
     for expected in [
-        config.openfn.cli_build_tool.as_str(),
-        config.openfn.runtime.as_str(),
+        format!("cli_build_tool={}", config.openfn.cli_build_tool),
+        format!("runtime={}", config.openfn.runtime),
     ] {
-        if !combined.contains(expected) {
+        if !reported.iter().any(|reported| *reported == expected) {
             return Err(SidecarError::StartupCheck(format!(
                 "OpenFn version check did not report required pin {expected}"
             )));
         }
     }
     for source in config.sources.values() {
-        if !combined.contains(&source.adaptor) {
+        let pinned_version = adaptor_pin_version(&source.adaptor).ok_or_else(|| {
+            SidecarError::StartupCheck(format!(
+                "OpenFn adaptor {} is missing a version pin",
+                source.adaptor
+            ))
+        })?;
+        let expected_prefix = format!("{}:", source.adaptor);
+        let Some(reported_suffix) = reported
+            .iter()
+            .find_map(|reported| reported.strip_prefix(&expected_prefix))
+        else {
             return Err(SidecarError::StartupCheck(format!(
                 "OpenFn version check did not report required adaptor {}",
                 source.adaptor
+            )));
+        };
+        let installed_version = reported_suffix
+            .split_once('=')
+            .map_or(reported_suffix, |(version, _)| version);
+        if installed_version != pinned_version {
+            return Err(SidecarError::StartupCheck(format!(
+                "OpenFn adaptor {} resolved to version {}, expected {}",
+                source.adaptor, installed_version, pinned_version
             )));
         }
     }
@@ -337,9 +448,40 @@ fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, S
                 env: source.credential_env.clone(),
                 source: error,
             })?;
+        validate_credential_base_url(source_id, source, &credential)?;
         credentials.insert(source_id.clone(), credential);
     }
     Ok(credentials)
+}
+
+fn validate_credential_base_url(
+    source_id: &str,
+    source: &SourceConfig,
+    credential: &Value,
+) -> Result<(), SidecarError> {
+    if source.allowed_base_urls.is_empty() {
+        return Ok(());
+    }
+    let Some(base_url) = credential.get("baseUrl").and_then(Value::as_str) else {
+        return Err(SidecarError::CredentialBaseUrl {
+            source_id: source_id.to_string(),
+            env: source.credential_env.clone(),
+        });
+    };
+    let normalized = base_url.trim_end_matches('/');
+    if source
+        .allowed_base_urls
+        .iter()
+        .map(|allowed| allowed.trim_end_matches('/'))
+        .any(|allowed| allowed == normalized)
+    {
+        Ok(())
+    } else {
+        Err(SidecarError::CredentialBaseUrl {
+            source_id: source_id.to_string(),
+            env: source.credential_env.clone(),
+        })
+    }
 }
 
 async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
@@ -413,6 +555,12 @@ fn smoke_error_reason(error: &WorkerError) -> String {
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Response {
     let snapshot = state.pool.snapshot().await;
+    if snapshot.idle_workers + snapshot.in_flight < snapshot.max_workers {
+        return problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "worker pool capacity degraded",
+        );
+    }
     let liveness_window = Duration::from_millis(state.config.limits.liveness_window_ms);
     if snapshot
         .active_for
@@ -599,18 +747,11 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), Box<Response>>
     else {
         return Err(Box::new(unauthorized()));
     };
-    let Some(token) = raw
-        .strip_prefix("Bearer ")
-        .filter(|token| !token.is_empty())
-    else {
-        return Err(Box::new(unauthorized()));
-    };
+    let token = parse_bearer_token(raw).map_err(|_| Box::new(unauthorized()))?;
     if state
-        .config
-        .auth
-        .bearer_tokens
+        .auth_tokens
         .iter()
-        .any(|configured| constant_time_eq(configured.token.as_bytes(), token.as_bytes()))
+        .any(|configured| verify_api_key(token, &configured.fingerprint).unwrap_or(false))
     {
         Ok(())
     } else {
@@ -630,10 +771,6 @@ fn unauthorized() -> Response {
         .headers_mut()
         .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
     response
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    left.len() == right.len() && left.ct_eq(right).into()
 }
 
 struct LookupQuery {

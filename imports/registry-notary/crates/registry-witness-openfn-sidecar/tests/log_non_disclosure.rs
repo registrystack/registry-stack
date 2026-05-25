@@ -12,6 +12,8 @@ const ENTITY: &str = "civil_person";
 const LOOKUP_FIELD: &str = "national_id";
 const PURPOSE: &str = "https://purpose.example.test/eligibility";
 const TOKEN: &str = "contract-sidecar-token";
+const TOKEN_HASH_ENV: &str = "OPENFN_CONTRACT_LOG_SIDECAR_TOKEN_HASH";
+const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
 const CREDENTIAL_ENV: &str = "OPENCRVS_READER_CREDENTIAL_JSON";
 
 #[derive(Clone)]
@@ -68,6 +70,7 @@ fn structured_logs_do_not_disclose_credentials_or_request_state() {
 }
 
 async fn contract_server() -> (TempDir, TestServer) {
+    std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
     std::env::set_var(
         CREDENTIAL_ENV,
         r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
@@ -84,7 +87,7 @@ server:
 auth:
   bearer_tokens:
     - id: witness-contract
-      token: {token}
+      hash_env: {token_hash_env}
 limits:
   max_workers: 2
   worker_timeout_ms: 250
@@ -115,7 +118,7 @@ sources:
         - national_id
       purpose: startup-smoke
 "#,
-        token = yaml_string(TOKEN),
+        token_hash_env = yaml_string(TOKEN_HASH_ENV),
         worker = yaml_path(&worker),
         attempt_log = yaml_path(&attempt_log),
         job = yaml_path(&job),

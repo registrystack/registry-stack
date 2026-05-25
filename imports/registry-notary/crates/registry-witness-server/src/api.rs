@@ -8,12 +8,15 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use registry_platform_audit::AuditKeyHasher;
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use registry_witness_core::sd_jwt;
 use registry_witness_core::{
-    BatchEvaluateRequest, CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest,
-    EvidenceConfig, EvidenceError, EvidencePrincipal, HolderRequest, RenderRequest,
-    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    AccessMode, BatchEvaluateRequest, BoundedClaimId, ClaimSet, ConfigMetadata,
+    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceConfig,
+    EvidenceError, EvidencePrincipal, Hashed, HolderRequest, PolicyIdentifier, RateLimitBucket,
+    RenderRequest, SelfAttestationConfig, SelfAttestationDenialCode, SourceCapability,
+    StoredSelfAttestationMetadata, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -21,8 +24,9 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::{
-    credential_profile_for, openapi_document, BatchEvaluateOptions, EvidenceStore,
-    RegistryWitnessRuntime, SourceReader,
+    credential_profile_for, format_time, openapi_document, BatchEvaluateOptions, EvidenceStore,
+    RegistryWitnessRuntime, SelfAttestationRateLimitBucket, SelfAttestationRateLimitError,
+    SelfAttestationRateLimitKeys, SelfAttestationRateLimiter, SourceReader,
 };
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
@@ -129,6 +133,9 @@ pub trait EvidenceIssuerResolver: Send + Sync {
 #[derive(Clone)]
 pub struct RegistryWitnessApiState {
     evidence: Arc<EvidenceConfig>,
+    self_attestation: Arc<SelfAttestationConfig>,
+    self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
+    self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     source: Arc<dyn SourceReader>,
     store: Arc<EvidenceStore>,
     issuers: Arc<dyn EvidenceIssuerResolver>,
@@ -142,8 +149,51 @@ impl RegistryWitnessApiState {
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
+        Self::new_with_self_attestation(
+            evidence,
+            Arc::new(SelfAttestationConfig::default()),
+            source,
+            store,
+            issuers,
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_self_attestation(
+        evidence: Arc<EvidenceConfig>,
+        self_attestation: Arc<SelfAttestationConfig>,
+        source: Arc<dyn SourceReader>,
+        store: Arc<EvidenceStore>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+    ) -> Self {
+        Self::new_with_self_attestation_hasher(
+            evidence,
+            self_attestation,
+            AuditKeyHasher::unkeyed_dev_only(),
+            source,
+            store,
+            issuers,
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_self_attestation_hasher(
+        evidence: Arc<EvidenceConfig>,
+        self_attestation: Arc<SelfAttestationConfig>,
+        audit_hasher: AuditKeyHasher,
+        source: Arc<dyn SourceReader>,
+        store: Arc<EvidenceStore>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+    ) -> Self {
+        let self_attestation_rate_limiter = Arc::new(SelfAttestationRateLimiter::new(
+            self_attestation.rate_limits.clone(),
+        ));
+        let self_attestation_rate_keys = Arc::new(SelfAttestationRateLimitKeys::new(audit_hasher));
         Self {
             evidence,
+            self_attestation,
+            self_attestation_rate_limiter,
+            self_attestation_rate_keys,
             source,
             store,
             issuers,
@@ -165,18 +215,30 @@ pub struct EvidenceAuditContext {
     pub verification_decision: Option<String>,
     pub claim_hash: Option<String>,
     pub row_count: Option<u64>,
+    pub access_mode: Option<AccessMode>,
+    pub denial_code: Option<SelfAttestationDenialCode>,
+    pub credential_profile: Option<ConfigMetadata>,
+    pub holder_binding_mode: Option<ConfigMetadata>,
+    pub rate_limit_bucket: Option<RateLimitBucket>,
+    pub policy_hash: Option<Hashed<PolicyIdentifier>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EvidenceErrorCodeContext(pub String);
 
+struct SelfAttestationEvaluateContext {
+    source_capability: SourceCapability,
+    metadata: StoredSelfAttestationMetadata,
+    purpose: String,
+}
+
 async fn service_document(
     state: Option<Extension<Arc<RegistryWitnessApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
 ) -> Response {
-    if principal.is_none() {
+    let Some(Extension(principal)) = principal else {
         return evidence_error_response(EvidenceError::MissingCredential);
-    }
+    };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -184,7 +246,17 @@ async fn service_document(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    Json(RegistryWitnessRuntime::service_document(evidence)).into_response()
+    let include_self_attestation_details =
+        classify_self_attestation_principal(&state.self_attestation, &principal)
+            .is_ok_and(|principal| principal.is_self_attestation());
+    Json(
+        RegistryWitnessRuntime::service_document_with_self_attestation(
+            evidence,
+            &state.self_attestation,
+            include_self_attestation_details,
+        ),
+    )
+    .into_response()
 }
 
 async fn issuer_jwks(
@@ -291,29 +363,138 @@ async fn evaluate(
         Ok(format) => request.format = Some(format),
         Err(error) => return evidence_error_response(error),
     }
+    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
+        Ok(principal) => principal,
+        Err(error) => {
+            if let Err(rate_error) = consume_classification_denial_if_keyable(&state, &principal) {
+                let mut response = evidence_error_response(rate_error.evidence_error());
+                attach_self_attestation_rate_limit_audit(
+                    &mut response,
+                    "evaluate_rate_limited",
+                    &request.claims,
+                    rate_error.bucket(),
+                );
+                return response;
+            }
+            let mut response = evidence_error_response(error);
+            let denial_code = denial_code_from_response(&response);
+            attach_self_attestation_audit(
+                &mut response,
+                "evaluate_denied",
+                &request.claims,
+                denial_code,
+            );
+            return response;
+        }
+    };
+    let mut self_attestation_context = None;
+    if principal.is_self_attestation() {
+        let principal_hash = match state
+            .self_attestation_rate_keys
+            .principal(&principal.principal_id)
+        {
+            Ok(hash) => hash,
+            Err(error) => return evidence_error_response(error.evidence_error()),
+        };
+        if let Err(error) = state
+            .self_attestation_rate_limiter
+            .check_authenticated_request(&principal_hash)
+        {
+            let mut response = evidence_error_response(error.evidence_error());
+            attach_self_attestation_rate_limit_audit(
+                &mut response,
+                "evaluate_rate_limited",
+                &request.claims,
+                error.bucket(),
+            );
+            return response;
+        }
+        match prepare_self_attestation_evaluate(&state, evidence, &principal, &request) {
+            Ok(context) => {
+                request.purpose = Some(context.purpose.clone());
+                self_attestation_context = Some(context);
+            }
+            Err(error) => {
+                if denial_code_from_error(&error)
+                    == Some(SelfAttestationDenialCode::SubjectMismatch)
+                {
+                    if let Err(rate_error) =
+                        consume_subject_mismatch_denial(&state, &principal_hash)
+                    {
+                        let mut response = evidence_error_response(rate_error.evidence_error());
+                        attach_self_attestation_rate_limit_audit(
+                            &mut response,
+                            "evaluate_rate_limited",
+                            &request.claims,
+                            rate_error.bucket(),
+                        );
+                        return response;
+                    }
+                }
+                let denial_code = denial_code_from_error(&error);
+                let mut response = evidence_error_response(error);
+                attach_self_attestation_audit(
+                    &mut response,
+                    "evaluate_denied",
+                    &request.claims,
+                    denial_code,
+                );
+                return response;
+            }
+        }
+    }
     let runtime = RegistryWitnessRuntime::new();
     let requested_claims = request.claims.clone();
-    match runtime
-        .evaluate(
-            Arc::clone(&state.evidence),
-            Arc::clone(&state.source),
-            &state.store,
-            &principal,
-            request,
-            purpose_header(&headers),
-        )
-        .await
-    {
+    let self_attestation_policy_hash = self_attestation_context
+        .as_ref()
+        .and_then(|context| context.metadata.policy_hash.clone());
+    let evaluation = if let Some(context) = self_attestation_context {
+        runtime
+            .evaluate_with_source_capability(
+                Arc::clone(&state.evidence),
+                Arc::clone(&state.source),
+                &state.store,
+                &principal,
+                context.source_capability,
+                request,
+                None,
+                Some(context.metadata),
+            )
+            .await
+    } else {
+        runtime
+            .evaluate(
+                Arc::clone(&state.evidence),
+                Arc::clone(&state.source),
+                &state.store,
+                &principal,
+                request,
+                purpose_header(&headers),
+            )
+            .await
+    };
+    match evaluation {
         Ok(results) => {
             let evaluation_id = results.first().map(|result| result.evaluation_id.clone());
             let mut response = Json(json!({ "results": results })).into_response();
-            attach_evidence_audit(
-                &mut response,
-                "evaluate",
-                evaluation_id,
-                &requested_claims,
-                Some(1),
-            );
+            if principal.is_self_attestation() {
+                attach_self_attestation_success_audit(
+                    &mut response,
+                    "evaluate",
+                    evaluation_id,
+                    &requested_claims,
+                    Some(1),
+                    self_attestation_policy_hash,
+                );
+            } else {
+                attach_evidence_audit(
+                    &mut response,
+                    "evaluate",
+                    evaluation_id,
+                    &requested_claims,
+                    Some(1),
+                );
+            }
             response
         }
         Err(error) => evidence_error_response(error),
@@ -340,6 +521,33 @@ async fn batch_evaluate(
     match negotiate_request_format(evidence, &headers, request.format.as_deref()) {
         Ok(format) => request.format = Some(format),
         Err(error) => return evidence_error_response(error),
+    }
+    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
+        Ok(principal) => principal,
+        Err(error) => {
+            let mut response = evidence_error_response(error);
+            let denial_code = denial_code_from_response(&response);
+            attach_self_attestation_audit(
+                &mut response,
+                "batch_evaluate_denied",
+                &request.claims,
+                denial_code,
+            );
+            return response;
+        }
+    };
+    if principal.is_self_attestation() {
+        let error = EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::BatchDenied,
+        };
+        let mut response = evidence_error_response(error);
+        attach_self_attestation_audit(
+            &mut response,
+            "batch_evaluate_denied",
+            &request.claims,
+            Some(SelfAttestationDenialCode::BatchDenied),
+        );
+        return response;
     }
     let runtime = RegistryWitnessRuntime::new();
     let requested_claims = request.claims.clone();
@@ -391,11 +599,54 @@ async fn render(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
+    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
+        Ok(principal) => principal,
+        Err(error) => return evidence_error_response(error),
+    };
     let Some(evaluation) = state.store.get(&request.evaluation_id) else {
         return evidence_error_response(EvidenceError::EvaluationNotFound);
     };
-    if evaluation.client_id != principal.principal_id {
+    if !evaluation_client_matches(&state, &principal, &evaluation)
+        || evaluation.access_mode() != principal.access_mode()
+    {
         return evidence_error_response(EvidenceError::EvaluationNotFound);
+    }
+    if let Err(error) = require_self_attestation_stored_access(
+        &state,
+        evidence,
+        &principal,
+        &evaluation,
+        request.claims.as_deref().unwrap_or(&evaluation.claim_ids),
+        request
+            .disclosure
+            .as_deref()
+            .unwrap_or(&evaluation.disclosure),
+        &request.format,
+        None,
+    ) {
+        return evidence_error_response(error);
+    }
+    if principal.is_self_attestation() {
+        let principal_hash = match state
+            .self_attestation_rate_keys
+            .principal(&principal.principal_id)
+        {
+            Ok(hash) => hash,
+            Err(error) => return evidence_error_response(error.evidence_error()),
+        };
+        if let Err(error) = state
+            .self_attestation_rate_limiter
+            .check_authenticated_request(&principal_hash)
+        {
+            let mut response = evidence_error_response(error.evidence_error());
+            attach_self_attestation_rate_limit_audit(
+                &mut response,
+                "render_rate_limited",
+                &evaluation.claim_ids,
+                error.bucket(),
+            );
+            return response;
+        }
     }
     if let Err(error) =
         require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
@@ -403,27 +654,56 @@ async fn render(
         return evidence_error_response(error);
     }
     let runtime = RegistryWitnessRuntime::new();
-    match runtime.render(evidence, &state.store, &principal, request) {
+    let runtime_principal = runtime_principal_for_stored_evaluation(&principal, &evaluation);
+    match runtime.render(evidence, &state.store, &runtime_principal, request) {
         Ok(value) => {
             let mut response = Json(value).into_response();
-            attach_evidence_audit(
-                &mut response,
-                "render",
-                Some(evaluation_id),
-                requested_claims.as_deref().unwrap_or(&[]),
-                None,
-            );
+            if principal.is_self_attestation() {
+                attach_self_attestation_success_audit(
+                    &mut response,
+                    "render",
+                    Some(evaluation_id),
+                    requested_claims.as_deref().unwrap_or(&evaluation.claim_ids),
+                    None,
+                    evaluation
+                        .self_attestation
+                        .as_ref()
+                        .and_then(|metadata| metadata.policy_hash.clone()),
+                );
+            } else {
+                attach_evidence_audit(
+                    &mut response,
+                    "render",
+                    Some(evaluation_id),
+                    requested_claims.as_deref().unwrap_or(&[]),
+                    None,
+                );
+            }
             response
         }
         Err(error) => {
             let mut response = evidence_error_response(error);
-            attach_evidence_audit(
-                &mut response,
-                "render_failed",
-                Some(evaluation_id),
-                requested_claims.as_deref().unwrap_or(&[]),
-                None,
-            );
+            if principal.is_self_attestation() {
+                attach_self_attestation_success_audit(
+                    &mut response,
+                    "render_failed",
+                    Some(evaluation_id),
+                    requested_claims.as_deref().unwrap_or(&evaluation.claim_ids),
+                    None,
+                    evaluation
+                        .self_attestation
+                        .as_ref()
+                        .and_then(|metadata| metadata.policy_hash.clone()),
+                );
+            } else {
+                attach_evidence_audit(
+                    &mut response,
+                    "render_failed",
+                    Some(evaluation_id),
+                    requested_claims.as_deref().unwrap_or(&[]),
+                    None,
+                );
+            }
             response
         }
     }
@@ -444,11 +724,17 @@ async fn issue_credential(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
+    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
+        Ok(principal) => principal,
+        Err(error) => return evidence_error_response(error),
+    };
     let evaluation = match state.store.get(&request.evaluation_id) {
         Some(evaluation) => evaluation,
         None => return evidence_error_response(EvidenceError::EvaluationNotFound),
     };
-    if evaluation.client_id != principal.principal_id {
+    if !evaluation_client_matches(&state, &principal, &evaluation)
+        || evaluation.access_mode() != principal.access_mode()
+    {
         return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
     }
     if let Err(error) =
@@ -481,6 +767,21 @@ async fn issue_credential(
     };
     if evaluation.format != FORMAT_SD_JWT_VC {
         return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    }
+    if let Err(error) = require_self_attestation_stored_access(
+        &state,
+        evidence,
+        &principal,
+        &evaluation,
+        request.claims.as_deref().unwrap_or(&evaluation.claim_ids),
+        request
+            .disclosure
+            .as_deref()
+            .unwrap_or(&evaluation.disclosure),
+        request.format.as_deref().unwrap_or(&evaluation.format),
+        Some(profile_id),
+    ) {
+        return evidence_error_response(error);
     }
     // Fail-closed: every evaluated claim must appear in the profile's
     // allow-list. An empty `allowed_claims` therefore permits nothing rather
@@ -520,6 +821,35 @@ async fn issue_credential(
         .holder
         .as_ref()
         .and_then(|holder| holder.id.as_deref());
+    if principal.is_self_attestation() {
+        let principal_hash = match state
+            .self_attestation_rate_keys
+            .principal(&principal.principal_id)
+        {
+            Ok(hash) => hash,
+            Err(error) => return evidence_error_response(error.evidence_error()),
+        };
+        let holder_hash = match holder_id
+            .map(|holder_id| state.self_attestation_rate_keys.holder(holder_id))
+            .transpose()
+        {
+            Ok(hash) => hash,
+            Err(error) => return evidence_error_response(error.evidence_error()),
+        };
+        if let Err(error) = state
+            .self_attestation_rate_limiter
+            .check_credential_issuance(&principal_hash, holder_hash.as_ref())
+        {
+            let mut response = evidence_error_response(error.evidence_error());
+            attach_self_attestation_rate_limit_audit(
+                &mut response,
+                "credential_issue_rate_limited",
+                &evaluation.claim_ids,
+                error.bucket(),
+            );
+            return response;
+        }
+    }
     let issuer = match state.issuers.issuer(profile_id) {
         Ok(issuer) => issuer,
         Err(error) => return evidence_error_response(error),
@@ -555,13 +885,25 @@ async fn issue_credential(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    attach_evidence_audit(
-        &mut response,
-        "credential_issued",
-        Some(request.evaluation_id.clone()),
-        &evaluation.claim_ids,
-        Some(evaluation.results.len() as u64),
-    );
+    if let Some(metadata) = evaluation.self_attestation.as_ref() {
+        attach_self_attestation_credential_audit(
+            &mut response,
+            &request.evaluation_id,
+            &evaluation.claim_ids,
+            evaluation.results.len() as u64,
+            profile_id,
+            profile,
+            metadata.policy_hash.clone(),
+        );
+    } else {
+        attach_evidence_audit(
+            &mut response,
+            "credential_issued",
+            Some(request.evaluation_id.clone()),
+            &evaluation.claim_ids,
+            Some(evaluation.results.len() as u64),
+        );
+    }
     response
 }
 
@@ -682,6 +1024,9 @@ fn require_evaluation_access(
     principal: &EvidencePrincipal,
     evaluation: &registry_witness_core::StoredEvaluation,
 ) -> Result<(), EvidenceError> {
+    if principal.is_self_attestation() {
+        return Ok(());
+    }
     for claim_id in &evaluation.claim_ids {
         for scope in source.required_scopes(evidence, claim_id)? {
             if !principal.has_scope(&scope) {
@@ -690,6 +1035,550 @@ fn require_evaluation_access(
         }
     }
     Ok(())
+}
+
+fn evaluation_client_matches(
+    state: &RegistryWitnessApiState,
+    principal: &EvidencePrincipal,
+    evaluation: &registry_witness_core::StoredEvaluation,
+) -> bool {
+    if let Some(metadata) = evaluation.self_attestation.as_ref() {
+        principal.is_self_attestation()
+            && state
+                .self_attestation_rate_keys
+                .principal(&principal.principal_id)
+                .is_ok_and(|hash| {
+                    hash == metadata.principal_hash && evaluation.client_id == hash.as_str()
+                })
+    } else {
+        evaluation.client_id == principal.principal_id
+    }
+}
+
+fn runtime_principal_for_stored_evaluation(
+    principal: &EvidencePrincipal,
+    evaluation: &registry_witness_core::StoredEvaluation,
+) -> EvidencePrincipal {
+    if evaluation.self_attestation.is_some() {
+        let mut runtime_principal = principal.clone();
+        runtime_principal.principal_id = evaluation.client_id.clone();
+        runtime_principal
+    } else {
+        principal.clone()
+    }
+}
+
+fn consume_classification_denial_if_keyable(
+    state: &RegistryWitnessApiState,
+    principal: &EvidencePrincipal,
+) -> Result<(), SelfAttestationRateLimitError> {
+    if principal.verified_claims.is_none() {
+        return Ok(());
+    }
+    let principal_hash = state
+        .self_attestation_rate_keys
+        .principal(&principal.principal_id)?;
+    state
+        .self_attestation_rate_limiter
+        .check_authenticated_request(&principal_hash)
+}
+
+fn classify_self_attestation_principal(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+) -> Result<EvidencePrincipal, EvidenceError> {
+    if !config.enabled {
+        if principal.is_self_attestation() {
+            return Err(self_attestation_denied(SelfAttestationDenialCode::Disabled));
+        }
+        return Ok(principal.clone());
+    }
+
+    let citizen_scope_signal = config
+        .required_scopes
+        .iter()
+        .any(|scope| principal.has_scope(scope));
+    if principal.verified_claims.is_none() && citizen_scope_signal {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::InvalidToken,
+        ));
+    }
+    let citizen_client_signal = principal
+        .verified_claims
+        .as_ref()
+        .is_some_and(|claims| citizen_client_or_audience_matches(config, claims));
+    let self_attestation_candidate =
+        principal.is_self_attestation() || citizen_scope_signal || citizen_client_signal;
+    if !self_attestation_candidate {
+        return Ok(principal.clone());
+    }
+
+    let Some(verified_claims) = principal.verified_claims.as_ref() else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::InvalidToken,
+        ));
+    };
+    if !citizen_client_or_audience_matches(config, verified_claims) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::InvalidToken,
+        ));
+    }
+    if !config
+        .required_scopes
+        .iter()
+        .all(|scope| principal.has_scope(scope) || verified_claims.has_scope(scope))
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::InvalidToken,
+        ));
+    }
+
+    let mut classified = principal.clone();
+    classified.access_mode = AccessMode::SelfAttestation;
+    Ok(classified)
+}
+
+fn citizen_client_or_audience_matches(
+    config: &SelfAttestationConfig,
+    claims: &registry_witness_core::BoundedVerifiedClaims,
+) -> bool {
+    let client_matches = claims.client_id.as_ref().is_some_and(|client_id| {
+        config
+            .citizen_clients
+            .allowed_client_ids
+            .iter()
+            .any(|allowed| verified_client_matches(client_id.as_str(), allowed))
+    });
+    let audience_matches = claims.audiences.iter().any(|audience| {
+        config
+            .citizen_clients
+            .allowed_audiences
+            .iter()
+            .any(|allowed| audience.as_str() == allowed)
+    });
+    client_matches || audience_matches
+}
+
+fn verified_client_matches(candidate: &str, allowed: &str) -> bool {
+    candidate == allowed
+        || candidate
+            .strip_prefix("azp:")
+            .or_else(|| candidate.strip_prefix("client_id:"))
+            .is_some_and(|raw| raw == allowed)
+}
+
+fn require_self_attestation_evaluate(
+    evidence: &EvidenceConfig,
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+    request: &EvaluateRequest,
+) -> Result<(), EvidenceError> {
+    if !config.allowed_operations.evaluate {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::OperationDenied,
+        ));
+    }
+    if request.claims.len() != 1
+        || !request.claims.iter().all(|claim_id| {
+            config
+                .allowed_claims
+                .iter()
+                .any(|allowed| allowed == claim_id)
+        })
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::ClaimDenied,
+        ));
+    }
+
+    let format = request
+        .format
+        .as_deref()
+        .unwrap_or(FORMAT_CLAIM_RESULT_JSON);
+    if !config
+        .allowed_formats
+        .iter()
+        .any(|allowed| allowed == format)
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::FormatDenied,
+        ));
+    }
+
+    let disclosure = selected_disclosure(evidence, &request.claims, request.disclosure.as_deref())
+        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DisclosureDenied))?;
+    if !config
+        .allowed_disclosures
+        .iter()
+        .any(|allowed| allowed == &disclosure)
+        || !request
+            .claims
+            .iter()
+            .all(|claim_id| claim_allows_disclosure(evidence, claim_id, &disclosure))
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::DisclosureDenied,
+        ));
+    }
+
+    for claim_id in &request.claims {
+        let claim = crate::find_claim(evidence, claim_id)
+            .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+        if !claim.operations.evaluate.enabled {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::OperationDenied,
+            ));
+        }
+        if claim.purpose.as_deref().is_none_or(|purpose| {
+            !config
+                .allowed_purposes
+                .iter()
+                .any(|allowed| allowed == purpose)
+        }) {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::OperationDenied,
+            ));
+        }
+    }
+
+    let subject_binding = &config.subject_binding;
+    if request.subject.id.trim().is_empty() {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    if request.subject.id_type.as_deref() != Some(subject_binding.id_type.as_str()) {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    let Some(bound_subject) =
+        principal.verified_subject_binding_value(&subject_binding.token_claim)
+    else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectClaimMissing,
+        ));
+    };
+    if bound_subject != request.subject.id {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_self_attestation_evaluate(
+    state: &RegistryWitnessApiState,
+    evidence: &EvidenceConfig,
+    principal: &EvidencePrincipal,
+    request: &EvaluateRequest,
+) -> Result<SelfAttestationEvaluateContext, EvidenceError> {
+    require_self_attestation_evaluate(evidence, &state.self_attestation, principal, request)?;
+    require_self_attestation_token_policy(&state.self_attestation, principal)?;
+
+    let claim_id = request
+        .claims
+        .first()
+        .ok_or(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::ClaimDenied,
+        })?;
+    let claim = crate::find_claim(evidence, claim_id).map_err(|_| {
+        EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::ClaimDenied,
+        }
+    })?;
+    let purpose = claim
+        .purpose
+        .clone()
+        .ok_or(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::OperationDenied,
+        })?;
+    let format = request
+        .format
+        .as_deref()
+        .unwrap_or(FORMAT_CLAIM_RESULT_JSON)
+        .to_string();
+    let disclosure = selected_disclosure(evidence, &request.claims, request.disclosure.as_deref())
+        .map_err(|_| EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::DisclosureDenied,
+        })?;
+    let claims = principal
+        .verified_claims
+        .as_ref()
+        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+    let subject_binding_value = principal
+        .verified_subject_binding_value(&state.self_attestation.subject_binding.token_claim)
+        .ok_or(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::SubjectClaimMissing,
+        })?;
+    let principal_hash = state
+        .self_attestation_rate_keys
+        .principal(&principal.principal_id)
+        .map_err(|error| error.evidence_error())?;
+    let subject_binding_hash = state
+        .self_attestation_rate_keys
+        .subject_binding(subject_binding_value)
+        .map_err(|error| error.evidence_error())?;
+    let requested_claims_hash = Hashed::<ClaimSet>::from_hash(evidence_claim_hash(&request.claims));
+    let policy_hash = self_attestation_policy_hash(
+        evidence,
+        &state.self_attestation,
+        &request.claims,
+        &disclosure,
+        &format,
+    )?;
+    let now = OffsetDateTime::now_utc();
+    let evaluation_expires_at = now
+        + time::Duration::seconds(
+            state
+                .self_attestation
+                .token_policy
+                .max_evaluation_age_seconds as i64,
+        );
+
+    let metadata = StoredSelfAttestationMetadata {
+        access_mode: AccessMode::SelfAttestation,
+        issuer: claims.issuer.clone(),
+        audiences: claims.audiences.clone(),
+        client_id: claims.client_id.clone(),
+        principal_hash,
+        subject_id_type: ConfigMetadata::new(
+            state.self_attestation.subject_binding.id_type.clone(),
+        )
+        .map_err(|_| EvidenceError::InvalidRequest)?,
+        subject_binding_claim: ConfigMetadata::new(
+            state.self_attestation.subject_binding.token_claim.clone(),
+        )
+        .map_err(|_| EvidenceError::InvalidRequest)?,
+        subject_binding_hash: subject_binding_hash.clone(),
+        requested_claims_hash,
+        disclosure: ConfigMetadata::new(disclosure.clone())
+            .map_err(|_| EvidenceError::InvalidRequest)?,
+        result_format: ConfigMetadata::new(format).map_err(|_| EvidenceError::InvalidRequest)?,
+        delegation_chain: Vec::new(),
+        policy_version: None,
+        policy_hash: Some(policy_hash.clone()),
+        evaluation_expires_at: Some(format_time(evaluation_expires_at)),
+    };
+    let source_capability = SourceCapability::SelfAttestation {
+        claim_id: BoundedClaimId::new(claim_id.clone())
+            .map_err(|_| EvidenceError::InvalidRequest)?,
+        subject_binding_hash,
+    };
+
+    Ok(SelfAttestationEvaluateContext {
+        source_capability,
+        metadata,
+        purpose,
+    })
+}
+
+fn require_self_attestation_token_policy(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+) -> Result<(), EvidenceError> {
+    let claims = principal
+        .verified_claims
+        .as_ref()
+        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+    if !config.token_policy.required_acr_values.is_empty() {
+        let acr = claims
+            .acr
+            .as_ref()
+            .ok_or(EvidenceError::SelfAttestationAssuranceDenied)?;
+        if !config
+            .token_policy
+            .required_acr_values
+            .iter()
+            .any(|allowed| allowed == acr.as_str())
+        {
+            return Err(EvidenceError::SelfAttestationAssuranceDenied);
+        }
+    }
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let leeway = config.token_policy.max_clock_leeway_seconds as i64;
+    let auth_time = claims
+        .auth_time
+        .ok_or(EvidenceError::SelfAttestationAssuranceDenied)?;
+    if auth_time > now + leeway {
+        return Err(EvidenceError::SelfAttestationAssuranceDenied);
+    }
+    if now.saturating_sub(auth_time) > config.token_policy.max_auth_age_seconds as i64 + leeway {
+        return Err(EvidenceError::SelfAttestationAssuranceDenied);
+    }
+    let exp = claims
+        .exp
+        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+    let iat = claims
+        .iat
+        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+    if iat > now + leeway {
+        return Err(EvidenceError::SelfAttestationAssuranceDenied);
+    }
+    if exp < iat
+        || exp.saturating_sub(iat)
+            > config.token_policy.max_access_token_lifetime_seconds as i64 + leeway
+    {
+        return Err(EvidenceError::SelfAttestationAssuranceDenied);
+    }
+    Ok(())
+}
+
+fn consume_subject_mismatch_denial(
+    state: &RegistryWitnessApiState,
+    principal_hash: &Hashed<registry_witness_core::PrincipalIdentifier>,
+) -> Result<(), SelfAttestationRateLimitError> {
+    state
+        .self_attestation_rate_limiter
+        .consume_subject_mismatch_denial_only(principal_hash)
+}
+
+fn require_self_attestation_stored_access(
+    state: &RegistryWitnessApiState,
+    evidence: &EvidenceConfig,
+    principal: &EvidencePrincipal,
+    evaluation: &registry_witness_core::StoredEvaluation,
+    requested_claims: &[String],
+    disclosure: &str,
+    format: &str,
+    credential_profile: Option<&str>,
+) -> Result<(), EvidenceError> {
+    let Some(metadata) = evaluation.self_attestation.as_ref() else {
+        if principal.is_self_attestation() {
+            return Err(EvidenceError::EvaluationBindingMismatch);
+        }
+        return Ok(());
+    };
+    if !principal.is_self_attestation() {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    if credential_profile.is_some() && !state.self_attestation.allowed_operations.issue_credential {
+        return Err(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::OperationDenied,
+        });
+    }
+    if credential_profile.is_none() && !state.self_attestation.allowed_operations.render {
+        return Err(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::OperationDenied,
+        });
+    }
+    require_self_attestation_token_policy(&state.self_attestation, principal)?;
+    let principal_hash = state
+        .self_attestation_rate_keys
+        .principal(&principal.principal_id)
+        .map_err(|error| error.evidence_error())?;
+    if principal_hash != metadata.principal_hash {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    if metadata.subject_id_type.as_str() != state.self_attestation.subject_binding.id_type {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    let claims = principal
+        .verified_claims
+        .as_ref()
+        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+    if claims.issuer != metadata.issuer
+        || claims.client_id != metadata.client_id
+        || !verified_audiences_match(&claims.audiences, &metadata.audiences)
+    {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    let subject_binding_value = principal
+        .verified_subject_binding_value(&state.self_attestation.subject_binding.token_claim)
+        .ok_or(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::SubjectClaimMissing,
+        })?;
+    let subject_binding_hash = state
+        .self_attestation_rate_keys
+        .subject_binding(subject_binding_value)
+        .map_err(|error| error.evidence_error())?;
+    if subject_binding_hash != metadata.subject_binding_hash {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    if metadata.requested_claims_hash.as_str() != evidence_claim_hash(requested_claims) {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    if metadata.disclosure.as_str() != disclosure || metadata.result_format.as_str() != format {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    if let Some(profile_id) = credential_profile {
+        if !state
+            .self_attestation
+            .credential_profiles
+            .iter()
+            .any(|allowed| allowed == profile_id)
+        {
+            return Err(EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ProfileDenied,
+            });
+        }
+    }
+    let expected_policy_hash = self_attestation_policy_hash(
+        evidence,
+        &state.self_attestation,
+        &evaluation.claim_ids,
+        &evaluation.disclosure,
+        &evaluation.format,
+    )?;
+    if metadata.policy_hash.as_ref() != Some(&expected_policy_hash) {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    Ok(())
+}
+
+fn verified_audiences_match(left: &[VerifiedClaimValue], right: &[VerifiedClaimValue]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .all(|candidate| right.iter().any(|stored| stored == candidate))
+}
+
+fn claim_allows_disclosure(evidence: &EvidenceConfig, claim_id: &str, disclosure: &str) -> bool {
+    crate::find_claim(evidence, claim_id).is_ok_and(|claim| {
+        claim.disclosure.default == disclosure
+            || claim
+                .disclosure
+                .allowed
+                .iter()
+                .any(|allowed| allowed == disclosure)
+    })
+}
+
+fn selected_disclosure(
+    evidence: &EvidenceConfig,
+    claim_ids: &[String],
+    requested: Option<&str>,
+) -> Result<String, EvidenceError> {
+    let disclosure = requested
+        .or_else(|| {
+            claim_ids
+                .first()
+                .and_then(|claim_id| crate::find_claim(evidence, claim_id).ok())
+                .map(|claim| claim.disclosure.default.as_str())
+        })
+        .unwrap_or("redacted");
+    registry_witness_core::DisclosureProfile::parse(disclosure)
+        .ok_or(EvidenceError::InvalidRequest)
+        .map(|profile| profile.as_str().to_string())
+}
+
+fn self_attestation_denied(reason: SelfAttestationDenialCode) -> EvidenceError {
+    EvidenceError::SelfAttestationDenied { reason }
+}
+
+fn denial_code_from_error(error: &EvidenceError) -> Option<SelfAttestationDenialCode> {
+    match error {
+        EvidenceError::SelfAttestationDenied { reason } => Some(*reason),
+        _ => None,
+    }
+}
+
+fn denial_code_from_response(response: &Response) -> Option<SelfAttestationDenialCode> {
+    response
+        .extensions()
+        .get::<EvidenceErrorCodeContext>()
+        .and_then(|context| SelfAttestationDenialCode::parse(&context.0))
 }
 
 fn attach_evidence_audit(
@@ -704,11 +1593,103 @@ fn attach_evidence_audit(
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         row_count,
+        access_mode: None,
+        denial_code: None,
+        credential_profile: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_hash: None,
+    });
+}
+
+fn attach_self_attestation_credential_audit(
+    response: &mut Response,
+    evaluation_id: &str,
+    claim_ids: &[String],
+    row_count: u64,
+    profile_id: &str,
+    profile: &CredentialProfileConfig,
+    policy_hash: Option<Hashed<PolicyIdentifier>>,
+) {
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id: Some(evaluation_id.to_string()),
+        verification_decision: Some("credential_issued".to_string()),
+        claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        row_count: Some(row_count),
+        access_mode: Some(AccessMode::SelfAttestation),
+        denial_code: None,
+        credential_profile: ConfigMetadata::new(profile_id).ok(),
+        holder_binding_mode: ConfigMetadata::new(profile.holder_binding.mode.clone()).ok(),
+        rate_limit_bucket: None,
+        policy_hash,
+    });
+}
+
+fn attach_self_attestation_success_audit(
+    response: &mut Response,
+    decision: &str,
+    verification_id: Option<String>,
+    claim_ids: &[String],
+    row_count: Option<u64>,
+    policy_hash: Option<Hashed<PolicyIdentifier>>,
+) {
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id,
+        verification_decision: Some(decision.to_string()),
+        claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        row_count,
+        access_mode: Some(AccessMode::SelfAttestation),
+        denial_code: None,
+        credential_profile: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_hash,
+    });
+}
+
+fn attach_self_attestation_audit(
+    response: &mut Response,
+    decision: &str,
+    claim_ids: &[String],
+    denial_code: Option<SelfAttestationDenialCode>,
+) {
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id: None,
+        verification_decision: Some(decision.to_string()),
+        claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        row_count: None,
+        access_mode: Some(AccessMode::SelfAttestation),
+        denial_code,
+        credential_profile: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_hash: None,
+    });
+}
+
+fn attach_self_attestation_rate_limit_audit(
+    response: &mut Response,
+    decision: &str,
+    claim_ids: &[String],
+    bucket: Option<SelfAttestationRateLimitBucket>,
+) {
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id: None,
+        verification_decision: Some(decision.to_string()),
+        claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        row_count: None,
+        access_mode: Some(AccessMode::SelfAttestation),
+        denial_code: Some(SelfAttestationDenialCode::RateLimited),
+        credential_profile: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: bucket.and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
+        policy_hash: None,
     });
 }
 
 pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
     let code = error.code().to_string();
+    let audit_code = error.audit_code().to_string();
     let status = evidence_status(&error);
     let body = json!({
         "type": format!("https://data.example.gov/problems/{}", code.replace('.', "/")),
@@ -720,7 +1701,7 @@ pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
     let mut response = (status, Json(body)).into_response();
     response
         .extensions_mut()
-        .insert(EvidenceErrorCodeContext(code));
+        .insert(EvidenceErrorCodeContext(audit_code));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
@@ -743,11 +1724,14 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::PurposeRequired => StatusCode::BAD_REQUEST,
         EvidenceError::DisclosureNotAllowed
         | EvidenceError::EvaluationBindingMismatch
-        | EvidenceError::ScopeDenied { .. } => StatusCode::FORBIDDEN,
+        | EvidenceError::ScopeDenied { .. }
+        | EvidenceError::SelfAttestationDenied { .. }
+        | EvidenceError::SelfAttestationAssuranceDenied => StatusCode::FORBIDDEN,
         EvidenceError::SourceAmbiguous
         | EvidenceError::IdempotencyConflict
         | EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
         EvidenceError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        EvidenceError::SelfAttestationRateLimited => StatusCode::TOO_MANY_REQUESTS,
         EvidenceError::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         EvidenceError::CredentialIssuanceFailed | EvidenceError::RuleEvaluationFailed => {
             StatusCode::INTERNAL_SERVER_ERROR
@@ -779,6 +1763,10 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::PurposeRequired => "Purpose required",
         EvidenceError::MissingCredential => "Missing credential",
         EvidenceError::ScopeDenied { .. } => "Scope denied",
+        EvidenceError::SelfAttestationDenied { .. } => "Self-attestation denied",
+        EvidenceError::SelfAttestationRateLimited => "Self-attestation rate limited",
+        EvidenceError::SelfAttestationInvalidToken => "Self-attestation token invalid",
+        EvidenceError::SelfAttestationAssuranceDenied => "Self-attestation assurance denied",
         _ => "Evidence error",
     }
 }
@@ -812,6 +1800,12 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         EvidenceError::PurposeRequired => "a data purpose is required",
         EvidenceError::MissingCredential => "missing authentication credential",
         EvidenceError::ScopeDenied { .. } => "missing required scope",
+        EvidenceError::SelfAttestationDenied { .. } => "self-attestation request was denied",
+        EvidenceError::SelfAttestationRateLimited => "self-attestation request was rate limited",
+        EvidenceError::SelfAttestationInvalidToken => "self-attestation token is invalid",
+        EvidenceError::SelfAttestationAssuranceDenied => {
+            "self-attestation assurance policy denied the request"
+        }
         _ => "evidence request failed",
     }
 }
@@ -823,6 +1817,75 @@ fn evidence_claim_hash(claim_ids: &[String]) -> String {
         hasher.update([0]);
     }
     format!("sha256:{}", hex_encode(&hasher.finalize()))
+}
+
+fn self_attestation_policy_hash(
+    evidence: &EvidenceConfig,
+    config: &SelfAttestationConfig,
+    claim_ids: &[String],
+    disclosure: &str,
+    format: &str,
+) -> Result<Hashed<PolicyIdentifier>, EvidenceError> {
+    let mut claim_profiles = Vec::new();
+    let mut credential_profiles = Vec::new();
+    for claim_id in claim_ids {
+        let claim = crate::find_claim(evidence, claim_id)?;
+        claim_profiles.push(json!({
+            "id": claim.id,
+            "purpose": claim.purpose,
+            "formats": claim.formats,
+            "disclosure": {
+                "default": claim.disclosure.default,
+                "allowed": claim.disclosure.allowed,
+            },
+            "credential_profiles": claim.credential_profiles,
+        }));
+    }
+    for profile_id in &config.credential_profiles {
+        let Some(profile) = evidence.credential_profiles.get(profile_id) else {
+            continue;
+        };
+        credential_profiles.push(json!({
+            "id": profile_id,
+            "format": profile.format,
+            "issuer": profile.issuer,
+            "issuer_kid": profile.issuer_kid,
+            "vct": profile.vct,
+            "validity_seconds": profile.validity_seconds,
+            "holder_binding": {
+                "mode": profile.holder_binding.mode,
+                "proof_of_possession": profile.holder_binding.proof_of_possession,
+                "allowed_did_methods": profile.holder_binding.allowed_did_methods,
+            },
+            "allowed_claims": profile.allowed_claims,
+            "disclosure": {
+                "allowed": profile.disclosure.allowed,
+            },
+        }));
+    }
+    let canonical = json!({
+        "subject_binding": {
+            "token_claim": config.subject_binding.token_claim,
+            "request_field": config.subject_binding.request_field,
+            "id_type": config.subject_binding.id_type,
+            "normalize": config.subject_binding.normalize,
+        },
+        "allowed_claims": config.allowed_claims,
+        "requested_claims": claim_ids,
+        "allowed_disclosures": config.allowed_disclosures,
+        "requested_disclosure": disclosure,
+        "allowed_formats": config.allowed_formats,
+        "requested_format": format,
+        "credential_profiles": config.credential_profiles,
+        "credential_profile_policy": credential_profiles,
+        "max_credential_validity_seconds": config.token_policy.max_credential_validity_seconds,
+        "claim_profiles": claim_profiles,
+    });
+    let bytes = serde_json::to_vec(&canonical).map_err(|_| EvidenceError::InvalidRequest)?;
+    Ok(Hashed::from_hash(format!(
+        "sha256:{}",
+        hex_encode(&Sha256::digest(bytes))
+    )))
 }
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -965,12 +2028,21 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use registry_platform_crypto::{sign, PrivateJwk};
+    use registry_witness_core::{
+        BoundedVerifiedClaims, SourceBindingConfig, SubjectRequest, VerifiedClaimName,
+        VerifiedClaimValue,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     // Ed25519 keypair: `d` is the seed, `x` is the corresponding public key,
     // both base64url (no padding). Identical to the key in
     // registry-witness-core::sd_jwt tests so behavior is consistent.
     const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
     const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
+    const SUBJECT_BINDING_CLAIM: &str = "https://id.example.gov/claims/national_id";
 
     fn holder_did_jwk() -> String {
         let public_jwk = json!({
@@ -980,6 +2052,521 @@ mod tests {
         });
         let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&public_jwk).unwrap());
         format!("did:jwk:{encoded}")
+    }
+
+    fn bounded(value: &str) -> VerifiedClaimValue {
+        VerifiedClaimValue::new(value).expect("test claim value is bounded")
+    }
+
+    fn self_attestation_config() -> SelfAttestationConfig {
+        serde_json::from_value(json!({
+            "enabled": true,
+            "requires_auth_mode": "oidc",
+            "subject_binding": {
+                "token_claim": SUBJECT_BINDING_CLAIM,
+                "request_field": "SubjectId",
+                "id_type": "national_id",
+                "normalize": "exact",
+                "allow_sub_as_civil_id": false
+            },
+            "citizen_clients": {
+                "allowed_client_ids": ["citizen-portal"],
+                "allowed_audiences": ["registry-witness-citizen"]
+            },
+            "token_policy": {
+                "max_auth_age_seconds": 900,
+                "max_access_token_lifetime_seconds": 900,
+                "max_evaluation_age_seconds": 600,
+                "max_credential_validity_seconds": 600,
+                "max_clock_leeway_seconds": 60
+            },
+            "allowed_operations": {
+                "evaluate": true,
+                "render": true,
+                "issue_credential": true,
+                "batch_evaluate": false
+            },
+            "allowed_purposes": ["citizen_self_attestation"],
+            "allowed_claims": ["person-is-alive"],
+            "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
+            "allowed_disclosures": ["predicate"],
+            "required_scopes": ["self_attestation"],
+            "allowed_wallet_origins": ["https://wallet.example.gov"],
+            "credential_profiles": ["civil_status_sd_jwt"],
+            "rate_limits": {
+                "mode": "in_process",
+                "invalid_token_per_client_address_per_minute": 20,
+                "per_principal_per_minute": 10,
+                "subject_mismatch_per_principal_per_hour": 5,
+                "per_holder_per_hour": 10,
+                "credential_issuance_per_principal_per_hour": 5
+            }
+        }))
+        .expect("self-attestation config parses")
+    }
+
+    fn evidence_config() -> EvidenceConfig {
+        serde_json::from_value(json!({
+            "enabled": true,
+            "claims": [{
+                "id": "person-is-alive",
+                "title": "Person is alive",
+                "version": "1",
+                "subject_type": "person",
+                "purpose": "citizen_self_attestation",
+                "rule": { "type": "cel", "expression": "true" },
+                "operations": {
+                    "evaluate": { "enabled": true },
+                    "batch_evaluate": { "enabled": true, "max_subjects": 5 }
+                },
+                "disclosure": {
+                    "default": "predicate",
+                    "allowed": ["predicate"],
+                    "downgrade": "deny"
+                },
+                "formats": [FORMAT_CLAIM_RESULT_JSON]
+            }]
+        }))
+        .expect("evidence config parses")
+    }
+
+    fn oidc_principal(client_id: Option<&str>, scopes: &[&str]) -> EvidencePrincipal {
+        EvidencePrincipal {
+            principal_id: "citizen-subject".to_string(),
+            scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
+            access_mode: AccessMode::MachineClient,
+            verified_claims: Some(BoundedVerifiedClaims {
+                issuer: bounded("https://id.example.gov"),
+                audiences: vec![bounded("registry-witness-citizen")],
+                client_id: client_id.map(bounded),
+                token_type: Some(bounded("JWT")),
+                scopes: scopes.iter().map(|scope| bounded(scope)).collect(),
+                subject: Some(bounded("login-subject")),
+                subject_binding_claim: Some(
+                    VerifiedClaimName::new(SUBJECT_BINDING_CLAIM)
+                        .expect("subject claim name is bounded"),
+                ),
+                subject_binding_value: Some(bounded("NAT-123")),
+                acr: Some(bounded("urn:example:loa:substantial")),
+                auth_time: Some(1_700_000_000),
+                exp: Some(1_700_000_900),
+                iat: Some(1_700_000_000),
+                nbf: None,
+            }),
+        }
+    }
+
+    fn fresh_oidc_principal(client_id: Option<&str>, scopes: &[&str]) -> EvidencePrincipal {
+        let mut principal = oidc_principal(client_id, scopes);
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims");
+        claims.auth_time = Some(now);
+        claims.iat = Some(now);
+        claims.exp = Some(now + 600);
+        principal
+    }
+
+    fn evaluate_request(subject_id: &str) -> EvaluateRequest {
+        EvaluateRequest {
+            subject: SubjectRequest {
+                id: subject_id.to_string(),
+                id_type: Some("national_id".to_string()),
+            },
+            claims: vec!["person-is-alive".to_string()],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        }
+    }
+
+    #[test]
+    fn self_attestation_classification_requires_citizen_client_and_scope() {
+        let config = self_attestation_config();
+
+        let classified = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen client and scope classify");
+        assert!(classified.is_self_attestation());
+
+        let missing_scope = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &[]),
+        )
+        .expect_err("citizen client without scope fails closed");
+        assert!(matches!(
+            missing_scope,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::InvalidToken
+            }
+        ));
+
+        let mut no_citizen_client_or_audience =
+            oidc_principal(Some("client_id:other"), &["self_attestation"]);
+        no_citizen_client_or_audience
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .audiences
+            .clear();
+        let missing_client =
+            classify_self_attestation_principal(&config, &no_citizen_client_or_audience)
+                .expect_err("scope without citizen client or audience fails closed");
+        assert!(matches!(
+            missing_client,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::InvalidToken
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_scope_without_verified_claims_fails_closed() {
+        let config = self_attestation_config();
+        let principal = EvidencePrincipal {
+            principal_id: "citizen-subject".to_string(),
+            scopes: vec!["self_attestation".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+        };
+
+        let err = classify_self_attestation_principal(&config, &principal)
+            .expect_err("citizen scope without verified claims must not fall back to machine mode");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::InvalidToken
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_evaluate_guard_rejects_subject_mismatch() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+
+        let err = require_self_attestation_evaluate(
+            &evidence,
+            &config,
+            &principal,
+            &evaluate_request("NAT-999"),
+        )
+        .expect_err("mismatched subject must be denied before runtime");
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::SubjectMismatch
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_prepare_pins_claim_purpose_and_metadata() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let state = RegistryWitnessApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        );
+
+        let context = prepare_self_attestation_evaluate(
+            &state,
+            &evidence,
+            &principal,
+            &evaluate_request("NAT-123"),
+        )
+        .expect("self-attestation evaluate context prepares");
+
+        assert_eq!(context.purpose, "citizen_self_attestation");
+        assert_eq!(context.metadata.access_mode, AccessMode::SelfAttestation);
+        assert_eq!(context.metadata.subject_id_type.as_str(), "national_id");
+        assert!(context.metadata.policy_hash.is_some());
+        assert!(
+            context.metadata.evaluation_expires_at.is_some(),
+            "self-attestation evaluation must carry its capped expiry"
+        );
+        assert!(matches!(
+            context.source_capability,
+            SourceCapability::SelfAttestation { .. }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_token_policy_fails_closed_without_auth_time() {
+        let config = self_attestation_config();
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .auth_time = None;
+
+        let err = require_self_attestation_token_policy(&config, &principal)
+            .expect_err("missing auth_time fails closed");
+
+        assert!(matches!(err, EvidenceError::SelfAttestationAssuranceDenied));
+    }
+
+    #[test]
+    fn self_attestation_token_policy_fails_closed_without_required_acr() {
+        let mut config = self_attestation_config();
+        config.token_policy.required_acr_values = vec!["urn:example:loa:substantial".to_string()];
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .acr = None;
+
+        let err = require_self_attestation_token_policy(&config, &principal)
+            .expect_err("missing acr fails closed when required");
+
+        assert!(matches!(err, EvidenceError::SelfAttestationAssuranceDenied));
+    }
+
+    #[test]
+    fn self_attestation_token_policy_rejects_future_iat_and_auth_time() {
+        let config = self_attestation_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+
+        let mut future_auth_time = principal.clone();
+        future_auth_time
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .auth_time = Some(OffsetDateTime::now_utc().unix_timestamp() + 3_600);
+        assert!(matches!(
+            require_self_attestation_token_policy(&config, &future_auth_time),
+            Err(EvidenceError::SelfAttestationAssuranceDenied)
+        ));
+
+        let mut future_iat = principal;
+        future_iat
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .iat = Some(OffsetDateTime::now_utc().unix_timestamp() + 3_600);
+        assert!(matches!(
+            require_self_attestation_token_policy(&config, &future_iat),
+            Err(EvidenceError::SelfAttestationAssuranceDenied)
+        ));
+    }
+
+    #[test]
+    fn stored_self_attestation_rechecks_issuer_client_and_audience() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let state = RegistryWitnessApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        );
+        let context = prepare_self_attestation_evaluate(
+            &state,
+            &evidence,
+            &principal,
+            &evaluate_request("NAT-123"),
+        )
+        .expect("self-attestation context prepares");
+        let mut evaluation = evaluation_for_proof();
+        evaluation.client_id = principal.principal_id.clone();
+        evaluation.claim_ids = vec!["person-is-alive".to_string()];
+        evaluation.disclosure = "predicate".to_string();
+        evaluation.format = FORMAT_CLAIM_RESULT_JSON.to_string();
+        evaluation.self_attestation = Some(context.metadata);
+
+        let mut changed_client = principal.clone();
+        changed_client
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .client_id = Some(bounded("client_id:other-portal"));
+
+        let err = require_self_attestation_stored_access(
+            &state,
+            &evidence,
+            &changed_client,
+            &evaluation,
+            &evaluation.claim_ids,
+            &evaluation.disclosure,
+            &evaluation.format,
+            None,
+        )
+        .expect_err("changed client id must not access stored evaluation");
+
+        assert!(matches!(err, EvidenceError::EvaluationBindingMismatch));
+    }
+
+    #[test]
+    fn self_attestation_policy_hash_includes_credential_profile_policy() {
+        let config = self_attestation_config();
+        let mut evidence = evidence_config();
+        evidence.credential_profiles.insert(
+            "civil_status_sd_jwt".to_string(),
+            serde_json::from_value(json!({
+                "format": FORMAT_SD_JWT_VC,
+                "issuer": "did:web:issuer.example",
+                "issuer_key_env": "ISSUER_KEY",
+                "vct": "https://issuer.example/credentials/civil-status",
+                "validity_seconds": 600,
+                "holder_binding": {
+                    "mode": "did",
+                    "proof_of_possession": "required",
+                    "allowed_did_methods": ["did:jwk"]
+                },
+                "allowed_claims": ["person-is-alive"],
+                "disclosure": { "allowed": ["predicate"] }
+            }))
+            .expect("profile parses"),
+        );
+        let claims = vec!["person-is-alive".to_string()];
+        let original = self_attestation_policy_hash(
+            &evidence,
+            &config,
+            &claims,
+            "predicate",
+            FORMAT_CLAIM_RESULT_JSON,
+        )
+        .expect("policy hashes");
+
+        evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .expect("profile exists")
+            .holder_binding
+            .proof_of_possession = None;
+        let changed = self_attestation_policy_hash(
+            &evidence,
+            &config,
+            &claims,
+            "predicate",
+            FORMAT_CLAIM_RESULT_JSON,
+        )
+        .expect("changed policy hashes");
+
+        assert_ne!(original, changed);
+    }
+
+    #[derive(Default)]
+    struct CountingSource {
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl SourceReader for CountingSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            _subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Err(EvidenceError::SourceUnavailable)
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(vec!["civil_registry:evidence_verification".to_string()])
+        }
+    }
+
+    struct NoopIssuerResolver;
+
+    impl EvidenceIssuerResolver for NoopIssuerResolver {
+        fn issuer(
+            &self,
+            _profile_id: &str,
+        ) -> Result<registry_witness_core::sd_jwt::EvidenceIssuer, EvidenceError> {
+            Err(EvidenceError::CredentialIssuerNotConfigured)
+        }
+    }
+
+    #[tokio::test]
+    async fn self_attestation_batch_evaluate_is_rejected_before_source_read() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let state = Arc::new(RegistryWitnessApiState::new_with_self_attestation(
+            Arc::new(evidence_config()),
+            Arc::new(self_attestation_config()),
+            Arc::new(CountingSource {
+                reads: Arc::clone(&reads),
+            }),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        ));
+        let request = BatchEvaluateRequest {
+            subjects: vec![SubjectRequest {
+                id: "NAT-123".to_string(),
+                id_type: Some("national_id".to_string()),
+            }],
+            claims: vec!["person-is-alive".to_string()],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        };
+
+        let response = batch_evaluate(
+            HeaderMap::new(),
+            Some(Extension(state)),
+            Some(Extension(oidc_principal(
+                Some("client_id:citizen-portal"),
+                &["self_attestation"],
+            ))),
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("self-attestation denial audit context is attached");
+        assert_eq!(audit.access_mode, Some(AccessMode::SelfAttestation));
+        assert_eq!(
+            audit.denial_code,
+            Some(SelfAttestationDenialCode::BatchDenied)
+        );
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
@@ -1021,6 +2608,7 @@ mod tests {
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
             request_hash: "h".to_string(),
+            self_attestation: None,
         }
     }
 

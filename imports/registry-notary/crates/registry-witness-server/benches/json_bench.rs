@@ -38,6 +38,14 @@ fn build_audit_event() -> EvidenceAuditEvent {
         ),
         row_count: None,
         error_code: None,
+        access_mode: None,
+        denial_code: None,
+        correlation_id: None,
+        credential_profile: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_version: None,
+        policy_hash: None,
     }
 }
 

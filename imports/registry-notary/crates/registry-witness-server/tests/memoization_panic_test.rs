@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_witness_core::{
-    BatchEvaluateRequest, ClaimDefinition, ClaimOperationsConfig, ClaimValueConfig,
+    AccessMode, BatchEvaluateRequest, ClaimDefinition, ClaimOperationsConfig, ClaimValueConfig,
     ConcurrencyConfig, DisclosureConfig, EvidenceConfig, EvidenceError, EvidencePrincipal,
     RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
     SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
@@ -102,6 +102,7 @@ fn evaluate_claim() -> ClaimDefinition {
         },
         inputs: Vec::new(),
         depends_on: Vec::new(),
+        purpose: None,
         source_bindings: bindings,
         rule: RuleConfig::Extract {
             source: "src".to_string(),
@@ -143,6 +144,8 @@ fn principal() -> EvidencePrincipal {
     EvidencePrincipal {
         principal_id: "test".to_string(),
         scopes: Vec::new(),
+        access_mode: AccessMode::MachineClient,
+        verified_claims: None,
     }
 }
 
