@@ -108,6 +108,7 @@ fn benchmark_issue_single_claim(c: &mut Criterion) {
                 black_box(&profile),
                 black_box(&issuer),
                 black_box(&results),
+                black_box("bench-subject"),
                 black_box(None),
                 black_box(iat),
             )
@@ -127,6 +128,7 @@ fn benchmark_issue_three_claims(c: &mut Criterion) {
                 black_box(&profile),
                 black_box(&issuer),
                 black_box(&results),
+                black_box("bench-subject"),
                 black_box(None),
                 black_box(iat),
             )

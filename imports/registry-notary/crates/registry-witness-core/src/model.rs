@@ -760,7 +760,8 @@ impl EvidencePrincipal {
 pub struct EvidenceAuditEvent {
     pub event_id: String,
     pub occurred_at: String,
-    pub principal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_id_hash: Option<Hashed<PrincipalIdentifier>>,
     pub decision: String,
     pub method: String,
     pub path: String,
@@ -773,6 +774,8 @@ pub struct EvidenceAuditEvent {
     pub access_mode: Option<AccessMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial_code: Option<SelfAttestationDenialCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_claim_name: Option<ConfigMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<BoundedCorrelationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -865,7 +868,7 @@ mod tests {
         let event = EvidenceAuditEvent {
             event_id: "01HX".to_string(),
             occurred_at: "2026-05-25T00:00:00Z".to_string(),
-            principal_id: Some("principal-raw-before-audit-hash".to_string()),
+            principal_id_hash: Some(Hashed::from_hash("hmac-sha256:principal")),
             decision: "denied".to_string(),
             method: "POST".to_string(),
             path: "/claims/evaluate".to_string(),
@@ -876,6 +879,7 @@ mod tests {
             error_code: Some("self_attestation.denied".to_string()),
             access_mode: Some(AccessMode::SelfAttestation),
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
+            token_claim_name: Some(bounded("national_id")),
             correlation_id: Some(bounded("req-123")),
             credential_profile: None,
             holder_binding_mode: None,
@@ -890,7 +894,10 @@ mod tests {
             value["denial_code"],
             json!("self_attestation.subject_mismatch")
         );
+        assert_eq!(value["token_claim_name"], json!("national_id"));
         assert_eq!(value["correlation_id"], json!("req-123"));
+        assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
+        assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());
     }
 

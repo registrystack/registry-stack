@@ -18,7 +18,7 @@ pub struct StandaloneRegistryWitnessConfig {
     pub auth: EvidenceAuthConfig,
     #[serde(default)]
     pub audit: EvidenceAuditConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "self_attestation_config_is_default")]
     pub self_attestation: SelfAttestationConfig,
 }
 
@@ -187,7 +187,7 @@ impl StandaloneRegistryWitnessConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfAttestationConfig {
     #[serde(default)]
@@ -218,6 +218,10 @@ pub struct SelfAttestationConfig {
     pub credential_profiles: Vec<String>,
     #[serde(default)]
     pub rate_limits: SelfAttestationRateLimitsConfig,
+}
+
+fn self_attestation_config_is_default(config: &SelfAttestationConfig) -> bool {
+    config == &SelfAttestationConfig::default()
 }
 
 impl Default for SelfAttestationConfig {
@@ -268,6 +272,17 @@ impl SelfAttestationConfig {
         self.subject_binding.validate()?;
         self.citizen_clients.validate(oidc)?;
         self.token_policy.validate(oidc)?;
+        if self.subject_binding.claim_source == SelfAttestationClaimSource::Userinfo
+            && oidc
+                .userinfo_endpoint
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+        {
+            return self.invalid(
+                "subject_binding.claim_source = userinfo requires auth.oidc.userinfo_endpoint",
+            );
+        }
         self.allowed_operations.validate()?;
         validate_non_empty_entries("self_attestation.allowed_purposes", &self.allowed_purposes)?;
         validate_non_empty_entries("self_attestation.allowed_claims", &self.allowed_claims)?;
@@ -277,10 +292,6 @@ impl SelfAttestationConfig {
             &self.allowed_disclosures,
         )?;
         validate_non_empty_entries("self_attestation.required_scopes", &self.required_scopes)?;
-        validate_non_empty_entries(
-            "self_attestation.allowed_wallet_origins",
-            &self.allowed_wallet_origins,
-        )?;
         validate_non_empty_entries(
             "self_attestation.credential_profiles",
             &self.credential_profiles,
@@ -371,11 +382,13 @@ impl SelfAttestationConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfAttestationSubjectBindingConfig {
     #[serde(default)]
     pub token_claim: String,
+    #[serde(default)]
+    pub claim_source: SelfAttestationClaimSource,
     #[serde(default)]
     pub request_field: SubjectId,
     #[serde(default)]
@@ -416,6 +429,14 @@ impl SelfAttestationSubjectBindingConfig {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfAttestationClaimSource {
+    #[default]
+    AccessToken,
+    Userinfo,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum SubjectId {
     #[default]
     SubjectId,
@@ -428,7 +449,7 @@ pub enum SubjectBindingNormalize {
     Exact,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfAttestationCitizenClientsConfig {
     #[serde(default)]
@@ -476,11 +497,13 @@ impl SelfAttestationCitizenClientsConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfAttestationTokenPolicyConfig {
     #[serde(default)]
     pub required_acr_values: Vec<String>,
+    #[serde(default)]
+    pub assurance_claim_source: SelfAttestationAssuranceClaimSource,
     #[serde(default)]
     pub max_auth_age_seconds: u64,
     #[serde(default)]
@@ -491,6 +514,14 @@ pub struct SelfAttestationTokenPolicyConfig {
     pub max_credential_validity_seconds: u64,
     #[serde(default)]
     pub max_clock_leeway_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfAttestationAssuranceClaimSource {
+    #[default]
+    AccessToken,
+    IdToken,
 }
 
 impl SelfAttestationTokenPolicyConfig {
@@ -533,7 +564,7 @@ impl SelfAttestationTokenPolicyConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfAttestationOperationsConfig {
     #[serde(default)]
@@ -562,7 +593,7 @@ impl SelfAttestationOperationsConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfAttestationRateLimitsConfig {
     #[serde(default)]
@@ -720,6 +751,27 @@ fn validate_self_attestation_profile(
         return invalid_self_attestation(format!(
             "credential profile '{profile_id}' uses unallowed format '{}'",
             profile.format
+        ));
+    }
+    if profile.holder_binding.mode != "did" {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' holder_binding.mode must be did"
+        ));
+    }
+    if profile.holder_binding.proof_of_possession.as_deref() != Some("required") {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' holder_binding.proof_of_possession must be required"
+        ));
+    }
+    if profile.holder_binding.allowed_did_methods.is_empty()
+        || profile
+            .holder_binding
+            .allowed_did_methods
+            .iter()
+            .any(|method| method != "did:jwk")
+    {
+        return invalid_self_attestation(format!(
+            "credential profile '{profile_id}' holder_binding.allowed_did_methods must only contain did:jwk"
         ));
     }
     for claim_id in &profile.allowed_claims {
@@ -978,6 +1030,8 @@ pub struct EvidenceOidcAuthConfig {
     pub issuer: String,
     pub jwks_uri: String,
     #[serde(default)]
+    pub userinfo_endpoint: Option<String>,
+    #[serde(default)]
     pub audiences: Vec<String>,
     #[serde(default)]
     pub allowed_clients: Vec<String>,
@@ -1035,6 +1089,15 @@ impl EvidenceOidcAuthConfig {
                 reason: "jwks_uri must not be empty".to_string(),
             });
         }
+        validate_jwks_uri_transport(&self.jwks_uri, self.allow_insecure_localhost)?;
+        if let Some(userinfo_endpoint) = self.userinfo_endpoint.as_deref() {
+            if userinfo_endpoint.trim().is_empty() {
+                return Err(EvidenceConfigError::InvalidOidcConfig {
+                    reason: "userinfo_endpoint must not be empty when configured".to_string(),
+                });
+            }
+            validate_jwks_uri_transport(userinfo_endpoint, self.allow_insecure_localhost)?;
+        }
         if self.audiences.is_empty() {
             return Err(EvidenceConfigError::InvalidOidcConfig {
                 reason: "audiences must list at least one accepted audience".to_string(),
@@ -1052,6 +1115,42 @@ impl EvidenceOidcAuthConfig {
         }
         Ok(())
     }
+}
+
+fn validate_jwks_uri_transport(
+    jwks_uri: &str,
+    allow_insecure_localhost: bool,
+) -> Result<(), EvidenceConfigError> {
+    let jwks_uri = jwks_uri.trim();
+    if jwks_uri.starts_with("https://")
+        || (allow_insecure_localhost && is_insecure_localhost_url(jwks_uri))
+    {
+        return Ok(());
+    }
+    Err(EvidenceConfigError::InvalidOidcConfig {
+        reason:
+            "jwks_uri must use https unless allow_insecure_localhost permits an http localhost URL"
+                .to_string(),
+    })
+}
+
+fn is_insecure_localhost_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    let host = if let Some(after_bracket) = authority.strip_prefix('[') {
+        after_bracket.split(']').next().unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2207,6 +2306,7 @@ vct: https://vct.example/test
         config.auth.oidc = Some(EvidenceOidcAuthConfig {
             issuer: "https://issuer.example".to_string(),
             jwks_uri: "https://issuer.example/jwks.json".to_string(),
+            userinfo_endpoint: None,
             audiences: vec!["registry-witness".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
@@ -2220,6 +2320,89 @@ vct: https://vct.example/test
         });
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn oidc_jwks_uri_must_use_https() {
+        let mut config = minimal_config();
+        config.auth.mode = "oidc".to_string();
+        config.auth.api_keys.clear();
+        config.auth.oidc = Some(EvidenceOidcAuthConfig {
+            issuer: "https://issuer.example".to_string(),
+            jwks_uri: "http://issuer.example/jwks.json".to_string(),
+            userinfo_endpoint: None,
+            audiences: vec!["registry-witness".to_string()],
+            allowed_clients: vec!["registry-client".to_string()],
+            allowed_algorithms: vec!["EdDSA".to_string()],
+            allowed_typ: vec!["JWT".to_string()],
+            scope_claim: "scope".to_string(),
+            scope_separator: " ".to_string(),
+            scope_map: BTreeMap::new(),
+            principal_claim: "sub".to_string(),
+            leeway_seconds: 60,
+            allow_insecure_localhost: false,
+        });
+
+        let err = config
+            .validate()
+            .expect_err("remote http jwks_uri must fail validation");
+        match err {
+            EvidenceConfigError::InvalidOidcConfig { reason } => {
+                assert!(
+                    reason.contains("jwks_uri must use https"),
+                    "unexpected: {reason}"
+                );
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+
+        config
+            .auth
+            .oidc
+            .as_mut()
+            .expect("oidc config exists")
+            .allow_insecure_localhost = true;
+        let err = config
+            .validate()
+            .expect_err("allow_insecure_localhost must not permit remote http");
+        assert!(matches!(err, EvidenceConfigError::InvalidOidcConfig { .. }));
+    }
+
+    #[test]
+    fn oidc_jwks_uri_allows_insecure_localhost_only_when_enabled() {
+        let mut config = minimal_config();
+        config.auth.mode = "oidc".to_string();
+        config.auth.api_keys.clear();
+        config.auth.oidc = Some(EvidenceOidcAuthConfig {
+            issuer: "https://issuer.example".to_string(),
+            jwks_uri: "http://127.0.0.1:8080/jwks.json".to_string(),
+            userinfo_endpoint: None,
+            audiences: vec!["registry-witness".to_string()],
+            allowed_clients: vec!["registry-client".to_string()],
+            allowed_algorithms: vec!["EdDSA".to_string()],
+            allowed_typ: vec!["JWT".to_string()],
+            scope_claim: "scope".to_string(),
+            scope_separator: " ".to_string(),
+            scope_map: BTreeMap::new(),
+            principal_claim: "sub".to_string(),
+            leeway_seconds: 60,
+            allow_insecure_localhost: false,
+        });
+
+        let err = config
+            .validate()
+            .expect_err("localhost http jwks_uri needs explicit opt-in");
+        assert!(matches!(err, EvidenceConfigError::InvalidOidcConfig { .. }));
+
+        config
+            .auth
+            .oidc
+            .as_mut()
+            .expect("oidc config exists")
+            .allow_insecure_localhost = true;
+        config
+            .validate()
+            .expect("localhost http jwks_uri is allowed only with the opt-in");
     }
 
     #[test]
@@ -2587,6 +2770,17 @@ allowed_claims: ["", "   "]
     }
 
     #[test]
+    fn disabled_default_self_attestation_is_omitted_from_serialized_config() {
+        let config = minimal_config();
+        let serialized = serde_json::to_value(&config).expect("config serializes as JSON");
+
+        assert!(
+            serialized.get("self_attestation").is_none(),
+            "disabled default self_attestation must stay compact when serialized: {serialized}",
+        );
+    }
+
+    #[test]
     fn valid_self_attestation_config_passes_validation() {
         let config = valid_self_attestation_config();
         assert!(config.validate().is_ok());
@@ -2744,6 +2938,16 @@ self_attestation:
     }
 
     #[test]
+    fn self_attestation_allows_empty_wallet_origins_for_non_browser_flows() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.allowed_wallet_origins.clear();
+
+        config
+            .validate()
+            .expect("wallet origins are optional for CLI and server-side flows");
+    }
+
+    #[test]
     fn self_attestation_rejects_zero_rate_limits() {
         let mut config = valid_self_attestation_config();
         config.self_attestation.rate_limits.per_principal_per_minute = 0;
@@ -2828,6 +3032,18 @@ self_attestation:
     }
 
     #[test]
+    fn self_attestation_rejects_claim_without_purpose() {
+        let mut config = valid_self_attestation_config();
+        config.evidence.claims[0].purpose = None;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("must declare purpose"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
     fn self_attestation_rejects_unknown_profile_references() {
         let mut config = valid_self_attestation_config();
         config.self_attestation.credential_profiles = vec!["missing-profile".to_string()];
@@ -2851,6 +3067,42 @@ self_attestation:
 
         let reason = expect_self_attestation_error(&config);
         assert!(reason.contains("validity_seconds"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_rejects_profile_without_did_holder_binding() {
+        let mut config = valid_self_attestation_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .holder_binding
+            .mode = "none".to_string();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("holder_binding.mode must be did"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_rejects_profile_without_required_holder_proof() {
+        let mut config = valid_self_attestation_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .holder_binding
+            .proof_of_possession = None;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("holder_binding.proof_of_possession must be required"),
+            "unexpected: {reason}"
+        );
     }
 
     #[test]

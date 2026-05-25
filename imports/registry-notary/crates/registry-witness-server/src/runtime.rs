@@ -178,14 +178,15 @@ use cel_mapper_core::{
 };
 use registry_witness_core::{
     AccessMode, BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
-    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId, BulkMode,
-    CelBindingsConfig, ClaimDefinition, ClaimProvenance, ClaimResultView, CredentialProfileConfig,
-    DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceError,
-    EvidenceFormat, EvidencePrincipal, Hashed, RenderRequest, RuleConfig, SelfAttestationConfig,
-    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
-    StoredSelfAttestationMetadata, SubjectBinding, SubjectRequest, FORMAT_CCCEV_JSONLD,
-    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD,
-    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
+    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimProvenance,
+    ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
+    EvaluateRequest, EvidenceConfig, EvidenceError, EvidenceFormat, EvidencePrincipal, Hashed,
+    RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
+    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectBinding,
+    SubjectRequest, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
+    SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-witness-cel")]
 use serde_json::Map;
@@ -250,6 +251,7 @@ pub trait SourceReader: Send + Sync {
         Box::pin(default_read_many(self, bindings, purpose))
     }
 
+    #[allow(clippy::type_complexity)]
     fn read_many_with_capability<'a>(
         &'a self,
         capability: &'a SourceCapability,
@@ -521,6 +523,7 @@ struct ClaimEvaluationContext {
     source_capability: SourceCapability,
     subject: SubjectRequest,
     purpose: String,
+    correlation_id: Option<BoundedCorrelationId>,
     evaluation_id: String,
     now: OffsetDateTime,
     // Per-request cap on parallel source bindings. Acquired only inside
@@ -830,10 +833,12 @@ impl RegistryWitnessRuntime {
             request,
             header_purpose,
             None,
+            None,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn evaluate_with_source_capability(
         &self,
         evidence: Arc<EvidenceConfig>,
@@ -844,6 +849,7 @@ impl RegistryWitnessRuntime {
         request: EvaluateRequest,
         header_purpose: Option<&str>,
         self_attestation: Option<StoredSelfAttestationMetadata>,
+        correlation_id: Option<BoundedCorrelationId>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
         ensure_source_capability_matches_principal(principal, &source_capability)?;
         if request.claims.is_empty() {
@@ -880,6 +886,7 @@ impl RegistryWitnessRuntime {
                 binding_concurrency,
                 source_capability,
                 None, // single-subject evaluate: no cross-subject memo needed
+                correlation_id,
             )
             .await?;
         let views = request
@@ -1120,6 +1127,7 @@ impl RegistryWitnessRuntime {
     /// store inserts happen on the calling task that owns `&EvidenceStore`.
     /// Accepts the per-batch memoization table so sibling subjects can share
     /// upstream reads.
+    #[allow(clippy::too_many_arguments)]
     async fn evaluate_subject_for_batch(
         &self,
         evidence: Arc<EvidenceConfig>,
@@ -1163,6 +1171,7 @@ impl RegistryWitnessRuntime {
                 binding_concurrency,
                 source_capability,
                 Some(fetch_memo),
+                None,
             )
             .await?;
         request
@@ -1194,6 +1203,7 @@ impl RegistryWitnessRuntime {
         binding_concurrency: Arc<Semaphore>,
         source_capability: SourceCapability,
         fetch_memo: Option<FetchMemo>,
+        correlation_id: Option<BoundedCorrelationId>,
     ) -> Result<BTreeMap<String, ClaimResultInternal>, EvidenceError> {
         let levels = build_claim_levels(&evidence, &requested)?;
         let prior: Arc<Mutex<BTreeMap<String, ClaimResultInternal>>> =
@@ -1217,6 +1227,7 @@ impl RegistryWitnessRuntime {
                     source_capability: source_capability.clone(),
                     subject: subject.clone(),
                     purpose: purpose.clone(),
+                    correlation_id: correlation_id.clone(),
                     evaluation_id: evaluation_id.clone(),
                     now,
                     binding_concurrency: Arc::clone(&binding_concurrency),
@@ -1230,7 +1241,14 @@ impl RegistryWitnessRuntime {
                 // task would hold a permit and then block waiting for one inside
                 // load_sources.
                 tasks.spawn(async move {
-                    let result = evaluate_claim_task(ctx, &claim_id, prior_for_task).await;
+                    let correlation_id = ctx.correlation_id.clone();
+                    let evaluation = evaluate_claim_task(ctx, &claim_id, prior_for_task);
+                    let result = if let Some(correlation_id) = correlation_id {
+                        crate::standalone::with_request_correlation_id(correlation_id, evaluation)
+                            .await
+                    } else {
+                        evaluation.await
+                    };
                     (claim_id, result)
                 });
             }
@@ -1788,6 +1806,7 @@ async fn load_sources(
 /// 4. Waiters re-check the table after the semaphore fires; if `Ready` they
 ///    return the cached value; if the slot was removed they fall through and
 ///    attempt a fresh fetch themselves.
+#[allow(clippy::too_many_arguments)]
 async fn load_one_binding(
     source: Arc<dyn SourceReader>,
     source_capability: &SourceCapability,
@@ -2911,6 +2930,7 @@ mod tests {
                 test_request("selected"),
                 None,
                 None,
+                None,
             )
             .await
             .expect_err("dependency source read is not selected claim");
@@ -2941,6 +2961,7 @@ mod tests {
                 &self_attestation_principal(),
                 self_attestation_capability("selected"),
                 test_request("other"),
+                None,
                 None,
                 None,
             )
@@ -2975,6 +2996,7 @@ mod tests {
                     scopes: BTreeSet::new(),
                 },
                 test_request("selected"),
+                None,
                 None,
                 None,
             )

@@ -572,6 +572,7 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: idp.issuer(),
         jwks_uri: idp.jwks_uri(),
+        userinfo_endpoint: None,
         audiences: vec!["registry-witness".to_string()],
         allowed_clients: vec!["registry-client".to_string()],
         allowed_algorithms: vec!["EdDSA".to_string()],
@@ -661,6 +662,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     let evaluate = server
         .post("/claims/evaluate")
         .add_header("authorization", authorization.clone())
+        .add_header("x-request-id", "req-self-attest-1")
         .json(&json!({
             "subject": {
                 "id": "person-1",
@@ -682,6 +684,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     let render = server
         .post("/evidence/render")
         .add_header("authorization", authorization)
+        .add_header("x-request-id", "req-self-attest-1")
         .json(&json!({
             "evaluation_id": evaluation_id,
             "disclosure": "value",
@@ -694,6 +697,9 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
     assert!(!audit.contains(&token));
+    assert!(!audit.contains("person-1"));
+    assert!(!audit.contains("citizen-subject"));
+    assert!(!audit.contains("source-token"));
     let records = audit_envelopes(&audit_path)
         .into_iter()
         .map(|envelope| envelope.record)
@@ -712,6 +718,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         "{evaluate_audit}"
     );
     assert!(evaluate_audit["policy_hash"].is_string());
+    assert_eq!(evaluate_audit["correlation_id"], json!("req-self-attest-1"));
     assert!(evaluate_audit.get("principal_id").is_none());
     assert!(evaluate_audit.get("principal_id_hash").is_some());
 
@@ -725,6 +732,91 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         .expect("render audit record exists");
     assert_eq!(render_audit["access_mode"], json!("self_attestation"));
     assert!(render_audit["policy_hash"].is_string());
+    assert_eq!(render_audit["correlation_id"], json!("req-self-attest-1"));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-witness-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+
+    let response = server
+        .post("/claims/evaluate")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("x-request-id", "bad value")
+        .json(&json!({
+            "subject": {
+                "id": "person-2",
+                "id_type": "national_id"
+            },
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/vnd.registry-witness.claim-result+json"
+        }))
+        .await;
+    response.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("self_attestation.denied"));
+    assert_eq!(
+        body["type"],
+        json!("https://data.example.gov/problems/self_attestation/denied")
+    );
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    assert!(!audit.contains("person-1"));
+    assert!(!audit.contains("person-2"));
+    assert!(!audit.contains("citizen-subject"));
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    let denied = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/claims/evaluate")
+                && record["decision"] == json!("evaluate_denied")
+                && record["status"] == json!(403)
+        })
+        .expect("denial audit record exists");
+    assert_eq!(denied["access_mode"], json!("self_attestation"));
+    assert_eq!(
+        denied["denial_code"],
+        json!("self_attestation.subject_mismatch")
+    );
+    assert_eq!(
+        denied["error_code"],
+        json!("self_attestation.subject_mismatch")
+    );
+    assert_eq!(denied["token_claim_name"], json!("national_id"));
+    assert!(denied["correlation_id"].is_string());
+    assert_ne!(denied["correlation_id"], json!("bad value"));
 
     idp.stop().await;
 }

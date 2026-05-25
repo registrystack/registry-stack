@@ -87,8 +87,9 @@ impl EvidenceError {
             Self::ScopeDenied { .. } => "auth.scope_denied",
             Self::SelfAttestationDenied { .. } => "self_attestation.denied",
             Self::SelfAttestationRateLimited => "self_attestation.rate_limited",
-            Self::SelfAttestationInvalidToken => "self_attestation.invalid_token",
-            Self::SelfAttestationAssuranceDenied => "self_attestation.assurance_denied",
+            Self::SelfAttestationInvalidToken | Self::SelfAttestationAssuranceDenied => {
+                "self_attestation.denied"
+            }
         }
     }
 
@@ -96,6 +97,10 @@ impl EvidenceError {
     pub fn audit_code(&self) -> &'static str {
         match self {
             Self::SelfAttestationDenied { reason } => reason.as_str(),
+            Self::SelfAttestationInvalidToken => SelfAttestationDenialCode::InvalidToken.as_str(),
+            Self::SelfAttestationAssuranceDenied => {
+                SelfAttestationDenialCode::AssuranceDenied.as_str()
+            }
             _ => self.code(),
         }
     }
@@ -123,10 +128,18 @@ mod tests {
         );
         assert_eq!(
             EvidenceError::SelfAttestationInvalidToken.code(),
+            "self_attestation.denied"
+        );
+        assert_eq!(
+            EvidenceError::SelfAttestationInvalidToken.audit_code(),
             "self_attestation.invalid_token"
         );
         assert_eq!(
             EvidenceError::SelfAttestationAssuranceDenied.code(),
+            "self_attestation.denied"
+        );
+        assert_eq!(
+            EvidenceError::SelfAttestationAssuranceDenied.audit_code(),
             "self_attestation.assurance_denied"
         );
     }

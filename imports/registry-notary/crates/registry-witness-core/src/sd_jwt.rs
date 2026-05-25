@@ -80,6 +80,7 @@ pub fn issue(
     profile: &CredentialProfileConfig,
     issuer: &EvidenceIssuer,
     results: &[ClaimResultView],
+    subject_ref: &str,
     holder_id: Option<&str>,
     iat: OffsetDateTime,
 ) -> Result<SignedSdJwtVc, EvidenceError> {
@@ -87,11 +88,10 @@ pub fn issue(
     if profile.holder_binding.mode != "none" && holder_confirmation.is_none() {
         return Err(EvidenceError::HolderProofRequired);
     }
+    if subject_ref.trim().is_empty() {
+        return Err(EvidenceError::InvalidRequest);
+    }
     let expires_at = iat + time::Duration::seconds(profile.validity_seconds);
-    let subject_ref = holder_id
-        .or_else(|| results.first().map(|result| result.subject_ref.as_str()))
-        .unwrap_or(profile.issuer.as_str())
-        .to_string();
     let disclosures = results
         .iter()
         .map(|result| Disclosure {
@@ -110,7 +110,7 @@ pub fn issue(
         .issuer
         .issue(SdJwtIssuanceInput {
             iss: profile.issuer.clone(),
-            sub_ref: subject_ref,
+            sub_ref: subject_ref.to_string(),
             iat: iat.unix_timestamp(),
             exp: expires_at.unix_timestamp(),
             vct: profile.vct.clone(),
@@ -186,6 +186,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &[claim_result("first")],
+            "subject-ref",
             None,
             OffsetDateTime::now_utc(),
         )
@@ -210,6 +211,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &[claim_result("first")],
+            "subject-ref",
             None,
             OffsetDateTime::now_utc(),
         )
@@ -233,6 +235,7 @@ mod tests {
             &holder_required_profile(),
             &issuer,
             &[result],
+            &holder,
             Some(&holder),
             iat,
         )
@@ -271,6 +274,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &[claim_result("first")],
+            "subject-ref",
             None,
             OffsetDateTime::now_utc(),
         )
@@ -301,6 +305,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &[claim_result("first")],
+            &holder,
             Some(&holder),
             OffsetDateTime::now_utc(),
         )
@@ -325,6 +330,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &[result],
+            &holder,
             Some(&holder),
             OffsetDateTime::now_utc(),
         )
@@ -349,6 +355,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &[result],
+            "registry-subject-ref",
             None,
             OffsetDateTime::now_utc(),
         )
@@ -366,14 +373,22 @@ mod tests {
         let iat = OffsetDateTime::from_unix_timestamp(1_700_000_000)
             .expect("test fixture timestamp is valid");
 
-        let missing_holder = issue(&profile, &issuer, &[claim_result("first")], None, iat)
-            .expect_err("holder-bound profile requires holder proof material");
+        let missing_holder = issue(
+            &profile,
+            &issuer,
+            &[claim_result("first")],
+            "subject-ref",
+            None,
+            iat,
+        )
+        .expect_err("holder-bound profile requires holder proof material");
         assert!(matches!(missing_holder, EvidenceError::HolderProofRequired));
 
         let unsupported_holder = issue(
             &profile,
             &issuer,
             &[claim_result("first")],
+            "did:key:z6Mkunsupported",
             Some("did:key:z6Mkunsupported"),
             iat,
         )
@@ -398,12 +413,26 @@ mod tests {
         let pinned_iat =
             OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("valid unix timestamp");
 
-        let signed_1 =
-            issue(&test_profile(), &issuer, &results, None, pinned_iat).expect("first issue");
+        let signed_1 = issue(
+            &test_profile(),
+            &issuer,
+            &results,
+            "subject-ref",
+            None,
+            pinned_iat,
+        )
+        .expect("first issue");
         // Force a measurable wall-clock gap between calls.
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let signed_2 =
-            issue(&test_profile(), &issuer, &results, None, pinned_iat).expect("second issue");
+        let signed_2 = issue(
+            &test_profile(),
+            &issuer,
+            &results,
+            "subject-ref",
+            None,
+            pinned_iat,
+        )
+        .expect("second issue");
 
         let iat_1 = payload(&signed_1)["iat"]
             .as_i64()
@@ -453,6 +482,7 @@ mod tests {
             &test_profile(),
             &issuer,
             &results,
+            "subject-ref",
             None,
             OffsetDateTime::now_utc(),
         )

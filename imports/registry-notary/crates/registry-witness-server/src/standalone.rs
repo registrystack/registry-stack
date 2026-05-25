@@ -29,15 +29,17 @@ use registry_platform_httputil::{
     read_bounded, url as httputil_url, FetchUrlPolicy, OutboundClientBuilder,
 };
 use registry_platform_oidc::{
-    Audience, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig,
-    VerifiedToken,
+    fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use registry_witness_core::sd_jwt::EvidenceIssuer;
 use registry_witness_core::{
-    AccessMode, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig, EvidenceAuditEvent,
-    EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, RateLimitBucket,
-    SelfAttestationDenialCode, SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind,
-    StandaloneRegistryWitnessConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
+    AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
+    EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal,
+    Hashed, PrincipalIdentifier, RateLimitBucket, SelfAttestationAssuranceClaimSource,
+    SelfAttestationClaimSource, SelfAttestationDenialCode, SourceBindingConfig,
+    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryWitnessConfig, SubjectRequest,
+    VerifiedClaimName, VerifiedClaimValue,
 };
 use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
@@ -54,7 +56,23 @@ const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
-const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str = "authorization,content-type";
+const OIDC_ID_TOKEN_HEADER: &str = "x-registry-witness-oidc-id-token";
+const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str =
+    "authorization,content-type,x-registry-witness-oidc-id-token";
+
+tokio::task_local! {
+    static REQUEST_CORRELATION_ID: BoundedCorrelationId;
+}
+
+pub(crate) async fn with_request_correlation_id<F>(
+    correlation_id: BoundedCorrelationId,
+    future: F,
+) -> F::Output
+where
+    F: Future,
+{
+    REQUEST_CORRELATION_ID.scope(correlation_id, future).await
+}
 
 pub fn standalone_router(
     config: StandaloneRegistryWitnessConfig,
@@ -589,6 +607,7 @@ struct AuthAuditState {
 struct RequestCredentials {
     api_key: Option<String>,
     bearer_token: Option<String>,
+    id_token: Option<String>,
 }
 
 #[derive(Debug)]
@@ -599,8 +618,13 @@ enum Authenticator {
     },
     Oidc {
         verifier: Arc<TokenVerifier>,
+        client: reqwest::Client,
+        fetch_url_policy: FetchUrlPolicy,
         principal_claim: String,
         subject_binding_claim: Option<String>,
+        subject_binding_claim_source: SelfAttestationClaimSource,
+        assurance_claim_source: SelfAttestationAssuranceClaimSource,
+        userinfo_endpoint: Option<String>,
     },
 }
 
@@ -670,9 +694,9 @@ impl Authenticator {
                 };
                 let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     oidc.jwks_uri.clone(),
-                    client,
+                    client.clone(),
                     JwksFetcherConfig::defaults(),
-                    fetch_url_policy,
+                    fetch_url_policy.clone(),
                 ));
                 let verifier = TokenVerifier::new(
                     TokenVerifierConfig {
@@ -696,12 +720,23 @@ impl Authenticator {
                 );
                 Ok(Self::Oidc {
                     verifier: Arc::new(verifier),
+                    client,
+                    fetch_url_policy,
                     principal_claim: oidc.principal_claim.clone(),
                     subject_binding_claim: config
                         .self_attestation
                         .enabled
                         .then(|| config.self_attestation.subject_binding.token_claim.clone())
                         .filter(|claim| !claim.is_empty()),
+                    subject_binding_claim_source: config
+                        .self_attestation
+                        .subject_binding
+                        .claim_source,
+                    assurance_claim_source: config
+                        .self_attestation
+                        .token_policy
+                        .assurance_claim_source,
+                    userinfo_endpoint: oidc.userinfo_endpoint.clone(),
                 })
             }
             mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
@@ -721,14 +756,24 @@ impl Authenticator {
             } => authenticate_static(&credentials, api_keys, bearer_tokens),
             Self::Oidc {
                 verifier,
+                client,
+                fetch_url_policy,
                 principal_claim,
                 subject_binding_claim,
+                subject_binding_claim_source,
+                assurance_claim_source,
+                userinfo_endpoint,
             } => {
                 authenticate_oidc(
                     &credentials,
                     verifier,
+                    client,
+                    fetch_url_policy,
                     principal_claim,
                     subject_binding_claim.as_deref(),
+                    *subject_binding_claim_source,
+                    *assurance_claim_source,
+                    userinfo_endpoint.as_deref(),
                 )
                 .await
             }
@@ -793,16 +838,7 @@ impl AuditPipeline {
             .chain
             .get_or_try_init(|| async { ChainState::bootstrap(self.sink.as_ref()).await })
             .await?;
-        let mut record = serde_json::to_value(event).map_err(AuditError::Json)?;
-        if let Some(object) = record.as_object_mut() {
-            if let Some(principal_id) = event.principal_id.as_deref() {
-                object.insert(
-                    "principal_id_hash".to_string(),
-                    json!(self.hasher.hash(principal_id)),
-                );
-            }
-            object.remove("principal_id");
-        }
+        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
         chain.append(self.sink.as_ref(), record).await?;
         Ok(())
     }
@@ -815,6 +851,7 @@ async fn auth_audit_middleware(
 ) -> Response {
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    let correlation_id = correlation_id_from_headers(request.headers());
     if is_public_probe_path(&path) {
         return next.run(request).await;
     }
@@ -831,6 +868,7 @@ async fn auth_audit_middleware(
             row_count: None,
             access_mode: Some(AccessMode::Unknown),
             denial_code: Some(SelfAttestationDenialCode::RateLimited),
+            token_claim_name: None,
             credential_profile: None,
             holder_binding_mode: None,
             rate_limit_bucket: rate_error
@@ -838,7 +876,14 @@ async fn auth_audit_middleware(
                 .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
             policy_hash: None,
         });
-        let audit_event = build_audit_event(None, &method, &path, &response);
+        let audit_event = build_audit_event(
+            None,
+            &state.audit.hasher,
+            &method,
+            &path,
+            correlation_id.clone(),
+            &response,
+        );
         return match state.audit.emit(&audit_event).await {
             Ok(()) => response,
             Err(error) => audit_error_response(error),
@@ -860,6 +905,7 @@ async fn auth_audit_middleware(
                     row_count: None,
                     access_mode: Some(AccessMode::Unknown),
                     denial_code: Some(SelfAttestationDenialCode::RateLimited),
+                    token_claim_name: None,
                     credential_profile: None,
                     holder_binding_mode: None,
                     rate_limit_bucket: rate_error
@@ -867,14 +913,28 @@ async fn auth_audit_middleware(
                         .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
                     policy_hash: None,
                 });
-                let audit_event = build_audit_event(None, &method, &path, &response);
+                let audit_event = build_audit_event(
+                    None,
+                    &state.audit.hasher,
+                    &method,
+                    &path,
+                    correlation_id.clone(),
+                    &response,
+                );
                 return match state.audit.emit(&audit_event).await {
                     Ok(()) => response,
                     Err(error) => audit_error_response(error),
                 };
             }
             let response = crate::api::evidence_error_response(error);
-            let audit_event = build_audit_event(None, &method, &path, &response);
+            let audit_event = build_audit_event(
+                None,
+                &state.audit.hasher,
+                &method,
+                &path,
+                correlation_id.clone(),
+                &response,
+            );
             return match state.audit.emit(&audit_event).await {
                 Ok(()) => response,
                 Err(error) => audit_error_response(error),
@@ -882,8 +942,16 @@ async fn auth_audit_middleware(
         }
     };
     request.extensions_mut().insert(principal.clone());
-    let response = next.run(request).await;
-    let audit_event = build_audit_event(Some(&principal), &method, &path, &response);
+    request.extensions_mut().insert(correlation_id.clone());
+    let response = with_request_correlation_id(correlation_id.clone(), next.run(request)).await;
+    let audit_event = build_audit_event(
+        Some(&principal),
+        &state.audit.hasher,
+        &method,
+        &path,
+        correlation_id,
+        &response,
+    );
     match state.audit.emit(&audit_event).await {
         Ok(()) => response,
         Err(error) => audit_error_response(error),
@@ -940,8 +1008,10 @@ fn is_public_probe_path(path: &str) -> bool {
 
 fn build_audit_event(
     principal: Option<&EvidencePrincipal>,
+    hasher: &AuditKeyHasher,
     method: &str,
     path: &str,
+    correlation_id: BoundedCorrelationId,
     response: &Response,
 ) -> EvidenceAuditEvent {
     let audit = response.extensions().get::<EvidenceAuditContext>();
@@ -953,6 +1023,7 @@ fn build_audit_event(
         .and_then(|context| context.access_mode)
         .or_else(|| principal.map(EvidencePrincipal::access_mode));
     let denial_code = audit.and_then(|context| context.denial_code);
+    let token_claim_name = audit.and_then(|context| context.token_claim_name.clone());
     let credential_profile = audit.and_then(|context| context.credential_profile.clone());
     let holder_binding_mode = audit.and_then(|context| context.holder_binding_mode.clone());
     let rate_limit_bucket = audit.and_then(|context| context.rate_limit_bucket.clone());
@@ -973,7 +1044,9 @@ fn build_audit_event(
     EvidenceAuditEvent {
         event_id: Ulid::new().to_string(),
         occurred_at,
-        principal_id: principal.map(|principal| principal.principal_id.clone()),
+        principal_id_hash: principal.map(|principal| {
+            Hashed::<PrincipalIdentifier>::from_hash(hasher.hash(&principal.principal_id))
+        }),
         decision,
         method: method.to_string(),
         path: path.to_string(),
@@ -984,13 +1057,36 @@ fn build_audit_event(
         error_code,
         access_mode,
         denial_code,
-        correlation_id: None,
+        token_claim_name,
+        correlation_id: Some(correlation_id),
         credential_profile,
         holder_binding_mode,
         rate_limit_bucket,
         policy_version: None,
         policy_hash,
     }
+}
+
+fn correlation_id_from_headers(headers: &HeaderMap) -> BoundedCorrelationId {
+    headers
+        .get("x-request-id")
+        .or_else(|| headers.get("x-correlation-id"))
+        .and_then(header_str)
+        .and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty()
+                || !trimmed
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            {
+                return None;
+            }
+            BoundedCorrelationId::new(trimmed).ok()
+        })
+        .unwrap_or_else(|| {
+            BoundedCorrelationId::new(Ulid::new().to_string())
+                .expect("generated correlation id is bounded")
+        })
 }
 
 fn resolve_credentials(
@@ -1030,6 +1126,11 @@ fn request_credentials(request: &Request) -> RequestCredentials {
             .and_then(header_str)
             .and_then(|raw| parse_bearer_token(raw).ok())
             .map(ToOwned::to_owned),
+        id_token: request
+            .headers()
+            .get(OIDC_ID_TOKEN_HEADER)
+            .and_then(header_str)
+            .map(ToOwned::to_owned),
     }
 }
 
@@ -1051,34 +1152,87 @@ fn authenticate_static(
     Err(EvidenceError::MissingCredential)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn authenticate_oidc(
     credentials: &RequestCredentials,
     verifier: &TokenVerifier,
+    client: &reqwest::Client,
+    fetch_url_policy: &FetchUrlPolicy,
     principal_claim: &str,
     subject_binding_claim: Option<&str>,
+    subject_binding_claim_source: SelfAttestationClaimSource,
+    assurance_claim_source: SelfAttestationAssuranceClaimSource,
+    userinfo_endpoint: Option<&str>,
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let Some(token) = credentials.bearer_token.as_deref() else {
         return Err(EvidenceError::MissingCredential);
     };
     let verified = verifier.verify(token).await.map_err(oidc_auth_error)?;
+    let verified_userinfo = match (subject_binding_claim, subject_binding_claim_source) {
+        (Some(_), SelfAttestationClaimSource::Userinfo) => {
+            let endpoint = userinfo_endpoint.ok_or(EvidenceError::MissingCredential)?;
+            let userinfo_jwt = fetch_userinfo_jwt_with_policy(
+                endpoint,
+                token,
+                client,
+                fetch_url_policy,
+                Duration::from_secs(5),
+                64 * 1024,
+            )
+            .await
+            .map_err(oidc_auth_error)?;
+            Some(
+                verifier
+                    .verify_userinfo_jwt(&userinfo_jwt, &verified)
+                    .await
+                    .map_err(oidc_auth_error)?,
+            )
+        }
+        _ => None,
+    };
+    let verified_id_token = match assurance_claim_source {
+        SelfAttestationAssuranceClaimSource::AccessToken => None,
+        SelfAttestationAssuranceClaimSource::IdToken => {
+            let Some(id_token) = credentials.id_token.as_deref() else {
+                return Err(EvidenceError::MissingCredential);
+            };
+            let id_token = verifier
+                .verify_related_token(id_token)
+                .await
+                .map_err(oidc_auth_error)?;
+            if id_token.claims.sub != verified.claims.sub {
+                return Err(EvidenceError::MissingCredential);
+            }
+            Some(id_token)
+        }
+    };
     let token_type = jsonwebtoken::decode_header(token)
         .ok()
         .and_then(|header| header.typ)
         .and_then(|typ| verified_claim_value(&typ));
     principal_from_oidc(
         &verified,
+        verified_userinfo.as_ref(),
+        verified_id_token.as_ref(),
         token_type,
         principal_claim,
         subject_binding_claim,
+        subject_binding_claim_source,
+        assurance_claim_source,
     )
     .ok_or(EvidenceError::MissingCredential)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn principal_from_oidc(
     verified: &VerifiedToken,
+    userinfo: Option<&registry_platform_oidc::Claims>,
+    id_token: Option<&VerifiedToken>,
     token_type: Option<VerifiedClaimValue>,
     principal_claim: &str,
     subject_binding_claim: Option<&str>,
+    subject_binding_claim_source: SelfAttestationClaimSource,
+    assurance_claim_source: SelfAttestationAssuranceClaimSource,
 ) -> Option<EvidencePrincipal> {
     let principal_id = if principal_claim == "sub" {
         verified.claims.sub.clone()
@@ -1097,31 +1251,49 @@ fn principal_from_oidc(
         access_mode: AccessMode::MachineClient,
         verified_claims: bounded_verified_claims_from_oidc(
             verified,
+            userinfo,
+            id_token,
             token_type,
             subject_binding_claim,
+            subject_binding_claim_source,
+            assurance_claim_source,
         ),
     })
 }
 
 fn bounded_verified_claims_from_oidc(
     verified: &VerifiedToken,
+    userinfo: Option<&registry_platform_oidc::Claims>,
+    id_token: Option<&VerifiedToken>,
     token_type: Option<VerifiedClaimValue>,
     subject_binding_claim: Option<&str>,
+    subject_binding_claim_source: SelfAttestationClaimSource,
+    assurance_claim_source: SelfAttestationAssuranceClaimSource,
 ) -> Option<BoundedVerifiedClaims> {
     let issuer = verified
         .claims
         .iss
         .as_deref()
         .and_then(verified_claim_value)?;
-    let (subject_binding_claim, subject_binding_value) =
-        if let Some(subject_binding_claim) = subject_binding_claim {
-            let claim_name = VerifiedClaimName::new(subject_binding_claim).ok()?;
-            let claim_value =
-                claim_string(verified, claim_name.as_str()).and_then(verified_claim_value)?;
-            (Some(claim_name), Some(claim_value))
-        } else {
-            (None, None)
-        };
+    let (subject_binding_claim, subject_binding_value) = if let Some(subject_binding_claim) =
+        subject_binding_claim
+    {
+        let claim_name = VerifiedClaimName::new(subject_binding_claim).ok()?;
+        let claim_value = match subject_binding_claim_source {
+            SelfAttestationClaimSource::AccessToken => claim_string(verified, claim_name.as_str()),
+            SelfAttestationClaimSource::Userinfo => {
+                userinfo.and_then(|claims| claim_string_from_claims(claims, claim_name.as_str()))
+            }
+        }
+        .and_then(verified_claim_value)?;
+        (Some(claim_name), Some(claim_value))
+    } else {
+        (None, None)
+    };
+    let assurance_claims = match assurance_claim_source {
+        SelfAttestationAssuranceClaimSource::AccessToken => &verified.claims,
+        SelfAttestationAssuranceClaimSource::IdToken => &id_token?.claims,
+    };
     Some(BoundedVerifiedClaims {
         issuer,
         audiences: bounded_audience(verified.claims.aud.as_ref()),
@@ -1135,13 +1307,12 @@ fn bounded_verified_claims_from_oidc(
             .and_then(verified_claim_value),
         subject_binding_claim,
         subject_binding_value,
-        acr: verified
-            .claims
+        acr: assurance_claims
             .extra
             .get("acr")
             .and_then(Value::as_str)
             .and_then(verified_claim_value),
-        auth_time: numeric_claim(&verified.claims.extra, "auth_time"),
+        auth_time: numeric_claim(&assurance_claims.extra, "auth_time"),
         exp: verified.claims.exp,
         iat: verified.claims.iat,
         nbf: verified.claims.nbf,
@@ -1152,7 +1323,17 @@ fn claim_string<'a>(verified: &'a VerifiedToken, claim: &str) -> Option<&'a str>
     if claim == "sub" {
         return verified.claims.sub.as_deref();
     }
-    verified.claims.extra.get(claim).and_then(Value::as_str)
+    claim_string_from_claims(&verified.claims, claim)
+}
+
+fn claim_string_from_claims<'a>(
+    claims: &'a registry_platform_oidc::Claims,
+    claim: &str,
+) -> Option<&'a str> {
+    if claim == "sub" {
+        return claims.sub.as_deref();
+    }
+    claims.extra.get(claim).and_then(Value::as_str)
 }
 
 fn verified_claim_value(value: &str) -> Option<VerifiedClaimValue> {
@@ -1236,6 +1417,7 @@ fn oidc_internal_error_code(error: &OidcError) -> &'static str {
 fn parse_oidc_algorithm(algorithm: &str) -> Result<Algorithm, StandaloneServerError> {
     match algorithm {
         "EdDSA" => Ok(Algorithm::EdDSA),
+        "RS256" => Ok(Algorithm::RS256),
         other => Err(StandaloneServerError::InvalidOidcConfig(format!(
             "unsupported OIDC signing algorithm '{other}'"
         ))),
@@ -1307,6 +1489,14 @@ fn audit_error_response(error: AuditError) -> Response {
     response
 }
 
+fn add_correlation_header(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let Ok(correlation_id) = REQUEST_CORRELATION_ID.try_with(|id| id.as_str().to_string()) {
+        builder.header("x-request-id", correlation_id)
+    } else {
+        builder
+    }
+}
+
 async fn read_remote_registry_data_api_one(
     sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
@@ -1325,14 +1515,16 @@ async fn read_remote_registry_data_api_one(
     ];
     let request_url = url.clone();
     let body = send_request_with_retry(sources, connection, "rda", &url, move || {
-        sources
-            .client
-            .get(request_url.clone())
-            .timeout(sources.request_timeout)
-            .bearer_auth(&connection.bearer_token)
-            .header("accept", "application/json")
-            .header("data-purpose", purpose)
-            .query(&query_pairs)
+        add_correlation_header(
+            sources
+                .client
+                .get(request_url.clone())
+                .timeout(sources.request_timeout)
+                .bearer_auth(&connection.bearer_token)
+                .header("accept", "application/json")
+                .header("data-purpose", purpose),
+        )
+        .query(&query_pairs)
     })
     .await?;
     let rows = body
@@ -1361,15 +1553,17 @@ async fn read_external_dci_http_one(
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
     let request_url = url.clone();
     let body = send_request_with_retry(sources, connection, "dci", &url, move || {
-        sources
-            .client
-            .post(request_url.clone())
-            .timeout(sources.request_timeout)
-            .bearer_auth(&connection.bearer_token)
-            .header("accept", "application/json")
-            .header("content-type", "application/json")
-            .header("data-purpose", purpose)
-            .json(&request_body)
+        add_correlation_header(
+            sources
+                .client
+                .post(request_url.clone())
+                .timeout(sources.request_timeout)
+                .bearer_auth(&connection.bearer_token)
+                .header("accept", "application/json")
+                .header("content-type", "application/json")
+                .header("data-purpose", purpose),
+        )
+        .json(&request_body)
     })
     .await?;
     let rows = get_json_path(&body, &connection.dci.records_path)
@@ -1446,14 +1640,16 @@ async fn read_remote_registry_data_api_many(
     let timeout_budget = bulk_timeout(connection, n);
     let request_url = url.clone();
     let body_result = send_request_with_retry(sources, connection, "rda_bulk", &url, move || {
-        sources
-            .client
-            .get(request_url.clone())
-            .timeout(timeout_budget)
-            .bearer_auth(&connection.bearer_token)
-            .header("accept", "application/json")
-            .header("data-purpose", purpose)
-            .query(&query_pairs)
+        add_correlation_header(
+            sources
+                .client
+                .get(request_url.clone())
+                .timeout(timeout_budget)
+                .bearer_auth(&connection.bearer_token)
+                .header("accept", "application/json")
+                .header("data-purpose", purpose),
+        )
+        .query(&query_pairs)
     })
     .await;
     let body = match body_result {
@@ -1616,15 +1812,17 @@ async fn read_external_dci_http_many(
     let timeout_budget = bulk_timeout(connection, n_valid);
     let request_url = url.clone();
     let body_result = send_request_with_retry(sources, connection, "dci_bulk", &url, move || {
-        sources
-            .client
-            .post(request_url.clone())
-            .timeout(timeout_budget)
-            .bearer_auth(&connection.bearer_token)
-            .header("accept", "application/json")
-            .header("content-type", "application/json")
-            .header("data-purpose", purpose)
-            .json(&request_body)
+        add_correlation_header(
+            sources
+                .client
+                .post(request_url.clone())
+                .timeout(timeout_budget)
+                .bearer_auth(&connection.bearer_token)
+                .header("accept", "application/json")
+                .header("content-type", "application/json")
+                .header("data-purpose", purpose),
+        )
+        .json(&request_body)
     })
     .await;
     let body = match body_result {
@@ -2106,7 +2304,7 @@ mod tests {
         EvidenceAuditEvent {
             event_id: "01HX0000000000000000000000".to_string(),
             occurred_at: "2026-05-22T00:00:00Z".to_string(),
-            principal_id: Some("caseworker".to_string()),
+            principal_id_hash: Some(Hashed::from_hash("sha256:caseworker")),
             decision: "allowed".to_string(),
             method: "GET".to_string(),
             path: "/claims".to_string(),
@@ -2117,6 +2315,7 @@ mod tests {
             error_code: None,
             access_mode: Some(AccessMode::MachineClient),
             denial_code: None,
+            token_claim_name: None,
             correlation_id: None,
             credential_profile: None,
             holder_binding_mode: None,
@@ -2158,17 +2357,35 @@ mod tests {
             row_count: None,
             access_mode: Some(AccessMode::SelfAttestation),
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
+            token_claim_name: Some(
+                registry_witness_core::ConfigMetadata::new("national_id").expect("bounded"),
+            ),
             credential_profile: None,
             holder_binding_mode: None,
             rate_limit_bucket: None,
             policy_hash: None,
         });
 
-        let event = build_audit_event(Some(&principal), "POST", "/claims/evaluate", &response);
+        let event = build_audit_event(
+            Some(&principal),
+            &AuditKeyHasher::unkeyed_dev_only(),
+            "POST",
+            "/claims/evaluate",
+            BoundedCorrelationId::new("req-123").expect("test correlation id is bounded"),
+            &response,
+        );
 
         assert_eq!(event.decision, "evaluate_denied");
         assert_eq!(event.claim_hash.as_deref(), Some("sha256:claim-hash"));
         assert_eq!(event.access_mode, Some(AccessMode::SelfAttestation));
+        assert!(event.principal_id_hash.is_some());
+        assert_eq!(
+            event
+                .correlation_id
+                .as_ref()
+                .map(BoundedCorrelationId::as_str),
+            Some("req-123")
+        );
         assert_eq!(
             event.denial_code,
             Some(SelfAttestationDenialCode::SubjectMismatch)
@@ -2610,6 +2827,7 @@ sources:
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
             bearer_token: None,
+            id_token: None,
         };
 
         let authenticated =
@@ -2653,9 +2871,13 @@ sources:
 
         let authenticated = principal_from_oidc(
             &verified,
+            None,
+            None,
             verified_claim_value("JWT"),
             subject_binding_claim,
             Some(subject_binding_claim),
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
         )
         .expect("OIDC principal is derived");
         let verified_claims = authenticated
@@ -2730,6 +2952,84 @@ sources:
     }
 
     #[test]
+    fn oidc_principal_can_bind_userinfo_claims_and_id_token_assurance() {
+        let mut access_extra = Map::new();
+        access_extra.insert("scope".to_string(), json!("openid self_attestation"));
+        let access_token = VerifiedToken {
+            claims: registry_platform_oidc::Claims {
+                sub: Some("pairwise-subject".to_string()),
+                iss: Some("https://issuer.example.test".to_string()),
+                aud: Some(Audience::One("citizen-client".to_string())),
+                exp: Some(1_700_003_600),
+                iat: Some(1_700_000_000),
+                nbf: None,
+                azp: Some("citizen-client".to_string()),
+                client_id: Some("citizen-client".to_string()),
+                extra: access_extra,
+            },
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: vec!["openid".to_string(), "self_attestation".to_string()],
+        };
+        let mut userinfo_extra = Map::new();
+        userinfo_extra.insert("individual_id".to_string(), json!("NID-1001"));
+        let userinfo = registry_platform_oidc::Claims {
+            sub: Some("pairwise-subject".to_string()),
+            iss: Some("https://issuer.example.test".to_string()),
+            aud: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            azp: None,
+            client_id: None,
+            extra: userinfo_extra,
+        };
+        let mut id_token_extra = Map::new();
+        id_token_extra.insert("acr".to_string(), json!("mosip:idp:acr:generated-code"));
+        id_token_extra.insert("auth_time".to_string(), json!(1_700_000_010_i64));
+        let id_token = VerifiedToken {
+            claims: registry_platform_oidc::Claims {
+                sub: Some("pairwise-subject".to_string()),
+                iss: Some("https://issuer.example.test".to_string()),
+                aud: Some(Audience::One("citizen-client".to_string())),
+                exp: Some(1_700_003_600),
+                iat: Some(1_700_000_010),
+                nbf: None,
+                azp: None,
+                client_id: None,
+                extra: id_token_extra,
+            },
+            matched_client: None,
+            scopes: Vec::new(),
+        };
+
+        let authenticated = principal_from_oidc(
+            &access_token,
+            Some(&userinfo),
+            Some(&id_token),
+            verified_claim_value("JWT"),
+            "sub",
+            Some("individual_id"),
+            SelfAttestationClaimSource::Userinfo,
+            SelfAttestationAssuranceClaimSource::IdToken,
+        )
+        .expect("OIDC principal is derived");
+        let verified_claims = authenticated
+            .verified_claims
+            .expect("verified claims are transported");
+
+        assert_eq!(authenticated.principal_id, "pairwise-subject");
+        assert_eq!(
+            verified_claims.subject_binding_value("individual_id"),
+            Some("NID-1001")
+        );
+        assert_eq!(
+            verified_claims.acr.as_ref().map(VerifiedClaimValue::as_str),
+            Some("mosip:idp:acr:generated-code")
+        );
+        assert_eq!(verified_claims.auth_time, Some(1_700_000_010));
+    }
+
+    #[test]
     fn oidc_verified_claims_fail_closed_without_string_subject_binding_claim() {
         let subject_binding_claim = "https://id.example.gov/claims/national_id";
         let verified = VerifiedToken {
@@ -2750,8 +3050,12 @@ sources:
 
         assert!(bounded_verified_claims_from_oidc(
             &verified,
+            None,
+            None,
             verified_claim_value("JWT"),
-            Some(subject_binding_claim)
+            Some(subject_binding_claim),
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
         )
         .is_none());
 
@@ -2763,8 +3067,12 @@ sources:
 
         assert!(bounded_verified_claims_from_oidc(
             &verified,
+            None,
+            None,
             verified_claim_value("JWT"),
-            Some(subject_binding_claim)
+            Some(subject_binding_claim),
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
         )
         .is_none());
     }

@@ -1187,12 +1187,17 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
         .min()
         .expect("at least one parseable issued_at");
 
-    let signed_1 =
-        sd_jwt_issue(&profile, &issuer, &results, None, iat_anchor).expect("first sd-jwt issuance");
+    let subject_ref = results
+        .first()
+        .expect("at least one result")
+        .subject_ref
+        .as_str();
+    let signed_1 = sd_jwt_issue(&profile, &issuer, &results, subject_ref, None, iat_anchor)
+        .expect("first sd-jwt issuance");
     // Sleep so wall-clock advances between calls; without the fix this gap
     // surfaces as a drift in the JWT `iat`.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let signed_2 = sd_jwt_issue(&profile, &issuer, &results, None, iat_anchor)
+    let signed_2 = sd_jwt_issue(&profile, &issuer, &results, subject_ref, None, iat_anchor)
         .expect("second sd-jwt issuance");
 
     let iat_1 = jwt_payload_iat(&signed_1.compact);

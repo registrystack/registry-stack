@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use registry_witness_core::model::{ClaimProvenance, ClaimResultView, EvidenceAuditEvent};
+use registry_witness_core::model::{
+    ClaimProvenance, ClaimResultView, EvidenceAuditEvent, Hashed, PrincipalIdentifier,
+};
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
@@ -27,7 +29,9 @@ fn build_audit_event() -> EvidenceAuditEvent {
     EvidenceAuditEvent {
         event_id: "01HWQZPJ3VXKM8N2BF5CSRTE4D".to_string(),
         occurred_at: "2026-05-24T12:00:00Z".to_string(),
-        principal_id: Some("client-bench-001".to_string()),
+        principal_id_hash: Some(Hashed::<PrincipalIdentifier>::from_hash(
+            "hmac-sha256:client-bench-001",
+        )),
         decision: "allow".to_string(),
         method: "POST".to_string(),
         path: "/claims/evaluate".to_string(),
@@ -40,6 +44,7 @@ fn build_audit_event() -> EvidenceAuditEvent {
         error_code: None,
         access_mode: None,
         denial_code: None,
+        token_claim_name: None,
         correlation_id: None,
         credential_profile: None,
         holder_binding_mode: None,
