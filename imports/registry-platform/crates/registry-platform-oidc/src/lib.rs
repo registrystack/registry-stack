@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 const DEFAULT_DOC_BYTES: u64 = 1024 * 1024;
 const DEFAULT_MAX_KID_BYTES: usize = 1024;
 const DEFAULT_MAX_NEGATIVE_CACHE_ENTRIES: usize = 1024;
+const MIN_RSA_MODULUS_BITS: usize = 2048;
 
 #[derive(Debug, Clone)]
 pub struct OidcDiscoveryConfig {
@@ -29,6 +30,8 @@ pub struct OidcDiscoveryConfig {
 pub struct DiscoveryDocument {
     pub issuer: String,
     pub jwks_uri: String,
+    #[serde(default)]
+    pub userinfo_endpoint: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -53,6 +56,7 @@ pub async fn fetch_discovery_with_policy(
         return Ok(DiscoveryDocument {
             issuer: cfg.issuer.clone(),
             jwks_uri: jwks_uri.clone(),
+            userinfo_endpoint: None,
             extra: Map::new(),
         });
     }
@@ -240,6 +244,7 @@ impl JwksFetcher {
             .keys
             .get(kid)
             .map_or(Ok(JwksCacheLookup::FreshMiss), |jwk| {
+                validate_jwk(jwk)?;
                 DecodingKey::from_jwk(jwk)
                     .map(JwksCacheLookup::Hit)
                     .map_err(|_| OidcError::InvalidJwk)
@@ -302,6 +307,27 @@ impl JwksFetcher {
         }
         Ok(())
     }
+}
+
+fn validate_jwk(jwk: &Jwk) -> Result<(), OidcError> {
+    if let jsonwebtoken::jwk::AlgorithmParameters::RSA(parameters) = &jwk.algorithm {
+        let modulus = URL_SAFE_NO_PAD
+            .decode(parameters.n.as_bytes())
+            .map_err(|_| OidcError::InvalidJwk)?;
+        let first_non_zero = modulus
+            .iter()
+            .position(|byte| *byte != 0)
+            .unwrap_or(modulus.len());
+        let significant = &modulus[first_non_zero..];
+        let bit_len = significant
+            .first()
+            .map(|first| (significant.len() - 1) * 8 + (8 - first.leading_zeros() as usize))
+            .unwrap_or(0);
+        if bit_len < MIN_RSA_MODULUS_BITS {
+            return Err(OidcError::InvalidJwk);
+        }
+    }
+    Ok(())
 }
 
 fn evict_oldest_negative_entry(negative: &mut HashMap<String, Instant>) {
@@ -389,6 +415,18 @@ impl TokenVerifier {
     }
 
     pub async fn verify(&self, token: &str) -> Result<VerifiedToken, OidcError> {
+        self.verify_access_token(token, true).await
+    }
+
+    pub async fn verify_related_token(&self, token: &str) -> Result<VerifiedToken, OidcError> {
+        self.verify_id_token(token).await
+    }
+
+    async fn verify_access_token(
+        &self,
+        token: &str,
+        enforce_client: bool,
+    ) -> Result<VerifiedToken, OidcError> {
         let header = decode_header(token).map_err(|_| OidcError::MalformedToken)?;
         if !self.config.allowed_algorithms.contains(&header.alg) {
             return Err(OidcError::AlgorithmNotAllowed);
@@ -416,13 +454,132 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
-        let matched_client = self.match_client(&data.claims)?;
+        let matched_client = if enforce_client {
+            self.match_client(&data.claims)?
+        } else {
+            self.match_client(&data.claims).ok().flatten()
+        };
         let scopes = self.scopes(&data.claims);
         Ok(VerifiedToken {
             claims: data.claims,
             matched_client,
             scopes,
         })
+    }
+
+    async fn verify_id_token(&self, token: &str) -> Result<VerifiedToken, OidcError> {
+        let header = decode_header(token).map_err(|_| OidcError::MalformedToken)?;
+        if !self.config.allowed_algorithms.contains(&header.alg) {
+            return Err(OidcError::AlgorithmNotAllowed);
+        }
+        if let Some(typ) = header.typ.as_deref() {
+            let typ = typ.to_ascii_lowercase();
+            if typ != "jwt" && typ != "id_token" {
+                return Err(OidcError::TokenTypeNotAllowed);
+            }
+        }
+        let kid = header.kid.ok_or(OidcError::MissingKid)?;
+        let key = self.fetcher.key_for_kid(&kid).await?;
+        let mut validation = Validation::new(header.alg);
+        validation.algorithms = vec![header.alg];
+        validation.set_issuer(&[self.config.issuer.as_str()]);
+        let audiences = self.id_token_audiences();
+        validation.set_audience(&audiences);
+        validation.leeway = self.config.leeway.as_secs();
+        validation.validate_nbf = true;
+        validation.required_spec_claims = ["iss", "aud", "exp"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let data = decode::<Claims>(token, &key, &validation)
+            .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        let matched_client = self.match_client(&data.claims).ok().flatten();
+        let scopes = self.scopes(&data.claims);
+        Ok(VerifiedToken {
+            claims: data.claims,
+            matched_client,
+            scopes,
+        })
+    }
+
+    pub async fn verify_userinfo_jwt(
+        &self,
+        userinfo_jwt: &str,
+        access_token: &VerifiedToken,
+    ) -> Result<Claims, OidcError> {
+        let issuers = [self.config.issuer.as_str()];
+        self.verify_userinfo_jwt_with_claims_policy(
+            userinfo_jwt,
+            access_token,
+            &issuers,
+            &self.config.audiences,
+        )
+        .await
+    }
+
+    pub async fn verify_userinfo_jwt_with_claims_policy(
+        &self,
+        userinfo_jwt: &str,
+        access_token: &VerifiedToken,
+        accepted_issuers: &[&str],
+        accepted_audiences: &[String],
+    ) -> Result<Claims, OidcError> {
+        let header = decode_header(userinfo_jwt).map_err(|_| OidcError::MalformedToken)?;
+        if !self.config.allowed_algorithms.contains(&header.alg) {
+            return Err(OidcError::AlgorithmNotAllowed);
+        }
+        if let Some(typ) = header.typ.as_deref() {
+            if !self.allowed_typ.is_empty() && !self.allowed_typ.contains(&typ.to_ascii_lowercase())
+            {
+                return Err(OidcError::TokenTypeNotAllowed);
+            }
+        }
+        let kid = header.kid.ok_or(OidcError::MissingKid)?;
+        let key = self.fetcher.key_for_kid(&kid).await?;
+        let mut validation = Validation::new(header.alg);
+        validation.algorithms = vec![header.alg];
+        validation.leeway = self.config.leeway.as_secs();
+        validation.validate_nbf = true;
+        validation.validate_aud = false;
+        validation.required_spec_claims.clear();
+        let data = decode::<Claims>(userinfo_jwt, &key, &validation)
+            .map_err(|err| map_jwt_error(err, &self.config.issuer, userinfo_jwt))?;
+        let issuer = data
+            .claims
+            .iss
+            .as_deref()
+            .ok_or_else(|| OidcError::IssuerMismatch {
+                expected: expected_issuers(accepted_issuers),
+                actual: String::new(),
+            })?;
+        if !accepted_issuers.iter().any(|accepted| *accepted == issuer) {
+            return Err(OidcError::IssuerMismatch {
+                expected: expected_issuers(accepted_issuers),
+                actual: issuer.to_string(),
+            });
+        }
+        let audience = data
+            .claims
+            .aud
+            .as_ref()
+            .ok_or(OidcError::AudienceMismatch)?;
+        if !audience_intersects(audience, accepted_audiences) {
+            return Err(OidcError::AudienceMismatch);
+        }
+        let Some(access_sub) = access_token.claims.sub.as_deref() else {
+            return Err(OidcError::InvalidToken);
+        };
+        if data.claims.sub.as_deref() != Some(access_sub) {
+            return Err(OidcError::InvalidToken);
+        }
+        Ok(data.claims)
+    }
+
+    fn id_token_audiences(&self) -> Vec<String> {
+        if self.allowed_clients.is_empty() {
+            return self.config.audiences.clone();
+        }
+        self.allowed_clients.iter().cloned().collect()
     }
 
     fn match_client(&self, claims: &Claims) -> Result<Option<String>, OidcError> {
@@ -473,6 +630,48 @@ impl TokenVerifier {
             raw
         }
     }
+}
+
+pub async fn fetch_userinfo_jwt_with_policy(
+    endpoint: &str,
+    access_token: &str,
+    _client: &reqwest::Client,
+    fetch_url_policy: &FetchUrlPolicy,
+    timeout: Duration,
+    max_doc_bytes: u64,
+) -> Result<String, OidcError> {
+    let url = Url::parse(endpoint).map_err(|_| OidcError::InvalidUrl)?;
+    let validated_url = fetch_url_policy
+        .validate_for_immediate_fetch_with_timeout(&url, timeout)
+        .await?;
+    let resp = validated_url
+        .immediate_get()?
+        .bearer_auth(access_token)
+        .header(reqwest::header::ACCEPT, "application/jwt")
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(OidcError::Transport)?;
+    if !resp.status().is_success() {
+        return Err(OidcError::HttpStatus(resp.status().as_u16()));
+    }
+    let body = read_bounded(resp, max_doc_bytes.max(1)).await?;
+    String::from_utf8(body)
+        .map(|value| value.trim().to_string())
+        .map_err(|_| OidcError::Parse)
+}
+
+fn audience_intersects(audience: &Audience, accepted: &[String]) -> bool {
+    match audience {
+        Audience::One(value) => accepted.iter().any(|candidate| candidate == value),
+        Audience::Many(values) => values
+            .iter()
+            .any(|value| accepted.iter().any(|candidate| candidate == value)),
+    }
+}
+
+fn expected_issuers(accepted_issuers: &[&str]) -> String {
+    accepted_issuers.join(",")
 }
 
 fn map_jwt_error(
@@ -550,6 +749,7 @@ mod tests {
     use axum::{routing::get, Json, Router};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use jsonwebtoken::{encode, EncodingKey, Header};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::net::TcpListener;
@@ -625,12 +825,107 @@ mod tests {
         }
     }
 
+    fn rsa_jwk_with_modulus_bytes(kid: &str, modulus_bytes: usize) -> Jwk {
+        serde_json::from_value(json!({
+            "kty": "RSA",
+            "kid": kid,
+            "alg": "RS256",
+            "use": "sig",
+            "n": URL_SAFE_NO_PAD.encode(vec![0xff; modulus_bytes]),
+            "e": "AQAB",
+        }))
+        .expect("test RSA JWK parses")
+    }
+
+    fn rsa_jwk_with_modulus(kid: &str, modulus: Vec<u8>) -> Jwk {
+        serde_json::from_value(json!({
+            "kty": "RSA",
+            "kid": kid,
+            "alg": "RS256",
+            "use": "sig",
+            "n": URL_SAFE_NO_PAD.encode(modulus),
+            "e": "AQAB",
+        }))
+        .expect("test RSA JWK parses")
+    }
+
+    fn jwks_with_oct_key(kid: &str, secret: &[u8]) -> Value {
+        json!({
+            "keys": [{
+                "kty": "oct",
+                "kid": kid,
+                "alg": "HS256",
+                "k": URL_SAFE_NO_PAD.encode(secret),
+            }]
+        })
+    }
+
+    async fn hs256_test_verifier(
+        issuer: &str,
+        audiences: Vec<String>,
+        allowed_clients: Vec<String>,
+        kid: &str,
+        secret: &[u8],
+    ) -> TokenVerifier {
+        let document = Arc::new(RwLock::new(jwks_with_oct_key(kid, secret)));
+        let jwks_uri = serve_jwks(document, Arc::new(AtomicUsize::new(0))).await;
+        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            reqwest::Client::new(),
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        ));
+        TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: issuer.to_string(),
+                audiences,
+                allowed_algorithms: vec![Algorithm::HS256],
+                allowed_typ: Vec::new(),
+                scope_claim: "scope".to_string(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients,
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        )
+    }
+
+    fn signed_hs256_token(kid: &str, claims: Claims, secret: &[u8], typ: Option<&str>) -> String {
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some(kid.to_string());
+        header.typ = typ.map(ToOwned::to_owned);
+        let mut claims = serde_json::to_value(claims).expect("claims serialize");
+        if let Value::Object(map) = &mut claims {
+            map.retain(|_, value| !value.is_null());
+        }
+        encode(&header, &claims, &EncodingKey::from_secret(secret)).expect("sign HS256 test token")
+    }
+
     fn unsigned_token(header: Value, claims: Value) -> String {
         format!(
             "{}.{}.",
             URL_SAFE_NO_PAD.encode(header.to_string()),
             URL_SAFE_NO_PAD.encode(claims.to_string())
         )
+    }
+
+    #[test]
+    fn oidc_rsa_jwks_require_2048_bit_modulus() {
+        let small = rsa_jwk_with_modulus_bytes("small", 128);
+        let large = rsa_jwk_with_modulus_bytes("large", 256);
+        let short_bit_length = rsa_jwk_with_modulus("short-bit-length", {
+            let mut modulus = vec![0_u8; 256];
+            modulus[0] = 0x01;
+            modulus
+        });
+
+        assert!(matches!(validate_jwk(&small), Err(OidcError::InvalidJwk)));
+        assert!(matches!(
+            validate_jwk(&short_bit_length),
+            Err(OidcError::InvalidJwk)
+        ));
+        validate_jwk(&large).expect("2048-bit RSA key is accepted");
     }
 
     fn verifier_for_header_tests() -> TokenVerifier {
@@ -758,6 +1053,228 @@ mod tests {
         assert!(matches!(
             verifier.verify(&token).await,
             Err(OidcError::MissingKid)
+        ));
+    }
+
+    fn test_claims(issuer: Option<&str>, audience: Option<&str>, subject: Option<&str>) -> Claims {
+        Claims {
+            sub: subject.map(ToOwned::to_owned),
+            iss: issuer.map(ToOwned::to_owned),
+            aud: audience.map(|aud| Audience::One(aud.to_string())),
+            exp: Some(4_102_444_800_i64),
+            iat: None,
+            nbf: None,
+            azp: Some("citizen-client".to_string()),
+            client_id: None,
+            extra: Map::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn oidc_userinfo_jwt_requires_issuer_audience_and_matching_subject() {
+        let secret = b"registry-platform-oidc-test-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec!["citizen-client".to_string()],
+            "kid",
+            secret,
+        )
+        .await;
+        let access = VerifiedToken {
+            claims: test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("subject-1"),
+            ),
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: Vec::new(),
+        };
+        let accepted_issuers = ["https://issuer.example/userinfo"];
+        let accepted_audiences = vec!["citizen-client".to_string()];
+
+        let valid = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example/userinfo"),
+                Some("citizen-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &valid,
+                &access,
+                &accepted_issuers,
+                &accepted_audiences,
+            )
+            .await
+            .expect("valid signed UserInfo verifies");
+
+        let missing_issuer = signed_hs256_token(
+            "kid",
+            test_claims(None, Some("citizen-client"), Some("subject-1")),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &missing_issuer,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::IssuerMismatch { .. })
+        ));
+
+        let wrong_issuer = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://evil.example"),
+                Some("citizen-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &wrong_issuer,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::IssuerMismatch { .. })
+        ));
+
+        let missing_audience = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example/userinfo"),
+                None,
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &missing_audience,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::AudienceMismatch)
+        ));
+
+        let wrong_audience = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example/userinfo"),
+                Some("other-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &wrong_audience,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::AudienceMismatch)
+        ));
+
+        let wrong_subject = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example/userinfo"),
+                Some("citizen-client"),
+                Some("subject-2"),
+            ),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &wrong_subject,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::InvalidToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_related_id_token_rejects_access_token_type_and_uses_client_audience() {
+        let secret = b"registry-platform-id-token-test-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec!["citizen-client".to_string()],
+            "kid",
+            secret,
+        )
+        .await;
+
+        let id_token = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example"),
+                Some("citizen-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        verifier
+            .verify_related_token(&id_token)
+            .await
+            .expect("ID token audience is the OIDC client");
+
+        let access_typed = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example"),
+                Some("citizen-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            Some("at+jwt"),
+        );
+        assert!(matches!(
+            verifier.verify_related_token(&access_typed).await,
+            Err(OidcError::TokenTypeNotAllowed)
+        ));
+
+        let resource_audience = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier.verify_related_token(&resource_audience).await,
+            Err(OidcError::AudienceMismatch)
         ));
     }
 

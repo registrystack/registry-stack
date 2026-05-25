@@ -199,6 +199,7 @@ pub enum CryptoError {
 pub enum DidMethod {
     Web,
     Key,
+    Jwk,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +223,8 @@ pub enum DidError {
     InvalidDidWebHost,
     #[error("did:web paths must not contain traversal")]
     PathTraversal,
+    #[error("did:jwk payload is invalid")]
+    InvalidDidJwk,
 }
 
 pub fn validate_did(s: &str, allowed_methods: &[DidMethod]) -> Result<ValidatedDid, DidError> {
@@ -237,6 +240,7 @@ pub fn validate_did(s: &str, allowed_methods: &[DidMethod]) -> Result<ValidatedD
     let method = match method {
         "web" => DidMethod::Web,
         "key" => DidMethod::Key,
+        "jwk" => DidMethod::Jwk,
         _ => return Err(DidError::UnsupportedMethod),
     };
     if !allowed_methods.contains(&method) {
@@ -249,12 +253,41 @@ pub fn validate_did(s: &str, allowed_methods: &[DidMethod]) -> Result<ValidatedD
                 return Err(DidError::InvalidIdentifier);
             }
         }
+        DidMethod::Jwk => {
+            if identifier.contains('/') || identifier.contains('?') {
+                return Err(DidError::InvalidIdentifier);
+            }
+            parse_did_jwk(s)?;
+        }
     }
     Ok(ValidatedDid {
         method,
         identifier: identifier.to_string(),
         fragment,
     })
+}
+
+pub fn parse_did_jwk(s: &str) -> Result<PublicJwk, DidError> {
+    let rest = s
+        .strip_prefix("did:jwk:")
+        .ok_or(DidError::UnsupportedMethod)?;
+    let identifier = rest
+        .split_once('#')
+        .map_or(rest, |(identifier, _)| identifier);
+    if identifier.is_empty() || identifier.contains('/') || identifier.contains('?') {
+        return Err(DidError::InvalidIdentifier);
+    }
+    let jwk_json = URL_SAFE_NO_PAD
+        .decode(identifier)
+        .map_err(|_| DidError::InvalidDidJwk)?;
+    let jwk_json = String::from_utf8(jwk_json).map_err(|_| DidError::InvalidDidJwk)?;
+    PublicJwk::parse(&jwk_json).map_err(|_| DidError::InvalidDidJwk)
+}
+
+pub fn did_jwk_from_public_jwk(jwk: &PublicJwk) -> Result<String, DidError> {
+    let value = serde_json::to_value(jwk).map_err(|_| DidError::InvalidDidJwk)?;
+    let canonical = canonicalize_json(&value).map_err(|_| DidError::InvalidDidJwk)?;
+    Ok(format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(canonical)))
 }
 
 pub fn validate_did_web(s: &str) -> Result<(), DidError> {
@@ -535,6 +568,31 @@ mod tests {
         assert_eq!(did.fragment.as_deref(), Some("key-1"));
 
         validate_did("did:key:z6MkiTBz", &[DidMethod::Key]).expect("did:key validates");
+    }
+
+    #[test]
+    fn did_jwk_round_trips_public_jwk_and_rejects_private_material() {
+        let public = PrivateJwk::parse(RAW_JWK)
+            .expect("private jwk parses")
+            .public();
+        let did = did_jwk_from_public_jwk(&public).expect("did:jwk encodes");
+        let validated = validate_did(&did, &[DidMethod::Jwk]).expect("did:jwk validates");
+        let parsed = parse_did_jwk(&did).expect("did:jwk parses");
+
+        assert_eq!(validated.method, DidMethod::Jwk);
+        assert_eq!(parsed, public);
+
+        let private_payload = URL_SAFE_NO_PAD.encode(
+            canonicalize_json(&json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+                "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"
+            }))
+            .expect("canonical json"),
+        );
+        let private_did = format!("did:jwk:{private_payload}");
+        assert_eq!(parse_did_jwk(&private_did), Err(DidError::InvalidDidJwk));
     }
 
     #[test]

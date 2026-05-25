@@ -5,6 +5,7 @@ members = [
     "crates/registry-platform-audit",
     "crates/registry-platform-oidc",
     "crates/registry-platform-httpsec",
+    "crates/registry-platform-oid4vci",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-crypto",
     "crates/registry-platform-testing",

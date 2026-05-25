@@ -17,6 +17,7 @@ use registry_platform_audit::{
     verify_chain, verify_chain_with_anchors, AuditEnvelope, ChainVerificationAnchors,
 };
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
+use registry_platform_oid4vci::{CREDENTIAL_SIGNING_ALG_EDDSA, PROOF_JWT_TYPE};
 use serde_json::{json, Map, Value};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use wiremock::{
@@ -181,6 +182,36 @@ fn mint_ed25519_jwt(issuer: &str, claims: Value, private: &PrivateJwk) -> String
     let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
     let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");
     format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
+}
+
+#[must_use]
+pub fn sign_openid4vci_proof_jwt(
+    private_jwk: &str,
+    audience: &str,
+    nonce: Option<&str>,
+    now_unix_seconds: i64,
+) -> String {
+    let holder = PrivateJwk::parse(private_jwk).expect("fixture holder JWK parses");
+    let mut claims = Map::new();
+    claims.insert("aud".to_string(), Value::String(audience.to_string()));
+    claims.insert("iat".to_string(), json!(now_unix_seconds));
+    claims.insert("exp".to_string(), json!(now_unix_seconds + 60));
+    if let Some(nonce) = nonce {
+        claims.insert("nonce".to_string(), Value::String(nonce.to_string()));
+    }
+
+    let header = json!({
+        "alg": CREDENTIAL_SIGNING_ALG_EDDSA,
+        "typ": PROOF_JWT_TYPE,
+        "jwk": holder.public(),
+    });
+    let signing_input = format!(
+        "{}.{}",
+        encode_json(&header),
+        encode_json(&Value::Object(claims))
+    );
+    let signature = sign(signing_input.as_bytes(), &holder).expect("fixture holder signs proof");
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
 fn normalize_claims(issuer: &str, claims: Value) -> Value {
