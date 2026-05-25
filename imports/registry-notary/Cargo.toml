@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -18,8 +18,8 @@ repository = "https://github.com/jeremi/registry-witness"
 axum = { version = "0.8" }
 base64 = { version = "0.22" }
 clap = { version = "4", features = ["derive", "env"] }
-registry-witness-core = { version = "0.2.1", path = "crates/registry-witness-core" }
-registry-witness-server = { version = "0.2.1", path = "crates/registry-witness-server", default-features = false }
+registry-witness-core = { version = "0.3.0", path = "crates/registry-witness-core" }
+registry-witness-server = { version = "0.3.0", path = "crates/registry-witness-server", default-features = false }
 cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "32679bb78c969b8f33129113e31465dbe54b0ea0" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }

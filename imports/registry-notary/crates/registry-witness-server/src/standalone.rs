@@ -707,7 +707,6 @@ impl Authenticator {
                 };
                 let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     oidc.jwks_uri.clone(),
-                    client.clone(),
                     JwksFetcherConfig::defaults(),
                     fetch_url_policy.clone(),
                 ));
@@ -1473,6 +1472,7 @@ fn oidc_internal_error_code(error: &OidcError) -> &'static str {
         | OidcError::SignatureInvalid
         | OidcError::InvalidToken
         | OidcError::ClientNotAllowed => "auth.invalid_token",
+        _ => "auth.invalid_token",
     }
 }
 

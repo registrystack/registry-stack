@@ -4003,7 +4003,7 @@ mod tests {
         let header_b64 = URL_SAFE_NO_PAD.encode(
             serde_json::to_vec(&json!({
                 "alg": "EdDSA",
-                "typ": "JWT",
+                "typ": "kb+jwt",
                 "kid": holder_id,
             }))
             .expect("header serializes"),

@@ -1,5 +1,22 @@
 # Release Notes
 
+## 0.3.0
+
+- Added citizen self-attestation flows, including bearer-token subject binding,
+  rate limiting, denial audit metadata, and SD-JWT VC issuance.
+- Added OpenID4VCI issuer primitives and HTTP routes for credential issuer
+  metadata, credential offers, nonce creation, and credential issuance.
+- Added the OpenFn sidecar source for isolated worker execution.
+- Hardened SD-JWT VC conformance for `dc+sd-jwt`, holder binding, proof
+  validation, and OpenAPI documentation.
+- Replaced fake Problem Details type URLs with
+  `https://docs.registry-witness.dev/problems/...`.
+- Changed self-attestation subject-binding hashes to keyed HMAC values and
+  stopped recording raw query strings in request spans or audit paths.
+- Known limitations: this release is `dc+sd-jwt` only, does not serve
+  `/.well-known/jwt-vc-issuer`, does not provide credential revocation/status,
+  and leaves retention/erasure workflows to the operator.
+
 ## 0.2.1
 
 - Added `evidence.source_connections[].allow_insecure_private_network` for

@@ -42,7 +42,7 @@ utoipa.workspace = true
 [dev-dependencies]
 axum-test = { version = "20" }
 registry-platform-testing.workspace = true
-registry-witness-openfn-sidecar = { version = "0.2.1", path = "../registry-witness-openfn-sidecar" }
+registry-witness-openfn-sidecar = { version = "0.3.0", path = "../registry-witness-openfn-sidecar" }
 serde_norway.workspace = true
 tempfile = { version = "3" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are

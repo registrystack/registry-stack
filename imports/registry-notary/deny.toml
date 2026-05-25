@@ -24,11 +24,6 @@ ignore = [
     # consumers. Review when `cel-mapper-core` or phonenumber removes this
     # path, or before making CEL mapping part of a hardened default runtime.
     "RUSTSEC-2023-0089",
-    # RUSTSEC-2024-0436: `paste` is pulled transitively by DataFusion in Relay.
-    # It is unmaintained, but remains compile-time/runtime macro plumbing, not
-    # request-facing parsing. Review when DataFusion moves off `paste` or when
-    # upgrading the DataFusion major version.
-    "RUSTSEC-2024-0436",
     # RUSTSEC-2025-0068: retained for consumers that still carry `serde_yml`.
     # New platform code should use maintained YAML crates such as
     # `serde-saphyr` or `serde_norway`; review when consumer lockfiles no
@@ -83,5 +78,4 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/PublicSchema/cel-mapping",
-    "https://github.com/jeremi/registry-manifest",
 ]

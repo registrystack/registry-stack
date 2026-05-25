@@ -84,3 +84,17 @@ Registry Witness owns its OpenAPI output. Generate the current document with:
 ```bash
 cargo run -p registry-witness-bin -- openapi
 ```
+
+## Distribution
+
+The workspace crates are not published to crates.io. Consumers should use the
+Docker image or a pinned git tag/revision.
+
+## Security
+
+Report vulnerabilities through GitHub Security Advisories. See
+[`SECURITY.md`](SECURITY.md) for scope and acknowledgement expectations.
+
+## License
+
+Apache-2.0. See [`LICENSE`](LICENSE).

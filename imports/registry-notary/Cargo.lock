@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "registry-witness-bin"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "clap",
@@ -2502,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "registry-witness-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "registry-witness-openfn-sidecar"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "axum-test",
@@ -2540,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "registry-witness-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "axum-test",
