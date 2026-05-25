@@ -1,9 +1,10 @@
 # registry-lab
 
-This demo runs three independent Registry Relay authorities, three independent
-Registry Witness verifiers, a static metadata publisher, and a narrated client.
-It uses functional domains only. The services simulate civil, social protection,
-and health registry patterns, but they are not real OpenCRVS, OpenSPP, DHIS2,
+This demo runs three independent Registry Relay authorities, four Registry
+Witness verifiers, a live Postgres source, a live Zitadel IdP, a default OpenFn
+sidecar scenario, a static metadata publisher, and a narrated client. It uses
+functional domains only. The services simulate civil, social protection, and
+health registry patterns, but they are not real OpenCRVS, OpenSPP, DHIS2,
 OpenIMIS, MOSIP, or other product integrations.
 
 ## Topology
@@ -11,12 +12,14 @@ OpenIMIS, MOSIP, or other product integrations.
 - `civil-registry-relay`: CSV-backed civil registry authority on host port `4311`.
 - `social-protection-registry-relay`: XLSX-backed social protection authority on host port `4312`.
 - `health-registry-relay`: Parquet-backed health authority on host port `4313`.
+- `postgres`: live Postgres service for Relay database-source scenarios on host port `54329`.
+- `zitadel`: live Zitadel IdP for Relay OIDC scenarios on host port `4380`.
 - `civil-witness`: civil evidence verifier on host port `4321`.
 - `social-protection-witness`: social protection verifier on host port `4322`.
 - `shared-eligibility-witness`: cross-authority civil, social, and health verifier on host port `4323`.
-- `openfn-civil-witness`: optional OpenFn sidecar-backed civil verifier on host port `4324`.
-- `openfn-civil-sidecar`: optional OpenFn adaptor sidecar on host port `4341`.
-- `openfn-mock-registry`: optional registry-like HTTP API on host port `4340`.
+- `openfn-civil-witness`: OpenFn sidecar-backed civil verifier on host port `4324`.
+- `openfn-civil-sidecar`: OpenFn adaptor sidecar on the private Compose network.
+- `openfn-mock-registry`: registry-like HTTP API on the private OpenFn network.
 - `static-metadata-publisher`: generated static metadata on host port `4331`.
 
 Inside Compose, services use DNS names like
@@ -25,7 +28,7 @@ Inside Compose, services use DNS names like
 not mount source data. They read registry facts over HTTP from Relay. The demo
 client also has no `data/` mount.
 
-## First Run
+## Quick Start
 
 Clone with submodules:
 
@@ -34,54 +37,172 @@ git clone --recurse-submodules git@github.com:jeremi/registry-lab.git
 cd registry-lab
 ```
 
-For an existing checkout:
+For an existing checkout, or after pulling changes:
 
 ```bash
-git submodule update --init --recursive
+just setup
+just generate
+just build
+just up
+just smoke
+just client
 ```
 
-Then run:
+The service-first story uses sibling checkouts of `registry-manifest` and
+`registry-atlas` by default. Override `REGISTRY_MANIFEST_REPO` and
+`REGISTRY_ATLAS_SOURCE_DIR` if those projects are not next to this repo.
+`just generate` fails early when `registry-manifest` is missing, while
+`just smoke`, `just live-stories`, and `just release` fail early when either
+service-first sibling checkout is missing.
+
+`just generate` writes `.env`, fixture files, and static metadata. Run it before
+`just up` the first time, and run it again after pulling demo changes that add
+new credentials such as the default OpenFn sidecar tokens. It rewrites `.env`
+with fresh local demo secrets, so do not use a hand-edited `.env` for anything
+you need to keep.
+
+When you are done:
 
 ```bash
-uv run scripts/generate-fixtures.py
-scripts/generate-demo-secrets.py
-scripts/publish-static-metadata.sh
-docker compose -f compose.yaml build
-docker compose -f compose.yaml up -d
-scripts/smoke.sh
-docker compose -f compose.yaml --profile client run --rm demo-client
-docker compose -f compose.yaml down -v
+just down
 ```
 
-The same path is wrapped by:
+For a single command that generates, builds, starts, and runs the core checks:
 
 ```bash
-scripts/release-check.sh
+just quick
 ```
 
-## Optional OpenFn Sidecar Demo
+## Demo Commands
 
-The OpenFn profile proves the Registry Witness `registry_data_api` connector can
+List available recipes:
+
+```bash
+just
+```
+
+Core setup and lifecycle:
+
+```bash
+just setup       # initialize submodules
+just generate    # write fixtures, .env secrets, and static metadata
+just build       # build the default topology
+just up          # start Relay, Witness, Postgres, Zitadel, OpenFn, metadata
+just ps          # show service status
+just logs        # follow all logs
+just logs -- zitadel openfn-civil-witness
+just down        # stop containers and remove demo volumes
+```
+
+Run the default API-key demo:
+
+```bash
+just smoke       # API-level smoke for Relay and Witness
+just openfn      # OpenFn sidecar-backed Witness smoke
+just client      # narrated default client flow
+just quick       # generate, build, up, smoke, openfn, client
+```
+
+Run the live-service demos:
+
+```bash
+just relay-postgres  # Relay ignored Postgres integration test
+just relay-zitadel   # Relay ignored Zitadel integration test
+just oidc-relay      # separate OIDC-protected Relay node
+just citizen-self-attestation # optional eSignet-backed citizen Witness flow
+just live-stories    # print narrated discovery queries and write artifacts
+```
+
+Re-open explainability artifacts from `just live-stories`:
+
+```bash
+just story-page
+just briefing
+just case-file
+just conformance
+```
+
+Run the broader checks:
+
+```bash
+just try          # standard demo sequence, leaves containers up
+just release      # full release check, cleans up volumes on success
+just release-fast # release check without slower live-service extras
+```
+
+The release wrapper ends with `docker compose -f compose.yaml down -v`, so it
+removes demo volumes after a successful run. Use the individual checks above
+when you want to keep the current Postgres, Zitadel, or OpenFn containers
+running for inspection.
+
+The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
+`REGISTRY_WITNESS_SOURCE_DIR`, `REGISTRY_OPENFN_WITNESS_SOURCE_DIR`, and
+`REGISTRY_PLATFORM_SOURCE_DIR` to sibling checkouts when present. Override those
+variables when you want to build from the pinned `vendor/` submodules or another
+local path.
+
+## Live Relay Scenarios
+
+The lab includes live services by default so the same checkout can exercise
+file-backed Relays, Postgres-backed Relay ingest, and OIDC bearer-JWT auth:
+
+```bash
+just relay-postgres
+just relay-zitadel
+just oidc-relay
+```
+
+`check-relay-postgres.sh` starts the lab Postgres service and runs Relay's
+ignored `postgres_snapshot` integration test against
+`postgres://postgres:postgres@127.0.0.1:54329/registry_lab?sslmode=disable`.
+
+`check-relay-zitadel.sh` starts Zitadel, exports the generated credentials to
+`output/zitadel.env`, and runs Relay's ignored `oidc_zitadel` integration test.
+
+`smoke-oidc-relay.sh` starts a host-side OIDC-protected social protection Relay
+on port `4314` using the same `output/zitadel.env`. This keeps the existing
+API-key demo nodes intact while proving a separate Relay node can verify a real
+Zitadel access token. Today the script accepts either a `200` row read or a
+`403` scope denial: both prove JWT verification succeeded, while `403` means the
+machine-user token did not emit the mapped Zitadel roles.
+
+`smoke-citizen-self-attestation.sh` is an optional eSignet-oriented story for a
+citizen-facing Registry Witness on port `4325`. It supports either a JWT access
+token carrying the subject-binding claim and `auth_time`, or the eSignet-style
+split where UserInfo carries the subject claim and the ID token carries
+`auth_time`/`acr`. For stock local eSignet tokens that omit `scope`, the demo
+uses `ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled` and relies on issuer,
+client/audience, assurance, and subject binding instead. The script generates
+`output/citizen-self-attestation/citizen-civil-witness.yaml`, starts a host-side
+Witness against the existing civil Relay, evaluates `person-is-alive` for the
+token-bound citizen, and proves `NID-1002` is denied. See
+`docs/citizen-self-attestation-esignet-use-case.md` for the use case and setup
+details.
+
+## OpenFn Sidecar Demo
+
+The OpenFn nodes prove the Registry Witness `registry_data_api` connector can
 source one-item civil lookups from an OpenFn HTTP adaptor sidecar:
 
 ```bash
-uv run scripts/generate-fixtures.py
-scripts/generate-demo-secrets.py
-
-REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
-REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
-docker compose -f compose.yaml --profile openfn build openfn-mock-registry openfn-civil-sidecar openfn-civil-witness
-
-REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
-REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
-scripts/smoke-openfn.sh
+just generate
+just build
+just up
+just openfn
 ```
 
-Use the sibling `../registry-witness` checkout until the vendored Witness pin
-contains `crates/registry-witness-openfn-sidecar`.
+The default OpenFn build uses `../registry-witness` through
+`REGISTRY_OPENFN_WITNESS_SOURCE_DIR` until the vendored Witness pin contains
+`crates/registry-witness-openfn-sidecar`.
 
-The smoke writes `output/smoke-openfn-sidecar-rda.json` and
-`output/smoke-openfn-witness-evaluation.json`. The direct Witness request is:
+OpenFn is part of the default Compose topology. The sidecar and mock registry
+are not published to host ports; they run only on the private
+`openfn-internal` network. `scripts/smoke-openfn.sh` recreates the three OpenFn
+containers with `--force-recreate --remove-orphans` so repeated local runs do
+not get stuck on stale Compose container IDs.
+
+The smoke writes `output/smoke-openfn-witness-evaluation.json`. The sidecar is
+not published to the host; use the Witness API for evidence requests:
 
 ```bash
 set -a
@@ -97,9 +218,58 @@ curl -fsS \
   --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-witness.claim-result+json"}' | jq
 ```
 
+## Live-Service Story Runner
+
+`scripts/demo-live-stories.sh` turns the default live services into narrated
+demo stories. The terminal output shows each discovery query, key response
+fields, and the conclusion being proved. Each run also writes artifacts under
+`output/live-stories/` and generates an interactive `index.html`,
+`briefing.md`, `case-file.json`, and `conformance-map.json` so the demo can be
+presented as a guided case file rather than a pile of API responses:
+
+1. **Service-first discovery through Atlas** publishes `/metadata/cpsv-ap`,
+   invokes the Atlas semantic discovery CLI and ServiceGraph API, selects the
+   health-linked child support service, maps grouped CCCEV evidence options to
+   evidence types and providers, validates a sample form payload against the
+   published form JSON Schema, then calls the relevant Witness endpoints from
+   discovered access-service endpoints in that service context.
+2. **Database-source cutover with live Postgres** starts a temporary
+   Postgres-backed Relay on port `4315`, reads benefit cases, inserts a new
+   database row, then proves the live Relay sees it without a restart.
+3. **Zitadel-issued JWT at a separate OIDC Relay node** starts a temporary
+   OIDC-protected Relay on port `4316`, mints a Zitadel machine-user token,
+   records the non-secret JWT claims, and shows whether the token authorizes or
+   reaches a scope denial after successful verification.
+4. **OpenFn sidecar lookup behind Registry Witness** calls the default
+   OpenFn-backed Witness on port `4324` and records the date-of-birth claim
+   result while keeping the sidecar private to the Compose network.
+
+```bash
+just live-stories
+just story-page
+just briefing
+just case-file
+just conformance
+```
+
 Generated artifacts are written to `output/`. Generated static publication
 files are written under `static-metadata/`. Both directories keep only their
 `.gitignore` files in git.
+
+See `docs/service-first-discovery.md` for the Atlas-backed service-first story
+artifact contract.
+
+In the service-first story, Registry Witness dispatch uses access-service
+`endpoint_url` values discovered from Atlas output. The runner records the
+discovered endpoint and validates that the host URL used for the HTTP call is
+derived from it. The only local rewrite is Compose hostname-to-host-port
+translation, for example `http://shared-eligibility-witness:8080` to
+`http://127.0.0.1:4323`, so the host-side story runner can reach the same
+container service.
+
+This lab does not call OOTS Evidence Broker or Data Service Directory services.
+Those remain future cross-border integration points rather than hidden demo
+behavior.
 
 ## Source Repositories
 
@@ -119,14 +289,21 @@ used without changing `compose.yaml`:
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
 REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
-docker compose -f compose.yaml build
+just build
 ```
 
-Use the same variables with `scripts/generate-demo-secrets.py` and
-`scripts/publish-static-metadata.sh` when you want those scripts to use a sibling
-Relay checkout instead of the `vendor/registry-relay` submodule. For a release,
-pin the submodules to commits that already include the Registry Platform,
-Registry Relay, and Registry Witness behavior required by this demo.
+Use the same variables with `scripts/generate-demo-secrets.py` when you want
+that script to use a sibling Relay checkout instead of the
+`vendor/registry-relay` submodule. `scripts/publish-static-metadata.sh` uses
+the Registry Manifest CLI from `REGISTRY_MANIFEST_REPO`, defaulting to the
+`../registry-manifest` sibling checkout. For a release, pin the submodules to
+commits that already include the Registry Platform, Registry Relay, and Registry
+Witness behavior required by this demo.
+
+OpenFn image builds can use `REGISTRY_OPENFN_WITNESS_SOURCE_DIR` separately from
+the core Witness image. The current lab default points OpenFn at
+`../registry-witness` because the vendored Witness pin does not yet include the
+OpenFn sidecar crate.
 
 ## Fixture Data
 
@@ -147,8 +324,8 @@ subjects, and health-linked support cases.
 ## Credentials
 
 `scripts/generate-demo-secrets.py` writes `.env` with local demo credentials and
-matching Relay SHA-256 hashes. The committed `.env.example` contains inert
-examples only.
+matching SHA-256 fingerprints for Relay, Witness, and OpenFn sidecar auth. The
+committed `.env.example` contains inert examples only.
 
 Credential classes:
 
@@ -158,8 +335,10 @@ Credential classes:
   row or aggregate access;
 - row-reader tokens for the explicit positive row-read check;
 - aggregate-reader tokens for the aggregate consultation;
+- OpenFn sidecar tokens, stored as raw caller tokens plus `OPENFN_SIDECAR_TOKEN_HASH`;
+- OpenFn mock registry target tokens, used only inside the private OpenFn network;
 - separate Registry Witness client API keys and bearer tokens;
-- distinct shared Registry Witness source tokens for civil, social, and health.
+- distinct shared Registry Witness source tokens for civil, social, and health;
 - per-deployment audit hash secrets for Relay and Witness redaction.
 
 The social protection Relay config keeps row and aggregate scopes on separate
@@ -169,14 +348,17 @@ future symmetry but are not used by the v1 walkthrough.
 
 Relay and Registry Witness auth configs should reference only `*_HASH` env vars.
 Registry Witness upstream source connections still reference raw `token_env`
-names for outbound calls to Relay. No raw token should be committed.
+names for outbound calls to Relay. The OpenFn sidecar auth config also requires
+`OPENFN_SIDECAR_TOKEN_HASH`; plaintext sidecar token config is rejected. No raw
+token should be committed.
 
 ## Static Metadata
 
-`scripts/publish-static-metadata.sh` wraps
-`vendor/registry-relay/scripts/run_registry_manifest_cli.sh publish` by default
-and publishes the portable manifest at `config/static-metadata/metadata.yaml`
-into `static-metadata/metadata/`. The publisher serves it at paths such as:
+`scripts/publish-static-metadata.sh` runs
+`registry-manifest-cli publish` from `REGISTRY_MANIFEST_REPO`, defaulting to the
+`../registry-manifest` sibling checkout, and publishes the portable manifest at
+`config/static-metadata/metadata.yaml` into `static-metadata/metadata/`. The
+publisher serves it at paths such as:
 
 - `http://127.0.0.1:4331/metadata/index.json`
 - `http://127.0.0.1:4331/metadata/catalog.json`

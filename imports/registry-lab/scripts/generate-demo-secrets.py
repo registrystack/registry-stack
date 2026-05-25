@@ -64,6 +64,7 @@ def env_line(key: str, value: str) -> str:
 
 def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_witness_issuer_jwk()
+    openfn_sidecar_token = generate_raw_key()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_claim_verification_binding_key(),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
@@ -72,7 +73,9 @@ def generate_env() -> dict[str, str]:
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
-        "OPENFN_SIDECAR_TOKEN_RAW": generate_raw_key(),
+        "OPENFN_SIDECAR_TOKEN_RAW": openfn_sidecar_token,
+        "OPENFN_SIDECAR_TOKEN_HASH": fingerprint(openfn_sidecar_token),
+        "OPENFN_MOCK_REGISTRY_TOKEN_RAW": generate_raw_key(),
     }
     for name in TOKEN_NAMES:
         raw = generate_raw_key()

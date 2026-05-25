@@ -34,6 +34,88 @@ x-witness-common: &witness-common
   restart: unless-stopped
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: registry_lab
+    ports:
+      - "${REGISTRY_LAB_POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d registry_lab"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  zitadel-seed-init:
+    image: alpine:3.20
+    restart: "no"
+    command: ["chown", "-R", "1000:1000", "/seed"]
+    volumes:
+      - zitadel-seed:/seed
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v2.66.4
+    command: start-from-init --masterkey "MasterkeyNeedsToHave32Characters" --tlsMode disabled
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: postgres
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: postgres
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: ${REGISTRY_LAB_ZITADEL_PORT:-4380}
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: zitadel-bootstrap-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Bootstrap Service Account
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-12-31T23:59:59Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /seed/zitadel-pat
+    ports:
+      - "${REGISTRY_LAB_ZITADEL_PORT:-4380}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zitadel-seed-init:
+        condition: service_completed_successfully
+    volumes:
+      - zitadel-seed:/seed
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  zitadel-init:
+    image: alpine:3.20
+    restart: "no"
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    environment:
+      ZITADEL_BASE_URL: http://zitadel:8080
+      ZITADEL_PUBLIC_URL: http://localhost:${REGISTRY_LAB_ZITADEL_PORT:-4380}
+      PAT_FILE: /seed/zitadel-pat
+      OUTPUT_FILE: /seed/zitadel.env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache bash curl jq > /dev/null 2>&1
+        /seed/zitadel-init.sh
+    volumes:
+      - ./config/zitadel/zitadel-init.sh:/seed/zitadel-init.sh:ro
+      - zitadel-seed:/seed
+
   civil-registry-relay:
     <<: *relay-common
     command: ["--config", "/etc/registry-relay/civil-registry-relay.yaml"]
@@ -89,63 +171,78 @@ services:
       - ./config/witness/shared-eligibility-witness.yaml:/etc/registry-witness/shared-eligibility-witness.yaml:ro
 
   openfn-mock-registry:
-    profiles: ["openfn"]
     image: registry-witness-openfn-sidecar:demo
     build:
       context: .
       dockerfile: Dockerfile.registry-witness-openfn-sidecar
       additional_contexts:
-        witness_src: ${REGISTRY_WITNESS_SOURCE_DIR:-./vendor/registry-witness}
+        witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
         registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
-    entrypoint: ["node", "/opt/openfn/mock-registry-server.mjs"]
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        : "$${MOCK_REGISTRY_TOKEN:?missing OPENFN_MOCK_REGISTRY_TOKEN_RAW; run scripts/generate-demo-secrets.py}"
+        exec node /opt/openfn/mock-registry-server.mjs
+    env_file:
+      - .env
     environment:
       MOCK_REGISTRY_HOST: 0.0.0.0
       MOCK_REGISTRY_PORT: "8080"
-      MOCK_REGISTRY_TOKEN: demo-target-token
-    ports:
-      - "4340:8080"
+      MOCK_REGISTRY_TOKEN: ${OPENFN_MOCK_REGISTRY_TOKEN_RAW:-}
+    networks:
+      - openfn-internal
     healthcheck:
       test:
-        - CMD
-        - node
-        - -e
-        - |
-          fetch("http://127.0.0.1:8080/people/person-123", { headers: { Authorization: "Bearer demo-target-token" } }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));
+        - CMD-SHELL
+        - "node -e 'fetch(\"http://127.0.0.1:8080/people/person-123\", { headers: { Authorization: \"Bearer \" + process.env.MOCK_REGISTRY_TOKEN } }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
       interval: 2s
       timeout: 2s
       retries: 20
 
   openfn-civil-sidecar:
-    profiles: ["openfn"]
     image: registry-witness-openfn-sidecar:demo
     build:
       context: .
       dockerfile: Dockerfile.registry-witness-openfn-sidecar
       additional_contexts:
-        witness_src: ${REGISTRY_WITNESS_SOURCE_DIR:-./vendor/registry-witness}
+        witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
         registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
     env_file:
       - .env
     environment:
       RUST_LOG: info
-      OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
-      OPENFN_HTTP_DEMO_CREDENTIAL_JSON: '{"baseUrl":"http://openfn-mock-registry:8080","apiToken":"demo-target-token"}'
-    entrypoint: ["/bin/sh", "-c"]
+      OPENFN_SIDECAR_TOKEN_HASH: ${OPENFN_SIDECAR_TOKEN_HASH:-}
+      OPENFN_MOCK_REGISTRY_TOKEN_RAW: ${OPENFN_MOCK_REGISTRY_TOKEN_RAW:-}
+      OPENFN_HTTP_DEMO_CREDENTIAL_JSON: '{"baseUrl":"http://openfn-mock-registry:8080","apiToken":"${OPENFN_MOCK_REGISTRY_TOKEN_RAW:-}"}'
+    entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |
-        sed "s/__OPENFN_SIDECAR_TOKEN_RAW__/$${OPENFN_SIDECAR_TOKEN_RAW}/g" /etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template > /tmp/openfn-civil-sidecar.yaml
-        exec registry-witness-openfn-sidecar --config /tmp/openfn-civil-sidecar.yaml
-    ports:
-      - "4341:8080"
+        : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
+        : "$${OPENFN_MOCK_REGISTRY_TOKEN_RAW:?missing OPENFN_MOCK_REGISTRY_TOKEN_RAW; run scripts/generate-demo-secrets.py}"
+        exec registry-witness-openfn-sidecar --config /etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template
     volumes:
       - ./config/openfn/openfn-civil-sidecar.yaml.template:/etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template:ro
+    networks:
+      - openfn-internal
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e 'fetch(\"http://127.0.0.1:8080/ready\").then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
+      interval: 2s
+      timeout: 2s
+      retries: 30
     depends_on:
       openfn-mock-registry:
         condition: service_healthy
 
   openfn-civil-witness:
     <<: *witness-common
-    profiles: ["openfn"]
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-witness
+      additional_contexts:
+        witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
+        registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
     command: ["--config", "/etc/registry-witness/openfn-civil-witness.yaml"]
     environment:
       RUST_LOG: info
@@ -154,8 +251,12 @@ services:
       - "4324:8080"
     volumes:
       - ./config/witness/openfn-civil-witness.yaml:/etc/registry-witness/openfn-civil-witness.yaml:ro
+    networks:
+      - default
+      - openfn-internal
     depends_on:
-      - openfn-civil-sidecar
+      openfn-civil-sidecar:
+        condition: service_healthy
 
   static-metadata-publisher:
     image: python:3.12.3-slim-bookworm
@@ -195,6 +296,12 @@ services:
       - static-metadata-publisher
 
 volumes:
+  postgres-data:
+  zitadel-seed:
   civil-registry-cache:
   social-protection-registry-cache:
   health-registry-cache:
+
+networks:
+  openfn-internal:
+    internal: true

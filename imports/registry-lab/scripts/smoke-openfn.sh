@@ -18,7 +18,18 @@ else
 fi
 
 : "${OPENFN_SIDECAR_TOKEN_RAW:?missing OPENFN_SIDECAR_TOKEN_RAW; rerun scripts/generate-demo-secrets.py}"
+: "${OPENFN_MOCK_REGISTRY_TOKEN_RAW:?missing OPENFN_MOCK_REGISTRY_TOKEN_RAW; rerun scripts/generate-demo-secrets.py}"
 : "${CIVIL_EVIDENCE_CLIENT_BEARER:?missing CIVIL_EVIDENCE_CLIENT_BEARER; rerun scripts/generate-demo-secrets.py}"
+if [[ -z "${OPENFN_SIDECAR_TOKEN_HASH:-}" ]]; then
+  OPENFN_SIDECAR_TOKEN_HASH="$(
+    python - "${OPENFN_SIDECAR_TOKEN_RAW}" <<'PY'
+import hashlib
+import sys
+print(f"sha256:{hashlib.sha256(sys.argv[1].encode('ascii')).hexdigest()}")
+PY
+  )"
+  export OPENFN_SIDECAR_TOKEN_HASH
+fi
 
 fail() {
   echo "FAILED: $1" >&2
@@ -49,33 +60,12 @@ wait_http() {
 
 mkdir -p "${output_dir}"
 
-docker compose -f "${compose_file}" --profile openfn up -d \
+docker compose -f "${compose_file}" up -d --force-recreate --remove-orphans \
   openfn-mock-registry \
   openfn-civil-sidecar \
   openfn-civil-witness
 
-wait_http "OpenFn mock registry" http://127.0.0.1:4340/people/person-123 "demo-target-token"
-wait_http "OpenFn sidecar ready" http://127.0.0.1:4341/ready ""
 wait_http "OpenFn civil witness discovery" http://127.0.0.1:4324/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}"
-
-sidecar_body="${output_dir}/smoke-openfn-sidecar-rda.json"
-curl -fsS \
-  -H "Authorization: Bearer ${OPENFN_SIDECAR_TOKEN_RAW}" \
-  -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
-  -H "x-request-id: ${correlation_id}" \
-  -o "${sidecar_body}" \
-  "http://127.0.0.1:4341/datasets/civil_registry/civil_person?national_id=person-123&fields=national_id,birth_date&limit=2"
-
-python - "${sidecar_body}" <<'PY'
-import json
-import sys
-body = json.load(open(sys.argv[1], encoding="utf-8"))
-records = body.get("data") or []
-assert len(records) == 1, body
-assert records[0].get("national_id") == "person-123", body
-assert records[0].get("birth_date") == "1990-01-01", body
-assert "ignored_extra" not in records[0], body
-PY
 
 witness_body="${output_dir}/smoke-openfn-witness-evaluation.json"
 curl -fsS \

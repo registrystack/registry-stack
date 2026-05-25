@@ -3,11 +3,12 @@
 schema_version: registry-manifest/v1
 catalog:
   id: decentralized-demo-static-publication
-  base_url: http://static-metadata-publisher:8080/metadata
+  base_url: http://static-metadata-publisher:8080
   title: Decentralized Demo Static Metadata
   description: Static portable metadata for simulated registry and evidence services.
   publisher:
     name: Interoperability Metadata Publisher (Demo)
+    iri: did:web:static-metadata.demo.example.gov
   standards:
     dcat: '3.0'
     shacl: '1.1'
@@ -15,34 +16,188 @@ catalog:
   application_profiles:
     - id: bregdcat-ap
       version: '3.0'
+    - id: cpsv-ap
+      version: 3.2.0
+profiles:
+  - id: service-first-discovery
+    version: '1'
+authorities:
+  - id: civil_registration_authority
+    iri: did:web:civil-registry.demo.example.gov
+    name: Civil Registration Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: social_protection_authority
+    iri: did:web:social-protection.demo.example.gov
+    name: Social Protection Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: health_services_authority
+    iri: did:web:health-registry.demo.example.gov
+    name: Health Services Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: interoperability_metadata_publisher
+    iri: did:web:static-metadata.demo.example.gov
+    name: Interoperability Metadata Publisher
+    spatial: https://demo.example.gov/jurisdictions/ZZ
 requirements:
-  - id: child_support_requirement
-    iri: https://demo.example.gov/requirements/child-support
+  - id: child_identity_requirement
+    iri: https://demo.example.gov/requirements/child-identity
     title: Child support identity and alive-status requirement
+    description: Requirement to confirm the child has a civil registry record and is alive.
   - id: household_support_requirement
     iri: https://demo.example.gov/requirements/household-support
     title: Household support review requirement
+    description: Requirement to confirm the household has an active support record.
   - id: health_linked_support_requirement
     iri: https://demo.example.gov/requirements/health-linked-support
     title: Health-linked conditional support requirement
+    description: Requirement to confirm licensed health services are available for the applicant context.
+  - id: combined_support_bundle_requirement
+    iri: https://demo.example.gov/requirements/combined-support-bundle
+    title: Combined support evidence bundle requirement
+    description: Requirement represented by the legacy combined cross-authority evidence bundle.
+    evidence_type_lists:
+      - id: granular-authority-evidence
+        title: Civil, household, and health evidence bundle
+        description: A grouped option requiring evidence from the civil, social protection, and health authorities.
+        evidence_types:
+          - civil_child_status_evidence
+          - household_support_evidence
+          - health_service_availability_evidence
+      - id: combined-support-evidence
+        title: Combined support evidence
+        description: A single composed evidence record satisfying the same requirement.
+        evidence_types:
+          - combined_support_evidence
 evidence_types:
   - id: civil_child_status_evidence
     iri: https://demo.example.gov/evidence-types/civil-child-status
     title: Civil child status evidence
     proves:
-      - child_support_requirement
+      - child_identity_requirement
+      - combined_support_bundle_requirement
   - id: household_support_evidence
     iri: https://demo.example.gov/evidence-types/household-support
     title: Household support evidence
     proves:
       - household_support_requirement
+      - combined_support_bundle_requirement
+  - id: health_service_availability_evidence
+    iri: https://demo.example.gov/evidence-types/health-service-availability
+    title: Health service availability evidence
+    proves:
+      - health_linked_support_requirement
+      - combined_support_bundle_requirement
   - id: combined_support_evidence
     iri: https://demo.example.gov/evidence-types/combined-support
     title: Combined cross-authority support evidence
     proves:
-      - child_support_requirement
-      - household_support_requirement
-      - health_linked_support_requirement
+      - combined_support_bundle_requirement
+public_services:
+  - id: health_linked_child_support
+    iri: https://demo.example.gov/services/health-linked-child-support
+    title: Health-linked child support eligibility review
+    description: Public service for reviewing child support eligibility using civil, social protection, and health evidence.
+    competent_authority: social_protection_authority
+    jurisdiction: https://demo.example.gov/jurisdictions/ZZ
+    channels:
+      - id: health_linked_child_support_online
+        iri: https://demo.example.gov/services/health-linked-child-support/channels/online
+        title: Online review channel
+        kind: cv:OnlineChannel
+        access_url: https://demo.example.gov/services/health-linked-child-support
+    holds_requirements:
+      - combined_support_bundle_requirement
+    data_services:
+      - health_facility_lookup_api
+    forms:
+      - health_linked_child_support_form
+data_services:
+  - id: health_facility_lookup_api
+    iri: https://demo.example.gov/data-services/health-facility-lookup
+    title: Health facility lookup API
+    description: API route used to verify licensed health service availability.
+    endpoint_url: https://demo.example.gov/api/health/facilities
+    endpoint_description: https://demo.example.gov/openapi/health-facilities.yaml
+    serves_datasets:
+      - health_registry
+    conforms_to: https://spec.openapis.org/oas/v3.1.0
+forms:
+  - id: health_linked_child_support_form
+    iri: https://demo.example.gov/forms/health-linked-child-support/v1
+    title: Health-linked child support application form
+    description: Form used to start the health-linked child support review.
+    service: health_linked_child_support
+    channel: health_linked_child_support_online
+    validates_with:
+      json_schema: http://static-metadata-publisher:8080/metadata/forms/health_linked_child_support_form/schema.json
+      shacl: http://static-metadata-publisher:8080/metadata/forms/health_linked_child_support_form/shacl
+    sections:
+      - id: applicant
+        title: Applicant
+        min_occurs: 1
+        max_occurs: 1
+        fields:
+          - id: applicant_national_id
+            name: applicantNationalId
+            label: Applicant national ID
+            widget_type: text
+            data_type: xsd:string
+            concept: https://demo.example.gov/concepts/national-id
+            supports_requirement: child_identity_requirement
+            required: true
+            min_occurs: 1
+            max_occurs: 1
+            fulfillment:
+              modes:
+                - manual_input
+                - registry_lookup
+              preferred_mode: registry_lookup
+      - id: children
+        title: Children
+        repeatable: true
+        min_occurs: 1
+        fields:
+          - id: child_national_id
+            name: childNationalId
+            label: Child national ID
+            widget_type: text
+            data_type: xsd:string
+            concept: https://demo.example.gov/concepts/national-id
+            supports_requirement: child_identity_requirement
+            required: true
+            min_occurs: 1
+            max_occurs: 1
+      - id: health_linked
+        title: Health service context
+        visible_when:
+          field: supportType
+          equals: health_linked
+        fields:
+          - id: health_district
+            name: healthDistrict
+            label: Health district
+            widget_type: text
+            data_type: xsd:string
+            concept: https://demo.example.gov/concepts/health-district
+            supports_requirement: health_linked_support_requirement
+            required: true
+            fulfillment:
+              modes:
+                - registry_lookup
+                - known_from_context
+              preferred_mode: registry_lookup
+    fields:
+      - id: support_type
+        name: supportType
+        label: Support type
+        widget_type: select
+        data_type: xsd:string
+        concept: https://demo.example.gov/concepts/support-type
+        required: true
+        fulfillment:
+          modes:
+            - manual_input
+          preferred_mode: manual_input
 datasets:
   - id: civil_registry
     title: Civil Registry
@@ -51,6 +206,10 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: daily
+    public_services:
+      - id: https://demo.example.gov/services/civil-registry-service
+        title: Civil registry service
+        description: Service responsible for maintaining civil registration data.
     evidence_offerings:
       - id: civil_child_status_evidence_service
         iri: https://demo.example.gov/evidence-offerings/civil-child-status
@@ -67,6 +226,8 @@ datasets:
         entity: civil_person
         lookup_keys:
           - national_id
+        procedure_contexts:
+          - health_linked_child_support
         access:
           kind: registry-witness
           conforms_to: registry_relay:registry-witness-v1
@@ -105,6 +266,10 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: weekly
+    public_services:
+      - id: https://demo.example.gov/services/social-protection-registry-service
+        title: Social protection registry service
+        description: Service responsible for maintaining social protection registry data.
     evidence_offerings:
       - id: household_support_evidence_service
         iri: https://demo.example.gov/evidence-offerings/household-support
@@ -121,6 +286,8 @@ datasets:
         entity: program_enrollment
         lookup_keys:
           - national_id
+        procedure_contexts:
+          - health_linked_child_support
         access:
           kind: registry-witness
           conforms_to: registry_relay:registry-witness-v1
@@ -146,6 +313,80 @@ datasets:
           - name: enrollment_status
             type: string
             required: true
+  - id: health_registry
+    title: Health Facility Registry
+    description: Static description of simulated facility licensing and service availability records.
+    owner: Health Services Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    public_services:
+      - id: https://demo.example.gov/services/health-facility-registry-service
+        title: Health facility registry service
+        description: Service responsible for maintaining health facility availability data.
+    evidence_offerings:
+      - id: health_service_availability_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/health-service-availability
+        title: Health service availability evidence service
+        description: Evidence Server endpoint that computes facility license and service availability.
+        evidence_type: health_service_availability_evidence
+        issuing_authority:
+          id: health_services_authority
+          iri: did:web:health-registry.demo.example.gov
+          name: Health Services Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: health_facility
+        lookup_keys:
+          - national_id
+        procedure_contexts:
+          - health_linked_child_support
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://shared-eligibility-witness:8080
+          discovery_url: http://shared-eligibility-witness:8080/.well-known/evidence-service
+          ruleset: health-service-availability-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/health-linked-support-eligibility
+    entities:
+      - name: health_facility
+        title: Health Facility
+        description: Facility service and license projection for eligibility evidence.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: facility_name
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: license_status
+            type: string
+            required: true
+          - name: maternal_service_available
+            type: boolean
+            required: true
+          - name: pediatric_service_available
+            type: boolean
+            required: true
+          - name: practitioner_credential_active
+            type: boolean
+            required: true
+          - name: updated_on
+            type: date
+            required: true
   - id: combined_support_registry_view
     title: Combined Support Registry View
     description: Static policy metadata describing a cross-authority evidence service.
@@ -170,6 +411,8 @@ datasets:
         entity: applicant
         lookup_keys:
           - national_id
+        procedure_contexts:
+          - health_linked_child_support
         access:
           kind: registry-witness
           conforms_to: registry_relay:registry-witness-v1

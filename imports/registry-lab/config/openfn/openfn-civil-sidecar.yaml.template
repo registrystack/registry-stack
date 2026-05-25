@@ -6,7 +6,7 @@ server:
 auth:
   bearer_tokens:
     - id: openfn_civil_witness
-      token: "__OPENFN_SIDECAR_TOKEN_RAW__"
+      hash_env: OPENFN_SIDECAR_TOKEN_HASH
 
 limits:
   max_workers: 2
@@ -41,6 +41,8 @@ sources:
     job: /opt/openfn/jobs/http-person-lookup.js
     adaptor: "@openfn/language-http@7.2.0"
     credential_env: OPENFN_HTTP_DEMO_CREDENTIAL_JSON
+    allowed_base_urls:
+      - http://openfn-mock-registry:8080
     smoke_lookup:
       field: national_id
       value: person-123

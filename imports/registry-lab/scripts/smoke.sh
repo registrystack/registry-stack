@@ -131,7 +131,52 @@ if value != expected_value:
 PY
 }
 
+atlas_service_view() {
+  local atlas_root
+  atlas_root="$("${script_dir}/check-service-first-deps.sh" atlas-path)"
+  (
+    cd "${atlas_root}"
+    cargo run --quiet -p semantic-asset-discovery-cli --bin semantic-asset-discovery -- analyze \
+      --entry-url http://127.0.0.1:4331/metadata/cpsv-ap \
+      "${output_dir}/smoke-static-cpsv-ap.jsonld" > "${output_dir}/smoke-atlas-service-report.json"
+    cargo run --quiet -p semantic-asset-discovery-cli --bin semantic-asset-discovery -- service-view \
+      https://demo.example.gov/services/health-linked-child-support \
+      --report "${output_dir}/smoke-atlas-service-report.json" > "${output_dir}/smoke-atlas-service-view.json"
+  )
+  python - "${output_dir}/smoke-atlas-service-view.json" <<'PY'
+import json
+import sys
+
+view = json.load(open(sys.argv[1], encoding="utf-8"))
+expected = {
+    "requirements": 1,
+    "accepted_evidence_types": 4,
+    "providers": 4,
+    "forms": 1,
+}
+for key, minimum in expected.items():
+    actual = len(view.get(key, []))
+    if actual < minimum:
+        raise SystemExit(f"{key} expected at least {minimum}, got {actual}")
+if view.get("gaps"):
+    raise SystemExit(f"service graph has gaps: {view['gaps']}")
+option_count = sum(len(req.get("evidence_options", [])) for req in view.get("requirements", []))
+if option_count < 2:
+    raise SystemExit(f"service graph expected grouped evidence options, got {option_count}")
+if not any(
+    option.get("satisfiable") is True and len(option.get("evidence_types", [])) == 1
+    for req in view.get("requirements", [])
+    for option in req.get("evidence_options", [])
+):
+    raise SystemExit("service graph did not preserve the satisfiable single-record evidence option")
+if not any(route.get("kind") == "evidence_access_service" for route in view.get("routes", [])):
+    raise SystemExit("service graph has no evidence access service route")
+PY
+}
+
 mkdir -p "${output_dir}"
+
+check "service-first sibling dependencies" "${script_dir}/check-service-first-deps.sh" all
 
 wait_http "civil relay health" http://127.0.0.1:4311/health "${CIVIL_METADATA_CLIENT_RAW}"
 wait_http "social relay health" http://127.0.0.1:4312/health "${SOCIAL_METADATA_CLIENT_RAW}"
@@ -167,8 +212,38 @@ check "shared Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4323/opena
 check "civil relay evidence offerings" curl_json GET http://127.0.0.1:4311/metadata/evidence-offerings "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-offerings.json"
 check "social relay evidence offerings" curl_json GET http://127.0.0.1:4312/metadata/evidence-offerings "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-offerings.json"
 check "health relay evidence offerings" curl_json GET http://127.0.0.1:4313/metadata/evidence-offerings "${HEALTH_METADATA_CLIENT_RAW}" "${output_dir}/smoke-health-offerings.json"
+check "static metadata index" curl_json GET http://127.0.0.1:4331/metadata/index.json "" "${output_dir}/smoke-static-metadata-index.json"
 check "static evidence offerings" curl_json GET http://127.0.0.1:4331/metadata/evidence-offerings.json "" "${output_dir}/smoke-static-offerings.json"
 check "static policy metadata" curl_json GET http://127.0.0.1:4331/metadata/policies.jsonld "" "${output_dir}/smoke-static-policies.json"
+check "static BRegDCAT profile route" curl_json GET http://127.0.0.1:4331/metadata/dcat/bregdcat-ap "" "${output_dir}/smoke-static-bregdcat-ap.jsonld"
+check "static CPSV-AP service catalogue" curl_json GET http://127.0.0.1:4331/metadata/cpsv-ap "" "${output_dir}/smoke-static-cpsv-ap.jsonld"
+check "static service form schema" curl_json GET http://127.0.0.1:4331/metadata/forms/health_linked_child_support_form/schema.json "" "${output_dir}/smoke-service-form-schema.json"
+check "static index links CPSV-AP route" python - "${output_dir}/smoke-static-cpsv-ap.jsonld" "${output_dir}/smoke-static-metadata-index.json" <<'PY'
+import json
+import sys
+
+cpsv_path, index_path = sys.argv[1], sys.argv[2]
+cpsv = json.load(open(cpsv_path, encoding="utf-8"))
+index = json.load(open(index_path, encoding="utf-8"))
+service_iri = "https://demo.example.gov/services/health-linked-child-support"
+
+graph = cpsv.get("@graph", [])
+if not any(
+    isinstance(node, dict)
+    and node.get("@id") == service_iri
+    and "cpsv:PublicService" in ([node.get("@type")] if isinstance(node.get("@type"), str) else node.get("@type", []))
+    for node in graph
+):
+    raise SystemExit("CPSV-AP catalogue does not include the health-linked child support public service")
+
+catalogues = index.get("service_catalogues", [])
+if not any(item.get("id") == "cpsv-ap" and item.get("url") == "/metadata/cpsv-ap" for item in catalogues):
+    raise SystemExit("metadata index does not link /metadata/cpsv-ap")
+form_schemas = index.get("form_schemas", [])
+if not any(item.get("form") == "health_linked_child_support_form" for item in form_schemas):
+    raise SystemExit("metadata index does not link the service form JSON Schema")
+PY
+check "Atlas service graph discovery" atlas_service_view
 
 status="$(curl_status GET http://127.0.0.1:4312/datasets/social_protection_registry/household?limit=1 "${SOCIAL_EVIDENCE_ONLY_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
 [[ "${status}" == "403" ]] || fail "row denial with evidence-only credential expected 403, got ${status}"
