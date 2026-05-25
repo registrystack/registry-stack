@@ -506,6 +506,22 @@ mod tests {
         encode(&header, &Value::Object(claims_map), &encoding_key).expect("encode jwt")
     }
 
+    fn unsigned_alg_none_token() -> String {
+        let now = now_secs() as i64;
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT","kid":"test-kid"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "iss": TEST_ISSUER,
+                "aud": TEST_AUDIENCE,
+                "sub": "user-1",
+                "iat": now,
+                "exp": now + 300,
+            }))
+            .expect("payload serializes"),
+        );
+        format!("{header}.{payload}.")
+    }
+
     #[tokio::test]
     async fn valid_bearer_resolves_principal_with_scopes() {
         let (sk, vk) = fresh_keypair();
@@ -644,6 +660,32 @@ mod tests {
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
         let err = provider.verify(&token).await.expect_err("expired");
         assert!(matches!(err, AuthError::TokenExpired), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn not_yet_valid_token_is_rejected() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                nbf_delta_secs: Some(3600),
+                ..Default::default()
+            },
+        );
+        let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
+        let err = provider.verify(&token).await.expect_err("nbf in future");
+        assert!(matches!(err, AuthError::TokenNotYetValid), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn unsigned_alg_none_token_is_rejected() {
+        let (_sk, vk) = fresh_keypair();
+        let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
+        let err = provider
+            .verify(&unsigned_alg_none_token())
+            .await
+            .expect_err("alg none must not authenticate");
+        assert!(matches!(err, AuthError::MalformedCredential), "got {err:?}");
     }
 
     #[tokio::test]
