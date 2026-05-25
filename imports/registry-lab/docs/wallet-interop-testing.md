@@ -20,7 +20,17 @@ just citizen-oid4vci-token
 
 That probe proves the wallet-neutral protocol surface: issuer metadata,
 credential offer, nonce, holder proof, credential endpoint, source read,
-credential issuance, and redacted evidence artifacts.
+credential issuance, and local evidence artifacts.
+
+The OID4VCI facade currently targets Draft 13-style credential offers and
+credential responses for wallet compatibility, plus a Final-style nonce endpoint
+for wallets that require nonce retrieval before the credential request.
+
+The lab intentionally writes raw demo evidence under `output/`, including
+tokens, proof JWTs, issued credentials, and seeded civil identifiers such as
+`NID-1001`. Treat those files as sensitive local replay/debug artifacts. They
+are useful for learning and troubleshooting, but they must not be committed,
+shared, or copied into public issue reports.
 
 Real wallet testing adds wallet-specific behavior: offer parsing, holder DID
 selection, authorization redirect handling, proof generation, credential
@@ -125,6 +135,8 @@ If Walt stops before issuance, capture:
 - Witness log or audit line for `/oid4vci/credential`, if reached.
 - Whether the blocker was offer parsing, issuer metadata, authorization,
   nonce, proof, credential response, or credential storage.
+- Redact raw tokens, proof JWTs, issued credentials, and seeded civil IDs before
+  sharing artifacts outside the local demo workspace.
 
 ## Inji and Mimoto
 
@@ -163,6 +175,8 @@ If Inji does not complete the flow, capture:
 - The first incompatible request or response field.
 - Witness `output/citizen-oid4vci/report.md`.
 - A scripted partial-path result from `just citizen-oid4vci-code`.
+- Redact raw tokens, proof JWTs, issued credentials, and seeded civil IDs before
+  sharing artifacts outside the local demo workspace.
 
 ## Evidence Checklist
 
@@ -197,5 +211,7 @@ The run is considered passed when:
 - V1 is authorization-code oriented for real wallets. The lab script can use
   pre-supplied tokens, but that is a test convenience, not the normal wallet
   UX.
-- If a wallet requires a different OpenID4VCI draft field name, record the
-  mismatch before adding a wallet-specific workaround.
+- V1 targets Draft 13-style offer and credential response compatibility, while
+  also exposing a Final-style nonce endpoint.
+- If a wallet requires a different OpenID4VCI field name or response shape,
+  record the mismatch before adding a wallet-specific workaround.

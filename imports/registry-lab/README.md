@@ -183,9 +183,11 @@ accepts explicit env overrides for those settings. The script generates
 Witness against the existing civil Relay, evaluates `person-is-alive` for the
 token-bound citizen, and proves `NID-1002` is denied. See
 `output/citizen-self-attestation/report.md` and
-`output/citizen-self-attestation/flow-transcript.txt` for the redacted evidence
-trail, and `docs/citizen-self-attestation-esignet-use-case.md` for the use case
-and setup details.
+`output/citizen-self-attestation/flow-transcript.txt` for the evidence trail,
+and `docs/citizen-self-attestation-esignet-use-case.md` for the use case and
+setup details. The lab intentionally keeps raw demo tokens, decoded claims, and
+seeded civil IDs in `output/` for replay and debugging, so treat the directory
+as sensitive local evidence.
 
 For the local eSignet profile used by the lab, prefer the Just wrappers:
 
@@ -248,12 +250,15 @@ just citizen-oid4vci-token
 ```
 
 The probe checks issuer metadata, credential offer, nonce, holder proof, and
-credential issuance. It prints each endpoint result in plain language, redacts
-tokens and credential values, and writes `output/citizen-oid4vci/report.md`,
-endpoint status files, request bodies, and response bodies. The nonce request is
-bound to the selected `credential_configuration_id`, matching the Witness nonce
-replay checks. To test the same facade with Walt Wallet API or Inji/Mimoto, see
-`docs/wallet-interop-testing.md`.
+credential issuance. V1 targets Draft 13-style offer and credential response
+compatibility, plus a Final-style nonce endpoint for wallets that require it.
+The probe prints each endpoint result in plain language and avoids printing
+bearer tokens or credential values to the terminal, but it intentionally writes
+raw local replay/debug artifacts under `output/`, including proof JWTs,
+credential request and response bodies, and seeded demo civil IDs where present.
+The nonce request is bound to the selected `credential_configuration_id`,
+matching the Witness nonce replay checks. To test the same facade with Walt
+Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
 ## OpenFn Sidecar Demo
 

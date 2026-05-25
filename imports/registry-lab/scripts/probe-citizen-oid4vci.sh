@@ -13,6 +13,7 @@ correlation_id="${DEMO_CORRELATION_ID:-citizen-oid4vci-demo-001}"
 
 metadata_path="${output_dir}/issuer-metadata.json"
 offer_path="${output_dir}/credential-offer.json"
+negative_offer_path="${output_dir}/credential-offer-unknown-denied.json"
 nonce_path="${output_dir}/nonce.json"
 nonce_request_path="${output_dir}/nonce-request.json"
 credential_request_path="${output_dir}/credential-request.json"
@@ -158,6 +159,7 @@ write_report() {
     "${transcript_path}" \
     "${metadata_path}" \
     "${offer_path}" \
+    "${negative_offer_path}" \
     "${nonce_path}" \
     "${nonce_request_path}" \
     "${credential_request_path}" \
@@ -169,6 +171,7 @@ write_report() {
     "${detail}" \
     "$(status_for metadata)" \
     "$(status_for offer)" \
+    "$(status_for negative_offer)" \
     "$(status_for nonce)" \
     "$(status_for credential)" <<'PY'
 import json
@@ -180,6 +183,7 @@ from pathlib import Path
     transcript_path,
     metadata_path,
     offer_path,
+    negative_offer_path,
     nonce_path,
     nonce_request_path,
     credential_request_path,
@@ -191,6 +195,7 @@ from pathlib import Path
     detail,
     metadata_status,
     offer_status,
+    negative_offer_status,
     nonce_status,
     credential_status,
 ) = sys.argv[1:]
@@ -206,6 +211,7 @@ def load_json(path):
 
 metadata = load_json(metadata_path) or {}
 offer = load_json(offer_path) or {}
+negative_offer = load_json(negative_offer_path) or {}
 nonce = load_json(nonce_path) or {}
 nonce_request = load_json(nonce_request_path) or {}
 credential_request = load_json(credential_request_path) or {}
@@ -229,6 +235,7 @@ lines = [
     "",
     f"- Metadata status: `{metadata_status}`",
     f"- Offer status: `{offer_status}`",
+    f"- Unknown offer status: `{negative_offer_status}`",
     f"- Nonce status: `{nonce_status}`",
     f"- Credential status: `{credential_status}`",
     "",
@@ -244,6 +251,8 @@ lines = [
     f"- Offer issuer: `{offer.get('credential_issuer', '')}`",
     f"- Offered configurations: `{', '.join(offer.get('credential_configuration_ids') or [])}`",
     f"- Authorization code grant present: `{bool((offer.get('grants') or {}).get('authorization_code'))}`",
+    f"- Unknown offer probe received OAuth error: `{negative_offer.get('error', '')}`",
+    f"- Unknown offer detail: `{negative_offer.get('error_description', '')}`",
     "",
     "## Nonce Summary",
     "",
@@ -266,12 +275,15 @@ lines = [
     "## Inputs",
     "",
     f"- Self-attestation artifacts: `{self_attestation_dir}`",
-    f"- Raw eSignet tokens: `redacted, never written`",
+    f"- Sensitive demo artifacts: `intentionally retained locally for replay/debugging`",
+    f"- Raw eSignet tokens: `not printed by this probe; may exist in the self-attestation output used to launch it`",
+    f"- Raw proof and credential bodies: `written under {Path(credential_request_path).parent}`",
     "",
     "## Artifacts",
     "",
     f"- `{metadata_path}`",
     f"- `{offer_path}`",
+    f"- `{negative_offer_path}`",
     f"- `{nonce_path}`",
     f"- `{nonce_request_path}`",
     f"- `{credential_request_path}`",
@@ -359,7 +371,18 @@ is_2xx "${offer_status}" ||
   fail "credential offer endpoint did not return 2xx; status ${offer_status}."
 echo "Credential offer received."
 echo "  status: ${offer_status}"
-echo "  offer URL present: $(json_present "${offer_path}" "url")"
+echo "  offered configurations: $(json_value "${offer_path}" "credential_configuration_ids")"
+
+negative_offer_url="${CITIZEN_OID4VCI_OFFER_ENDPOINT:-${base_url%/}/oid4vci/credential-offer}?credential_configuration_id=unknown"
+request negative_offer GET "${negative_offer_url}" "${negative_offer_path}"
+negative_offer_status="$(status_for negative_offer)"
+[[ "${negative_offer_status}" == "400" ]] ||
+  fail "unknown credential offer request should return 400; status ${negative_offer_status}."
+[[ "$(json_value "${negative_offer_path}" "error")" == "invalid_request" ]] ||
+  fail "unknown credential offer request did not return OAuth error invalid_request."
+echo "Negative offer probe received OAuth error shape."
+echo "  status: ${negative_offer_status}"
+echo "  error: $(json_value "${negative_offer_path}" "error")"
 
 python3 - "${nonce_request_path}" "${CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID}" <<'PY'
 import json
@@ -446,6 +469,7 @@ Artifacts:
   ${transcript_path}
   ${metadata_path}
   ${offer_path}
+  ${negative_offer_path}
   ${nonce_path}
   ${credential_request_path}
   ${credential_response_path}

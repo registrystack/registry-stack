@@ -58,6 +58,12 @@ configured registry fact, and returns a bounded attestation result.
 The optional smoke script writes artifacts under
 `output/citizen-self-attestation/`:
 
+These are intentionally local demo artifacts. They may include raw token
+responses, decoded token/UserInfo claims, seeded civil identifiers, proof
+material, and issued credentials when an optional credential probe is run. Keep
+them for replay and debugging, but treat them as sensitive and do not commit or
+share them without redaction.
+
 - `citizen-witness-discovery.json`: authenticated Witness discovery.
 - `citizen-self-evaluation.json`: successful `person-is-alive` evaluation for
   `NID-1001`.
@@ -69,8 +75,8 @@ The optional smoke script writes artifacts under
   `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo`.
 - `citizen-civil-witness.log`: Witness startup and audit output, including
   `access_mode=self_attestation`.
-- `flow-transcript.txt`: redacted step-by-step transcript with token hashes,
-  issuers, audiences, algorithms, and binding choices.
+- `flow-transcript.txt`: step-by-step transcript with token hashes, issuers,
+  audiences, algorithms, binding choices, and demo control values.
 - `report.md`: short human-readable evidence report with the successful claim,
   denied other-person control, and self-attestation audit excerpt.
 
@@ -203,10 +209,14 @@ just citizen-oid4vci-token
 The probe reads `/.well-known/openid-credential-issuer`, requests
 `/oid4vci/credential-offer`, requests `/oid4vci/nonce` with the selected
 `credential_configuration_id`, generates an ephemeral holder proof JWT, and posts
-an OID4VCI credential request. It prints what each endpoint returned without
-printing bearer tokens or credential values. If the active Witness does not
-expose OID4VCI endpoints yet, the command fails and leaves `report.md`, status
-files, headers, request bodies, and response bodies under
+an OID4VCI credential request. V1 targets Draft 13-style credential offer and
+credential response compatibility, plus a Final-style nonce endpoint for wallets
+that require it. The script prints what each endpoint returned without printing
+bearer tokens or credential values to the terminal, but it intentionally writes
+raw local replay/debug artifacts under `output/citizen-oid4vci/`, including the
+proof JWT, credential request body, and credential response body. If the active
+Witness does not expose OID4VCI endpoints yet, the command fails and leaves
+`report.md`, status files, headers, request bodies, and response bodies under
 `output/citizen-oid4vci/` rather than passing silently. For real wallet checks
 with Walt Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
