@@ -34,7 +34,7 @@
     "name": "BRegDCAT-AP",
     "standards_body": "SEMIC",
     "official_url": "https://semiceu.github.io/BRegDCAT-AP/releases/2.00/",
-    "version_or_profile": "BRegDCAT-AP 2.00",
+    "version_or_profile": "BRegDCAT-AP 2.00 render surface",
     "status": "used",
     "claim_level": "emits",
     "used_by": [
@@ -55,8 +55,44 @@
         "url": "https://github.com/jeremi/registry-manifest/blob/main/README.md"
       }
     ],
-    "last_checked": "2026-05-23",
-    "notes": "Current docs describe generated BRegDCAT-AP JSON-LD with SHACL node shapes."
+    "last_checked": "2026-05-25",
+    "notes": "Manifest and Relay emit BRegDCAT-shaped registry and data-service metadata. CPSV-AP is now the service-discovery layer; BRegDCAT-AP remains the registry and data-service discovery layer. Later BRegDCAT-AP releases require a separate renderer review."
+  },
+  {
+    "id": "cpsv-ap",
+    "name": "Core Public Service Vocabulary Application Profile",
+    "standards_body": "SEMIC",
+    "official_url": "https://semiceu.github.io/CPSV-AP/releases/3.2.0/",
+    "version_or_profile": "CPSV-AP 3.2.0",
+    "status": "used",
+    "claim_level": "emits",
+    "used_by": [
+      "registry-manifest",
+      "registry-atlas",
+      "registry-lab"
+    ],
+    "surfaces": [
+      "public service catalogue rendering",
+      "service-first discovery",
+      "channel and form linking",
+      "competent authority and requirement links"
+    ],
+    "evidence_docs": [
+      {
+        "label": "Registry Manifest CPSV-AP fixture",
+        "url": "https://github.com/jeremi/registry-manifest/tree/main/fixtures/cpsv-ap"
+      },
+      {
+        "label": "Registry Atlas service-first spec",
+        "url": "https://github.com/jeremi/registry-atlas/blob/main/SERVICE_FIRST_DISCOVERY_SPEC.md"
+      },
+      {
+        "label": "Registry Lab service-first discovery docs",
+        "url": "https://github.com/jeremi/registry-lab/blob/main/docs/service-first-discovery.md"
+      }
+    ],
+    "last_checked": "2026-05-25",
+    "notes": "Registry Manifest emits CPSV-AP service catalogues. Registry Atlas consumes them for service-first discovery; Registry Lab demonstrates the flow with static metadata."
   },
   {
     "id": "ogc-api-records",
@@ -212,6 +248,7 @@
     ],
     "surfaces": [
       "catalog JSON-LD",
+      "CPSV-AP service catalogue JSON-LD",
       "policy JSON-LD",
       "CCCEV render output",
       "provenance contexts"
@@ -297,18 +334,32 @@
     "id": "cccev",
     "name": "Core Criterion and Core Evidence Vocabulary",
     "standards_body": "SEMIC",
-    "official_url": "https://semiceu.github.io/CCCEV/releases/2.00/",
-    "version_or_profile": "CCCEV 2.00",
+    "official_url": "https://semiceu.github.io/CCCEV/releases/2.2.0/",
+    "version_or_profile": "CCCEV 2.2.0",
     "status": "used",
     "claim_level": "emits",
     "used_by": [
-      "registry-witness"
+      "registry-manifest",
+      "registry-witness",
+      "registry-atlas",
+      "registry-lab"
     ],
     "surfaces": [
+      "requirement and information requirement metadata",
+      "evidence type and evidence type list metadata",
+      "grouped evidence option discovery",
       "claim result rendering",
       "evidence node JSON-LD"
     ],
     "evidence_docs": [
+      {
+        "label": "Registry Manifest grouped evidence fixture",
+        "url": "https://github.com/jeremi/registry-manifest/tree/main/fixtures/cpsv-ap"
+      },
+      {
+        "label": "Registry Atlas service-first navigation API",
+        "url": "https://github.com/jeremi/registry-atlas/blob/main/crates/semantic-asset-discovery-core/src/navigation.rs"
+      },
       {
         "label": "Registry Witness CCCEV renderer",
         "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs"
@@ -318,8 +369,8 @@
         "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs"
       }
     ],
-    "last_checked": "2026-05-23",
-    "notes": "Witness renders CCCEV-shaped JSON-LD for claim evaluation results. Profile conformance is not claimed."
+    "last_checked": "2026-05-25",
+    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. Atlas treats each EvidenceTypeList as one grouped option and multiple lists as alternatives. Witness renders CCCEV-shaped claim results. Profile conformance is not claimed."
   },
   {
     "id": "odrl",

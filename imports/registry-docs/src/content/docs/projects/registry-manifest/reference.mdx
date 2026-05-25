@@ -1,15 +1,17 @@
 ---
 title: Registry Manifest reference
-description: Reference tables for registry-manifest-cli subcommands, manifest top-level keys, and publish output artifacts.
+description: Reference tables for registry-manifest-cli subcommands, manifest top-level keys, service-first keys, and publish output artifacts.
 status: draft
 owner: registry-manifest
 source_repos:
   - registry-manifest
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: reference
 locale: en
 standards_referenced:
   - dcat
+  - cpsv-ap
+  - cccev
   - bregdcat-ap
   - shacl
   - json-schema
@@ -38,7 +40,7 @@ validate <metadata.yaml>
 Compiles the manifest and writes one renderer's output to stdout.
 
 ```text
-render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--offering <id>]
+render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--form <id>] [--offering <id>]
 ```
 
 ### `publish`
@@ -60,6 +62,9 @@ validate-profiles [profiles-dir]
 ### Render format values
 
 The `--format` flag on `render` accepts:
+Terms used in the table include Data Catalog Vocabulary (DCAT), BRegDCAT-AP, Core Public Service
+Vocabulary Application Profile (CPSV-AP), Shapes Constraint Language (SHACL), and Open Digital
+Rights Language (ODRL).
 
 | Format value | Required flags | Output |
 | --- | --- | --- |
@@ -70,11 +75,14 @@ The `--format` flag on `render` accepts:
 | `policy` | `--dataset <id>` | Per-dataset ODRL policy document JSON-LD |
 | `dcat` | `--profile <id>` optional | Base DCAT JSON-LD. With `--profile bregdcat-ap`, renders the BRegDCAT-AP 2.00 variant. `--profile dcat` and `--profile dcat-ap` also render base DCAT. |
 | `bregdcat-ap` | None | BRegDCAT-AP 2.00 JSON-LD (shorthand; equivalent to `--format dcat --profile bregdcat-ap`) |
+| `cpsv-ap` | None | CPSV-AP 3.2.0 service catalogue JSON-LD |
 | `shacl` | None | SHACL node shapes JSON-LD |
 | `json-schema` | `--dataset <id>` and `--entity <name>` | JSON Schema Draft 2020-12 |
+| `form-json-schema` | `--form <id>` | Form JSON Schema Draft 2020-12 |
 | `ogc-records` | None | OGC API Records item bodies JSON |
 
 Valid `--profile` values for `--format dcat`: `dcat`, `dcat-ap` (both render base DCAT), and `bregdcat-ap` (renders BRegDCAT-AP 2.00).
+Use `--format cpsv-ap` for the service catalogue rather than `--format dcat --profile cpsv-ap`.
 
 ## Manifest top-level keys
 
@@ -88,8 +96,14 @@ Source:
 | `schema_version` | string | Yes | Must equal `"registry-manifest/v1"`. |
 | `catalog` | `CatalogManifest` | Yes | Catalog title, publisher, base URL, application profiles list, standards versions. |
 | `datasets` | list of `DatasetManifest` | Yes | One entry per dataset. |
+| `vocabularies` | map | No | Prefix expansions used by concept, requirement, form, and evidence references. |
+| `profiles` | list of `ProfileClaim` | No | Local profile claims included in catalog output. |
 | `requirements` | list of `RequirementManifest` | No | CCCEV-aligned requirement definitions. |
 | `evidence_types` | list of `EvidenceTypeManifest` | No | Evidence type definitions. |
+| `authorities` | list of `AuthorityManifest` | No | Public authority records referenced by public services. |
+| `public_services` | list of `ServiceManifest` | No | CPSV-AP public services and channels. |
+| `data_services` | list of `DataServiceManifest` | No | DCAT data services referenced by services and evidence offerings. |
+| `forms` | list of `FormManifest` | No | Local form-profile records linked from public services and channels. |
 | `codelists` | list of `CodelistManifest` | No | Enumerated value schemes with concept URIs. |
 
 ### CatalogManifest keys
@@ -111,7 +125,20 @@ Source:
 | `entities` | List of `EntityManifest` entries describing domain resources and their fields. |
 | `policies` | List of `DatasetPolicyManifest` entries describing ODRL access policies. |
 | `evidence_offerings` | List of `EvidenceOfferingManifest` entries. |
+| `public_services` | Dataset-scoped public registry services, when a dataset is itself the produced registry resource. |
 | `codelists` | List of codelist IDs referenced by this dataset's fields. |
+
+### Service-first keys
+
+| Key | Description |
+| --- | --- |
+| `public_services[].holds_requirements` | Requirement IDs rendered as `cv:holdsRequirement`. |
+| `public_services[].channels` | CPSV-AP channel records for online, office, phone, or other access paths. |
+| `public_services[].forms` | Form IDs linked through the local `registry_manifest:hasForm` predicate. |
+| `requirements[].evidence_type_lists` | Grouped CCCEV evidence options. All evidence types inside one list are required together; multiple lists are alternatives. |
+| `forms[].sections[].fields[].concept` | Information concept IRI collected by the form field. |
+| `forms[].sections[].fields[].supports_requirement` | Requirement ID supported by the field. |
+| `forms[].sections[].fields[].fulfillment` | Manual input, file upload, registry lookup, evidence exchange, self-declaration, or already-known mode metadata. |
 
 ### Runtime-only keys
 
@@ -139,6 +166,8 @@ All paths are relative to the `--out` directory.
 | `metadata.yaml` | YAML | Copy of input manifest |
 | `catalog.json` | JSON | `render_catalog()` |
 | `dcat.jsonld` | JSON-LD | `render_base_dcat()` |
+| `cpsv-ap` | JSON-LD | `render_cpsv_ap()` when the catalog declares the `cpsv-ap` profile |
+| `cpsv-ap.jsonld` | JSON-LD | `render_cpsv_ap()` when the catalog declares the `cpsv-ap` profile |
 | `dcat.<profile-id>.jsonld` | JSON-LD | `render_dcat_profile()` per application profile |
 | `shacl.jsonld` | JSON-LD | `render_shacl()` |
 | `evidence-offerings.json` | JSON | `render_evidence_offerings()` |
@@ -146,6 +175,7 @@ All paths are relative to the `--out` directory.
 | `policies.jsonld` | JSON-LD | `render_policy_collection()` |
 | `policies/<dataset-id>.jsonld` | JSON-LD | `render_dataset_policy_document()` per dataset |
 | `schema/<dataset-id>/<entity-name>/schema.json` | JSON Schema Draft 2020-12 | `render_entity_schema_draft_2020_12()` per entity |
+| `forms/<form-id>/schema.json` | JSON Schema Draft 2020-12 | `render_form_schema_draft_2020_12()` per form |
 | `profiles/<profile-id>.json` | JSON | Compiled profile structure |
 | `index.json` | JSON | Bundle manifest index (schema version `registry-manifest-index/v1`) |
 
@@ -167,6 +197,19 @@ Minimal example shape:
     {
       "urls": ["https://registry.example.gov/metadata/shacl"],
       "path": "shacl.jsonld"
+    }
+  ],
+  "service_catalogues": [
+    {
+      "id": "cpsv-ap",
+      "version": "3.2.0",
+      "url": "/metadata/cpsv-ap"
+    }
+  ],
+  "form_schemas": [
+    {
+      "form": "child-support-review-form",
+      "url": "/metadata/forms/child-support-review-form/schema.json"
     }
   ]
 }

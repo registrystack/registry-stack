@@ -11,15 +11,17 @@ source_repos:
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
-  - OpenAPI
-  - DCAT
-  - SHACL
-  - JSON-Schema
-  - SD-JWT-VC
+  - openapi
+  - dcat
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - sd-jwt-vc
 ---
 
 import ProjectMap from '../../../components/ProjectMap.astro';
@@ -40,11 +42,11 @@ Use this map to decide which repository owns a question before opening implement
 ## Flow across the family
 
 [Registry Platform](../../projects/registry-platform/) provides shared Rust primitives that Relay and Witness compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy, and testing.
-[Registry Manifest](../../projects/registry-manifest/) defines portable metadata and compiles it into standards-facing artifacts.
+[Registry Manifest](../../projects/registry-manifest/) defines portable metadata and compiles it into standards-facing service, registry, schema, form, policy, and evidence artifacts.
 [Registry Relay](../../projects/registry-relay/) binds logical datasets and entities to protected runtime sources and exposes them as authorized read-only APIs.
 [Registry Witness](../../projects/registry-witness/) evaluates configured claims against registry sources and issues SD-JWT VC credentials.
-[Registry Atlas](../../projects/registry-atlas/) inspects published discovery artifacts, parses DCAT catalogs and capability envelopes, and answers strict capability queries.
-[Registry Lab](../../projects/registry-lab/) runs the smallest local ecosystem demo, composing three Relay authorities, three Witness services, a static metadata publisher, and a narrated client.
+[Registry Atlas](../../projects/registry-atlas/) inspects published discovery artifacts, parses service catalogues and registry metadata, and navigates service-first requirements, evidence options, providers, forms, and access routes.
+[Registry Lab](../../projects/registry-lab/) runs the smallest local ecosystem demo, composing three Relay authorities, four Witness services, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated clients.
 
 ---
 

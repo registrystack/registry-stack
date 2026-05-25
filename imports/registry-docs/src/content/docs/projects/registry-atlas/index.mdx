@@ -1,15 +1,17 @@
 ---
 title: Registry Atlas overview
-description: Explains what Registry Atlas is, its inspection model for catalog and discovery artifacts, the strict capability discovery engine, and its relationship to the rest of the registry family.
+description: Explains what Registry Atlas is, its service-first semantic discovery model, strict matching boundary, and relationship to the rest of the registry family.
 status: draft
 owner: registry-atlas
 source_repos:
   - registry-atlas
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
   - dcat
+  - cpsv-ap
+  - cccev
   - bregdcat-ap
   - shacl
   - json-schema
@@ -18,18 +20,20 @@ standards_referenced:
 
 Registry Atlas is a browser workbench for inspecting what a registry publishes before you write
 integration code.
-It fetches and parses the catalog, schemas, policies, and evidence offerings a registry exposes
-at its metadata endpoints, shows you the discovered assets, and lets you run strict capability
-queries to check whether the registry actually emits what it claims to emit.
+It fetches and parses the service catalogue, schemas, policies, forms, and evidence offerings a
+registry exposes at its metadata endpoints, shows you the discovered assets, and lets you inspect
+the service-first graph from public service to requirement, evidence option, provider, and access
+route.
 
 Atlas does not run queries against live person-level data.
 It does not make authorization decisions.
 It is a discovery and review tool, not a data access gateway.
 
 A typical workflow: you paste the registry's metadata URL into Atlas, run discovery, browse
-the schemas and policies in the Registry tab, then open the Capabilities tab to check whether
-the registry's published metadata actually supports the information need you want to query.
-If it does, the candidate routes give you the endpoint URL and evidence to take into your
+the schemas and policies in the Registry tab, then open the Services tab to check which public
+services, requirements, evidence bundles, forms, providers, and data services the registry
+publishes.
+If a route is present, Atlas shows the endpoint URL and the relation evidence to take into your
 integration code.
 
 ## What Atlas is made of
@@ -37,8 +41,8 @@ integration code.
 `registry-atlas` is a browser single-page application (SPA) built with React 19, TypeScript,
 and Vite.
 A companion Node.js/Express server runs alongside the SPA as a same-origin fetch proxy.
-The heavy analysis runs in your browser via WebAssembly; the Node/Express server is just a
-same-origin fetch proxy that lets you point the workspace at any URL.
+The heavy analysis runs in your browser via WebAssembly; the Node/Express server is a
+same-origin fetch proxy for inspected URLs.
 
 The SPA and proxy are separate processes.
 In development, `pnpm dev` starts both concurrently:
@@ -52,19 +56,23 @@ When you point Atlas at a registry metadata endpoint (a Data Catalog Vocabulary 
 URL), Atlas performs discovery in layers:
 
 1. The fetch proxy downloads the catalog document and each linked artifact it finds
-   (distributions, SHACL shapes, JSON Schema files, ODRL policies, OGC API Records landing pages,
-   OpenAPI descriptions).
+   (Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogues,
+   distributions, SHACL shapes, JSON Schema files, ODRL policies, OGC API Records landing pages,
+   OpenAPI descriptions, and form schemas).
 2. The Rust-compiled WASM core classifies each fetched artifact into a `SemanticAsset` kind:
-   `catalog`, `dataset`, `distribution`, `data_service`, `json_schema`, `shacl`, `policy`,
+   `catalog`, `public_service`, `requirement`, `evidence_type`, `evidence_type_list`,
+   `form`, `data_service`, `dataset`, `distribution`, `json_schema`, `shacl`, `policy`,
    `open_api`, `api_description`, `class`, or `metadata_index`.
 3. The results are assembled into a `DiscoveryReport`, the portable evidence contract the
-   capability discovery layer consumes.
+   service-first navigation and strict matching layers consume.
 
 The UI presents the discovered material across four workspace tabs:
 
 - **Overview**: discovery summary, recognized profiles, validation status, and gaps.
 - **Registry**: searchable list of discovered datasets, services, distributions, and catalogs.
-- **Capabilities**: strict capability query interface.
+- **Services**: service-first graph over CPSV-AP public services, Core Criterion and Core Evidence
+  Vocabulary (CCCEV) requirements, grouped evidence options, providers, access services, forms,
+  and gaps.
 - **Evidence**: raw `DiscoveryReport` JSON, artifact tree, and a comparison view that separates
   core-recognized metadata from publisher-specific metadata.
 
@@ -110,9 +118,35 @@ The token is forwarded as an `Authorization: Bearer` header in the proxy request
 discarded when the browser tab closes.
 You must re-enter the token in each new browser session.
 
+## Service-first discovery
+
+The service-first view answers questions such as:
+
+```text
+Which public service is published?
+Which requirements does the service hold?
+Which evidence option groups satisfy each requirement?
+Which provider or access service can supply the evidence?
+Which form is linked to the online channel?
+```
+
+Registry Atlas treats a Core Criterion and Core Evidence Vocabulary (CCCEV)
+`EvidenceTypeList` as one grouped evidence option.
+Every evidence type in the list is required together.
+Multiple lists on one requirement remain alternatives.
+
+The UI labels missing authority, legal, form, provider, and access-route evidence as gaps.
+It does not convert those gaps into legal conclusions.
+The normalized report keeps generic assets and typed relations as the wire contract; typed views
+such as a public service view or requirement view are projections over that report.
+
+The full normative contract for the service-first graph is in
+[`SERVICE_FIRST_DISCOVERY_SPEC.md`](https://github.com/jeremi/registry-atlas/blob/main/SERVICE_FIRST_DISCOVERY_SPEC.md).
+
 ## The strict capability discovery engine
 
-The capability discovery engine answers questions such as:
+Atlas also includes a strict capability discovery engine for exact-term checks.
+That engine answers questions such as:
 
 ```text
 Where can I find if someone is registered as a farmer?
@@ -150,6 +184,8 @@ The key fixture files are:
 
 - [`src/fixtures/registry-relay-system-capability.envelope.json`](https://github.com/jeremi/registry-atlas/blob/main/src/fixtures/registry-relay-system-capability.envelope.json):
   a `DiscoveryRunEnvelope` produced by a live harvest of the Registry Relay all-standards demo.
+- [`fixtures/service-first/health-linked-child-support.cpsv-ap.jsonld`](https://github.com/jeremi/registry-atlas/blob/main/fixtures/service-first/health-linked-child-support.cpsv-ap.jsonld):
+  a CPSV-AP and CCCEV fixture with grouped evidence options for service-first navigation tests.
 - [`fixtures/system-capability/registry-relay-all-standards.report.json`](https://github.com/jeremi/registry-atlas/blob/main/fixtures/system-capability/registry-relay-all-standards.report.json):
   a `DiscoveryReport` with all known asset kinds represented.
 
@@ -166,11 +202,13 @@ For live queries against person-level data or runtime API calls, use
 
 ## Relationship to Registry Lab
 
-Registry Lab runs Registry Relay, Registry Witness, the static metadata publisher, and a demo
-client together in a single `docker compose up`.
+Registry Lab runs Registry Relay, Registry Witness, live Postgres and Zitadel services, the private
+OpenFn sidecar path, the static metadata publisher, and demo clients together in a single
+`docker compose up`.
 Atlas is not included in the Registry Lab compose topology at v0.1.
 To use Atlas with the Registry Lab demo, start Atlas separately with `pnpm dev` and point its
-URL field at the Relay metadata endpoint that the compose topology exposes.
+URL field at `http://127.0.0.1:4331/metadata/cpsv-ap.jsonld`, or use the curated
+Registry Lab CPSV-AP service catalogue demo chip.
 
 ## Status and v0.1 caveats
 
@@ -183,7 +221,6 @@ are not yet supported:
   is deferred to a later optional layer.
 - Reviewed mappings are defined in the spec but no ingestion interface or UI exists in v0.1.
 - The governance workflow for reviewed capability assertions is not yet implemented.
-- Field-level discovery lineage (multi-hop link visualization) is not yet surfaced in the UI.
 - Refresh indicators showing when data was last fetched are not yet present in the UI.
 
 ## Next

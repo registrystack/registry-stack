@@ -1,22 +1,25 @@
 ---
 title: Registry Lab overview
-description: Registry Lab is the Docker Compose demo for the registry family, wiring three Relay instances, three Witness instances, a static metadata publisher, and a narrated demo client into a single topology you can run on a laptop.
+description: Registry Lab is the Docker Compose demo for the registry family, wiring Relay, Witness, live-source, OpenFn, static metadata, and narrated demo services into a single topology you can run on a laptop.
 status: draft
 owner: registry-lab
 source_repos:
   - registry-lab
-last_reviewed: "2026-05-24"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
-standards_referenced: []
+standards_referenced:
+  - cpsv-ap
+  - cccev
 ---
 
 Use this when you want to see the registry stack actually run end-to-end on your laptop in one command.
 
 Registry Lab is a Docker Compose demo for the registry family.
-It wires three Registry Relay instances, three Registry Witness instances,
-a static metadata publisher, and a narrated demo client into a single topology
-you can run on a laptop, with no production credentials and no remote services.
+It wires three Registry Relay instances, four Registry Witness instances,
+live Postgres and Zitadel services, a private OpenFn sidecar path, a static
+metadata publisher, and narrated demo clients into a single topology you can
+run on a laptop, with no production credentials and no remote services.
 
 The goal is to let a developer, reviewer, or integrator observe every layer of the stack
 interacting end-to-end on local data before writing any integration code.
@@ -33,7 +36,8 @@ scripts/release-check.sh
 ```
 
 `release-check.sh` runs fixture generation, credential generation, static metadata publication,
-compose build, compose up, smoke checks, demo client, and compose down in one pass.
+compose build, compose up, core smoke checks, demo client, live-service checks,
+OpenFn smoke checks, live-story walkthroughs, and compose down in one pass.
 The submodules use GitHub SSH URLs; configure SSH access or a Git URL rewrite before cloning
 with `--recurse-submodules`.
 
@@ -41,13 +45,16 @@ with `--recurse-submodules`.
 
 The compose file
 ([`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml))
-defines eight services across three domain areas.
-Three are Relay instances; three are Witness instances; one is the static metadata publisher;
-one is the narrated demo client (started on demand only, via `--profile client`).
+defines the core demo services, live support services, and private OpenFn services.
+Three are Relay instances; four are Witness instances; two are live backing
+services; two are the private OpenFn sidecar and mock registry; one is the
+static metadata publisher; one is the narrated demo client (started on demand
+only, via `--profile client`).
 
 All Relay and Witness images are built locally from the `registry-relay:demo` and `registry-witness:demo`
 images using the `vendor/registry-platform`, `vendor/registry-relay`, and `vendor/registry-witness`
 submodule sources.
+Postgres and Zitadel use public container images.
 The static metadata publisher and demo client both use the public `python:3.12.3-slim-bookworm` image.
 
 Host-to-container port assignments are fixed in `compose.yaml`.
@@ -57,6 +64,9 @@ Witness containers do not mount source data files directly.
 Registry Witness reads registry facts over HTTP from the Relay services.
 
 The Lab Relay images include the SP DCI and CEL-mapping feature flags so demo claims work out of the box.
+The OpenFn sidecar and mock registry are attached only to the private
+`openfn-internal` network; callers reach the OpenFn scenario through
+`openfn-civil-witness` on host port 4324.
 
 ## Fixtures and generated credentials
 
@@ -83,6 +93,8 @@ It writes a `.env` file (gitignored) with local demo credentials.
 No raw token is committed to the repository.
 
 The `.env.example` file in the repository root contains inert placeholder values only.
+Generated credentials now include OpenFn sidecar caller tokens and the private
+mock registry target token used by the OpenFn smoke path.
 
 ## Static metadata publisher
 
@@ -94,13 +106,18 @@ The `static-metadata/` directory is gitignored except for its `.gitignore`.
 The `static-metadata-publisher` service then serves that bundle at `127.0.0.1:4331`.
 No authentication is required for the static publisher endpoints.
 The static bundle is generated from the portable metadata config, not scraped from a running Relay.
+It includes the Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue
+used by Registry Atlas for service-first discovery.
+The catalogue preserves grouped Core Criterion and Core Evidence Vocabulary (CCCEV) evidence
+options: one option can require separate civil, household, and health evidence records, while
+another can require a single combined support record.
 
 ## Smoke checks
 
 [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)
 runs more than 30 checks against the live compose topology.
 The checks cover health and readiness on all three Relay instances,
-discovery endpoints on all three Witness instances with bearer-token and `x-api-key` credentials,
+discovery endpoints on all three core Witness instances with bearer-token and `x-api-key` credentials,
 OpenAPI endpoints on every service,
 authorization scope denial responses (403 with `auth.scope_denied`),
 positive row-read and aggregate-read responses on the social protection Relay,
@@ -108,6 +125,19 @@ claim evaluation (`POST /claims/evaluate`) on civil, social protection, and shar
 a cross-authority result with `source_count >= 2` on the shared eligibility witness,
 credential-bound evaluation returning `application/dc+sd-jwt`,
 and service-log assertions that generated raw secrets are not emitted.
+
+Additional focused checks exercise live and adaptor-backed paths:
+
+- `scripts/smoke-openfn.sh` verifies the OpenFn-backed Witness path through host port 4324.
+- `scripts/check-relay-postgres.sh` runs Relay's ignored live Postgres tests.
+- `scripts/check-relay-zitadel.sh` runs Relay's ignored Zitadel OIDC tests.
+- `scripts/smoke-oidc-relay.sh` starts a temporary OIDC-protected Relay against the local Zitadel IdP.
+- `scripts/demo-live-stories.sh` runs narrated live-service stories for Postgres, Zitadel/OIDC, and OpenFn.
+
+The smoke suite also checks the Registry Atlas service graph path when the sibling
+`registry-atlas` checkout is available.
+That check verifies the published CPSV-AP catalogue has at least one public service, one
+requirement, multiple evidence option groups, a form, providers, and data-service routes.
 
 All smoke requests carry the correlation ID `decentralized-demo-correlation-001` by default,
 overridable via the `DEMO_CORRELATION_ID` environment variable.
@@ -144,12 +174,26 @@ The demo client is started with a profile flag so it does not start alongside th
 docker compose -f compose.yaml --profile client run --rm demo-client
 ```
 
+## Live-service stories
+
+[`scripts/demo-live-stories.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/demo-live-stories.sh)
+runs four additional narrated checks against the live-service topology:
+
+1. A live Postgres source cutover that shows new database rows becoming visible without a Relay restart.
+2. A Zitadel-issued JWT flow against a temporary OIDC-protected Relay.
+3. An OpenFn sidecar lookup behind Registry Witness, with the sidecar and mock registry kept off host ports.
+4. A service-first discovery story that asks Atlas to read the static CPSV-AP catalogue and select
+   a satisfiable grouped evidence option without reading protected person-level data.
+
+The script writes artifacts to `output/live-stories/`.
+
 ## v0 status and caveats
 
 Registry Lab is at v0.
 Fixture data covers only five districts and a maximum of approximately 100 rows per dataset;
 it is not representative of production scale.
-Witness services have no healthcheck in compose; only Relay services have the CLI-help healthcheck.
+Core Witness services have no healthcheck in compose; Relay services use the CLI-help healthcheck,
+and the OpenFn sidecar uses an HTTP readiness healthcheck.
 Static metadata is not auto-regenerated on manifest changes; you must re-run
 `scripts/publish-static-metadata.sh` after modifying `config/static-metadata/metadata.yaml`.
 The demo client's `output/` directory is wiped on each run.

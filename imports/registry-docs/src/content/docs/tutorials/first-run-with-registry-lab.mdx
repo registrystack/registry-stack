@@ -8,17 +8,20 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-witness
-last_reviewed: "2026-05-24"
+last_reviewed: "2026-05-25"
 doc_type: tutorial
 locale: en
 standards_referenced:
+  - cpsv-ap
+  - cccev
   - openapi
 ---
 
 [Registry Lab](../../projects/registry-lab/) is the compose-based local demo for the registry family.
 It wires Registry Platform source crates, three [Registry Relay](../../projects/registry-relay/) instances,
-three [Registry Witness](../../projects/registry-witness/) instances, a static metadata publisher,
-and a narrated demo client into a single topology you can run on a laptop.
+four [Registry Witness](../../projects/registry-witness/) instances, live Postgres and Zitadel services,
+a private OpenFn sidecar path, a static metadata publisher, and narrated demo clients into a single
+topology you can run on a laptop.
 
 ## Prerequisites
 
@@ -27,6 +30,8 @@ and a narrated demo client into a single topology you can run on a laptop.
 - `python3` and `openssl` on your PATH (used by `scripts/generate-demo-secrets.py` and `scripts/demo-flow.py`).
 - GitHub SSH access for submodules, or equivalent local Git configuration for the `vendor/*` submodule URLs.
 - No production secrets in the demo environment. The generated `.env` uses inert local credentials only.
+- A sibling `../registry-witness` checkout when running the OpenFn sidecar path before the
+  `vendor/registry-witness` submodule includes `crates/registry-witness-openfn-sidecar`.
 
 ## Steps
 
@@ -78,25 +83,60 @@ Step 1 uses `uv run` because `generate-fixtures.py` declares inline PEP 723 depe
     docker compose -f compose.yaml --profile client run --rm demo-client
     ```
 
+8. Run the OpenFn sidecar smoke path:
+
+    ```sh
+    env REGISTRY_OPENFN_WITNESS_SOURCE_DIR=../registry-witness REGISTRY_WITNESS_SOURCE_DIR=../registry-witness REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/smoke-openfn.sh
+    ```
+
+9. Run the live-service checks:
+
+    ```sh
+    scripts/check-relay-postgres.sh
+    scripts/check-relay-zitadel.sh
+    scripts/smoke-oidc-relay.sh
+    scripts/demo-live-stories.sh
+    ```
+
+10. Inspect the service-first graph in Registry Atlas:
+
+    ```sh
+    cd ../registry-atlas
+    pnpm dev
+    ```
+
+    In the Atlas UI, use the Registry Lab Core Public Service Vocabulary Application Profile
+    (CPSV-AP) service catalogue demo chip, or enter
+    `http://127.0.0.1:4331/metadata/cpsv-ap.jsonld` and open the Services tab.
+
 ## Service topology
 
-The compose file starts eight services. Host ports are fixed in `compose.yaml`:
+The compose file starts the core demo services, live support services, and private OpenFn services.
+Host ports are fixed in `compose.yaml`:
 
 | Service | Role | Host port |
 | --- | --- | --- |
 | `civil-registry-relay` | Registry Relay for civil domain | 4311 |
 | `social-protection-registry-relay` | Registry Relay for social protection domain | 4312 |
 | `health-registry-relay` | Registry Relay for health domain | 4313 |
+| `postgres` | Live Postgres service for Relay database-source scenarios | 54329 |
+| `zitadel` | Live Zitadel identity provider for Relay OIDC scenarios | 4380 |
 | `civil-witness` | Registry Witness for civil claims | 4321 |
 | `social-protection-witness` | Registry Witness for social protection claims | 4322 |
 | `shared-eligibility-witness` | Registry Witness for cross-authority eligibility claims | 4323 |
+| `openfn-civil-witness` | Registry Witness for civil claims sourced through the OpenFn sidecar | 4324 |
+| `openfn-civil-sidecar` | Private OpenFn adaptor sidecar | none |
+| `openfn-mock-registry` | Private registry-like HTTP API used by the OpenFn sidecar | none |
 | `static-metadata-publisher` | Python HTTP server for portable metadata bundle | 4331 |
 | `demo-client` | Narrated client (one-shot, `--profile client` only) | none |
 
 Inside the compose network, services communicate via DNS names on port 8080 (for example, `http://civil-registry-relay:8080`).
-Witness containers do not mount source data directly; they read registry facts over HTTP from the Relay services.
+Witness containers do not mount source data directly; they read registry facts over HTTP from the Relay services
+or, for `openfn-civil-witness`, through the private OpenFn sidecar.
 
 Atlas is not in the compose topology at v0.1; it is run separately when needed for browser-side inspection.
+Atlas reads the static CPSV-AP service catalogue from port 4331 and does not query protected
+person-level Relay routes during metadata discovery.
 
 ## Expected output
 
@@ -104,7 +144,7 @@ After step 5, all Relay and Witness services start in the background.
 `scripts/smoke.sh` runs more than 30 checks, including:
 
 - Health and readiness endpoints (`/health`, `/ready`) on all three Relay instances.
-- Discovery endpoint (`/.well-known/evidence-service`) on all three Witness instances,
+- Discovery endpoint (`/.well-known/evidence-service`) on all three core Witness instances,
   with bearer-token and `x-api-key` coverage.
 - OpenAPI endpoints (`/openapi.json`) on all Relay and Witness instances.
 - Authorization scope denial responses (403 with `auth.scope_denied`) for out-of-scope credentials.
@@ -115,6 +155,10 @@ After step 5, all Relay and Witness services start in the background.
 - Audit log assertions, including a check that generated raw secrets are not emitted in service logs.
 
 The demo client (step 7) runs three narrated scenarios and writes artifacts to `output/`.
+The OpenFn smoke (step 8) writes `output/smoke-openfn-witness-evaluation.json`.
+The live-service stories (step 9) write artifacts to `output/live-stories/`.
+The Atlas inspection step shows the health-linked child support public service, grouped Core
+Criterion and Core Evidence Vocabulary (CCCEV) evidence options, provider routes, and the linked form.
 All requests use the correlation ID `decentralized-demo-correlation-001` by default
 (overridable via the `DEMO_CORRELATION_ID` environment variable).
 
@@ -122,6 +166,9 @@ All requests use the correlation ID `decentralized-demo-correlation-001` by defa
 
 Run `scripts/smoke.sh` as the primary verification command.
 A passing smoke run means all endpoint, authorization, audit, and credential checks pass.
+
+Run `scripts/smoke-openfn.sh` to verify the OpenFn-backed Witness path.
+Run `scripts/demo-live-stories.sh` to verify the live Postgres, Zitadel/OIDC, and OpenFn stories.
 
 To manually spot-check the static metadata publisher:
 
@@ -140,6 +187,6 @@ docker compose -f compose.yaml down -v
 ```
 
 The `-v` flag removes the named volumes `civil-registry-cache`, `social-protection-registry-cache`,
-and `health-registry-cache`.
+`health-registry-cache`, `postgres-data`, and `zitadel-seed`.
 
 {/* Stable identifiers note: decentralized-demo-correlation-001 (correlation ID) and decentralized-demo-static-publication (manifest ID) are intentionally stable protocol and log-correlation values baked into credentials and spec URLs. They are not renamed when the directory moves from decentralized-evidence-demo to registry-lab. */}

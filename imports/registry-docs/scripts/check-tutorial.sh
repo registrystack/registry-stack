@@ -34,16 +34,21 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-registry-lab.mdx"
-EXPECTED_STEP_COUNT=7
+EXPECTED_STEP_COUNT=14
 EXPECTED_VERIFY_COUNT=1
 EXPECTED_DEMO_ARTIFACTS=3
 EXPECTED_SERVICES=(
 	civil-registry-relay
 	social-protection-registry-relay
 	health-registry-relay
+	postgres
+	zitadel
 	civil-witness
 	social-protection-witness
 	shared-eligibility-witness
+	openfn-mock-registry
+	openfn-civil-sidecar
+	openfn-civil-witness
 	static-metadata-publisher
 )
 

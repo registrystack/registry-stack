@@ -1,15 +1,17 @@
 ---
 title: Registry Manifest overview
-description: Explains what Registry Manifest is, the metadata-manifest model, its compiled form, the renderers it ships, and how it relates to Registry Relay.
+description: Explains what Registry Manifest is, the metadata-manifest model, service-first renderers, form bridge, and relationship to Registry Relay.
 status: draft
 owner: registry-manifest
 source_repos:
   - registry-manifest
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
   - dcat
+  - cpsv-ap
+  - cccev
   - bregdcat-ap
   - shacl
   - json-schema
@@ -18,19 +20,22 @@ standards_referenced:
   - json-ld
 ---
 
-Write one YAML file, run a command, and get DCAT, SHACL, JSON Schema, and policy documents out.
+Write one YAML file, run a command, and get service catalogues, catalog metadata, validation
+shapes, JSON Schema, forms, and policy documents out.
 No server required.
 
 Registry Manifest is a portable Rust workspace that lets you describe a registry once in YAML
 and derive every standards-facing metadata artifact other systems need to find, understand, and
 connect to it.
-It doesn't serve HTTP, doesn't talk to databases, and doesn't handle credentials.
+It does not serve HTTP, does not talk to databases, and does not handle credentials.
 
 ## When you'd use this
 
-You have a registry and need to publish machine-readable metadata: a DCAT catalog so other systems
-can discover you, SHACL shapes so consumers can validate data they receive, JSON Schema for
-API contract documentation, or ODRL policies declaring access terms.
+You have a registry or public-service workflow and need to publish machine-readable metadata:
+a Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue, a Data Catalog
+Vocabulary (DCAT) catalog, Shapes Constraint Language (SHACL) shapes, JSON Schema for API contract
+documentation, a local form profile, or Open Digital Rights Language (ODRL) policies declaring
+access terms.
 You write one `metadata.yaml`, run `registry-manifest-cli publish`, and get a static directory
 of all those artifacts ready to host anywhere.
 
@@ -70,6 +75,10 @@ datasets:
           - name: entity_id
             type: string
             required: true
+requirements: []
+evidence_types: []
+public_services: []
+forms: []
 ```
 
 A manifest must not contain runtime bindings such as source file paths, table names, database
@@ -81,12 +90,19 @@ portable and Relay-independent.
 The top-level struct is `MetadataManifest`, which contains:
 
 - `CatalogManifest`: catalog title, publisher, base URL, application profiles, and standards versions in use.
-- `DatasetManifest`: one entry per dataset, each carrying entities, policies, evidence offerings, codelists, and ODRL (Open Digital Rights Language) terms.
+- `DatasetManifest`: one entry per dataset, each carrying entities, policies, evidence offerings, codelists, and ODRL terms.
 - `EntityManifest`: structural schema for a domain resource, including fields, identifiers, relationships, and vocabulary concept IRIs.
+- `ServiceManifest`: CPSV-AP-facing public service metadata, channels, competent authority, requirements, produced resources, linked forms, and data services.
+- `FormManifest`: local form-profile metadata for sections, fields, conditional visibility, repeating sections, validation references, and fulfillment modes.
 - `EvidenceOfferingManifest`: description of a verification capability and the access path a client uses to reach it.
 - `DatasetPolicyManifest` / `PolicyRuleManifest` / `PolicyDutyManifest` / `PolicyConstraintManifest`: dataset-scoped ODRL policy terms.
-- `RequirementManifest` / `EvidenceTypeManifest`: Core Criterion and Core Evidence Vocabulary (CCCEV)-aligned requirement and evidence type definitions. CCCEV structure is modeled here, but CCCEV rendering is owned by Registry Witness.
+- `RequirementManifest` / `EvidenceTypeManifest`: Core Criterion and Core Evidence Vocabulary (CCCEV)-aligned requirement, evidence type, and grouped evidence type list definitions.
 - `CodelistManifest`: enumerated value schemes with concept URIs.
+
+Grouped evidence is explicit.
+An `evidence_type_lists` entry under a requirement is one option group; all evidence types in that
+list are required together.
+Multiple lists on the same requirement are alternatives.
 
 ## Validation
 
@@ -96,11 +112,14 @@ any rendering occurs:
 1. Confirms `schema_version == "registry-manifest/v1"`.
 2. Validates catalog fields: HTTP base URL, title, publisher, and supported application profiles list.
 3. Validates requirement and evidence-type reference integrity.
-4. Validates per-dataset entities, fields, relationships, identifiers, codelists, cardinality strings, and ODRL policy terms.
-5. Validates evidence-offering references.
+4. Validates grouped evidence type lists, including duplicate list IDs, empty lists, unknown
+   evidence types, and evidence types that do not prove the owning requirement.
+5. Validates public service, channel, authority, form, and data-service references.
+6. Validates per-dataset entities, fields, relationships, identifiers, codelists, cardinality strings, and ODRL policy terms.
+7. Validates evidence-offering references.
 
 All errors are collected and returned together so a single run surfaces every problem in the
-file. You don't need to fix one error at a time and re-run.
+file. You do not need to fix one error at a time and re-run.
 
 Validation also expands vocabulary prefixes (for example, `person:Person.identifier` becomes a
 full IRI) and resolves codelist concept references before any renderer runs.
@@ -115,9 +134,11 @@ input.
 | --- | --- |
 | Catalog JSON | `catalog` |
 | DCAT JSON-LD | `dcat` |
+| CPSV-AP service catalogue JSON-LD | `cpsv-ap` |
 | BRegDCAT-AP 2.00 JSON-LD | `bregdcat-ap` |
 | SHACL node shapes JSON-LD | `shacl` |
 | JSON Schema Draft 2020-12 | `json-schema` |
+| Form JSON Schema Draft 2020-12 | `form-json-schema` |
 | OGC API Records item bodies JSON | `ogc-records` |
 | ODRL policy collection JSON-LD | `policies` |
 | Per-dataset ODRL policy document JSON-LD | `policy` |
@@ -178,8 +199,8 @@ Profile fixtures in `profiles/` are non-normative examples.
 The static publication bundle format (including `index.json` schema version
 `registry-manifest-index/v1`) is not yet a stable contract.
 
-The test suite includes golden-fixture assertions that lock renderer output for the four example
-profiles.
+The test suite includes golden-fixture assertions for the older example profiles and a shared
+CPSV-AP fixture contract used by Atlas service-first discovery tests.
 
 ## Next
 

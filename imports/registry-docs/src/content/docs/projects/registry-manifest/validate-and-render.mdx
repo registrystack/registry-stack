@@ -1,15 +1,17 @@
 ---
 title: Validate and render a manifest
-description: How to validate a Registry Manifest metadata file, render individual artifacts, and produce a static publication bundle with registry-manifest-cli.
+description: How to validate a Registry Manifest metadata file, render individual service, schema, form, and catalogue artifacts, and produce a static publication bundle with registry-manifest-cli.
 status: draft
 owner: registry-manifest
 source_repos:
   - registry-manifest
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: how-to
 locale: en
 standards_referenced:
   - dcat
+  - cpsv-ap
+  - cccev
   - bregdcat-ap
   - shacl
   - json-schema
@@ -17,9 +19,12 @@ standards_referenced:
   - odrl
 ---
 
-Check a `metadata.yaml` file for errors, inspect individual rendered artifacts (DCAT, BRegDCAT-AP, SHACL, JSON Schemas, etc.), or produce a complete static publication bundle for hosting.
+Check a `metadata.yaml` file for errors, inspect individual rendered artifacts
+(service catalogues, catalog metadata, validation shapes, JSON Schemas, form schemas, and policies),
+or produce a complete static publication bundle for hosting.
 
-The validator collects all errors across every validation pass before reporting, so a single run surfaces every problem in the file. You don't need to fix one error at a time and re-run.
+The validator collects all errors across every validation pass before reporting, so a single run surfaces every problem in the file.
+You do not need to fix one error at a time and re-run.
 
 For profile fixture validation, see the [profile fixtures how-to](../profile-fixtures/) instead.
 
@@ -67,6 +72,8 @@ Validation checks include:
 - Entity names match the required identifier pattern.
 - Cardinality strings are well-formed (`"0..1"`, `"1..n"`, `"1..1"`).
 - Codelist references resolve to defined codelists.
+- Grouped evidence type lists reference known evidence types that prove the owning requirement.
+- Public service, authority, channel, form, and data-service references resolve.
 - ODRL policy terms use recognized action and operator values.
 - Evidence offering references are internally consistent.
 
@@ -89,6 +96,14 @@ Render base DCAT JSON-LD:
 cargo run -p registry-manifest-cli -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format dcat
+```
+
+Render a Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
+  --format cpsv-ap
 ```
 
 To render the BRegDCAT-AP profile variant via `--format dcat`, pass `--profile bregdcat-ap`.
@@ -120,6 +135,15 @@ cargo run -p registry-manifest-cli -- render \
   --format json-schema \
   --dataset vital-events \
   --entity person
+```
+
+Render a form JSON Schema Draft 2020-12 document:
+
+```sh
+cargo run -p registry-manifest-cli -- render \
+  fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
+  --format form-json-schema \
+  --form child-support-review-form
 ```
 
 Render OGC API Records item bodies:
@@ -185,9 +209,9 @@ cargo run -p registry-manifest-cli -- publish \
   --out target/metadata/public
 ```
 
-The output directory will contain `catalog.json`, `dcat.jsonld`, `shacl.jsonld`, per-entity
-JSON Schema files, OGC Records output, evidence-offering files, and per-dataset policy
-documents.
+The output directory will contain `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld` when the
+manifest declares the profile, `shacl.jsonld`, per-entity JSON Schema files, form JSON Schema
+files, OGC Records output, evidence-offering files, and per-dataset policy documents.
 See the [reference page](../reference/) for the full artifact list.
 
 The `index.json` at the root of the output directory carries schema version
@@ -208,6 +232,7 @@ After `publish`, confirm the key artifacts are present:
 ```sh
 ls target/metadata/public/catalog.json \
    target/metadata/public/dcat.jsonld \
+   target/metadata/public/cpsv-ap.jsonld \
    target/metadata/public/shacl.jsonld \
    target/metadata/public/index.json
 ```

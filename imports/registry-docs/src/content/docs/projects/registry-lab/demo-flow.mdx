@@ -5,10 +5,12 @@ status: draft
 owner: registry-lab
 source_repos:
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: how-to
 locale: en
-standards_referenced: []
+standards_referenced:
+  - cpsv-ap
+  - cccev
 ---
 
 This page walks you through the three narrated scenarios in
@@ -22,7 +24,7 @@ For starting the topology from the beginning, see the
 
 ## When to use this
 
-Use this walkthrough when the topology is already up (all eight services started with
+Use this walkthrough when the core topology is already up (services started with
 `docker compose -f compose.yaml up -d`) and you want to trace what the demo client does,
 understand how scope enforcement works across services, or verify that a change
 to a Relay or Witness configuration changes the client output in the expected way.
@@ -191,6 +193,17 @@ Run the full smoke suite as a post-run gate (it re-runs the demo client internal
 ```sh
 scripts/smoke.sh
 ```
+
+To exercise the additional live-service stories, run:
+
+```sh
+scripts/demo-live-stories.sh
+```
+
+That script writes Postgres, Zitadel/OIDC, and OpenFn artifacts under `output/live-stories/`.
+It also writes the service-first discovery artifact that shows which Core Criterion and Core
+Evidence Vocabulary (CCCEV) evidence option Registry Atlas selected from the published Core Public
+Service Vocabulary Application Profile (CPSV-AP) catalogue.
 
 ## Troubleshooting
 

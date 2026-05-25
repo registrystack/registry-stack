@@ -10,11 +10,12 @@ source_repos:
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: reference
 locale: en
 standards_referenced:
   - dcat
+  - cpsv-ap
   - openapi
   - shacl
   - json-schema
@@ -32,10 +33,10 @@ Product names are always in English, including on future translated pages.
 
 <dl class="glossary-dl">
   <dt>BRegDCAT-AP</dt>
-  <dd>SEMIC profile of DCAT-AP for business registries, version 2.00. Relay and Manifest emit BRegDCAT-AP JSON-LD including CPSV public service nodes.</dd>
+  <dd>SEMIC profile of DCAT-AP for base registries. Registry Relay and Registry Manifest emit BRegDCAT-AP-shaped registry and data-service metadata.</dd>
 
   <dt>CCCEV</dt>
-  <dd>Core Criterion and Core Evidence Vocabulary. SEMIC, version 2.00. Registry Witness renders CCCEV-shaped JSON-LD for claim evaluation results. Media type: `application/ld+json; profile="cccev"`.</dd>
+  <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Registry Atlas consumes those lists as grouped evidence options. Registry Witness renders CCCEV-shaped JSON-LD for claim evaluation results. Media type: `application/ld+json; profile="cccev"`.</dd>
 
   <dt>claim evaluation</dt>
   <dd>Registry Witness process that evaluates configured evidence rules against data from one or more source services and returns a structured claim result.</dd>
@@ -45,6 +46,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>DCAT</dt>
   <dd>Data Catalog Vocabulary. W3C recommendation. Registry Relay and Registry Manifest emit DCAT-shaped JSON-LD catalogs. Spell out on first use per page: "Data Catalog Vocabulary (DCAT)".</dd>
+
+  <dt>CPSV-AP</dt>
+  <dd>Core Public Service Vocabulary Application Profile. Registry Manifest emits CPSV-AP service catalogue JSON-LD. Registry Atlas uses it as the public-service entry point for service-first discovery.</dd>
 
   <dt>DPI</dt>
   <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. Registry family components fit the registry-consultation slice of a DPI stack. See <a href="../../explanation/dpi-safeguards-alignment/">DPI safeguards alignment</a>.</dd>
@@ -61,6 +65,9 @@ Product names are always in English, including on future translated pages.
   <dt>evidence offering</dt>
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. Can point to a Relay-native verification endpoint or to an external evidence service.</dd>
 
+  <dt>evidence type list</dt>
+  <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest and Registry Atlas, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
+
   <dt>historical docs</dt>
   <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance. Historical pages are visibly marked and linked only from the historical docs index.</dd>
 
@@ -68,7 +75,7 @@ Product names are always in English, including on future translated pages.
   <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and provenance contexts.</dd>
 
   <dt>metadata manifest</dt>
-  <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, policies, and evidence offerings. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
+  <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
 
   <dt>ODRL</dt>
   <dd>Open Digital Rights Language. W3C recommendation. Relay and Manifest emit ODRL Offer documents for dataset-scoped policies.</dd>
@@ -83,16 +90,16 @@ Product names are always in English, including on future translated pages.
   <dd>The six related projects: <a href="../../projects/registry-platform/">Registry Platform</a>, <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-witness/">Registry Witness</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
 
   <dt>Registry Atlas</dt>
-  <dd>Browser SPA with a Rust/WASM semantic analysis engine for inspecting published catalog and registry discovery artifacts. Repo slug: `registry-atlas`.</dd>
+  <dd>Browser SPA with a Rust/WASM semantic analysis engine for inspecting published service catalogue, catalog, and registry discovery artifacts. Repo slug: `registry-atlas`.</dd>
 
   <dt>Registry Lab</dt>
-  <dd>Compose-based runnable local demo that starts three Registry Relay instances, three Registry Witness instances, a static metadata publisher, and a narrated client. Repo slug: `registry-lab`.</dd>
+  <dd>Compose-based runnable local demo that starts three Registry Relay instances, four Registry Witness instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated clients. Repo slug: `registry-lab`.</dd>
 
   <dt>Registry Legend</dt>
   <dd>This documentation site and its source repo. Registry Legend explains the registry family map, contracts, standards claims, and first-run path. The site name is always in title case.</dd>
 
   <dt>Registry Manifest</dt>
-  <dd>Rust workspace for modeling, validating, and rendering standards-facing registry metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
+  <dd>Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
 
   <dt>Registry Platform</dt>
   <dd>Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures. Repo slug: `registry-platform`.</dd>
@@ -119,7 +126,7 @@ Product names are always in English, including on future translated pages.
   <dd>Social Protection Digital Convergence Initiative. Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag. Registry Witness ships an HTTP source connector that maps SP DCI search responses into claim evaluation inputs.</dd>
 
   <dt>static publication bundle</dt>
-  <dd>Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `shacl.jsonld`, entity JSON Schemas, evidence offering JSON, and policy JSON-LD. Can be hosted as static files without running Registry Relay.</dd>
+  <dd>Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, evidence offering JSON, and policy JSON-LD. Can be hosted as static files without running Registry Relay.</dd>
 </dl>
 
 ## Style notes

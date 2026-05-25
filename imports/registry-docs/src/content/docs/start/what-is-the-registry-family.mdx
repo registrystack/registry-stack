@@ -10,11 +10,13 @@ source_repos:
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
   - dcat
+  - cpsv-ap
+  - cccev
   - shacl
   - json-schema
   - sd-jwt-vc
@@ -36,7 +38,14 @@ Registry Platform is a Rust crate workspace, not a running service. Relay and Wi
 
 Describe a registry once in YAML, then render every standards-facing artifact other systems need to find, understand, and connect to it, without having to stand up any runtime.
 
-Registry Manifest is a Rust library and CLI. You point it at a metadata manifest and it produces a static bundle: catalog JSON, DCAT and BRegDCAT-AP JSON-LD, SHACL node shapes, JSON Schemas, OGC API Records item bodies, ODRL policy documents, and evidence-offering metadata. You can serve that bundle from any static host. No HTTP gateway, no database, no credentials.
+Registry Manifest is a Rust library and CLI.
+You point it at a metadata manifest and it produces a static bundle: catalog JSON,
+Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue JSON-LD,
+Data Catalog Vocabulary (DCAT) and BRegDCAT-AP JSON-LD, Core Criterion and Core Evidence
+Vocabulary (CCCEV) requirement and evidence metadata, SHACL node shapes, JSON Schemas,
+form schemas, OGC API Records item bodies, ODRL policy documents, and evidence-offering metadata.
+You can serve that bundle from any static host.
+No HTTP gateway, no database, no credentials.
 
 ### Registry Relay
 
@@ -52,7 +61,9 @@ Prove a person qualifies for a program without sharing the records that prove it
 
 Registry Witness is a standalone Rust HTTP service. It evaluates configured eligibility claims against registry data (fetched over HTTP from Registry Relay or an SP DCI source) and produces a verification receipt. It can issue that receipt as an SD-JWT VC credential with selective disclosure, so the caller learns only what each claim authorized. Auth, audit envelopes, HTTP security, OIDC verification, and SD-JWT helper behavior are backed by Registry Platform primitives.
 
-Witness is independent from Registry Relay application code: it doesn't import or link Relay libraries. Both services may depend on Registry Platform. Witness renders claim results as CCCEV JSON-LD when the caller asks for `application/ld+json; profile="cccev"`.
+Witness is independent from Registry Relay application code: it does not import or link Relay libraries.
+Both services may depend on Registry Platform.
+Witness renders claim results as CCCEV JSON-LD when the caller asks for `application/ld+json; profile="cccev"`.
 
 Witness produces a verification receipt. Treating it as a programmatic eligibility decision is the caller's choice, not a guarantee Witness makes.
 
@@ -60,15 +71,22 @@ Witness produces a verification receipt. Treating it as a programmatic eligibili
 
 Explore what a registry publishes in your browser, and check whether it actually emits what it claims to emit, before you write integration code.
 
-Registry Atlas is a browser single-page application with a small fetch proxy. You point it at a published catalog and it indexes the DCAT, SHACL, JSON Schemas, OpenAPI, and OGC Records artifacts, then lets you run strict capability queries against them. The v0.1 matcher is strict by design: no fuzzy matching, no synonym expansion, no AI inference. Every match needs an exact term correspondence.
+Registry Atlas is a browser single-page application with a small fetch proxy.
+You point it at a published catalog or service catalogue and it indexes the CPSV-AP, CCCEV,
+DCAT, SHACL, JSON Schema, OpenAPI, and OGC Records artifacts.
+The primary view is service-first: public service, requirement, grouped evidence option,
+provider, access service, and form.
+Atlas also keeps the v0.1 strict matcher boundary: no fuzzy matching, no synonym expansion,
+no AI inference.
+Every match needs an exact term correspondence.
 
 ### Registry Lab
 
 Run the registry runtime services together on your laptop in one `docker compose up`.
 
-Registry Lab is a Compose-based runnable demo. It wires three Relay instances, three Witness instances, a static metadata publisher, and a demo client into a single topology, with synthetic fixtures and a narrated walkthrough. Atlas is run separately and isn't in the Compose topology at v0.1.
+Registry Lab is a Compose-based runnable demo. It wires three Relay instances, four Witness instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and demo clients into a single topology, with synthetic fixtures and narrated walkthroughs. Atlas is run separately and is not in the Compose topology at v0.1.
 
-Lab is not production deployment guidance, and the demo isn't a real integration with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or any other production system.
+Lab is not production deployment guidance, and the demo is not a real integration with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or any other production system.
 
 ## Next
 
