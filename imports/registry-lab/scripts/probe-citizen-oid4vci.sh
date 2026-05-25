@@ -134,9 +134,10 @@ public_jwk = {
     "x": public_x,
     "alg": "EdDSA",
 }
+holder_id = "did:jwk:" + b64url(json.dumps(public_jwk, separators=(",", ":"), sort_keys=True).encode())
 now = int(time.time())
 header = {"alg": "EdDSA", "typ": "openid4vci-proof+jwt", "jwk": public_jwk}
-payload = {"aud": audience, "iat": now, "exp": now + 60, "nonce": nonce}
+payload = {"iss": holder_id, "aud": audience, "iat": now, "exp": now + 60, "nonce": nonce}
 header_b64 = b64url(json.dumps(header, separators=(",", ":")).encode())
 payload_b64 = b64url(json.dumps(payload, separators=(",", ":")).encode())
 Path(signing_input_path).write_text(f"{header_b64}.{payload_b64}", encoding="utf-8")
@@ -311,8 +312,11 @@ configs = metadata.get("credential_configurations_supported")
 if not isinstance(configs, dict) or not configs:
     raise SystemExit("issuer metadata missing non-empty credential_configurations_supported")
 credential_endpoint = metadata.get("credential_endpoint")
+credential_issuer = metadata.get("credential_issuer")
 offer_endpoint = metadata.get("offer_endpoint")
 nonce_endpoint = metadata.get("nonce_endpoint")
+if not credential_issuer:
+    raise SystemExit("issuer metadata missing credential_issuer")
 if not credential_endpoint:
     raise SystemExit("issuer metadata missing credential_endpoint")
 if not nonce_endpoint:
@@ -325,6 +329,7 @@ else:
     preferred = ["person_is_alive_sd_jwt", "citizen_civil_status_sd_jwt"]
     config_id = next((value for value in preferred if value in configs), next(iter(configs)))
 with open(env_path, "w", encoding="utf-8") as handle:
+    handle.write(f"CITIZEN_OID4VCI_CREDENTIAL_ISSUER={shlex.quote(str(credential_issuer))}\n")
     handle.write(f"CITIZEN_OID4VCI_CREDENTIAL_ENDPOINT={shlex.quote(str(credential_endpoint))}\n")
     handle.write(f"CITIZEN_OID4VCI_OFFER_ENDPOINT={shlex.quote(str(offer_endpoint or ''))}\n")
     handle.write(f"CITIZEN_OID4VCI_NONCE_ENDPOINT={shlex.quote(str(nonce_endpoint))}\n")
@@ -390,12 +395,12 @@ PY
   )"
   [[ -n "${c_nonce}" ]] || fail "nonce endpoint returned 2xx without c_nonce."
   proof_path="${output_dir}/holder-proof.jwt"
-  make_oid4vci_proof "${proof_path}" "${base_url%/}" "${c_nonce}" ||
+  make_oid4vci_proof "${proof_path}" "${CITIZEN_OID4VCI_CREDENTIAL_ISSUER}" "${c_nonce}" ||
     fail "could not generate local holder proof JWT. Ensure openssl supports Ed25519."
   CITIZEN_OID4VCI_PROOF_JWT="$(cat "${proof_path}")"
   echo "Generated ephemeral holder proof JWT."
   echo "  proof JWT: redacted"
-  echo "  audience: ${base_url%/}"
+  echo "  audience: ${CITIZEN_OID4VCI_CREDENTIAL_ISSUER}"
   echo "  nonce source: ${CITIZEN_OID4VCI_NONCE_ENDPOINT}"
 fi
 

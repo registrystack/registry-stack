@@ -174,7 +174,7 @@ def sign_holder_proof(
     holder_id = holder_did()
     now = int(time.time())
     jti = b64url(hashlib.sha256(f"{holder_id}:{evaluation_id}:{time.time_ns()}".encode()).digest()[:16])
-    header = b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": holder_id}, separators=(",", ":")).encode())
+    header = b64url(json.dumps({"alg": "EdDSA", "typ": "kb+jwt", "kid": holder_id}, separators=(",", ":")).encode())
     payload = b64url(
         json.dumps(
             {

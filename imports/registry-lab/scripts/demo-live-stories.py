@@ -57,7 +57,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def env(name: str, values: dict[str, str], default: str | None = None) -> str:
-    value = os.environ.get(name) or values.get(name) or default
+    value = values.get(name) or os.environ.get(name) or default
     if not value:
         raise StoryError(f"missing required environment variable: {name}")
     return value
@@ -1577,7 +1577,7 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
     print("\nStory 4. OpenFn sidecar lookup behind Registry Witness")
     explain("Discover the Witness service, discover its advertised claim, then evaluate that claim through the private OpenFn sidecar.")
     sidecar_raw = env("OPENFN_SIDECAR_TOKEN_RAW", values)
-    sidecar_hash = os.environ.get("OPENFN_SIDECAR_TOKEN_HASH") or values.get("OPENFN_SIDECAR_TOKEN_HASH") or fingerprint(sidecar_raw)
+    sidecar_hash = values.get("OPENFN_SIDECAR_TOKEN_HASH") or os.environ.get("OPENFN_SIDECAR_TOKEN_HASH") or fingerprint(sidecar_raw)
     openfn_env = {
         "REGISTRY_OPENFN_WITNESS_SOURCE_DIR": os.environ.get("REGISTRY_OPENFN_WITNESS_SOURCE_DIR", str(ROOT / ".." / "registry-witness")),
         "REGISTRY_WITNESS_SOURCE_DIR": os.environ.get("REGISTRY_WITNESS_SOURCE_DIR", str(ROOT / ".." / "registry-witness")),

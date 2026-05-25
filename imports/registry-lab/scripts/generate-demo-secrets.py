@@ -19,7 +19,6 @@ RELAY_ROOT = Path(os.environ.get("REGISTRY_RELAY_SOURCE_DIR", DEMO_ROOT / "vendo
 sys.path.insert(0, str(RELAY_ROOT / "demo/scripts"))
 
 from generate_demo_keys import (  # noqa: E402
-    generate_claim_verification_binding_key,
     generate_registry_witness_issuer_jwk,
     generate_raw_key,
 )
@@ -66,7 +65,7 @@ def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_witness_issuer_jwk()
     openfn_sidecar_token = generate_raw_key()
     values: dict[str, str] = {
-        "CLAIM_VERIFICATION_BINDING_KEY": generate_claim_verification_binding_key(),
+        "CLAIM_VERIFICATION_BINDING_KEY": generate_raw_key(),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
         "REGISTRY_WITNESS_AUDIT_HASH_SECRET": generate_raw_key(),
         "REGISTRY_WITNESS_ISSUER_JWK": issuer_jwk,
