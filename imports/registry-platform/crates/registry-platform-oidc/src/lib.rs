@@ -43,16 +43,12 @@ pub struct DiscoveryDocument {
     pub extra: Map<String, Value>,
 }
 
-pub async fn fetch_discovery(
-    cfg: &OidcDiscoveryConfig,
-    client: &reqwest::Client,
-) -> Result<DiscoveryDocument, OidcError> {
-    fetch_discovery_with_policy(cfg, client, &FetchUrlPolicy::strict()).await
+pub async fn fetch_discovery(cfg: &OidcDiscoveryConfig) -> Result<DiscoveryDocument, OidcError> {
+    fetch_discovery_with_policy(cfg, &FetchUrlPolicy::strict()).await
 }
 
 pub async fn fetch_discovery_with_policy(
     cfg: &OidcDiscoveryConfig,
-    _client: &reqwest::Client,
     fetch_url_policy: &FetchUrlPolicy,
 ) -> Result<DiscoveryDocument, OidcError> {
     if let Some(jwks_uri) = &cfg.jwks_uri_override {
@@ -834,7 +830,6 @@ impl TokenVerifier {
 pub async fn fetch_userinfo_jwt_with_policy(
     endpoint: &str,
     access_token: &str,
-    _client: &reqwest::Client,
     fetch_url_policy: &FetchUrlPolicy,
     timeout: Duration,
     max_doc_bytes: u64,
@@ -1581,9 +1576,7 @@ mod tests {
             discovery_timeout: Duration::from_secs(1),
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
-        let client = reqwest::Client::new();
-
-        let err = fetch_discovery_with_policy(&cfg, &client, &FetchUrlPolicy::strict())
+        let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::strict())
             .await
             .expect_err("strict policy rejects http override");
         assert!(matches!(
@@ -1591,7 +1584,7 @@ mod tests {
             OidcError::FetchUrl(FetchUrlError::SchemeDenied { .. })
         ));
 
-        let document = fetch_discovery_with_policy(&cfg, &client, &FetchUrlPolicy::dev())
+        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
             .await
             .expect("dev policy accepts loopback override");
         assert_eq!(document.issuer, cfg.issuer);
@@ -1607,9 +1600,7 @@ mod tests {
             discovery_timeout: Duration::from_secs(1),
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
-        let client = reqwest::Client::new();
-
-        let err = fetch_discovery(&cfg, &client)
+        let err = fetch_discovery(&cfg)
             .await
             .expect_err("strict policy rejects loopback discovery URL before fetch");
         assert!(matches!(
@@ -1617,7 +1608,7 @@ mod tests {
             OidcError::FetchUrl(FetchUrlError::SchemeDenied { .. })
         ));
 
-        let err = fetch_discovery_with_policy(&cfg, &client, &FetchUrlPolicy::dev())
+        let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
             .await
             .expect_err("dev policy rejects returned private jwks_uri");
         assert!(matches!(

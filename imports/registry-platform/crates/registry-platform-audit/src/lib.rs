@@ -549,6 +549,7 @@ pub mod redact {
     }
 
     #[derive(Debug, Error, PartialEq, Eq)]
+    #[non_exhaustive]
     pub enum QueryRedactionError {
         #[error("query component is not valid UTF-8")]
         InvalidUtf8,

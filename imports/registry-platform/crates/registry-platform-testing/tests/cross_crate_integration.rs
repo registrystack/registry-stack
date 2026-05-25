@@ -98,7 +98,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
     assert_eq!(problem.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     let idp = MockIdp::start().await;
-    let client = reqwest::Client::new();
     let discovery = fetch_discovery_with_policy(
         &OidcDiscoveryConfig {
             issuer: idp.issuer(),
@@ -106,7 +105,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 16 * 1024,
         },
-        &client,
         &FetchUrlPolicy::dev(),
     )
     .await

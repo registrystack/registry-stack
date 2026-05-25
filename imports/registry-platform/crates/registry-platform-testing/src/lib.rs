@@ -432,7 +432,6 @@ mod tests {
     #[tokio::test]
     async fn mock_idp_serves_discovery_jwks_and_mints_verifiable_tokens() {
         let idp = MockIdp::start().await;
-        let client = reqwest::Client::new();
         let discovery = fetch_discovery_with_policy(
             &OidcDiscoveryConfig {
                 issuer: idp.issuer(),
@@ -440,7 +439,6 @@ mod tests {
                 discovery_timeout: Duration::from_secs(5),
                 max_doc_bytes: 16 * 1024,
             },
-            &client,
             &FetchUrlPolicy::dev(),
         )
         .await

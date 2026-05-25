@@ -120,6 +120,7 @@ pub mod url {
 
     /// Errors returned by [`append_path_segments`].
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+    #[non_exhaustive]
     pub enum UrlError {
         /// The base URL cannot carry path segments.
         #[error("base URL cannot be a base for path segments")]

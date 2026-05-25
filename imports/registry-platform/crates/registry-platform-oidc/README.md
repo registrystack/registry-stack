@@ -18,14 +18,12 @@ OIDC discovery, JWKS caching, and JWT verification for registry services.
 use std::{sync::Arc, time::Duration};
 
 use jsonwebtoken::Algorithm;
-use registry_platform_httputil::OutboundClientBuilder;
 use registry_platform_oidc::{
     fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
     TokenVerifier, TokenVerifierConfig,
 };
 
 async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
-let client = OutboundClientBuilder::new().build();
 let discovery = fetch_discovery(
     &OidcDiscoveryConfig {
         issuer: "https://issuer.example".to_string(),
@@ -33,7 +31,6 @@ let discovery = fetch_discovery(
         discovery_timeout: Duration::from_secs(5),
         max_doc_bytes: 1024 * 1024,
     },
-    &client,
 )
 .await?;
 
