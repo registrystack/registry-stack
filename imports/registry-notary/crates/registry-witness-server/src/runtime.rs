@@ -499,11 +499,19 @@ struct HolderProofRecord {
     expires_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone)]
+struct Oid4vciNonceRecord {
+    expires_at: OffsetDateTime,
+}
+
+const MAX_OID4VCI_NONCES: usize = 4096;
+
 #[derive(Debug, Default)]
 pub struct EvidenceStore {
     evaluations: Mutex<HashMap<String, registry_witness_core::StoredEvaluation>>,
     idempotency: Mutex<HashMap<String, IdempotencyRecord>>,
     holder_proofs: Mutex<HashMap<String, HolderProofRecord>>,
+    oid4vci_nonces: Mutex<HashMap<String, Oid4vciNonceRecord>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -639,6 +647,40 @@ impl EvidenceStore {
         records.insert(key, HolderProofRecord { expires_at });
         Ok(())
     }
+
+    pub fn insert_oid4vci_nonce(
+        &self,
+        key: String,
+        expires_at: OffsetDateTime,
+    ) -> Result<(), EvidenceError> {
+        let now = OffsetDateTime::now_utc();
+        let mut records = self
+            .oid4vci_nonces
+            .lock()
+            .expect("evidence oid4vci nonce mutex is not poisoned");
+        records.retain(|_, record| record.expires_at > now);
+        if records.len() >= MAX_OID4VCI_NONCES && !records.contains_key(&key) {
+            return Err(EvidenceError::SelfAttestationRateLimited);
+        }
+        records.insert(key, Oid4vciNonceRecord { expires_at });
+        Ok(())
+    }
+
+    pub fn consume_oid4vci_nonce(&self, key: &str) -> Result<(), EvidenceError> {
+        let now = OffsetDateTime::now_utc();
+        let mut records = self
+            .oid4vci_nonces
+            .lock()
+            .expect("evidence oid4vci nonce mutex is not poisoned");
+        records.retain(|_, record| record.expires_at > now);
+        let Some(record) = records.remove(key) else {
+            return Err(EvidenceError::HolderProofRequired);
+        };
+        if record.expires_at <= now {
+            return Err(EvidenceError::HolderProofRequired);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -769,6 +811,7 @@ impl RegistryWitnessRuntime {
                     "credential_profile_ids": self_attestation.credential_profiles,
                     "subject_id_type": self_attestation.subject_binding.id_type,
                     "token_claim_name": self_attestation.subject_binding.token_claim,
+                    "scope_policy": self_attestation.scope_policy,
                     "required_scopes": self_attestation.required_scopes,
                     "max_evaluation_age_seconds": self_attestation
                         .token_policy
@@ -2886,6 +2929,10 @@ mod tests {
             json!(["self_attestation"])
         );
         assert_eq!(
+            document["self_attestation"]["scope_policy"],
+            json!("required")
+        );
+        assert_eq!(
             document["self_attestation"]["max_evaluation_age_seconds"],
             json!(600)
         );
@@ -3042,6 +3089,22 @@ mod tests {
             }
         ));
         assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn oid4vci_nonce_store_has_memory_cap() {
+        let store = EvidenceStore::default();
+        let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(60);
+        for index in 0..MAX_OID4VCI_NONCES {
+            store
+                .insert_oid4vci_nonce(format!("nonce-{index}"), expires_at)
+                .expect("nonce below cap inserts");
+        }
+
+        assert!(matches!(
+            store.insert_oid4vci_nonce("nonce-over-cap".to_string(), expires_at),
+            Err(EvidenceError::SelfAttestationRateLimited)
+        ));
     }
 
     #[cfg(feature = "registry-witness-cel")]

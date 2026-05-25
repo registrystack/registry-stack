@@ -149,6 +149,24 @@ impl SelfAttestationRateLimitKeys {
         self.hash_identifier("subject_binding", subject_binding)
     }
 
+    pub fn oid4vci_nonce(
+        &self,
+        issuer: &str,
+        credential_configuration_id: &str,
+        nonce: &str,
+    ) -> SelfAttestationRateLimitResult<String> {
+        if issuer.is_empty() || credential_configuration_id.is_empty() || nonce.is_empty() {
+            return Err(SelfAttestationRateLimitError::Unavailable {
+                reason: "oid4vci nonce identifier is empty".to_string(),
+            });
+        }
+        let hashed = self.hasher.hash(&format!(
+            "registry-witness:oid4vci:nonce:{issuer}:{credential_configuration_id}:{nonce}"
+        ));
+        ensure_bounded(&hashed)?;
+        Ok(hashed)
+    }
+
     fn hash_identifier<T>(
         &self,
         kind: &str,

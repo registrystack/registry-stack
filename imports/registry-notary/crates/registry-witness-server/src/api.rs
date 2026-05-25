@@ -3,20 +3,31 @@
 
 use std::{sync::Arc, time::Duration};
 
-use axum::extract::Path;
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::body::{to_bytes, Body, Bytes};
+use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use registry_platform_audit::AuditKeyHasher;
+use registry_platform_oid4vci::{
+    validate_proof_jwt, CredentialConfigurationMetadata, CredentialIssuerMetadata, CredentialOffer,
+    CredentialRequest as Oid4vciCredentialRequest, CredentialResponse as Oid4vciCredentialResponse,
+    NonceRequest as Oid4vciNonceRequest, NonceResponse, ProofValidationPolicy, WireError,
+    PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
+};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use registry_witness_core::sd_jwt;
 use registry_witness_core::{
     AccessMode, BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimSet,
     ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest,
-    EvidenceConfig, EvidenceError, EvidencePrincipal, Hashed, HolderRequest, PolicyIdentifier,
-    RateLimitBucket, RenderRequest, SelfAttestationConfig, SelfAttestationDenialCode,
-    SourceCapability, StoredSelfAttestationMetadata, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    EvidenceConfig, EvidenceError, EvidencePrincipal, Hashed, HolderRequest, Oid4vciConfig,
+    Oid4vciCredentialConfigurationConfig, PolicyIdentifier, RateLimitBucket, RenderRequest,
+    SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy, SourceCapability,
+    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
     FORMAT_SD_JWT_VC,
 };
 use serde_json::{json, Value};
@@ -33,6 +44,7 @@ use crate::{
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const ADMIN_SCOPE: &str = "registry_witness:admin";
+const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 
 pub fn router<S>() -> Router<S>
 where
@@ -45,6 +57,13 @@ where
         .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
         .route("/.well-known/evidence/jwks.json", get(issuer_jwks))
+        .route(
+            "/.well-known/openid-credential-issuer",
+            get(oid4vci_issuer_metadata),
+        )
+        .route("/oid4vci/credential-offer", get(oid4vci_credential_offer))
+        .route("/oid4vci/nonce", post(oid4vci_nonce))
+        .route("/oid4vci/credential", post(oid4vci_credential))
         .route("/claims", get(list_claims))
         .route("/claims/{claim_id}", get(get_claim))
         .route("/formats", get(list_formats))
@@ -52,6 +71,47 @@ where
         .route("/claims/batch-evaluate", post(batch_evaluate))
         .route("/evidence/render", post(render))
         .route("/credentials/issue", post(issue_credential))
+}
+
+pub async fn oid4vci_proof_precheck_middleware(
+    State(state): State<Arc<RegistryWitnessApiState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request.uri().path() != OID4VCI_CREDENTIAL_PATH {
+        return next.run(request).await;
+    }
+    if !state.oid4vci.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = match to_bytes(body, 64 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidRequest),
+    };
+    let request = match serde_json::from_slice::<Oid4vciCredentialRequest>(&bytes) {
+        Ok(request) => request,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidRequest),
+    };
+    if request.proof.proof_type != PROOF_TYPE_JWT {
+        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+    }
+    if validate_proof_jwt(
+        &request.proof.jwt,
+        &ProofValidationPolicy {
+            audience: &state.oid4vci.credential_issuer,
+            expected_nonce: None,
+            max_lifetime: Duration::from_secs(state.oid4vci.proof.max_age_seconds),
+            future_skew: Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
+        },
+        OffsetDateTime::now_utc().unix_timestamp(),
+    )
+    .is_err()
+    {
+        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+    }
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
 }
 
 async fn healthz() -> Response {
@@ -135,6 +195,7 @@ pub trait EvidenceIssuerResolver: Send + Sync {
 pub struct RegistryWitnessApiState {
     evidence: Arc<EvidenceConfig>,
     self_attestation: Arc<SelfAttestationConfig>,
+    oid4vci: Arc<Oid4vciConfig>,
     self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
     self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     source: Arc<dyn SourceReader>,
@@ -167,9 +228,29 @@ impl RegistryWitnessApiState {
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
-        Self::new_with_self_attestation_hasher(
+        Self::new_with_self_attestation_and_oid4vci(
             evidence,
             self_attestation,
+            Arc::new(Oid4vciConfig::default()),
+            source,
+            store,
+            issuers,
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_self_attestation_and_oid4vci(
+        evidence: Arc<EvidenceConfig>,
+        self_attestation: Arc<SelfAttestationConfig>,
+        oid4vci: Arc<Oid4vciConfig>,
+        source: Arc<dyn SourceReader>,
+        store: Arc<EvidenceStore>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+    ) -> Self {
+        Self::new_with_self_attestation_and_oid4vci_hasher(
+            evidence,
+            self_attestation,
+            oid4vci,
             AuditKeyHasher::unkeyed_dev_only(),
             source,
             store,
@@ -186,6 +267,27 @@ impl RegistryWitnessApiState {
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
+        Self::new_with_self_attestation_and_oid4vci_hasher(
+            evidence,
+            self_attestation,
+            Arc::new(Oid4vciConfig::default()),
+            audit_hasher,
+            source,
+            store,
+            issuers,
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_self_attestation_and_oid4vci_hasher(
+        evidence: Arc<EvidenceConfig>,
+        self_attestation: Arc<SelfAttestationConfig>,
+        oid4vci: Arc<Oid4vciConfig>,
+        audit_hasher: AuditKeyHasher,
+        source: Arc<dyn SourceReader>,
+        store: Arc<EvidenceStore>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+    ) -> Self {
         let self_attestation_rate_limiter = Arc::new(SelfAttestationRateLimiter::new(
             self_attestation.rate_limits.clone(),
         ));
@@ -193,6 +295,7 @@ impl RegistryWitnessApiState {
         Self {
             evidence,
             self_attestation,
+            oid4vci,
             self_attestation_rate_limiter,
             self_attestation_rate_keys,
             source,
@@ -259,6 +362,300 @@ async fn service_document(
         ),
     )
     .into_response()
+}
+
+async fn oid4vci_issuer_metadata(
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    };
+    if !state.oid4vci.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    Json(oid4vci_metadata(&state.oid4vci)).into_response()
+}
+
+async fn oid4vci_credential_offer(
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    };
+    if !state.oid4vci.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    Json(CredentialOffer::authorization_code(
+        state.oid4vci.credential_issuer.clone(),
+        state
+            .oid4vci
+            .credential_configurations
+            .keys()
+            .cloned()
+            .collect(),
+        "registry-witness:self-attestation",
+        state.oid4vci.authorization_servers.first().cloned(),
+    ))
+    .into_response()
+}
+
+async fn oid4vci_nonce(
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
+    body: Bytes,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    };
+    if !state.oid4vci.enabled || !state.oid4vci.nonce.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let request = if body.is_empty() {
+        Oid4vciNonceRequest {
+            credential_configuration_id: None,
+        }
+    } else {
+        match serde_json::from_slice::<Oid4vciNonceRequest>(&body) {
+            Ok(request) => request,
+            Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidRequest),
+        }
+    };
+    let configuration_id =
+        match oid4vci_nonce_configuration_id(&state.oid4vci, request.credential_configuration_id) {
+            Ok(configuration_id) => configuration_id,
+            Err(error) => return oid4vci_error_response(error),
+        };
+    let nonce = match generate_nonce() {
+        Ok(nonce) => nonce,
+        Err(error) => return evidence_error_response(error),
+    };
+    let key = match state.self_attestation_rate_keys.oid4vci_nonce(
+        &state.oid4vci.credential_issuer,
+        configuration_id,
+        &nonce,
+    ) {
+        Ok(key) => key,
+        Err(error) => return evidence_error_response(error.evidence_error()),
+    };
+    let expires_at =
+        OffsetDateTime::now_utc() + time::Duration::seconds(state.oid4vci.nonce.ttl_seconds as i64);
+    if state.store.insert_oid4vci_nonce(key, expires_at).is_err() {
+        return oid4vci_error_response(Oid4vciWireError::RateLimited);
+    }
+    Json(NonceResponse {
+        c_nonce: nonce,
+        c_nonce_expires_in: state.oid4vci.nonce.ttl_seconds,
+    })
+    .into_response()
+}
+
+async fn oid4vci_credential(
+    state: Option<Extension<Arc<RegistryWitnessApiState>>>,
+    principal: Option<Extension<EvidencePrincipal>>,
+    Json(request): Json<Oid4vciCredentialRequest>,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    };
+    if !state.oid4vci.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(Extension(principal)) = principal else {
+        return oid4vci_error_response(Oid4vciWireError::InvalidToken);
+    };
+    let evidence = match state.enabled_evidence() {
+        Ok(evidence) => evidence,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    };
+    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
+        Ok(principal) if principal.is_self_attestation() => principal,
+        _ => return oid4vci_error_response(Oid4vciWireError::InvalidToken),
+    };
+    if let Err(error) = require_oid4vci_token_audience(&state.oid4vci, &principal) {
+        return oid4vci_error_response(error);
+    }
+    if request.format != SD_JWT_VC_FORMAT || request.proof.proof_type != PROOF_TYPE_JWT {
+        return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType);
+    }
+    let (configuration_id, configuration) =
+        match oid4vci_configuration_for_request(&state.oid4vci, &request) {
+            Ok(configuration) => configuration,
+            Err(error) => return oid4vci_error_response(error),
+        };
+    let validated_proof = match validate_proof_jwt(
+        &request.proof.jwt,
+        &ProofValidationPolicy {
+            audience: &state.oid4vci.credential_issuer,
+            expected_nonce: None,
+            max_lifetime: Duration::from_secs(state.oid4vci.proof.max_age_seconds),
+            future_skew: Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
+        },
+        OffsetDateTime::now_utc().unix_timestamp(),
+    ) {
+        Ok(proof) => proof,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidProof),
+    };
+    if state.oid4vci.nonce.enabled {
+        let Some(nonce) = validated_proof.nonce.as_deref() else {
+            return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+        };
+        let key = match state.self_attestation_rate_keys.oid4vci_nonce(
+            &state.oid4vci.credential_issuer,
+            configuration_id,
+            nonce,
+        ) {
+            Ok(key) => key,
+            Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
+        };
+        if state.store.consume_oid4vci_nonce(&key).is_err() {
+            return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+        }
+    }
+    let holder_id = validated_proof.holder_id.as_str();
+    if let Err(error) =
+        check_oid4vci_self_attestation_rate_limit(&state, &principal, Some(holder_id))
+    {
+        let mut response = oid4vci_error_response(Oid4vciWireError::RateLimited);
+        attach_self_attestation_rate_limit_audit(
+            &mut response,
+            "oid4vci_rate_limited",
+            std::slice::from_ref(&configuration.claim_id),
+            error.bucket(),
+        );
+        return response;
+    }
+    let request = EvaluateRequest {
+        subject: match oid4vci_bound_subject(&state.self_attestation, &principal) {
+            Ok(subject) => subject,
+            Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidToken),
+        },
+        claims: vec![configuration.claim_id.clone()],
+        disclosure: None,
+        format: Some(FORMAT_SD_JWT_VC.to_string()),
+        purpose: None,
+    };
+    let mut request = request;
+    let context = match prepare_self_attestation_evaluate(&state, evidence, &principal, &request) {
+        Ok(context) => {
+            request.purpose = Some(context.purpose.clone());
+            context
+        }
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::AccessDenied),
+    };
+    let results = match RegistryWitnessRuntime::new()
+        .evaluate_with_source_capability(
+            Arc::clone(&state.evidence),
+            Arc::clone(&state.source),
+            &state.store,
+            &principal,
+            context.source_capability,
+            request,
+            None,
+            Some(context.metadata.clone()),
+            None,
+        )
+        .await
+    {
+        Ok(results) => results,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::AccessDenied),
+    };
+    let evaluation_id = results
+        .first()
+        .map(|result| result.evaluation_id.clone())
+        .unwrap_or_default();
+    let evaluation = match state.store.get(&evaluation_id) {
+        Some(evaluation) => evaluation,
+        None => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    };
+    let profile = match evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+    {
+        Some(profile) => profile,
+        None => return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType),
+    };
+    if let Err(error) = require_self_attestation_stored_access(
+        &state,
+        evidence,
+        &principal,
+        &evaluation,
+        &evaluation.claim_ids,
+        &evaluation.disclosure,
+        &evaluation.format,
+        Some(configuration.credential_profile.as_str()),
+    ) {
+        return oid4vci_error_response(oid4vci_error_from_evidence(&error));
+    }
+    if !state.self_attestation.allowed_operations.issue_credential {
+        return oid4vci_error_response(Oid4vciWireError::AccessDenied);
+    }
+    if let Err(error) = require_self_attestation_credential_profile_policy(
+        &state.self_attestation,
+        &configuration.credential_profile,
+        profile,
+    ) {
+        return oid4vci_error_response(oid4vci_error_from_evidence(&error));
+    }
+    let issuer = match state.issuers.issuer(&configuration.credential_profile) {
+        Ok(issuer) => issuer,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    };
+    let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
+    let signed = match sd_jwt::issue(
+        profile,
+        &issuer,
+        &evaluation.results,
+        holder_id,
+        Some(holder_id),
+        iat,
+    ) {
+        Ok(signed) => signed,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    };
+    let next_nonce = if state.oid4vci.nonce.enabled {
+        match generate_nonce() {
+            Ok(nonce) => {
+                if let Ok(key) = state.self_attestation_rate_keys.oid4vci_nonce(
+                    &state.oid4vci.credential_issuer,
+                    configuration_id,
+                    &nonce,
+                ) {
+                    let expires_at = OffsetDateTime::now_utc()
+                        + time::Duration::seconds(state.oid4vci.nonce.ttl_seconds as i64);
+                    if state.store.insert_oid4vci_nonce(key, expires_at).is_ok() {
+                        Some(nonce)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let mut response = Json(Oid4vciCredentialResponse {
+        credential: signed.compact,
+        format: Some(SD_JWT_VC_FORMAT.to_string()),
+        c_nonce: next_nonce,
+        c_nonce_expires_in: state
+            .oid4vci
+            .nonce
+            .enabled
+            .then_some(state.oid4vci.nonce.ttl_seconds),
+    })
+    .into_response();
+    attach_self_attestation_credential_audit(
+        &mut response,
+        &evaluation_id,
+        &evaluation.claim_ids,
+        evaluation.results.len() as u64,
+        configuration_id,
+        profile,
+        context.metadata.policy_hash,
+    );
+    response
 }
 
 async fn issuer_jwks(
@@ -811,6 +1208,11 @@ async fn issue_credential(
         return evidence_error_response(error);
     }
     if principal.is_self_attestation() {
+        if !state.self_attestation.allowed_operations.issue_credential {
+            return evidence_error_response(self_attestation_denied(
+                SelfAttestationDenialCode::OperationDenied,
+            ));
+        }
         if let Err(error) = require_self_attestation_credential_profile_policy(
             &state.self_attestation,
             profile_id,
@@ -976,6 +1378,232 @@ fn earliest_issued_at(
         .iter()
         .filter_map(|r| OffsetDateTime::parse(&r.issued_at, &Rfc3339).ok())
         .min()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Oid4vciWireError {
+    InvalidRequest,
+    InvalidToken,
+    InvalidProof,
+    UnsupportedCredentialType,
+    AccessDenied,
+    RateLimited,
+    ServerError,
+}
+
+fn oid4vci_error_response(error: Oid4vciWireError) -> Response {
+    let (status, code, description) = match error {
+        Oid4vciWireError::InvalidRequest => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "credential request is invalid",
+        ),
+        Oid4vciWireError::InvalidToken => (
+            StatusCode::UNAUTHORIZED,
+            "invalid_token",
+            "credential access token is invalid",
+        ),
+        Oid4vciWireError::InvalidProof => (
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "credential proof is invalid",
+        ),
+        Oid4vciWireError::UnsupportedCredentialType => (
+            StatusCode::BAD_REQUEST,
+            "unsupported_credential_type",
+            "credential request is not supported",
+        ),
+        Oid4vciWireError::AccessDenied => (
+            StatusCode::FORBIDDEN,
+            "access_denied",
+            "credential request is denied",
+        ),
+        Oid4vciWireError::RateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "temporarily_unavailable",
+            "credential request is rate limited",
+        ),
+        Oid4vciWireError::ServerError => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "credential issuer failed",
+        ),
+    };
+    let mut response = (
+        status,
+        Json(WireError::new(code, Some(description.to_string()))),
+    )
+        .into_response();
+    response
+        .extensions_mut()
+        .insert(EvidenceErrorCodeContext(format!("oid4vci.{code}")));
+    response
+}
+
+fn oid4vci_error_from_evidence(error: &EvidenceError) -> Oid4vciWireError {
+    match error {
+        EvidenceError::SelfAttestationRateLimited => Oid4vciWireError::RateLimited,
+        EvidenceError::HolderProofRequired | EvidenceError::HolderProofReplay => {
+            Oid4vciWireError::InvalidProof
+        }
+        EvidenceError::SelfAttestationInvalidToken
+        | EvidenceError::SelfAttestationAssuranceDenied => Oid4vciWireError::InvalidToken,
+        EvidenceError::FormatUnsupported | EvidenceError::CredentialIssuerNotConfigured => {
+            Oid4vciWireError::UnsupportedCredentialType
+        }
+        EvidenceError::CredentialIssuanceFailed | EvidenceError::SourceUnavailable => {
+            Oid4vciWireError::ServerError
+        }
+        _ => Oid4vciWireError::AccessDenied,
+    }
+}
+
+fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
+    CredentialIssuerMetadata::new(
+        config.credential_issuer.clone(),
+        config.credential_endpoint.clone(),
+        config.nonce_endpoint.clone(),
+        config.authorization_servers.clone(),
+        config
+            .credential_configurations
+            .iter()
+            .map(|(id, configuration)| (id.clone(), oid4vci_configuration_metadata(configuration)))
+            .collect(),
+    )
+}
+
+fn oid4vci_configuration_metadata(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> CredentialConfigurationMetadata {
+    CredentialConfigurationMetadata::sd_jwt_vc(
+        configuration.scope.clone(),
+        configuration
+            .cryptographic_binding_methods_supported
+            .clone(),
+        configuration.display_name.clone(),
+        configuration.vct.clone(),
+    )
+}
+
+fn oid4vci_configuration_for_request<'a>(
+    config: &'a Oid4vciConfig,
+    request: &Oid4vciCredentialRequest,
+) -> Result<(&'a str, &'a Oid4vciCredentialConfigurationConfig), Oid4vciWireError> {
+    if let (Some(identifier), Some(configuration_id)) = (
+        request.credential_identifier.as_deref(),
+        request.credential_configuration_id.as_deref(),
+    ) {
+        if identifier != configuration_id {
+            return Err(Oid4vciWireError::InvalidRequest);
+        }
+    }
+    if let Some(id) = request
+        .credential_configuration_id
+        .as_deref()
+        .or(request.credential_identifier.as_deref())
+    {
+        let (id, configuration) = config
+            .credential_configurations
+            .get_key_value(id)
+            .ok_or(Oid4vciWireError::UnsupportedCredentialType)?;
+        if let Some(vct) = request.vct.as_deref() {
+            if configuration.vct != vct {
+                return Err(Oid4vciWireError::InvalidRequest);
+            }
+        }
+        return Ok((id.as_str(), configuration));
+    }
+    if let Some(vct) = request.vct.as_deref() {
+        return config
+            .credential_configurations
+            .iter()
+            .find(|(_, configuration)| configuration.vct == vct)
+            .map(|(id, configuration)| (id.as_str(), configuration))
+            .ok_or(Oid4vciWireError::UnsupportedCredentialType);
+    }
+    config
+        .credential_configurations
+        .iter()
+        .next()
+        .map(|(id, configuration)| (id.as_str(), configuration))
+        .ok_or(Oid4vciWireError::UnsupportedCredentialType)
+}
+
+fn oid4vci_nonce_configuration_id(
+    config: &Oid4vciConfig,
+    requested_id: Option<String>,
+) -> Result<&str, Oid4vciWireError> {
+    if let Some(id) = requested_id {
+        return config
+            .credential_configurations
+            .get_key_value(&id)
+            .map(|(id, _)| id.as_str())
+            .ok_or(Oid4vciWireError::InvalidRequest);
+    }
+    let mut ids = config.credential_configurations.keys();
+    let Some(first) = ids.next() else {
+        return Err(Oid4vciWireError::InvalidRequest);
+    };
+    if ids.next().is_some() {
+        return Err(Oid4vciWireError::InvalidRequest);
+    }
+    Ok(first.as_str())
+}
+
+fn require_oid4vci_token_audience(
+    config: &Oid4vciConfig,
+    principal: &EvidencePrincipal,
+) -> Result<(), Oid4vciWireError> {
+    let claims = principal
+        .verified_claims
+        .as_ref()
+        .ok_or(Oid4vciWireError::InvalidToken)?;
+    let accepted = config.accepted_token_audiences.iter().any(|accepted| {
+        claims
+            .audiences
+            .iter()
+            .any(|audience| audience.as_str() == accepted)
+    });
+    if accepted {
+        Ok(())
+    } else {
+        Err(Oid4vciWireError::InvalidToken)
+    }
+}
+
+fn oid4vci_bound_subject(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+) -> Result<SubjectRequest, EvidenceError> {
+    let subject_id = principal
+        .verified_subject_binding_value(&config.subject_binding.token_claim)
+        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+    Ok(SubjectRequest {
+        id: subject_id.to_string(),
+        id_type: Some(config.subject_binding.id_type.clone()),
+    })
+}
+
+fn check_oid4vci_self_attestation_rate_limit(
+    state: &RegistryWitnessApiState,
+    principal: &EvidencePrincipal,
+    holder_id: Option<&str>,
+) -> Result<(), SelfAttestationRateLimitError> {
+    let principal_hash = state
+        .self_attestation_rate_keys
+        .principal(&principal.principal_id)?;
+    let holder_hash = holder_id
+        .map(|holder_id| state.self_attestation_rate_keys.holder(holder_id))
+        .transpose()?;
+    state
+        .self_attestation_rate_limiter
+        .check_credential_issuance(&principal_hash, holder_hash.as_ref())
+}
+
+fn generate_nonce() -> Result<String, EvidenceError> {
+    let mut nonce = [0_u8; 32];
+    getrandom::fill(&mut nonce).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+    Ok(URL_SAFE_NO_PAD.encode(nonce))
 }
 
 #[derive(Debug)]
@@ -1182,11 +1810,7 @@ fn classify_self_attestation_principal(
             SelfAttestationDenialCode::InvalidToken,
         ));
     }
-    if !config
-        .required_scopes
-        .iter()
-        .all(|scope| principal.has_scope(scope) || verified_claims.has_scope(scope))
-    {
+    if !self_attestation_scope_policy_allows(config, principal, verified_claims) {
         return Err(self_attestation_denied(
             SelfAttestationDenialCode::InvalidToken,
         ));
@@ -1195,6 +1819,29 @@ fn classify_self_attestation_principal(
     let mut classified = principal.clone();
     classified.access_mode = AccessMode::SelfAttestation;
     Ok(classified)
+}
+
+fn self_attestation_scope_policy_allows(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+    verified_claims: &registry_witness_core::BoundedVerifiedClaims,
+) -> bool {
+    match config.scope_policy {
+        SelfAttestationScopePolicy::Required => config
+            .required_scopes
+            .iter()
+            .all(|scope| principal.has_scope(scope) || verified_claims.has_scope(scope)),
+        SelfAttestationScopePolicy::Optional => {
+            let saw_scope_signal =
+                !principal.scopes.is_empty() || !verified_claims.scopes.is_empty();
+            !saw_scope_signal
+                || config
+                    .required_scopes
+                    .iter()
+                    .all(|scope| principal.has_scope(scope) || verified_claims.has_scope(scope))
+        }
+        SelfAttestationScopePolicy::Disabled => true,
+    }
 }
 
 fn citizen_client_or_audience_matches(
@@ -2128,7 +2775,8 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
-    use registry_platform_crypto::{sign, PrivateJwk};
+    use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
+    use registry_platform_testing::sign_openid4vci_proof_jwt;
     use registry_witness_core::{
         BoundedVerifiedClaims, SourceBindingConfig, SubjectRequest, VerifiedClaimName,
         VerifiedClaimValue,
@@ -2146,13 +2794,18 @@ mod tests {
     const SUBJECT_BINDING_CLAIM: &str = "https://id.example.gov/claims/national_id";
 
     fn holder_did_jwk() -> String {
-        let public_jwk = json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": HOLDER_PUB_X_B64,
-        });
-        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&public_jwk).unwrap());
-        format!("did:jwk:{encoded}")
+        let holder = PrivateJwk::parse(
+            &json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "d": HOLDER_PRIV_D_B64,
+                "x": HOLDER_PUB_X_B64,
+                "alg": "EdDSA"
+            })
+            .to_string(),
+        )
+        .expect("holder JWK parses");
+        did_jwk_from_public_jwk(&holder.public()).expect("did:jwk encodes")
     }
 
     fn bounded(value: &str) -> VerifiedClaimValue {
@@ -2229,6 +2882,259 @@ mod tests {
             }]
         }))
         .expect("evidence config parses")
+    }
+
+    fn oid4vci_config() -> Oid4vciConfig {
+        serde_json::from_value(json!({
+            "enabled": true,
+            "credential_issuer": "http://127.0.0.1:4325",
+            "authorization_servers": ["http://localhost:8088/v1/esignet"],
+            "accepted_token_audiences": ["http://127.0.0.1:4325"],
+            "credential_endpoint": "http://127.0.0.1:4325/oid4vci/credential",
+            "offer_endpoint": "http://127.0.0.1:4325/oid4vci/credential-offer",
+            "nonce_endpoint": "http://127.0.0.1:4325/oid4vci/nonce",
+            "nonce": { "enabled": true, "ttl_seconds": 300 },
+            "credential_configurations": {
+                "person_is_alive_sd_jwt": {
+                    "claim_id": "person-is-alive",
+                    "credential_profile": "civil_status_sd_jwt",
+                    "format": "dc+sd-jwt",
+                    "scope": "person_is_alive",
+                    "vct": "https://issuer.example/credentials/civil-status",
+                    "display_name": "Person is alive"
+                }
+            }
+        }))
+        .expect("oid4vci config parses")
+    }
+
+    #[test]
+    fn oid4vci_metadata_is_public_but_not_operationally_leaky() {
+        let metadata =
+            serde_json::to_value(oid4vci_metadata(&oid4vci_config())).expect("metadata serializes");
+
+        assert_eq!(
+            metadata["credential_endpoint"],
+            "http://127.0.0.1:4325/oid4vci/credential"
+        );
+        assert_eq!(
+            metadata["nonce_endpoint"],
+            "http://127.0.0.1:4325/oid4vci/nonce"
+        );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"][0]
+                ["name"],
+            "Person is alive"
+        );
+        let text = metadata.to_string();
+        assert!(!text.contains("token_env"));
+        assert!(!text.contains("source_connections"));
+        assert!(!text.contains("NAT-123"));
+    }
+
+    #[tokio::test]
+    async fn oid4vci_wire_errors_use_oauth_codes_and_keep_internal_audit_code() {
+        let response = oid4vci_error_response(Oid4vciWireError::InvalidProof);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<EvidenceErrorCodeContext>()
+                .map(|context| context.0.as_str()),
+            Some("oid4vci.invalid_proof")
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+
+        assert_eq!(body["error"], "invalid_proof");
+        assert!(body.get("code").is_none());
+    }
+
+    #[test]
+    fn oid4vci_nonce_store_consumes_once_and_rejects_replay() {
+        let store = EvidenceStore::default();
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let key = keys
+            .oid4vci_nonce(
+                "https://issuer.example",
+                "person_is_alive_sd_jwt",
+                "nonce-1",
+            )
+            .expect("nonce hashes");
+        let wrong_config_key = keys
+            .oid4vci_nonce(
+                "https://issuer.example",
+                "other_credential_sd_jwt",
+                "nonce-1",
+            )
+            .expect("nonce hashes for other config");
+        store
+            .insert_oid4vci_nonce(
+                key.clone(),
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
+            )
+            .expect("nonce inserts");
+
+        assert!(matches!(
+            store.consume_oid4vci_nonce(&wrong_config_key),
+            Err(EvidenceError::HolderProofRequired)
+        ));
+        store
+            .consume_oid4vci_nonce(&key)
+            .expect("first nonce use succeeds");
+        assert!(matches!(
+            store.consume_oid4vci_nonce(&key),
+            Err(EvidenceError::HolderProofRequired)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(EvidenceStore::default());
+        let mut self_attestation = self_attestation_config();
+        self_attestation
+            .allowed_formats
+            .push(FORMAT_SD_JWT_VC.to_string());
+        let mut evidence = evidence_config();
+        evidence
+            .claims
+            .first_mut()
+            .expect("claim exists")
+            .formats
+            .push(FORMAT_SD_JWT_VC.to_string());
+        evidence
+            .claims
+            .first_mut()
+            .expect("claim exists")
+            .credential_profiles
+            .push("civil_status_sd_jwt".to_string());
+        evidence.credential_profiles.insert(
+            "civil_status_sd_jwt".to_string(),
+            serde_json::from_value(json!({
+                "format": FORMAT_SD_JWT_VC,
+                "issuer": "did:web:issuer.example",
+                "issuer_key_env": "ISSUER_KEY",
+                "vct": "https://issuer.example/credentials/civil-status",
+                "validity_seconds": 600,
+                "holder_binding": {
+                    "mode": "did",
+                    "proof_of_possession": "required",
+                    "allowed_did_methods": ["did:jwk"]
+                },
+                "allowed_claims": ["person-is-alive"],
+                "disclosure": { "allowed": ["predicate"] }
+            }))
+            .expect("profile parses"),
+        );
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-witness-citizen".to_string()];
+        let state = Arc::new(
+            RegistryWitnessApiState::new_with_self_attestation_and_oid4vci(
+                Arc::new(evidence),
+                Arc::new(self_attestation),
+                Arc::new(oid4vci),
+                Arc::new(CountingSource {
+                    reads: Arc::clone(&reads),
+                }),
+                Arc::clone(&store),
+                Arc::new(StaticIssuerResolver),
+            ),
+        );
+        let nonce = "nonce-1";
+        let nonce_key = state
+            .self_attestation_rate_keys
+            .oid4vci_nonce(
+                &state.oid4vci.credential_issuer,
+                "person_is_alive_sd_jwt",
+                nonce,
+            )
+            .expect("nonce hashes");
+        store
+            .insert_oid4vci_nonce(
+                nonce_key,
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
+            )
+            .expect("nonce inserts");
+        let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
+        let request = Oid4vciCredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+            credential_configuration_id: None,
+            vct: None,
+            proof: registry_platform_oid4vci::CredentialRequestProof {
+                proof_type: PROOF_TYPE_JWT.to_string(),
+                jwt: proof.clone(),
+            },
+        };
+
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(fresh_oidc_principal(
+                Some("client_id:citizen-portal"),
+                &["self_attestation"],
+            ))),
+            Json(request.clone()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("credential body parses");
+        assert_eq!(body["format"], SD_JWT_VC_FORMAT);
+        assert!(
+            body["credential"]
+                .as_str()
+                .is_some_and(|credential| credential.contains('~')),
+            "expected compact SD-JWT credential: {body}"
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+
+        let replay = oid4vci_credential(
+            Some(Extension(state)),
+            Some(Extension(fresh_oidc_principal(
+                Some("client_id:citizen-portal"),
+                &["self_attestation"],
+            ))),
+            Json(request),
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+        let replay_body = axum::body::to_bytes(replay.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let replay_body: Value = serde_json::from_slice(&replay_body).expect("error body parses");
+        assert_eq!(replay_body["error"], "invalid_proof");
+    }
+
+    #[test]
+    fn oid4vci_credential_request_rejects_ambiguous_configuration_ids() {
+        let mut request = Oid4vciCredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+            credential_configuration_id: Some("other_sd_jwt".to_string()),
+            vct: None,
+            proof: registry_platform_oid4vci::CredentialRequestProof {
+                proof_type: PROOF_TYPE_JWT.to_string(),
+                jwt: "a.b.c".to_string(),
+            },
+        };
+
+        assert_eq!(
+            oid4vci_configuration_for_request(&oid4vci_config(), &request),
+            Err(Oid4vciWireError::InvalidRequest)
+        );
+
+        request.credential_configuration_id = Some("person_is_alive_sd_jwt".to_string());
+        request.vct = Some("https://issuer.example/credentials/other".to_string());
+        assert_eq!(
+            oid4vci_configuration_for_request(&oid4vci_config(), &request),
+            Err(Oid4vciWireError::InvalidRequest)
+        );
     }
 
     fn oidc_principal(client_id: Option<&str>, scopes: &[&str]) -> EvidencePrincipal {
@@ -2323,6 +3229,58 @@ mod tests {
                 reason: SelfAttestationDenialCode::InvalidToken
             }
         ));
+    }
+
+    #[test]
+    fn self_attestation_optional_scope_policy_allows_absent_scope_only() {
+        let mut config = self_attestation_config();
+        config.scope_policy = SelfAttestationScopePolicy::Optional;
+
+        let no_scope = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &[]),
+        )
+        .expect(
+            "optional policy accepts a scoped-out citizen token when no scope claim is present",
+        );
+        assert!(no_scope.is_self_attestation());
+
+        let wrong_scope = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["openid"]),
+        )
+        .expect_err("optional policy still rejects a present but insufficient scope claim");
+        assert!(matches!(
+            wrong_scope,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::InvalidToken
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_disabled_scope_policy_uses_client_and_audience_only() {
+        let mut config = self_attestation_config();
+        config.scope_policy = SelfAttestationScopePolicy::Disabled;
+        config.required_scopes.clear();
+
+        let classified = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &[]),
+        )
+        .expect("disabled policy classifies by verified citizen client and audience");
+        assert!(classified.is_self_attestation());
+
+        let mut wrong_client = oidc_principal(Some("client_id:other"), &[]);
+        wrong_client
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .audiences
+            .clear();
+        let denied = classify_self_attestation_principal(&config, &wrong_client)
+            .expect("non-citizen token remains a machine-client candidate");
+        assert!(!denied.is_self_attestation());
     }
 
     #[test]
@@ -2698,6 +3656,27 @@ mod tests {
         }
     }
 
+    struct StaticIssuerResolver;
+
+    impl EvidenceIssuerResolver for StaticIssuerResolver {
+        fn issuer(
+            &self,
+            _profile_id: &str,
+        ) -> Result<registry_witness_core::sd_jwt::EvidenceIssuer, EvidenceError> {
+            registry_witness_core::sd_jwt::EvidenceIssuer::from_jwk_str(
+                &json!({
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "d": HOLDER_PRIV_D_B64,
+                    "x": HOLDER_PUB_X_B64,
+                    "alg": "EdDSA"
+                })
+                .to_string(),
+                "did:web:issuer.example#key-1".to_string(),
+            )
+        }
+    }
+
     #[tokio::test]
     async fn self_attestation_batch_evaluate_is_rejected_before_source_read() {
         let reads = Arc::new(AtomicUsize::new(0));
@@ -2774,6 +3753,22 @@ mod tests {
         format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
     }
 
+    fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sign_openid4vci_proof_jwt(&holder_private_jwk(), audience, Some(nonce), now)
+    }
+
+    fn holder_private_jwk() -> String {
+        json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "d": HOLDER_PRIV_D_B64,
+            "x": HOLDER_PUB_X_B64,
+            "alg": "EdDSA"
+        })
+        .to_string()
+    }
+
     fn evaluation_for_proof() -> registry_witness_core::StoredEvaluation {
         registry_witness_core::StoredEvaluation {
             client_id: "client".to_string(),
@@ -2798,6 +3793,24 @@ mod tests {
             disclosure: None,
             holder: None,
         }
+    }
+
+    fn holder_required_profile() -> CredentialProfileConfig {
+        serde_json::from_value(json!({
+            "format": FORMAT_SD_JWT_VC,
+            "issuer": "did:web:issuer.example",
+            "issuer_key_env": "ISSUER_KEY",
+            "vct": "https://issuer.example/credentials/civil-status",
+            "validity_seconds": 600,
+            "holder_binding": {
+                "mode": "did",
+                "proof_of_possession": "required",
+                "allowed_did_methods": ["did:jwk"]
+            },
+            "allowed_claims": ["claim-a"],
+            "disclosure": { "allowed": ["redacted"] }
+        }))
+        .expect("profile parses")
     }
 
     fn proof_payload(holder_id: &str, aud: &str) -> Value {
@@ -2846,6 +3859,31 @@ mod tests {
             service_id,
         )
         .expect_err("proof with aud=\"registry-witness\" must be rejected when service_id differs");
+        assert!(matches!(err, EvidenceError::HolderProofRequired));
+    }
+
+    #[test]
+    fn strict_credential_issue_rejects_oid4vci_proof_shape() {
+        let holder_id = holder_did_jwk();
+        let proof = sign_oid4vci_proof("registry-witness", "nonce-1");
+        let request = issue_request();
+        let evaluation = evaluation_for_proof();
+        let holder = HolderRequest {
+            binding: Some("did".to_string()),
+            id: Some(holder_id),
+            proof: Some(proof),
+        };
+
+        let err = validate_holder_request(
+            &holder_required_profile(),
+            "profile-a",
+            &request,
+            &evaluation,
+            Some(&holder),
+            "registry-witness",
+        )
+        .expect_err("OID4VCI proof must not relax the strict credential endpoint proof");
+
         assert!(matches!(err, EvidenceError::HolderProofRequired));
     }
 

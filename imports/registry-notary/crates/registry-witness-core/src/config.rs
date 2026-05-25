@@ -5,9 +5,13 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
+use registry_platform_oid4vci::{
+    CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK, PKCE_METHOD_S256,
+    SD_JWT_VC_FORMAT as OID4VCI_SD_JWT_VC_FORMAT,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::model::FORMAT_SD_JWT_VC;
+use crate::model::{FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +24,8 @@ pub struct StandaloneRegistryWitnessConfig {
     pub audit: EvidenceAuditConfig,
     #[serde(default, skip_serializing_if = "self_attestation_config_is_default")]
     pub self_attestation: SelfAttestationConfig,
+    #[serde(default, skip_serializing_if = "oid4vci_config_is_default")]
+    pub oid4vci: Oid4vciConfig,
 }
 
 impl StandaloneRegistryWitnessConfig {
@@ -130,7 +136,7 @@ impl StandaloneRegistryWitnessConfig {
                 .holder_binding
                 .allowed_did_methods
                 .iter()
-                .filter(|m| m.as_str() != "did:jwk")
+                .filter(|m| m.as_str() != SD_JWT_VC_HOLDER_BINDING_METHOD)
                 .cloned()
                 .collect();
             if !unsupported.is_empty() {
@@ -183,8 +189,459 @@ impl StandaloneRegistryWitnessConfig {
             }
         }
         self.self_attestation.validate(&self.auth, &self.evidence)?;
+        self.validate_oid4vci_cross_block()?;
         Ok(())
     }
+
+    fn validate_oid4vci_cross_block(&self) -> Result<(), EvidenceConfigError> {
+        self.oid4vci
+            .validate(&self.self_attestation, &self.evidence)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub credential_issuer: String,
+    #[serde(default)]
+    pub authorization_servers: Vec<String>,
+    #[serde(default)]
+    pub accepted_token_audiences: Vec<String>,
+    #[serde(default)]
+    pub credential_endpoint: String,
+    #[serde(default)]
+    pub offer_endpoint: String,
+    #[serde(default)]
+    pub nonce_endpoint: Option<String>,
+    #[serde(default)]
+    pub nonce: Oid4vciNonceConfig,
+    #[serde(default)]
+    pub authorization: Oid4vciAuthorizationConfig,
+    #[serde(default)]
+    pub proof: Oid4vciProofConfig,
+    #[serde(default)]
+    pub credential_configurations: BTreeMap<String, Oid4vciCredentialConfigurationConfig>,
+}
+
+fn oid4vci_config_is_default(config: &Oid4vciConfig) -> bool {
+    config == &Oid4vciConfig::default()
+}
+
+impl Oid4vciConfig {
+    fn validate(
+        &self,
+        self_attestation: &SelfAttestationConfig,
+        evidence: &EvidenceConfig,
+    ) -> Result<(), EvidenceConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if !self_attestation.enabled {
+            return invalid_oid4vci("enabled oid4vci requires self_attestation.enabled = true");
+        }
+        validate_oid4vci_public_url("oid4vci.credential_issuer", &self.credential_issuer)?;
+        validate_oid4vci_endpoint_url(
+            "oid4vci.credential_endpoint",
+            &self.credential_endpoint,
+            &self.credential_issuer,
+        )?;
+        validate_oid4vci_endpoint_url(
+            "oid4vci.offer_endpoint",
+            &self.offer_endpoint,
+            &self.credential_issuer,
+        )?;
+        validate_oid4vci_non_empty_entries(
+            "oid4vci.authorization_servers",
+            &self.authorization_servers,
+        )?;
+        for server in &self.authorization_servers {
+            validate_oid4vci_public_url("oid4vci.authorization_servers", server)?;
+        }
+        validate_oid4vci_non_empty_entries(
+            "oid4vci.accepted_token_audiences",
+            &self.accepted_token_audiences,
+        )?;
+        if self.credential_configurations.is_empty() {
+            return invalid_oid4vci("credential_configurations must not be empty");
+        }
+        if self.nonce.enabled {
+            let nonce_endpoint = self.nonce_endpoint.as_deref().ok_or_else(|| {
+                EvidenceConfigError::InvalidOid4vciConfig {
+                    reason: "nonce_endpoint must be configured when nonce.enabled = true"
+                        .to_string(),
+                }
+            })?;
+            validate_oid4vci_endpoint_url(
+                "oid4vci.nonce_endpoint",
+                nonce_endpoint,
+                &self.credential_issuer,
+            )?;
+        } else if let Some(nonce_endpoint) = self.nonce_endpoint.as_deref() {
+            validate_oid4vci_endpoint_url(
+                "oid4vci.nonce_endpoint",
+                nonce_endpoint,
+                &self.credential_issuer,
+            )?;
+        }
+        self.nonce.validate()?;
+        self.authorization.validate()?;
+        self.proof.validate()?;
+
+        let claim_ids: HashSet<&str> = evidence
+            .claims
+            .iter()
+            .map(|claim| claim.id.as_str())
+            .collect();
+        let allowed_claim_ids: HashSet<&str> = self_attestation
+            .allowed_claims
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let allowed_profiles: HashSet<&str> = self_attestation
+            .credential_profiles
+            .iter()
+            .map(String::as_str)
+            .collect();
+
+        for (configuration_id, configuration) in &self.credential_configurations {
+            configuration.validate(
+                configuration_id,
+                evidence,
+                &claim_ids,
+                &allowed_claim_ids,
+                &allowed_profiles,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciNonceConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_oid4vci_nonce_ttl_seconds")]
+    pub ttl_seconds: u64,
+}
+
+impl Default for Oid4vciNonceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl_seconds: default_oid4vci_nonce_ttl_seconds(),
+        }
+    }
+}
+
+impl Oid4vciNonceConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.ttl_seconds == 0 || self.ttl_seconds > 600 {
+            return invalid_oid4vci("nonce.ttl_seconds must be between 1 and 600");
+        }
+        Ok(())
+    }
+}
+
+const fn default_oid4vci_nonce_ttl_seconds() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciAuthorizationConfig {
+    #[serde(default = "default_oid4vci_pkce_method")]
+    pub require_pkce_method: String,
+}
+
+impl Default for Oid4vciAuthorizationConfig {
+    fn default() -> Self {
+        Self {
+            require_pkce_method: default_oid4vci_pkce_method(),
+        }
+    }
+}
+
+impl Oid4vciAuthorizationConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.require_pkce_method != PKCE_METHOD_S256 {
+            return invalid_oid4vci("authorization.require_pkce_method must be S256");
+        }
+        Ok(())
+    }
+}
+
+fn default_oid4vci_pkce_method() -> String {
+    PKCE_METHOD_S256.to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciProofConfig {
+    #[serde(default = "default_oid4vci_proof_max_age_seconds")]
+    pub max_age_seconds: u64,
+    #[serde(default = "default_oid4vci_proof_max_clock_skew_seconds")]
+    pub max_clock_skew_seconds: u64,
+}
+
+impl Default for Oid4vciProofConfig {
+    fn default() -> Self {
+        Self {
+            max_age_seconds: default_oid4vci_proof_max_age_seconds(),
+            max_clock_skew_seconds: default_oid4vci_proof_max_clock_skew_seconds(),
+        }
+    }
+}
+
+impl Oid4vciProofConfig {
+    fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.max_age_seconds == 0 || self.max_age_seconds > 600 {
+            return invalid_oid4vci("proof.max_age_seconds must be between 1 and 600");
+        }
+        if self.max_clock_skew_seconds > 60 {
+            return invalid_oid4vci("proof.max_clock_skew_seconds must be at most 60");
+        }
+        Ok(())
+    }
+}
+
+const fn default_oid4vci_proof_max_age_seconds() -> u64 {
+    300
+}
+
+const fn default_oid4vci_proof_max_clock_skew_seconds() -> u64 {
+    60
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciCredentialConfigurationConfig {
+    pub claim_id: String,
+    pub credential_profile: String,
+    pub format: String,
+    pub scope: String,
+    pub vct: String,
+    pub display_name: String,
+    #[serde(default = "default_oid4vci_proof_signing_alg_values_supported")]
+    pub proof_signing_alg_values_supported: Vec<String>,
+    #[serde(default = "default_oid4vci_cryptographic_binding_methods_supported")]
+    pub cryptographic_binding_methods_supported: Vec<String>,
+}
+
+impl Oid4vciCredentialConfigurationConfig {
+    fn validate(
+        &self,
+        configuration_id: &str,
+        evidence: &EvidenceConfig,
+        claim_ids: &HashSet<&str>,
+        allowed_claim_ids: &HashSet<&str>,
+        allowed_profiles: &HashSet<&str>,
+    ) -> Result<(), EvidenceConfigError> {
+        if configuration_id.trim().is_empty() {
+            return invalid_oid4vci("credential_configurations must not contain a blank id");
+        }
+        validate_oid4vci_non_empty_value("credential_configurations.claim_id", &self.claim_id)?;
+        validate_oid4vci_non_empty_value(
+            "credential_configurations.credential_profile",
+            &self.credential_profile,
+        )?;
+        validate_oid4vci_non_empty_value("credential_configurations.scope", &self.scope)?;
+        validate_oid4vci_non_empty_value(
+            "credential_configurations.display_name",
+            &self.display_name,
+        )?;
+        if !claim_ids.contains(self.claim_id.as_str()) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' references unknown claim '{}'",
+                self.claim_id
+            ));
+        }
+        if !allowed_claim_ids.contains(self.claim_id.as_str()) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' references claim '{}' outside self_attestation.allowed_claims",
+                self.claim_id
+            ));
+        }
+        let profile = evidence
+            .credential_profiles
+            .get(&self.credential_profile)
+            .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+                reason: format!(
+                    "credential configuration '{configuration_id}' references unknown credential profile '{}'",
+                    self.credential_profile
+                ),
+            })?;
+        if !allowed_profiles.contains(self.credential_profile.as_str()) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' references credential profile '{}' outside self_attestation.credential_profiles",
+                self.credential_profile
+            ));
+        }
+        if !profile
+            .allowed_claims
+            .iter()
+            .any(|claim_id| claim_id == &self.claim_id)
+        {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' maps claim '{}' to credential profile '{}' but the profile does not allow that claim",
+                self.claim_id, self.credential_profile
+            ));
+        }
+        let claim = evidence
+            .claims
+            .iter()
+            .find(|claim| claim.id == self.claim_id)
+            .expect("claim id was checked above");
+        if !claim
+            .credential_profiles
+            .iter()
+            .any(|profile_id| profile_id == &self.credential_profile)
+        {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' maps claim '{}' to credential profile '{}' but the claim does not reference that profile",
+                self.claim_id, self.credential_profile
+            ));
+        }
+        if self.format != OID4VCI_SD_JWT_VC_FORMAT {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' format must be dc+sd-jwt"
+            ));
+        }
+        if profile.format != FORMAT_SD_JWT_VC {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' references credential profile '{}' with unsupported format '{}'",
+                self.credential_profile, profile.format
+            ));
+        }
+        if self.vct != profile.vct {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' vct must match credential profile '{}'",
+                self.credential_profile
+            ));
+        }
+        validate_oid4vci_public_url("credential_configurations.vct", &self.vct)?;
+        validate_oid4vci_non_empty_entries(
+            "credential_configurations.proof_signing_alg_values_supported",
+            &self.proof_signing_alg_values_supported,
+        )?;
+        for alg in &self.proof_signing_alg_values_supported {
+            if alg != CREDENTIAL_SIGNING_ALG_EDDSA {
+                return invalid_oid4vci(format!(
+                    "credential configuration '{configuration_id}' supports unsupported proof signing algorithm '{alg}'"
+                ));
+            }
+        }
+        validate_oid4vci_non_empty_entries(
+            "credential_configurations.cryptographic_binding_methods_supported",
+            &self.cryptographic_binding_methods_supported,
+        )?;
+        for method in &self.cryptographic_binding_methods_supported {
+            if method != CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK {
+                return invalid_oid4vci(format!(
+                    "credential configuration '{configuration_id}' supports unsupported binding method '{method}'"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn default_oid4vci_proof_signing_alg_values_supported() -> Vec<String> {
+    vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()]
+}
+
+fn default_oid4vci_cryptographic_binding_methods_supported() -> Vec<String> {
+    vec![CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK.to_string()]
+}
+
+fn validate_oid4vci_public_url(name: &str, url: &str) -> Result<(), EvidenceConfigError> {
+    let url = url.trim();
+    let (scheme, authority, _) =
+        split_absolute_url(url).ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+            reason: format!("{name} must be an absolute URL"),
+        })?;
+    if scheme != "https" && !(scheme == "http" && is_insecure_localhost_url(url)) {
+        return invalid_oid4vci(format!(
+            "{name} must use https unless it is an http loopback URL"
+        ));
+    }
+    if authority.is_empty() {
+        return invalid_oid4vci(format!("{name} must include a host"));
+    }
+    if url.contains('#') {
+        return invalid_oid4vci(format!("{name} must not include a fragment"));
+    }
+    Ok(())
+}
+
+fn validate_oid4vci_endpoint_url(
+    name: &str,
+    url: &str,
+    credential_issuer: &str,
+) -> Result<(), EvidenceConfigError> {
+    validate_oid4vci_public_url(name, url)?;
+    let (_, _, path) = split_absolute_url(url).expect("absolute URL was validated above");
+    if path.is_empty() || path == "/" {
+        return invalid_oid4vci(format!("{name} must include an endpoint path"));
+    }
+    if url.contains('?') {
+        return invalid_oid4vci(format!("{name} must not include a query string"));
+    }
+    let issuer_prefix = credential_issuer.trim().trim_end_matches('/');
+    if !url.trim().starts_with(&format!("{issuer_prefix}/")) {
+        return invalid_oid4vci(format!("{name} must be under oid4vci.credential_issuer"));
+    }
+    Ok(())
+}
+
+fn split_absolute_url(url: &str) -> Option<(&str, &str, &str)> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.is_empty() || rest.is_empty() {
+        return None;
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() {
+        return None;
+    }
+    let path = if rest[authority_end..].starts_with('/') {
+        rest[authority_end..]
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+    } else {
+        ""
+    };
+    Some((scheme, authority, path))
+}
+
+fn validate_oid4vci_non_empty_entries(
+    name: &str,
+    values: &[String],
+) -> Result<(), EvidenceConfigError> {
+    if values.is_empty() {
+        return invalid_oid4vci(format!("{name} must not be empty"));
+    }
+    for value in values {
+        validate_oid4vci_non_empty_value(name, value)?;
+    }
+    Ok(())
+}
+
+fn validate_oid4vci_non_empty_value(name: &str, value: &str) -> Result<(), EvidenceConfigError> {
+    if value.trim().is_empty() {
+        return invalid_oid4vci(format!("{name} must not contain blank entries"));
+    }
+    Ok(())
+}
+
+fn invalid_oid4vci<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidOid4vciConfig {
+        reason: reason.into(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -210,6 +667,8 @@ pub struct SelfAttestationConfig {
     pub allowed_formats: Vec<String>,
     #[serde(default)]
     pub allowed_disclosures: Vec<String>,
+    #[serde(default)]
+    pub scope_policy: SelfAttestationScopePolicy,
     #[serde(default)]
     pub required_scopes: Vec<String>,
     #[serde(default)]
@@ -237,6 +696,7 @@ impl Default for SelfAttestationConfig {
             allowed_claims: Vec::new(),
             allowed_formats: Vec::new(),
             allowed_disclosures: Vec::new(),
+            scope_policy: SelfAttestationScopePolicy::default(),
             required_scopes: Vec::new(),
             allowed_wallet_origins: Vec::new(),
             credential_profiles: Vec::new(),
@@ -291,7 +751,21 @@ impl SelfAttestationConfig {
             "self_attestation.allowed_disclosures",
             &self.allowed_disclosures,
         )?;
-        validate_non_empty_entries("self_attestation.required_scopes", &self.required_scopes)?;
+        if self.scope_policy != SelfAttestationScopePolicy::Disabled
+            && self.required_scopes.is_empty()
+        {
+            return self.invalid("scope_policy requires required_scopes unless it is disabled");
+        }
+        if self.scope_policy == SelfAttestationScopePolicy::Disabled
+            && !self.required_scopes.is_empty()
+        {
+            return self.invalid("scope_policy = disabled requires required_scopes to be empty");
+        }
+        if self.scope_policy != SelfAttestationScopePolicy::Disabled {
+            validate_non_empty_entries("self_attestation.required_scopes", &self.required_scopes)?;
+        } else {
+            validate_entries("self_attestation.required_scopes", &self.required_scopes)?;
+        }
         validate_non_empty_entries(
             "self_attestation.credential_profiles",
             &self.credential_profiles,
@@ -371,7 +845,9 @@ impl SelfAttestationConfig {
         }
 
         validate_self_attestation_allow_lists_are_supported(self, evidence)?;
-        validate_required_scopes_do_not_grant_source_access(self, oidc, evidence)?;
+        if self.scope_policy != SelfAttestationScopePolicy::Disabled {
+            validate_required_scopes_do_not_grant_source_access(self, oidc, evidence)?;
+        }
         Ok(())
     }
 
@@ -380,6 +856,15 @@ impl SelfAttestationConfig {
             reason: reason.into(),
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfAttestationScopePolicy {
+    #[default]
+    Required,
+    Optional,
+    Disabled,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -768,7 +1253,7 @@ fn validate_self_attestation_profile(
             .holder_binding
             .allowed_did_methods
             .iter()
-            .any(|method| method != "did:jwk")
+            .any(|method| method != SD_JWT_VC_HOLDER_BINDING_METHOD)
     {
         return invalid_self_attestation(format!(
             "credential profile '{profile_id}' holder_binding.allowed_did_methods must only contain did:jwk"
@@ -1032,6 +1517,8 @@ pub struct EvidenceOidcAuthConfig {
     #[serde(default)]
     pub userinfo_endpoint: Option<String>,
     #[serde(default)]
+    pub userinfo_issuers: Vec<String>,
+    #[serde(default)]
     pub audiences: Vec<String>,
     #[serde(default)]
     pub allowed_clients: Vec<String>,
@@ -1054,7 +1541,7 @@ pub struct EvidenceOidcAuthConfig {
 }
 
 fn default_oidc_allowed_algorithms() -> Vec<String> {
-    vec!["EdDSA".to_string()]
+    vec![SD_JWT_VC_SIGNING_ALG.to_string()]
 }
 
 fn default_oidc_allowed_typ() -> Vec<String> {
@@ -1098,6 +1585,7 @@ impl EvidenceOidcAuthConfig {
             }
             validate_jwks_uri_transport(userinfo_endpoint, self.allow_insecure_localhost)?;
         }
+        validate_entries("auth.oidc.userinfo_issuers", &self.userinfo_issuers)?;
         if self.audiences.is_empty() {
             return Err(EvidenceConfigError::InvalidOidcConfig {
                 reason: "audiences must list at least one accepted audience".to_string(),
@@ -1192,6 +1680,8 @@ pub enum EvidenceConfigError {
     InvalidOidcConfig { reason: String },
     #[error("invalid self_attestation config: {reason}")]
     InvalidSelfAttestationConfig { reason: String },
+    #[error("invalid oid4vci config: {reason}")]
+    InvalidOid4vciConfig { reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
@@ -1964,12 +2454,61 @@ self_attestation:
         .expect("self-attestation config is valid YAML")
     }
 
+    fn valid_oid4vci_config() -> StandaloneRegistryWitnessConfig {
+        let mut config = valid_self_attestation_config();
+        config.oid4vci = serde_norway::from_str(
+            r#"
+enabled: true
+credential_issuer: http://127.0.0.1:4325
+authorization_servers:
+  - http://localhost:8088/v1/esignet
+accepted_token_audiences:
+  - http://127.0.0.1:4325
+credential_endpoint: http://127.0.0.1:4325/oid4vci/credential
+offer_endpoint: http://127.0.0.1:4325/oid4vci/credential-offer
+nonce_endpoint: http://127.0.0.1:4325/oid4vci/nonce
+nonce:
+  enabled: true
+  ttl_seconds: 300
+authorization:
+  require_pkce_method: S256
+proof:
+  max_age_seconds: 300
+  max_clock_skew_seconds: 30
+credential_configurations:
+  date_of_birth_sd_jwt:
+    claim_id: date-of-birth
+    credential_profile: civil_status_sd_jwt
+    format: dc+sd-jwt
+    scope: date-of-birth
+    vct: https://issuer.example/credentials/civil-status
+    display_name: Date of birth
+    proof_signing_alg_values_supported:
+      - EdDSA
+    cryptographic_binding_methods_supported:
+      - did:jwk
+"#,
+        )
+        .expect("oid4vci config is valid YAML");
+        config
+    }
+
     fn expect_self_attestation_error(config: &StandaloneRegistryWitnessConfig) -> String {
         match config
             .validate()
             .expect_err("self-attestation config must fail validation")
         {
             EvidenceConfigError::InvalidSelfAttestationConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    fn expect_oid4vci_error(config: &StandaloneRegistryWitnessConfig) -> String {
+        match config
+            .validate()
+            .expect_err("oid4vci config must fail validation")
+        {
+            EvidenceConfigError::InvalidOid4vciConfig { reason } => reason,
             other => panic!("unexpected error variant: {other}"),
         }
     }
@@ -2307,6 +2846,7 @@ vct: https://vct.example/test
             issuer: "https://issuer.example".to_string(),
             jwks_uri: "https://issuer.example/jwks.json".to_string(),
             userinfo_endpoint: None,
+            userinfo_issuers: Vec::new(),
             audiences: vec!["registry-witness".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
@@ -2331,6 +2871,7 @@ vct: https://vct.example/test
             issuer: "https://issuer.example".to_string(),
             jwks_uri: "http://issuer.example/jwks.json".to_string(),
             userinfo_endpoint: None,
+            userinfo_issuers: Vec::new(),
             audiences: vec!["registry-witness".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
@@ -2377,6 +2918,7 @@ vct: https://vct.example/test
             issuer: "https://issuer.example".to_string(),
             jwks_uri: "http://127.0.0.1:8080/jwks.json".to_string(),
             userinfo_endpoint: None,
+            userinfo_issuers: Vec::new(),
             audiences: vec!["registry-witness".to_string()],
             allowed_clients: vec!["registry-client".to_string()],
             allowed_algorithms: vec!["EdDSA".to_string()],
@@ -2770,6 +3312,13 @@ allowed_claims: ["", "   "]
     }
 
     #[test]
+    fn oid4vci_is_disabled_by_default() {
+        let config = minimal_config();
+        assert!(!config.oid4vci.enabled);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn disabled_default_self_attestation_is_omitted_from_serialized_config() {
         let config = minimal_config();
         let serialized = serde_json::to_value(&config).expect("config serializes as JSON");
@@ -2781,9 +3330,168 @@ allowed_claims: ["", "   "]
     }
 
     #[test]
+    fn disabled_default_oid4vci_is_omitted_from_serialized_config() {
+        let config = minimal_config();
+        let serialized = serde_json::to_value(&config).expect("config serializes as JSON");
+
+        assert!(
+            serialized.get("oid4vci").is_none(),
+            "disabled default oid4vci must stay compact when serialized: {serialized}",
+        );
+    }
+
+    #[test]
     fn valid_self_attestation_config_passes_validation() {
         let config = valid_self_attestation_config();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_oid4vci_config_passes_validation() {
+        let config = valid_oid4vci_config();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn oid4vci_deserializes_absent_block_with_default() {
+        let config = valid_self_attestation_config();
+        assert_eq!(config.oid4vci, Oid4vciConfig::default());
+    }
+
+    #[test]
+    fn oid4vci_requires_enabled_self_attestation() {
+        let mut config = valid_oid4vci_config();
+        config.self_attestation.enabled = false;
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("self_attestation.enabled"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_missing_accepted_audiences() {
+        let mut config = valid_oid4vci_config();
+        config.oid4vci.accepted_token_audiences.clear();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("accepted_token_audiences"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_unknown_claim_reference() {
+        let mut config = valid_oid4vci_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .claim_id = "missing-claim".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("unknown claim 'missing-claim'"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_unknown_credential_profile_reference() {
+        let mut config = valid_oid4vci_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .credential_profile = "missing-profile".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("unknown credential profile 'missing-profile'"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_non_loopback_http_urls() {
+        let mut config = valid_oid4vci_config();
+        config.oid4vci.credential_issuer = "http://issuer.example".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("https") && reason.contains("loopback"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_endpoint_without_path() {
+        let mut config = valid_oid4vci_config();
+        config.oid4vci.credential_endpoint = "http://127.0.0.1:4325".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("endpoint path"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn oid4vci_rejects_missing_nonce_endpoint_when_nonce_enabled() {
+        let mut config = valid_oid4vci_config();
+        config.oid4vci.nonce_endpoint = None;
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("nonce_endpoint"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn oid4vci_rejects_bad_nonce_and_proof_timing_bounds() {
+        let mut config = valid_oid4vci_config();
+        config.oid4vci.nonce.ttl_seconds = 0;
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("nonce.ttl_seconds"), "unexpected: {reason}");
+
+        config.oid4vci.nonce.ttl_seconds = 300;
+        config.oid4vci.proof.max_age_seconds = 601;
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("proof.max_age_seconds"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_rejects_bad_algorithm_lists() {
+        let mut config = valid_oid4vci_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .proof_signing_alg_values_supported
+            .push("ES256".to_string());
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("ES256"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn oid4vci_rejects_bad_binding_methods() {
+        let mut config = valid_oid4vci_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .cryptographic_binding_methods_supported
+            .push("did:key".to_string());
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("did:key"), "unexpected: {reason}");
     }
 
     #[test]
@@ -2981,6 +3689,50 @@ self_attestation:
 
         let reason = expect_self_attestation_error(&config);
         assert!(reason.contains("scope_map"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_required_scope_policy_requires_scopes() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.required_scopes.clear();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("scope_policy requires required_scopes"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn self_attestation_optional_scope_policy_still_requires_scope_mapping() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.scope_policy = SelfAttestationScopePolicy::Optional;
+        config.auth.oidc.as_mut().unwrap().scope_map.clear();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(reason.contains("scope_map"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn self_attestation_optional_scope_policy_passes_with_required_scopes() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.scope_policy = SelfAttestationScopePolicy::Optional;
+
+        config
+            .validate()
+            .expect("optional scope policy uses configured self-attestation scopes");
+    }
+
+    #[test]
+    fn self_attestation_disabled_scope_policy_rejects_required_scopes() {
+        let mut config = valid_self_attestation_config();
+        config.self_attestation.scope_policy = SelfAttestationScopePolicy::Disabled;
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("scope_policy = disabled"),
+            "unexpected: {reason}"
+        );
     }
 
     #[test]

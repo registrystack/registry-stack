@@ -13,15 +13,18 @@ use axum::routing::post;
 use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_platform_audit::{verify_jsonl_lines, AuditEnvelope};
-use registry_platform_testing::MockIdp;
+use registry_platform_testing::{sign_openid4vci_proof_jwt, MockIdp};
 use registry_witness_core::{
-    EvidenceCredentialConfig, EvidenceOidcAuthConfig, StandaloneRegistryWitnessConfig,
+    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, SelfAttestationClaimSource,
+    StandaloneRegistryWitnessConfig,
 };
 use registry_witness_server::{standalone_router, StandaloneServerError};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 #[cfg(feature = "registry-witness-cel")]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 
@@ -30,6 +33,11 @@ const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd
 
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+}
+
+fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    sign_openid4vci_proof_jwt(TEST_ISSUER_JWK, audience, Some(nonce), now)
 }
 
 async fn registry_data_api(
@@ -395,6 +403,46 @@ self_attestation:
     serde_norway::from_str(&raw).expect("self-attestation config deserializes")
 }
 
+fn self_attestation_oid4vci_config(
+    base_url: &str,
+    audit_path: &str,
+    issuer: &str,
+    jwks_uri: &str,
+) -> StandaloneRegistryWitnessConfig {
+    let mut config = self_attestation_oidc_config(base_url, audit_path, issuer, jwks_uri);
+    config.oid4vci = serde_norway::from_str::<Oid4vciConfig>(
+        r#"
+enabled: true
+credential_issuer: http://127.0.0.1:4325
+authorization_servers:
+  - http://127.0.0.1:4325
+accepted_token_audiences:
+  - registry-witness-citizen
+credential_endpoint: http://127.0.0.1:4325/oid4vci/credential
+offer_endpoint: http://127.0.0.1:4325/oid4vci/credential-offer
+nonce_endpoint: http://127.0.0.1:4325/oid4vci/nonce
+nonce:
+  enabled: true
+  ttl_seconds: 300
+authorization:
+  require_pkce_method: S256
+proof:
+  max_age_seconds: 300
+  max_clock_skew_seconds: 30
+credential_configurations:
+  person_is_alive_sd_jwt:
+    claim_id: person-is-alive
+    credential_profile: civil_status_sd_jwt
+    format: dc+sd-jwt
+    scope: person-is-alive
+    vct: https://issuer.example/credentials/civil-status
+    display_name: Person is alive
+"#,
+    )
+    .expect("oid4vci config deserializes");
+    config
+}
+
 #[cfg(feature = "registry-witness-cel")]
 fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryWitnessConfig {
     config(base_url, audit_path, "dci", "farmed_land_size_hectares")
@@ -573,6 +621,7 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
         issuer: idp.issuer(),
         jwks_uri: idp.jwks_uri(),
         userinfo_endpoint: None,
+        userinfo_issuers: Vec::new(),
         audiences: vec!["registry-witness".to_string()],
         allowed_clients: vec!["registry-client".to_string()],
         allowed_algorithms: vec!["EdDSA".to_string()],
@@ -733,6 +782,270 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     assert_eq!(render_audit["access_mode"], json!("self_attestation"));
     assert!(render_audit["policy_hash"].is_string());
     assert_eq!(render_audit["correlation_id"], json!("req-self-attest-1"));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_metadata_offer_and_nonce_are_public() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let metadata = server.get("/.well-known/openid-credential-issuer").await;
+    metadata.assert_status_ok();
+    let metadata_body: Value = metadata.json();
+    assert_eq!(
+        metadata_body["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"]
+            [0]["name"],
+        json!("Person is alive")
+    );
+    let metadata_text = metadata_body.to_string();
+    assert!(!metadata_text.contains("source_connections"));
+    assert!(!metadata_text.contains("source-token"));
+
+    let offer = server.get("/oid4vci/credential-offer").await;
+    offer.assert_status_ok();
+    let offer_body: Value = offer.json();
+    assert_eq!(
+        offer_body["credential_configuration_ids"][0],
+        json!("person_is_alive_sd_jwt")
+    );
+
+    let nonce = server.post("/oid4vci/nonce").json(&json!({})).await;
+    nonce.assert_status_ok();
+    let nonce_body: Value = nonce.json();
+    assert!(nonce_body["c_nonce"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert_eq!(nonce_body["c_nonce_expires_in"], json!(300));
+
+    let bad_nonce = server
+        .post("/oid4vci/nonce")
+        .json(&json!({"subject": "person-2"}))
+        .await;
+    bad_nonce.assert_status(StatusCode::BAD_REQUEST);
+    let bad_nonce_body: Value = bad_nonce.json();
+    assert_eq!(bad_nonce_body["error"], json!("invalid_request"));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed_body() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(self_attestation_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/oid4vci/credential")
+        .add_header("content-type", "application/json")
+        .text("{")
+        .await;
+    response.assert_status(StatusCode::NOT_FOUND);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/datasets/people/person",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let nonce = server
+        .post("/oid4vci/nonce")
+        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
+        .await;
+    nonce.assert_status_ok();
+    let nonce_body: Value = nonce.json();
+    let nonce = nonce_body["c_nonce"]
+        .as_str()
+        .expect("nonce is returned")
+        .to_string();
+    let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-witness-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+
+    let response = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": proof
+            }
+        }))
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["format"], json!("dc+sd-jwt"));
+    assert!(body["credential"]
+        .as_str()
+        .is_some_and(|credential| credential.contains('~')));
+    assert!(body["c_nonce"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let userinfo_hits = Arc::new(AtomicUsize::new(0));
+    let userinfo_hits_for_route = Arc::clone(&userinfo_hits);
+    let userinfo_app = Router::new().route(
+        "/userinfo",
+        get(move || {
+            let userinfo_hits = Arc::clone(&userinfo_hits_for_route);
+            async move {
+                userinfo_hits.fetch_add(1, Ordering::SeqCst);
+                StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let userinfo_server = TestServer::builder().http_transport().build(userinfo_app);
+    let userinfo_endpoint = userinfo_server
+        .server_url("/userinfo")
+        .expect("userinfo URL builds")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("oidc config exists")
+        .userinfo_endpoint = Some(userinfo_endpoint);
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-witness-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+
+    let response = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": "not-a-compact-jwt"
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["error"], json!("invalid_proof"));
+    assert!(body.get("code").is_none());
+    assert_eq!(
+        userinfo_hits.load(Ordering::SeqCst),
+        0,
+        "malformed proof must be rejected before the live UserInfo fetch"
+    );
+
+    let response = server
+        .post("/oid4vci/credential")
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "subject": {"id": "person-2"},
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": "not-a-compact-jwt"
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["error"], json!("invalid_request"));
 
     idp.stop().await;
 }

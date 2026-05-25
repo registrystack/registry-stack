@@ -80,6 +80,7 @@ pub fn standalone_router(
     config.validate()?;
     let evidence = Arc::new(config.evidence.clone());
     let self_attestation = Arc::new(config.self_attestation.clone());
+    let oid4vci = Arc::new(config.oid4vci.clone());
     let source = Arc::new(HttpEvidenceSources::from_config(&config.evidence)?);
     let store = Arc::new(EvidenceStore::default());
     let issuers = Arc::new(EvidenceIssuerRegistry::from_config(&config.evidence)?);
@@ -92,18 +93,25 @@ pub fn standalone_router(
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
     let auth_state = Arc::new(AuthAuditState::from_config(&config)?);
-    let api_state = Arc::new(RegistryWitnessApiState::new_with_self_attestation_hasher(
-        evidence,
-        self_attestation,
-        auth_state.audit.hasher.clone(),
-        source,
-        store,
-        issuers,
-    ));
+    let api_state = Arc::new(
+        RegistryWitnessApiState::new_with_self_attestation_and_oid4vci_hasher(
+            evidence,
+            self_attestation,
+            oid4vci,
+            auth_state.audit.hasher.clone(),
+            source,
+            store,
+            issuers,
+        ),
+    );
 
     Ok(router()
-        .layer(axum::Extension(api_state))
+        .layer(axum::Extension(Arc::clone(&api_state)))
         .layer(from_fn_with_state(auth_state, auth_audit_middleware))
+        .layer(from_fn_with_state(
+            api_state,
+            crate::api::oid4vci_proof_precheck_middleware,
+        ))
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::restrictive(),
         ))
@@ -199,6 +207,10 @@ fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
         path,
         "/.well-known/evidence-service"
             | "/.well-known/evidence/jwks.json"
+            | "/.well-known/openid-credential-issuer"
+            | "/oid4vci/credential-offer"
+            | "/oid4vci/nonce"
+            | "/oid4vci/credential"
             | "/formats"
             | "/evidence/render"
             | "/credentials/issue"
@@ -625,6 +637,7 @@ enum Authenticator {
         subject_binding_claim_source: SelfAttestationClaimSource,
         assurance_claim_source: SelfAttestationAssuranceClaimSource,
         userinfo_endpoint: Option<String>,
+        userinfo_issuers: Vec<String>,
     },
 }
 
@@ -718,6 +731,11 @@ impl Authenticator {
                     },
                     fetcher,
                 );
+                let userinfo_issuers = if oidc.userinfo_issuers.is_empty() {
+                    vec![oidc.issuer.clone()]
+                } else {
+                    oidc.userinfo_issuers.clone()
+                };
                 Ok(Self::Oidc {
                     verifier: Arc::new(verifier),
                     client,
@@ -737,6 +755,7 @@ impl Authenticator {
                         .token_policy
                         .assurance_claim_source,
                     userinfo_endpoint: oidc.userinfo_endpoint.clone(),
+                    userinfo_issuers,
                 })
             }
             mode => Err(StandaloneServerError::InvalidOidcConfig(format!(
@@ -763,6 +782,7 @@ impl Authenticator {
                 subject_binding_claim_source,
                 assurance_claim_source,
                 userinfo_endpoint,
+                userinfo_issuers,
             } => {
                 authenticate_oidc(
                     &credentials,
@@ -774,6 +794,7 @@ impl Authenticator {
                     *subject_binding_claim_source,
                     *assurance_claim_source,
                     userinfo_endpoint.as_deref(),
+                    userinfo_issuers,
                 )
                 .await
             }
@@ -1003,7 +1024,14 @@ fn consume_invalid_token_after_auth_failure(
 }
 
 fn is_public_probe_path(path: &str) -> bool {
-    matches!(path, "/healthz" | "/ready")
+    matches!(
+        path,
+        "/healthz"
+            | "/ready"
+            | "/.well-known/openid-credential-issuer"
+            | "/oid4vci/credential-offer"
+            | "/oid4vci/nonce"
+    )
 }
 
 fn build_audit_event(
@@ -1163,6 +1191,7 @@ async fn authenticate_oidc(
     subject_binding_claim_source: SelfAttestationClaimSource,
     assurance_claim_source: SelfAttestationAssuranceClaimSource,
     userinfo_endpoint: Option<&str>,
+    userinfo_issuers: &[String],
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let Some(token) = credentials.bearer_token.as_deref() else {
         return Err(EvidenceError::MissingCredential);
@@ -1181,9 +1210,24 @@ async fn authenticate_oidc(
             )
             .await
             .map_err(oidc_auth_error)?;
+            let accepted_issuers = userinfo_issuers
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let accepted_audiences = verified
+                .matched_client
+                .as_ref()
+                .and_then(|matched| matched.split_once(':'))
+                .map(|(_, client)| vec![client.to_string()])
+                .unwrap_or_default();
             Some(
                 verifier
-                    .verify_userinfo_jwt(&userinfo_jwt, &verified)
+                    .verify_userinfo_jwt_with_claims_policy(
+                        &userinfo_jwt,
+                        &verified,
+                        &accepted_issuers,
+                        &accepted_audiences,
+                    )
                     .await
                     .map_err(oidc_auth_error)?,
             )
@@ -1384,6 +1428,7 @@ fn oidc_auth_error(error: OidcError) -> EvidenceError {
     tracing::debug!(
         target: "registry_witness_server::auth",
         error_code = oidc_internal_error_code(&error),
+        error = ?error,
         "OIDC token verification failed"
     );
     EvidenceError::MissingCredential
@@ -1418,6 +1463,7 @@ fn parse_oidc_algorithm(algorithm: &str) -> Result<Algorithm, StandaloneServerEr
     match algorithm {
         "EdDSA" => Ok(Algorithm::EdDSA),
         "RS256" => Ok(Algorithm::RS256),
+        "PS256" => Ok(Algorithm::PS256),
         other => Err(StandaloneServerError::InvalidOidcConfig(format!(
             "unsupported OIDC signing algorithm '{other}'"
         ))),

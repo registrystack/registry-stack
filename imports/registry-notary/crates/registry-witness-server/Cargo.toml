@@ -18,11 +18,13 @@ registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-oid4vci.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-sdjwt.workspace = true
 axum.workspace = true
 base64.workspace = true
 cel-mapper-core = { workspace = true, optional = true }
+getrandom.workspace = true
 jsonwebtoken.workspace = true
 reqwest.workspace = true
 serde.workspace = true

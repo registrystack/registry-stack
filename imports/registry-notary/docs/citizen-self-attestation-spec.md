@@ -169,6 +169,7 @@ self_attestation:
   allowed_disclosures:
     - predicate
     - value
+  scope_policy: required
   required_scopes:
     - self_attestation
   allowed_wallet_origins:
@@ -206,11 +207,16 @@ model. The important invariant is that a citizen token yields only the narrow
 self-attestation permission. It must not directly receive machine-client source
 scopes such as `civil_registry:evidence_verification`.
 
-For shared IdPs, V1 requires both a configured citizen client or audience and a
-configured self-attestation scope. A self-attestation scope without an allowed
-citizen client or audience is denied. An allowed citizen client or audience
-without the self-attestation scope is also denied. Neither case may fall back to
-machine-client authorization.
+For shared IdPs, V1 defaults to requiring both a configured citizen client or
+audience and a configured self-attestation scope. `scope_policy` may be set to
+`optional` or `disabled` only when the issuer/client/audience, assurance, and
+subject-binding checks are the deployment's primary citizen authorization
+boundary. A self-attestation scope without an allowed citizen client or audience
+is denied. An allowed citizen client or audience without the self-attestation
+scope is denied when `scope_policy = required`, accepted only when the token
+omits scope and `scope_policy = optional`, and ignored when
+`scope_policy = disabled`. None of these cases may fall back to machine-client
+authorization once classified as self-attestation.
 
 After access-mode classification, subject binding, operation allow-list, claim
 allow-list, disclosure allow-list, and format allow-list pass, Witness may
@@ -395,10 +401,13 @@ into exactly one access mode before authorization: `machine_client` or
 A request is `self_attestation` when the token comes from a configured citizen
 client, citizen audience, citizen issuer policy, or has any configured
 self-attestation scope. To be authorized, a self-attestation request must have
-both an allowed citizen client or audience and a configured self-attestation
-scope. A self-attestation-classified request must never fall back to
-machine-client authorization. If any self-attestation guard fails, the request
-is denied before source reads.
+an allowed citizen client or audience. Scope handling is controlled by
+`self_attestation.scope_policy`: `required` requires every configured
+`required_scopes` entry; `optional` requires those scopes only when the verified
+token carries any scope signal; `disabled` ignores OAuth scopes for the
+self-attestation decision. A self-attestation-classified request must never fall
+back to machine-client authorization. If any self-attestation guard fails, the
+request is denied before source reads.
 
 A request is `machine_client` only when it satisfies existing machine-client
 authentication and does not match configured citizen client, audience, issuer,
@@ -627,16 +636,20 @@ request may continue only when all of the following are true:
 
 - `self_attestation.enabled = true`;
 - auth mode is OIDC;
-- the verified principal has one of `self_attestation.required_scopes`;
 - the verified principal comes from an allowed citizen client or audience;
+- scope policy is satisfied: `required` means all configured
+  `self_attestation.required_scopes` are present, `optional` means they are
+  required only when the verified token carries a scope signal, and `disabled`
+  means scopes are not part of the self-attestation decision;
 - the request operation is listed as allowed;
 - the requested claims, disclosure, format, and credential profile are allowed;
 - the subject binding check passes.
 
 V1 does not support scope-only citizen classification for a shared IdP. Citizen
 and machine OIDC clients must be separated by client id, audience, or issuer
-policy, and self-attestation authorization still requires the dedicated
-self-attestation scope.
+policy. The dedicated self-attestation scope remains the default policy, but it
+can be explicitly relaxed for IdPs such as eSignet that do not emit a useful
+OAuth `scope` claim in the access token.
 
 ## Errors
 
@@ -938,8 +951,10 @@ Definition of Done:
 - Extend `EvidenceAuditEvent` with the fields required by this spec before
   implementing the evaluation guard.
 - Validate that `enabled = true` requires `auth.mode = oidc`.
-- Validate non-empty `subject_binding.token_claim`, `allowed_claims`, and
-  `required_scopes`.
+- Validate non-empty `subject_binding.token_claim` and `allowed_claims`.
+- Validate `scope_policy`; when it is `required` or `optional`,
+  `required_scopes` must be non-empty, and when it is `disabled`,
+  `required_scopes` must be empty.
 - Validate supported `request_field` enum values. V1 should accept only
   `SubjectId`.
 - Validate supported normalizers. V1 should accept only `exact`.
@@ -949,11 +964,11 @@ Definition of Done:
 - Validate rate-limit config when present and apply secure defaults when absent.
 - Validate token policy, citizen client/audience policy, and allowed purpose
   config when self-attestation is enabled.
-- Validate cross-block OIDC policy: `required_scopes` must map only to
-  self-attestation scope, citizen client or audience policy must be present,
-  citizen tokens must not map to machine-client source scopes, clock leeway must
-  be bounded, and configured credential profiles must respect the 600-second
-  citizen validity ceiling.
+- Validate cross-block OIDC policy: when scope policy is not `disabled`,
+  `required_scopes` must map only to self-attestation scope, citizen client or
+  audience policy must be present, citizen tokens must not map to machine-client
+  source scopes, clock leeway must be bounded, and configured credential
+  profiles must respect the 600-second citizen validity ceiling.
 - Validate each self-attestation claim profile has a fixed bounded purpose id
   that appears in `self_attestation.allowed_purposes`.
 
@@ -1023,7 +1038,13 @@ Definition of Done:
 - A subject mismatch writes a self-attestation denial audit event without raw
   subject identifiers.
 - A claim outside the allow-list is denied before any source read.
-- A missing self-attestation scope is denied.
+- A missing self-attestation scope is denied when `scope_policy = required`.
+- With `scope_policy = optional`, a token with no scope signal may proceed, but
+  a token with a scope signal that omits the configured self-attestation scope
+  is denied.
+- With `scope_policy = disabled`, a token with no self-attestation scope may
+  proceed only through the allowed citizen client/audience, assurance, and
+  subject-binding checks.
 - Alternate or duplicate subject identifiers outside `request.subject.id` are
   rejected.
 - Missing or unallowed purpose values fail before source reads.

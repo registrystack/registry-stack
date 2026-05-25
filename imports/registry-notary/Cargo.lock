@@ -2423,6 +2423,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-oid4vci"
+version = "0.1.2"
+dependencies = [
+ "base64",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "registry-platform-oidc"
 version = "0.1.2"
 dependencies = [
@@ -2465,6 +2476,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-oid4vci",
  "registry-platform-oidc",
  "reqwest",
  "serde_json",
@@ -2494,6 +2506,7 @@ version = "0.2.1"
 dependencies = [
  "base64",
  "registry-platform-crypto",
+ "registry-platform-oid4vci",
  "registry-platform-sdjwt",
  "serde",
  "serde_json",
@@ -2534,12 +2547,14 @@ dependencies = [
  "base64",
  "cel-mapper-core",
  "criterion",
+ "getrandom 0.4.2",
  "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-oid4vci",
  "registry-platform-oidc",
  "registry-platform-sdjwt",
  "registry-platform-testing",

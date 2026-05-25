@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Minimal SD-JWT VC issuer for Registry Witness claim views.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
-use registry_platform_crypto::{PrivateJwk, PublicJwk};
+use registry_platform_crypto::{parse_did_jwk, PrivateJwk, PublicJwk};
 use registry_platform_sdjwt::{Disclosure, HolderConfirmation, SdJwtIssuanceInput, SdJwtIssuer};
 use serde_json::{json, Value};
 use std::fmt;
@@ -152,15 +150,7 @@ fn holder_confirmation(holder_id: &str) -> Result<HolderConfirmation, EvidenceEr
 }
 
 pub fn holder_jwk(holder_id: &str) -> Result<PublicJwk, EvidenceError> {
-    let encoded = holder_id
-        .strip_prefix("did:jwk:")
-        .ok_or(EvidenceError::HolderProofRequired)?;
-    let bytes = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .map_err(|_| EvidenceError::HolderProofRequired)?;
-    let value: Value =
-        serde_json::from_slice(&bytes).map_err(|_| EvidenceError::HolderProofRequired)?;
-    PublicJwk::parse(&value.to_string()).map_err(|_| EvidenceError::HolderProofRequired)
+    parse_did_jwk(holder_id).map_err(|_| EvidenceError::HolderProofRequired)
 }
 
 fn format_time(value: OffsetDateTime) -> String {
@@ -173,6 +163,9 @@ fn format_time(value: OffsetDateTime) -> String {
 mod tests {
     use super::*;
     use crate::model::{ClaimProvenance, FORMAT_SD_JWT_VC, SD_JWT_VC_JWT_TYP};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use registry_platform_crypto::did_jwk_from_public_jwk;
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
@@ -539,14 +532,8 @@ mod tests {
     }
 
     fn holder_did_jwk() -> String {
-        let public_jwk = json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
-        });
-        let encoded =
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&public_jwk).expect("holder JWK serializes"));
-        format!("did:jwk:{encoded}")
+        let holder = PrivateJwk::parse(RAW_JWK).expect("holder JWK parses");
+        did_jwk_from_public_jwk(&holder.public()).expect("did:jwk encodes")
     }
 
     fn payload_sd(signed: &SignedSdJwtVc) -> Vec<String> {

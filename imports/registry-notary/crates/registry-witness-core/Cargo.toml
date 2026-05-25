@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 base64.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-oid4vci.workspace = true
 registry-platform-sdjwt.workspace = true
 serde.workspace = true
 serde_json.workspace = true
