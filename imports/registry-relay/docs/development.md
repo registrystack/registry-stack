@@ -62,10 +62,11 @@ just metadata-validate-profiles
 cargo test --test demo_configs_load
 ```
 
-`just metadata-*` recipes use an installed `registry-metadata` binary when one
-is present, a sibling checkout during local development, or the published
+`just metadata-*` recipes use `REGISTRY_MANIFEST_CLI` when set, an installed
+`registry-manifest` binary when present, a sibling `../registry-manifest`
+checkout during local development, or the published
 `https://github.com/jeremi/registry-manifest` tag configured by
-`scripts/run_registry_metadata_cli.sh`.
+`scripts/run_registry_manifest_cli.sh`.
 
 The demo runtime configs are split-backed: every `demo/config/*.yaml` points
 at a sibling `*.metadata.yaml` manifest, and `demo_configs_load` validates the
@@ -148,6 +149,7 @@ src/entity/       entity registry built from config
 src/format/       CSV, XLSX, and Parquet decoders
 src/ingest/       source ingest, cache layout, refresh, readiness
 src/metadata/     Relay adapters for scoped metadata publication
+src/api/ogc/      optional OGC API Features and Records adapters
 src/provenance/   VC-JWT issuance, DID Web, schemas, contexts, signers
 src/query/        entity and aggregate query planning
 src/server.rs     router composition and cross-cutting middleware

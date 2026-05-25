@@ -745,6 +745,7 @@ fn extract_purpose(headers: &HeaderMap) -> Option<String> {
     headers
         .get("data-purpose")
         .and_then(|v| v.to_str().ok())
+        .map(str::trim)
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
 }

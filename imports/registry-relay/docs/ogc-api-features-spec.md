@@ -1,8 +1,8 @@
 # OGC API Features Spec
 
-Status: proposed
+Status: implemented for Phase 1 behind the `ogcapi-features` Cargo feature.
 
-This document specifies a read-only OGC API Features surface for Registry Relay entities that expose GIS data. It is a product and implementation spec for a future feature, not current runtime behavior.
+This document specifies the read-only OGC API Features surface for Registry Relay entities that expose GIS data. The main Phase 1 surface is implemented in `src/api/ogc/features.rs`; Phase 2 and Phase 3 notes remain forward-looking.
 
 ## Decision
 
@@ -616,6 +616,8 @@ Candidate stable codes:
 Prefer `spatial.filter_unsupported` with a `parameter` member over one error code per filter parameter.
 
 ## Implementation Plan
+
+Phase 1 has landed. The checklist below is retained as implementation history and as a regression checklist for future changes.
 
 ### Phase 1: OGC Surface Without Spatial UDFs
 

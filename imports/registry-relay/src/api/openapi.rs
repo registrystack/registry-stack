@@ -1969,7 +1969,7 @@ fn problem_details_schema() -> Value {
         },
         "additionalProperties": true,
         "examples": [{
-            "type": "https://data.example.gov/problems/auth/missing_credential",
+            "type": format!("{}auth/missing_credential", crate::error::PROBLEM_TYPE_BASE),
             "title": "Missing credential",
             "status": 401,
             "detail": "no credential provided in Authorization or X-Api-Key header",
@@ -3342,7 +3342,7 @@ fn openapi_unavailable(detail: &'static str) -> Response {
     let mut response = (
         StatusCode::NOT_IMPLEMENTED,
         Json(json!({
-            "type": "https://data.example.gov/problems/openapi/generation_unavailable",
+            "type": format!("{}openapi/generation_unavailable", crate::error::PROBLEM_TYPE_BASE),
             "title": "OpenAPI generation unavailable",
             "status": StatusCode::NOT_IMPLEMENTED.as_u16(),
             "detail": detail,

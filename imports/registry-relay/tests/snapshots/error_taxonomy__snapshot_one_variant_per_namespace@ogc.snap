@@ -7,5 +7,5 @@ expression: json
   "detail": "collection is not registered, spatially exposed, or visible to the caller",
   "status": 404,
   "title": "OGC collection not found",
-  "type": "https://data.example.gov/problems/ogc/collection_not_found"
+  "type": "https://registry-relay.dev/problems/ogc/collection_not_found"
 }

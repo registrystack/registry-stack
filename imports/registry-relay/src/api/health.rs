@@ -72,7 +72,7 @@ async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>)
     let unresolved_count = snapshot.unresolved_entities.len();
 
     let body = Json(json!({
-        "type": "https://data.example.gov/problems/schema/resource_unavailable",
+        "type": format!("{}schema/resource_unavailable", crate::error::PROBLEM_TYPE_BASE),
         "title": "Resource unavailable",
         "status": 503,
         "detail": "one or more configured resources failed ingest, are not ready, or have unresolved entity mappings",

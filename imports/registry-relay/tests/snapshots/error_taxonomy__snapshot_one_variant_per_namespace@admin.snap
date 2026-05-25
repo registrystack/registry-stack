@@ -7,5 +7,5 @@ expression: json
   "detail": "one or more resources failed to reload",
   "status": 500,
   "title": "Reload failed",
-  "type": "https://data.example.gov/problems/admin/reload_failed"
+  "type": "https://registry-relay.dev/problems/admin/reload_failed"
 }

@@ -1,6 +1,10 @@
 # Metadata And Runtime Split Spec
 
-Status: revised after implementation review
+Status: historical implementation spec. The split has landed through the
+external `registry-manifest-core` and `registry-manifest-cli` crates. See
+[metadata.md](metadata.md), [configuration.md](configuration.md), and
+[development.md](development.md) for the current operator and contributor
+contract.
 
 This document specifies a standards-first split of `registry-relay` into:
 

@@ -747,7 +747,7 @@ async fn entity_collection_route_paginates_with_opaque_cursor() {
 }
 
 #[tokio::test]
-async fn entity_collection_cursor_mismatch_returns_conflict() {
+async fn entity_collection_cursor_mismatch_returns_bad_request() {
     let server = server_with_query().await;
 
     let first = server
@@ -761,13 +761,13 @@ async fn entity_collection_cursor_mismatch_returns_conflict() {
 
     let url = format!("/datasets/social_registry/household?limit=1&region=north&cursor={cursor}");
     let resp = server.get(&url).await;
-    resp.assert_status(StatusCode::CONFLICT);
+    resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
     assert_eq!(body["code"], "pagination.cursor_invalidated");
 }
 
 #[tokio::test]
-async fn entity_collection_stale_cursor_returns_conflict() {
+async fn entity_collection_stale_cursor_returns_bad_request() {
     // Share a cursor signer across both servers so the HMAC verifies on
     // the second request and the ingest-version mismatch surfaces as
     // `pagination.cursor_invalidated`. A signer change (e.g. a process
@@ -791,7 +791,7 @@ async fn entity_collection_stale_cursor_returns_conflict() {
             .await;
     let url = format!("/datasets/social_registry/household?limit=1&cursor={cursor}");
     let resp = new_server.get(&url).await;
-    resp.assert_status(StatusCode::CONFLICT);
+    resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
     assert_eq!(body["code"], "pagination.cursor_invalidated");
 }
@@ -821,6 +821,18 @@ async fn entity_record_returns_etag_and_honors_if_none_match() {
 
     cached.assert_status(StatusCode::NOT_MODIFIED);
     assert_eq!(cached.header("etag").to_str().expect("etag"), etag);
+}
+
+#[tokio::test]
+async fn entity_record_rejects_whitespace_purpose_header() {
+    let resp = server_with_query()
+        .await
+        .get("/datasets/social_registry/individual/p-1")
+        .add_header("data-purpose", "   ")
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(resp.json::<Value>()["code"], "auth.purpose_required");
 }
 
 #[tokio::test]
@@ -928,7 +940,7 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
 }
 
 #[tokio::test]
-async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
+async fn entity_has_many_relationship_stale_cursor_returns_bad_request() {
     // Share a cursor signer across both servers so the HMAC verifies on
     // the second request and the ingest-version mismatch surfaces as
     // `pagination.cursor_invalidated`.
@@ -954,7 +966,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_conflict() {
         .get(&url)
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
-    resp.assert_status(StatusCode::CONFLICT);
+    resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
     assert_eq!(body["code"], "pagination.cursor_invalidated");
 }

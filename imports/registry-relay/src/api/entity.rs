@@ -1367,7 +1367,7 @@ fn query_unavailable(detail: &'static str) -> Response {
     let mut response = (
         StatusCode::NOT_IMPLEMENTED,
         Json(json!({
-            "type": "https://data.example.gov/problems/entity/query_unavailable",
+            "type": format!("{}entity/query_unavailable", crate::error::PROBLEM_TYPE_BASE),
             "title": "Entity query unavailable",
             "status": StatusCode::NOT_IMPLEMENTED.as_u16(),
             "detail": detail,
@@ -1386,11 +1386,11 @@ fn query_unavailable(detail: &'static str) -> Response {
 
 fn cursor_invalidated() -> Response {
     let mut response = (
-        StatusCode::CONFLICT,
+        StatusCode::BAD_REQUEST,
         Json(json!({
-            "type": "https://data.example.gov/problems/pagination/cursor_invalidated",
+            "type": format!("{}pagination/cursor_invalidated", crate::error::PROBLEM_TYPE_BASE),
             "title": "Pagination cursor invalidated",
-            "status": StatusCode::CONFLICT.as_u16(),
+            "status": StatusCode::BAD_REQUEST.as_u16(),
             "detail": "cursor no longer matches the requested page",
             "code": CURSOR_INVALIDATED_CODE,
         })),

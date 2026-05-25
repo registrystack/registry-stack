@@ -327,7 +327,7 @@ fn query_unavailable(detail: &'static str) -> Response {
     let mut response = (
         StatusCode::NOT_IMPLEMENTED,
         Json(json!({
-            "type": "https://data.example.gov/problems/aggregate/query_unavailable",
+            "type": format!("{}aggregate/query_unavailable", crate::error::PROBLEM_TYPE_BASE),
             "title": "Aggregate query unavailable",
             "status": StatusCode::NOT_IMPLEMENTED.as_u16(),
             "detail": detail,

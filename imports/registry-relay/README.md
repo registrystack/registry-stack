@@ -17,7 +17,7 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 
 ## Current Status
 
-0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, tamper-evident platform audit envelopes, admin reload on `server.admin_bind`, refresh loops, best-effort OpenAPI, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include dataset-scoped ODRL Offers, standards-shaped media type metadata, evidence offerings, and DCAT access-service metadata for downstream connector integration. Admin routes are intentionally not mounted on the public data-plane listener.
+0.1.0 targets the V1 protected consultation API surface over local CSV, XLSX, Parquet, and bounded PostgreSQL sources. Postgres snapshot sources are supported for structured tables and configured read-only queries; Postgres live sources are supported only for structured tables, with generated column projection pushdown and gateway-side filters/limits. The config model, startup ingest, entity-shaped routes, API-key and OIDC auth, readable operational logs with optional JSONL, stdout/file/syslog audit sinks, tamper-evident platform audit envelopes, admin reload on `server.admin_bind`, refresh loops, scoped OpenAPI, portable metadata publication, and DCAT-AP/SHACL validation workflow are present. Catalog JSON-LD can include dataset-scoped ODRL Offers, standards-shaped media type metadata, evidence offerings, and DCAT access-service metadata for downstream connector integration. Optional feature-gated adapters expose OGC API Features, OGC API Records, PublicSchema VC mapping, and SP DCI sync routes. Admin routes are intentionally not mounted on the public data-plane listener.
 
 ## Repository Map
 
@@ -33,6 +33,7 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
   issuance.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
+- [docs/use-cases.md](docs/use-cases.md): core product journeys.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
 - [registry-manifest-core](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core): portable metadata manifest model, validation, and renderers.
 - [registry-manifest-cli](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-cli): local metadata validation, rendering, and static publish CLI.
@@ -61,7 +62,7 @@ Coverage metrics use `cargo-llvm-cov`; see [docs/development.md#coverage-metrics
 
 ## Metadata Manifests
 
-Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or Relay runtime backend URLs. Evidence offerings may declare standards-facing service `endpoint_url` and `discovery_url` values when the offering is fulfilled by an external Evidence Server.
+Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or Relay runtime backend URLs. Evidence offerings may declare standards-facing service `endpoint_url` and `discovery_url` values when the offering is fulfilled by Registry Witness.
 
 Use this split when you want standards-facing metadata that can outlive Registry Relay itself. A civil registration application, a social benefits application, or another registry system can validate and publish the same manifest through static files without adopting Relay's runtime API. The checked-in app profiles are hypothetical examples; real OpenCRVS, OpenSPP, PublicSchema, or SP DCI profiles should be added only after review with the relevant project artifacts or maintainers.
 
@@ -79,7 +80,7 @@ These recipes use an installed `registry-manifest` binary when present, a
 sibling `../registry-manifest` checkout during local development, or the
 published `registry-manifest` Git tag when running from a clean Relay clone.
 
-`metadata-publish` writes a static bundle with `index.json`, the original manifest, catalog JSON, base DCAT, BRegDCAT-AP, SHACL, and entity JSON Schemas. The bundle can be served as static files without starting Registry Relay.
+`metadata-publish` writes a static bundle with `index.json`, the original manifest, catalog JSON, evidence-offering JSON, policy JSON-LD, base DCAT, profile DCAT, SHACL, and entity JSON Schemas. The bundle can be served as static files without starting Registry Relay.
 
 When Relay serves a split config, it validates runtime bindings against the compiled manifest at startup and exposes caller-scoped metadata under `/metadata/*`. See [docs/metadata.md](docs/metadata.md) for the manifest shape, publication layout, endpoint list, and error codes.
 
@@ -117,7 +118,7 @@ or:
 X-Api-Key: <api-key>
 ```
 
-Use dataset scopes narrowly. `metadata`, `aggregate`, `rows`, `evidence_verification`, and `admin` are independent. An evidence-verification-only key cannot list metadata, run aggregates, read rows, or reload data.
+Use dataset scopes narrowly. `metadata`, `aggregate`, `rows`, `evidence_verification`, and `admin` are independent. An evidence-verification-only key cannot list metadata, run aggregates, read rows, or reload data. Relay no longer hosts claim-verification execution endpoints; `evidence_verification` remains a distinct scope label for standards adapters and integrations that need evidence-oriented access.
 
 Alternatively, set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. The relay is a resource server: it validates tokens against the IdP's JWKS but never mints, refreshes, or stores them.
 
@@ -182,15 +183,33 @@ GET /metadata/dcat
 GET /metadata/dcat/{profile}
 GET /metadata/shacl
 GET /metadata/policies
+GET /metadata/profiles
+GET /metadata/profiles/{profile}
 GET /metadata/datasets
 GET /metadata/datasets/{dataset_id}
 GET /metadata/datasets/{dataset_id}/policy
+GET /metadata/datasets/{dataset_id}/entities
+GET /metadata/datasets/{dataset_id}/entities/{entity}
 GET /metadata/datasets/{dataset_id}/entities/{entity}/schema
+GET /metadata/datasets/{dataset_id}/entities/{entity}/shacl
+GET /metadata/schema/{dataset_id}/{entity}/schema.json
+GET /metadata/ogc/records
+GET /metadata/ogc/records/{record_id}
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
+GET /ogc/v1                                 (feature: ogcapi-features)
+GET /ogc/v1/conformance                     (feature: ogcapi-features)
+GET /ogc/v1/collections                     (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections  (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}  (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items  (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}  (feature: ogcapi-features)
 GET /ogc/v1/records                         (feature: ogcapi-records)
+GET /ogc/v1/records/conformance             (feature: ogcapi-records)
 GET /ogc/v1/records/collections             (feature: ogcapi-records)
-GET /ogc/v1/records/collections/datasets/items  (feature: ogcapi-records)
+GET /ogc/v1/records/collections/{collection_id}  (feature: ogcapi-records)
+GET /ogc/v1/records/collections/{collection_id}/items  (feature: ogcapi-records)
+GET /ogc/v1/records/collections/{collection_id}/items/{record_id}  (feature: ogcapi-records)
 GET /datasets
 GET /datasets/{dataset_id}
 GET /datasets/{dataset_id}/{entity}/schema
@@ -199,7 +218,17 @@ GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+POST /dci/{registry}/registry/sync/search   (feature: spdci-api-standards)
+POST /dci/{registry}/registry/sync/disabled (feature: spdci-api-standards)
+POST /dci/{registry}/registry/sync/get-disability-details  (feature: spdci-api-standards)
+POST /dci/{registry}/registry/sync/get-disability-support  (feature: spdci-api-standards)
 ```
+
+For SP DCI, `sync/search` supports every named registry entry configured under
+`standards.spdci.registries` such as `dr`, `sr`, `crvs`, or `fr`. The
+`disabled`, `get-disability-details`, and `get-disability-support` routes are
+Disability Registry-specific: `{registry}` must resolve to a registry entry
+whose dataset/entity match `standards.spdci.disability_registry`.
 
 Evidence offerings are discovery records only. Relay publishes offerings whose
 metadata declares `access.kind: registry-witness`; clients call the advertised
@@ -210,6 +239,8 @@ Storage table ids do not appear in these paths. Filters are allowed only when de
 `GET /docs` serves a local Scalar API reference shell. The shell is public, but it contains no catalog data by itself. It asks for a bearer token and then fetches the auth-gated `GET /openapi.json` document with that token.
 
 See [docs/api.md](docs/api.md) for scope requirements, query parameters, pagination, `Data-Purpose`, conditional requests, and Problem Details error shapes.
+
+When provenance is configured and enabled, public unauthenticated support routes also expose `/.well-known/did.json` in gateway issuer mode and `/schemas/{claim_type}/{version}` plus `/contexts/{vocab}/{version}` for verifier resolution.
 
 ## DCAT-AP And SHACL Validation
 

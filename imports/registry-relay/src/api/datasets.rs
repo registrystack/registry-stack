@@ -339,7 +339,7 @@ fn datasets_unavailable(detail: &'static str) -> Response {
     let mut response = (
         StatusCode::NOT_IMPLEMENTED,
         Json(json!({
-            "type": "https://data.example.gov/problems/datasets/config_unavailable",
+            "type": format!("{}datasets/config_unavailable", crate::error::PROBLEM_TYPE_BASE),
             "title": "Dataset config unavailable",
             "status": StatusCode::NOT_IMPLEMENTED.as_u16(),
             "detail": detail,

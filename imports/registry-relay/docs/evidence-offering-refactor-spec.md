@@ -1,6 +1,9 @@
 # Evidence Offering Refactor Spec
 
-Status: draft
+Status: historical draft. The implemented Relay contract now publishes
+evidence-offering metadata only and delegates claim/evidence execution to
+Registry Witness. See [evidence-verification.md](evidence-verification.md) and
+[api.md](api.md) for the current behavior.
 
 This document specifies a refactor that makes Registry Relay simpler and more
 standards-based by replacing the public verification story with evidence

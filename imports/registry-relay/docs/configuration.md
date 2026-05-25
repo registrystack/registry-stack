@@ -16,8 +16,8 @@ metadata: {}   # optional split portable metadata manifest
 catalog: {}
 vocabularies: {}
 auth: {}
-datasets: []
 audit: {}
+datasets: []
 provenance: {} # optional
 standards: {}  # optional, feature-gated adapters
 ```
@@ -157,13 +157,13 @@ POST /dci/{registry}/registry/sync/get-disability-details
 POST /dci/{registry}/registry/sync/get-disability-support
 ```
 
-The `{registry}` segment selects a named `standards.spdci.registries` entry such as `dr`, which lets one listener host multiple DCI registry APIs without path ambiguity. The async `/registry/search`, subscribe, callback, and transaction-status APIs are intentionally not implemented by this sync adapter.
+For `sync/search`, the `{registry}` segment selects any named `standards.spdci.registries` entry such as `dr`, `sr`, `crvs`, or `fr`, which lets one listener host multiple DCI registry APIs without path ambiguity. The `disabled`, `get-disability-details`, and `get-disability-support` routes are Disability Registry-specific and resolve only when the named registry entry points at the same dataset/entity as `standards.spdci.disability_registry`. The async `/registry/search`, subscribe, callback, and transaction-status APIs are intentionally not implemented by this sync adapter.
 
 For generic sync search, `identifiers` maps DCI `idtype-value` query types to entity fields. `expression_fields` maps DCI expression or predicate attribute names to entity fields. Mapped fields must be exposed entity fields and allowed filters. The adapter currently supports `idtype-value`, expression `$and` with `eq`, `in`, `ge`, and `le`, and predicate conditions joined with `and`.
 
 `query_key` is read from `message.disabled_criteria.query` in the SP DCI request envelope. It may be represented as a literal dotted JSON key (`"member.member_identifier"`) or as nested objects (`{"member": {"member_identifier": ...}}`). `query_field` must be an allowed entity filter because the adapter delegates reads to the normal entity query engine.
 
-For `/dci/{registry}/registry/sync/disabled`, the caller needs the configured entity DCI status-check scope; generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer.
+For `/dci/{registry}/registry/sync/disabled`, the caller needs the entity `evidence_verification_scope`. Generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer. If a registry entry uses `response_mapping_path`, the binary must also be built with `--features standards-cel-mapping`; otherwise config validation fails with `spdci.config.mapping_feature_disabled`.
 
 ## API Keys
 
@@ -578,6 +578,43 @@ When `fields` is present, only listed fields are exposed. When it is omitted, ev
 
 Relationships are dataset-local in V1. Cross-dataset workflows should compose client-side with separate scoped calls and separate audit records.
 
+### OGC API Features
+
+Build with `--features ogcapi-features` to expose spatial entities through the protected `/ogc/v1` surface. The feature does not add a top-level `standards` config block. Instead, opt in per entity with `spatial`:
+
+```yaml
+spatial:
+  collection_id: facilities
+  title: Public facilities
+  description: Public facility locations from the civic registry.
+  geometry:
+    kind: point
+    longitude_field: lon
+    latitude_field: lat
+    crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
+  datetime_field: updated_at
+  max_bbox_degrees: 5.0
+  max_geometry_vertices: 10000
+```
+
+Phase 1 supports `kind: point` and `kind: geojson`. Point longitude, point latitude, datetime, and bbox helper fields must be exposed entity fields with compatible types. `kind: geojson` may use optional precomputed bbox fields:
+
+```yaml
+spatial:
+  collection_id: parcels
+  geometry:
+    kind: geojson
+    field: geometry
+    crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
+  bbox_fields:
+    min_x: bbox_min_x
+    min_y: bbox_min_y
+    max_x: bbox_max_x
+    max_y: bbox_max_y
+```
+
+Only CRS84 is accepted. `wkt` and `wkb` parse as reserved geometry kinds but are rejected by V1 validation. Collection ids default to the entity name and must be unique within a dataset. OGC discovery uses metadata scope; feature item reads use `read_scope` and preserve entity required filters, purpose-header requirements, projection, and audit behavior.
+
 ### Evidence Verification
 
 Evidence offerings expose Registry Witness discovery metadata:
@@ -595,6 +632,8 @@ access:
 ```
 
 `evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local verification endpoint.
+
+### PublicSchema VC Mapping
 
 `example-person-schema` is optional and requires a binary built with
 `--features publicschema-cel`. When present, entity-record VC issuance

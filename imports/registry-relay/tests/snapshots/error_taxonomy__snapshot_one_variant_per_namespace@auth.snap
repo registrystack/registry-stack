@@ -7,5 +7,5 @@ expression: json
   "detail": "required scope: social_registry:rows",
   "status": 403,
   "title": "Scope denied",
-  "type": "https://data.example.gov/problems/auth/scope_denied"
+  "type": "https://registry-relay.dev/problems/auth/scope_denied"
 }

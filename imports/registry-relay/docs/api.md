@@ -4,7 +4,7 @@ This guide describes the V1 HTTP contract from a client and operator point of vi
 
 ## Listeners And Surfaces
 
-The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery and verification, aggregates, OpenAPI, and optional provenance resources.
+The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery, aggregates, OpenAPI, optional standards adapters, and optional provenance resources.
 
 The admin listener is optional and only exists when `server.admin_bind` is configured. Admin routes must stay on a private network. They are never mounted on the public data-plane listener.
 
@@ -49,7 +49,32 @@ GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+GET /ogc/v1                                 (feature: ogcapi-features)
+GET /ogc/v1/conformance                     (feature: ogcapi-features)
+GET /ogc/v1/collections                     (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections  (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}  (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items  (feature: ogcapi-features)
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}  (feature: ogcapi-features)
+GET /ogc/v1/records                         (feature: ogcapi-records)
+GET /ogc/v1/records/conformance             (feature: ogcapi-records)
+GET /ogc/v1/records/collections             (feature: ogcapi-records)
+GET /ogc/v1/records/collections/{collection_id}  (feature: ogcapi-records)
+GET /ogc/v1/records/collections/{collection_id}/items  (feature: ogcapi-records)
+GET /ogc/v1/records/collections/{collection_id}/items/{record_id}  (feature: ogcapi-records)
+POST /dci/{registry}/registry/sync/search   (feature: spdci-api-standards)
+POST /dci/{registry}/registry/sync/disabled (feature: spdci-api-standards)
+POST /dci/{registry}/registry/sync/get-disability-details  (feature: spdci-api-standards)
+POST /dci/{registry}/registry/sync/get-disability-support  (feature: spdci-api-standards)
 ```
+
+For SP DCI, `sync/search` is the generic path for any configured
+`standards.spdci.registries` entry. The disability-status, details, and support
+paths are Disability Registry-specific and return unknown-resource errors unless
+the named `{registry}` points at the same dataset/entity as
+`standards.spdci.disability_registry`.
+
+When `provenance.enabled: true`, public verifier-support routes are mounted for `/.well-known/did.json` in gateway issuer mode and for `/schemas/{claim_type}/{version}` plus `/contexts/{vocab}/{version}`.
 
 Admin routes on `server.admin_bind`:
 
@@ -102,7 +127,7 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 | --- | --- |
 | `metadata` | Catalog, dataset summaries, entity schema, and OpenAPI visibility for that dataset |
 | `rows` | Entity collection, single-record, and relationship reads |
-| `evidence_verification` | Verification checks through declared evidence offerings |
+| `evidence_verification` | Evidence-oriented standards adapter calls and integrations that must stay separate from row reads |
 | `aggregate` | Aggregate discovery and configured aggregate execution |
 | `admin` | Admin listener operations |
 
@@ -144,7 +169,7 @@ Entity collection and record responses include validators where supported. Clien
 
 ## Purpose Headers
 
-Entities can require a purpose string for row reads and evidence verification:
+Entities can require a purpose string for row reads and OGC feature reads:
 
 ```http
 Data-Purpose: https://data.example.gov/purposes/service-intake-check
@@ -176,11 +201,25 @@ just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml 
 just metadata-publish profiles/example-civil-registration/fixtures/metadata.yaml target/metadata/public
 ```
 
-The published bundle includes `index.json`, `metadata.yaml`, `catalog.json`, `dcat.jsonld`, `dcat.bregdcat-ap.jsonld`, `shacl.jsonld`, and per-entity JSON Schemas. Static artifacts are broad metadata publication surfaces; caller-scoped discovery still belongs to authenticated Relay routes.
+The published bundle includes `index.json`, `metadata.yaml`, `catalog.json`, `evidence-offerings.json`, per-offering evidence documents, policy JSON-LD, `dcat.jsonld`, profile DCAT JSON-LD, `shacl.jsonld`, and per-entity JSON Schemas. Static artifacts are broad metadata publication surfaces; caller-scoped discovery still belongs to authenticated Relay routes.
 
 See [metadata.md](metadata.md) for the manifest model, publication layout, and split metadata startup errors.
 
-When enabled, OGC API Records exposes a metadata-only catalog view:
+When built with `ogcapi-features`, OGC API Features exposes spatial entities as read-only GeoJSON Features:
+
+```text
+GET /ogc/v1
+GET /ogc/v1/conformance
+GET /ogc/v1/collections
+GET /ogc/v1/datasets/{dataset_id}/collections
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items
+GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}
+```
+
+Spatial collections are configured per entity with `spatial`. Discovery routes require metadata scope; item routes require the entity's row-read scope and preserve required filters, purpose headers, projection, audit, and opaque cursor pagination. Phase 1 supports point fields and existing GeoJSON geometry fields. `bbox` works for point geometry and for entities with precomputed bbox fields; `bbox-crs` accepts CRS84 only; `datetime` requires `spatial.datetime_field`.
+
+When built with `ogcapi-records`, OGC API Records exposes a metadata-only catalog view:
 
 ```text
 GET /ogc/v1/records
@@ -227,7 +266,7 @@ Errors use RFC 9457 Problem Details with a stable `code` field:
 
 ```json
 {
-  "type": "https://data.example.gov/problems/auth/scope_denied",
+  "type": "https://registry-relay.dev/problems/auth/scope_denied",
   "title": "Scope denied",
   "status": 403,
   "code": "auth.scope_denied",

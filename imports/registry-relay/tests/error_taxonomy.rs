@@ -17,7 +17,7 @@ use registry_relay::error::{
 use serde_json::Value;
 
 const PROBLEM_JSON: &str = "application/problem+json";
-const BASE_TYPE_URL: &str = "https://data.example.gov/problems/";
+const BASE_TYPE_URL: &str = "https://registry-relay.dev/problems/";
 
 /// Every variant the taxonomy defines. Order is deliberate: keep
 /// variants grouped by namespace for reviewability.

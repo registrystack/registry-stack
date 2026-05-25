@@ -8,5 +8,5 @@ expression: json
   "parameter": "bbox",
   "status": 400,
   "title": "Spatial filter unsupported",
-  "type": "https://data.example.gov/problems/spatial/filter_unsupported"
+  "type": "https://registry-relay.dev/problems/spatial/filter_unsupported"
 }

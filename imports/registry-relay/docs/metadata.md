@@ -40,7 +40,7 @@ The runtime YAML keeps operational bindings:
 - source paths, table ids, schemas, and physical columns
 - API keys, scopes, and access policy
 - allowed filters, required filters, limits, and expansions
-- aggregates, evidence verification bindings, SP DCI, OGC Features, ingest, and refresh
+- aggregates, SP DCI, OGC Features, ingest, refresh, and runtime bindings that keep published evidence offerings aligned with served entities
 
 The metadata manifest keeps standard-facing semantics:
 
@@ -54,7 +54,7 @@ The metadata manifest keeps standard-facing semantics:
 Metadata manifests must not contain runtime-only details such as source paths,
 table ids, physical columns, auth scopes, Relay runtime backend URLs, or SQL.
 Evidence offerings may still declare standards-facing `endpoint_url` and
-`discovery_url` values when the offering points to an external Evidence Server.
+`discovery_url` values when the offering points to Registry Witness.
 
 ## Minimal Manifest
 
@@ -244,10 +244,16 @@ just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml 
 Supported formats are:
 
 - `catalog`
+- `evidence-offerings`
+- `evidence-offering`
+- `policies`
+- `policy`
 - `dcat`
 - `bregdcat-ap`
+- `cpsv-ap`
 - `shacl`
 - `json-schema`
+- `form-json-schema`
 - `ogc-records`
 
 `json-schema` renders Draft 2020-12 schemas. OGC Records rendering produces
@@ -268,10 +274,17 @@ The bundle contains:
 index.json
 metadata.yaml
 catalog.json
+evidence-offerings.json
+evidence-offerings/<offering>.json
+policies.jsonld
+policies/<dataset>.jsonld
 dcat.jsonld
 dcat.<profile>.jsonld
+cpsv-ap
+cpsv-ap.jsonld
 shacl.jsonld
 schema/<dataset>/<entity>/schema.json
+forms/<form>/schema.json
 profiles/<profile>.json
 ```
 
@@ -307,6 +320,8 @@ GET /metadata/datasets/{dataset_id}/entities/{entity}/shacl
 GET /metadata/schema/{dataset_id}/{entity}/schema.json
 GET /metadata/ogc/records
 GET /metadata/ogc/records/{record_id}
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/{offering_id}
 ```
 
 These routes use the caller's `metadata` scopes. They do not grant row access,

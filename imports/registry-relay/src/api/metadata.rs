@@ -640,7 +640,7 @@ fn metadata_unavailable(detail: &'static str) -> Response {
     let mut response = (
         StatusCode::NOT_IMPLEMENTED,
         Json(json!({
-            "type": "https://data.example.gov/problems/metadata/core_unavailable",
+            "type": format!("{}metadata/core_unavailable", crate::error::PROBLEM_TYPE_BASE),
             "title": "Metadata unavailable",
             "status": StatusCode::NOT_IMPLEMENTED.as_u16(),
             "detail": detail,
@@ -658,7 +658,7 @@ fn offering_not_found() -> Response {
     let mut response = (
         StatusCode::NOT_FOUND,
         Json(json!({
-            "type": "https://data.example.gov/problems/offering/not_found",
+            "type": format!("{}offering/not_found", crate::error::PROBLEM_TYPE_BASE),
             "title": "Evidence offering not found",
             "status": StatusCode::NOT_FOUND.as_u16(),
             "detail": "Evidence offering not found or not visible to the caller.",

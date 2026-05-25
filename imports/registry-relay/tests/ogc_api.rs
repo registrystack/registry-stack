@@ -329,6 +329,13 @@ async fn ogc_items_and_features_enforce_required_purpose_header() {
 
     let response = server
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
+        .add_header("data-purpose", "   ")
+        .await;
+    response.assert_status_bad_request();
+    assert_eq!(response.json::<Value>()["code"], "auth.purpose_required");
+
+    let response = server
+        .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic")
         .add_header("data-purpose", "capacity planning")
         .await;
     response.assert_status_ok();

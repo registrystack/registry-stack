@@ -145,6 +145,7 @@ datasets:
           read_scope:        disability_registry:rows
           evidence_verification_scope: disability_registry:evidence_verification
         api:
+          require_purpose_header: true
           default_limit: 100
           max_limit: 1000
           allowed_filters:

@@ -1,6 +1,6 @@
 # registry-relay Operations Runbook
 
-This runbook describes the intended V1 operating model and calls out current assumptions where runtime work is still landing.
+This runbook describes the V1 operating model for running Registry Relay in development, staging, and production-like deployments.
 
 ## Deployment Model
 
@@ -282,7 +282,7 @@ Protected endpoint returns 403:
 
 - Confirm the key has the exact scope named by the entity access block.
 - Remember that metadata, aggregate, rows, evidence verification, and admin scopes do not imply one another.
-- For row or evidence-verification endpoints on entities with `require_purpose_header: true`, include `Data-Purpose`.
+- For row or OGC feature endpoints on entities with `require_purpose_header: true`, include `Data-Purpose`.
 
 Dataset or entity returns unknown-resource errors:
 

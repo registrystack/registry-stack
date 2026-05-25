@@ -1,5 +1,10 @@
 # Decentralized Evidence Demo Spec
 
+Status: historical planning document. The current implementation and demo
+wording use Registry Witness as the external claim and evidence service. Treat
+older "Evidence Server" wording below as pre-rename architecture notes unless a
+current demo README or Registry Witness contract says otherwise.
+
 ## Purpose
 
 Build a Docker Compose demo that shows the post-split architecture as a small
