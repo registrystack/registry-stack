@@ -226,7 +226,7 @@ pub struct OidcDiscoveryConfig {
 }
 
 pub struct DiscoveryDocument { /* issuer, jwks_uri, ... */ }
-pub async fn fetch_discovery(cfg: &OidcDiscoveryConfig, client: &reqwest::Client) -> Result<DiscoveryDocument, OidcError>;
+pub async fn fetch_discovery(cfg: &OidcDiscoveryConfig) -> Result<DiscoveryDocument, OidcError>;
 
 pub struct JwksFetcherConfig {
     pub cache_ttl: Duration,                 // default 600s; keys served from cache until expired

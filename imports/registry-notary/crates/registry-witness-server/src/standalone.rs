@@ -630,7 +630,6 @@ enum Authenticator {
     },
     Oidc {
         verifier: Arc<TokenVerifier>,
-        client: reqwest::Client,
         fetch_url_policy: FetchUrlPolicy,
         principal_claim: String,
         subject_binding_claim: Option<String>,
@@ -696,10 +695,6 @@ impl Authenticator {
                         "scope_separator must be exactly one character".to_string(),
                     )
                 })?;
-                let client = OutboundClientBuilder::new()
-                    .timeout(Duration::from_secs(5))
-                    .user_agent("registry-witness/0.2")
-                    .build();
                 let fetch_url_policy = if oidc.allow_insecure_localhost {
                     FetchUrlPolicy::dev()
                 } else {
@@ -737,7 +732,6 @@ impl Authenticator {
                 };
                 Ok(Self::Oidc {
                     verifier: Arc::new(verifier),
-                    client,
                     fetch_url_policy,
                     principal_claim: oidc.principal_claim.clone(),
                     subject_binding_claim: config
@@ -774,7 +768,6 @@ impl Authenticator {
             } => authenticate_static(&credentials, api_keys, bearer_tokens),
             Self::Oidc {
                 verifier,
-                client,
                 fetch_url_policy,
                 principal_claim,
                 subject_binding_claim,
@@ -786,7 +779,6 @@ impl Authenticator {
                 authenticate_oidc(
                     &credentials,
                     verifier,
-                    client,
                     fetch_url_policy,
                     principal_claim,
                     subject_binding_claim.as_deref(),
@@ -1200,7 +1192,6 @@ fn authenticate_static(
 async fn authenticate_oidc(
     credentials: &RequestCredentials,
     verifier: &TokenVerifier,
-    client: &reqwest::Client,
     fetch_url_policy: &FetchUrlPolicy,
     principal_claim: &str,
     subject_binding_claim: Option<&str>,
@@ -1219,7 +1210,6 @@ async fn authenticate_oidc(
             let userinfo_jwt = fetch_userinfo_jwt_with_policy(
                 endpoint,
                 token,
-                client,
                 fetch_url_policy,
                 Duration::from_secs(5),
                 64 * 1024,
