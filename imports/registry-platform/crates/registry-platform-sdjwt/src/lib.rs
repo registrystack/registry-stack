@@ -7,13 +7,14 @@ use registry_platform_crypto::{sign, verify, JwkError, PrivateJwk, PublicJwk};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use ulid::Ulid;
 
 #[derive(Clone)]
 pub struct SdJwtIssuer {
-    jwk: PrivateJwk,
+    jwk: Arc<PrivateJwk>,
 }
 
 impl fmt::Debug for SdJwtIssuer {
@@ -28,7 +29,7 @@ impl fmt::Debug for SdJwtIssuer {
 impl SdJwtIssuer {
     pub fn from_jwk(jwk: PrivateJwk) -> Result<Self, SdJwtError> {
         jwk.algorithm().map_err(map_jwk_algorithm_error)?;
-        Ok(Self { jwk })
+        Ok(Self { jwk: Arc::new(jwk) })
     }
 
     pub fn issue(&self, input: SdJwtIssuanceInput) -> Result<SignedSdJwt, SdJwtError> {
@@ -137,15 +138,6 @@ pub struct HolderProofPolicy {
     pub max_lifetime: Duration,
 }
 
-impl Default for HolderProofPolicy {
-    fn default() -> Self {
-        Self {
-            audience: String::new(),
-            max_lifetime: Duration::from_secs(300),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct HolderProofBindings<'a> {
     pub expected_sub: &'a str,
@@ -176,6 +168,14 @@ pub fn validate_holder_proof(
     let header = decode_json(header_b64)?;
     if header.get("alg").and_then(Value::as_str) != Some("EdDSA") {
         return Err(SdJwtError::HolderProofInvalid);
+    }
+    if header.get("typ").and_then(Value::as_str) != Some("kb+jwt") {
+        return Err(SdJwtError::HolderProofInvalid);
+    }
+    for forbidden in ["crit", "jku", "jwk", "x5u", "x5c"] {
+        if header.get(forbidden).is_some() {
+            return Err(SdJwtError::HolderProofInvalid);
+        }
     }
     let signature = URL_SAFE_NO_PAD
         .decode(signature_b64)
@@ -497,6 +497,36 @@ mod tests {
         .expect_err("binding mismatch rejects");
     }
 
+    #[test]
+    fn holder_proof_rejects_wrong_type_and_dangerous_headers() {
+        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
+        let now = 1_700_000_000;
+        let claim_set = claim_set();
+        let bindings = bindings(&claim_set);
+
+        let wrong_typ = sign_jwt(
+            json!({"alg": "EdDSA", "typ": "JWT", "kid": "did:jwk:holder#key-1"}),
+            proof_payload(now, "proof-jti-6"),
+            &holder,
+        )
+        .expect("proof signs");
+        validate_holder_proof(&wrong_typ, &holder.public(), &bindings, &policy(), now)
+            .expect_err("holder proof typ must be kb+jwt");
+
+        for forbidden in ["crit", "jku", "jwk", "x5u", "x5c"] {
+            let mut header = json!({
+                "alg": "EdDSA",
+                "typ": "kb+jwt",
+                "kid": "did:jwk:holder#key-1"
+            });
+            header[forbidden] = json!("forbidden");
+            let proof =
+                sign_jwt(header, proof_payload(now, "proof-jti-7"), &holder).expect("proof signs");
+            validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
+                .expect_err("dangerous holder-proof header is rejected");
+        }
+    }
+
     fn issue_input(cnf: Option<HolderConfirmation>) -> SdJwtIssuanceInput {
         SdJwtIssuanceInput {
             iss: "did:web:issuer.test".to_string(),
@@ -551,7 +581,7 @@ mod tests {
 
     fn sign_holder_proof(holder: &PrivateJwk, payload: Value) -> String {
         sign_jwt(
-            json!({"alg": "EdDSA", "typ": "JWT", "kid": "did:jwk:holder#key-1"}),
+            json!({"alg": "EdDSA", "typ": "kb+jwt", "kid": "did:jwk:holder#key-1"}),
             payload,
             holder,
         )

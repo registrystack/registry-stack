@@ -133,28 +133,35 @@ impl PublicJwk {
         Ok(jwk)
     }
 
-    #[must_use]
-    pub fn jkt(&self) -> String {
+    pub fn jkt(&self) -> Result<String, JwkError> {
         let thumbprint = match self.kty.as_str() {
-            "OKP" => format!(
-                r#"{{"crv":"{}","kty":"OKP","x":"{}"}}"#,
-                self.crv.as_deref().unwrap_or_default(),
-                self.x.as_deref().unwrap_or_default()
-            ),
-            "EC" => format!(
-                r#"{{"crv":"{}","kty":"EC","x":"{}","y":"{}"}}"#,
-                self.crv.as_deref().unwrap_or_default(),
-                self.x.as_deref().unwrap_or_default(),
-                self.y.as_deref().unwrap_or_default()
-            ),
-            "RSA" => format!(
-                r#"{{"e":"{}","kty":"RSA","n":"{}"}}"#,
-                self.e.as_deref().unwrap_or_default(),
-                self.n.as_deref().unwrap_or_default()
-            ),
-            _ => String::new(),
+            "OKP" => json_object(&[
+                (
+                    "crv",
+                    required_thumbprint_member(self.crv.as_deref(), "crv")?,
+                ),
+                ("kty", "OKP"),
+                ("x", required_thumbprint_member(self.x.as_deref(), "x")?),
+            ]),
+            "EC" => json_object(&[
+                (
+                    "crv",
+                    required_thumbprint_member(self.crv.as_deref(), "crv")?,
+                ),
+                ("kty", "EC"),
+                ("x", required_thumbprint_member(self.x.as_deref(), "x")?),
+                ("y", required_thumbprint_member(self.y.as_deref(), "y")?),
+            ]),
+            "RSA" => json_object(&[
+                ("e", required_thumbprint_member(self.e.as_deref(), "e")?),
+                ("kty", "RSA"),
+                ("n", required_thumbprint_member(self.n.as_deref(), "n")?),
+            ]),
+            _ => return Err(JwkError::UnsupportedAlgorithm),
         };
-        URL_SAFE_NO_PAD.encode(Sha256::digest(thumbprint.as_bytes()))
+        let thumbprint = canonicalize_json(&thumbprint)
+            .map_err(|_| JwkError::Invalid("JWK thumbprint members"))?;
+        Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(&thumbprint)))
     }
 
     pub fn algorithm(&self) -> Result<SigningAlgorithm, JwkError> {
@@ -368,6 +375,25 @@ fn reject_private_members(value: &Value) -> Result<(), JwkError> {
         return Err(JwkError::Invalid("public JWK contains private material"));
     }
     Ok(())
+}
+
+fn required_thumbprint_member<'a>(
+    value: Option<&'a str>,
+    field: &'static str,
+) -> Result<&'a str, JwkError> {
+    let value = value.ok_or(JwkError::Invalid(field))?;
+    if value.is_empty() {
+        return Err(JwkError::Invalid(field));
+    }
+    Ok(value)
+}
+
+fn json_object(entries: &[(&str, &str)]) -> Value {
+    let mut object = Map::new();
+    for (key, value) in entries {
+        object.insert((*key).to_string(), Value::String((*value).to_string()));
+    }
+    Value::Object(object)
 }
 
 fn decode_fixed(
@@ -619,7 +645,20 @@ mod tests {
         let public = PrivateJwk::parse(RAW_JWK)
             .expect("private jwk parses")
             .public();
-        assert_eq!(public.jkt(), "qDygv_6SkrJ6krP3sYb0DCoEuYSYVP0ttF5m1cp_094");
+        assert_eq!(
+            public.jkt().expect("thumbprint computes"),
+            "qDygv_6SkrJ6krP3sYb0DCoEuYSYVP0ttF5m1cp_094"
+        );
+    }
+
+    #[test]
+    fn public_jwk_thumbprint_rejects_missing_required_members() {
+        let mut public = PrivateJwk::parse(RAW_JWK)
+            .expect("private jwk parses")
+            .public();
+        public.x = None;
+
+        assert!(matches!(public.jkt(), Err(JwkError::Invalid("x"))));
     }
 
     #[test]

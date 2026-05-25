@@ -50,14 +50,14 @@ impl CredentialIssuerMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialConfigurationMetadata {
     pub format: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scope: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cryptographic_binding_methods_supported: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_signing_alg_values_supported: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub proof_types_supported: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub proof_types_supported: BTreeMap<String, ProofTypeMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display: Vec<DisplayMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,10 +73,17 @@ impl CredentialConfigurationMetadata {
     ) -> Self {
         Self {
             format: SD_JWT_VC_FORMAT.to_string(),
-            scope: vec![scope.into()],
+            scope: Some(scope.into()),
             cryptographic_binding_methods_supported,
             credential_signing_alg_values_supported: vec![CREDENTIAL_SIGNING_ALG_EDDSA.to_string()],
-            proof_types_supported: vec![PROOF_TYPE_JWT.to_string()],
+            proof_types_supported: BTreeMap::from([(
+                PROOF_TYPE_JWT.to_string(),
+                ProofTypeMetadata {
+                    proof_signing_alg_values_supported: vec![
+                        CREDENTIAL_SIGNING_ALG_EDDSA.to_string()
+                    ],
+                },
+            )]),
             display: vec![DisplayMetadata {
                 name: display_name.into(),
                 locale: None,
@@ -91,6 +98,12 @@ pub struct DisplayMetadata {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofTypeMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_signing_alg_values_supported: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,15 +122,20 @@ impl CredentialOffer {
         authorization_server: Option<String>,
     ) -> Self {
         let issuer_state = issuer_state.into();
+        let mut grant = serde_json::Map::new();
+        grant.insert("issuer_state".to_string(), Value::String(issuer_state));
+        if let Some(authorization_server) = authorization_server {
+            grant.insert(
+                "authorization_server".to_string(),
+                Value::String(authorization_server),
+            );
+        }
         Self {
             credential_issuer: credential_issuer.into(),
             credential_configuration_ids,
             grants: BTreeMap::from([(
                 AUTHORIZATION_CODE_GRANT_TYPE.to_string(),
-                serde_json::json!({
-                    "issuer_state": issuer_state,
-                    "authorization_server": authorization_server,
-                }),
+                Value::Object(grant),
             )]),
         }
     }
@@ -274,6 +292,9 @@ pub fn validate_proof_jwt(
         }
         None => did_jwk_from_public_jwk(&holder_jwk).expect("public jwk encodes"),
     };
+    if claims.get("iss").and_then(Value::as_str) != Some(holder_id.as_str()) {
+        return Err(ProofError::InvalidClaims);
+    }
 
     Ok(ValidatedProof {
         holder_jwk,
@@ -392,9 +413,10 @@ mod tests {
     #[test]
     fn validates_public_jwk_proof() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let holder_id = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
         let proof = sign_proof(
             json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
-            json!({"aud":"https://issuer.example","iat":1000,"exp":1060,"nonce":"n-1"}),
+            json!({"iss":holder_id,"aud":"https://issuer.example","iat":1000,"exp":1060,"nonce":"n-1"}),
             &key,
         );
         let validated = validate_proof_jwt(
@@ -419,7 +441,7 @@ mod tests {
         let did = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
         let proof = sign_proof(
             json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"kid": format!("{did}#key-1")}),
-            json!({"aud":["https://other.example","https://issuer.example"],"iat":1000}),
+            json!({"iss":did,"aud":["https://other.example","https://issuer.example"],"iat":1000}),
             &key,
         );
 
@@ -441,9 +463,10 @@ mod tests {
     #[test]
     fn rejects_wrong_type_remote_key_and_wrong_nonce() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let holder_id = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
         let wrong_typ = sign_proof(
             json!({"alg":"EdDSA","typ":"jwt","jwk": key.public()}),
-            json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            json!({"iss":holder_id,"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
             &key,
         );
         assert_eq!(
@@ -453,7 +476,7 @@ mod tests {
 
         let remote = sign_proof(
             json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jku":"https://keys.example/jwks.json","jwk": key.public()}),
-            json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            json!({"iss":holder_id,"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
             &key,
         );
         assert_eq!(
@@ -470,6 +493,7 @@ mod tests {
     #[test]
     fn rejects_conflicting_public_jwk_and_did_jwk_kid() {
         let signing_key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let signing_did = did_jwk_from_public_jwk(&signing_key.public()).expect("did:jwk encodes");
         let other_key = PrivateJwk::parse(
             r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#,
         )
@@ -482,13 +506,37 @@ mod tests {
                 "jwk": signing_key.public(),
                 "kid": format!("{other_did}#key-1")
             }),
-            json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            json!({"iss":signing_did,"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
             &signing_key,
         );
 
         assert_eq!(
             validate_proof_jwt(&proof, &policy(Some("n-1")), 1001),
             Err(ProofError::UnsupportedKeyReference)
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_wrong_proof_issuer() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let missing_iss = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
+            json!({"aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+        assert_eq!(
+            validate_proof_jwt(&missing_iss, &policy(Some("n-1")), 1001),
+            Err(ProofError::InvalidClaims)
+        );
+
+        let wrong_iss = sign_proof(
+            json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
+            json!({"iss":"did:jwk:attacker","aud":"https://issuer.example","iat":1000,"nonce":"n-1"}),
+            &key,
+        );
+        assert_eq!(
+            validate_proof_jwt(&wrong_iss, &policy(Some("n-1")), 1001),
+            Err(ProofError::InvalidClaims)
         );
     }
 
@@ -545,9 +593,10 @@ mod tests {
     }
 
     fn valid_proof(key: &PrivateJwk, nonce: &str) -> String {
+        let holder_id = did_jwk_from_public_jwk(&key.public()).expect("did:jwk encodes");
         sign_proof(
             json!({"alg":"EdDSA","typ":PROOF_JWT_TYPE,"jwk": key.public()}),
-            json!({"aud":"https://issuer.example","iat":1000,"exp":1060,"nonce": nonce}),
+            json!({"iss":holder_id,"aud":"https://issuer.example","iat":1000,"exp":1060,"nonce": nonce}),
             key,
         )
     }

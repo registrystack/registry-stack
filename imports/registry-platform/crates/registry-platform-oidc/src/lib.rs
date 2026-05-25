@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::errors::ErrorKind as JwtErrorKind;
-use jsonwebtoken::jwk::{Jwk, JwkSet};
+use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use registry_platform_httputil::{read_bounded, FetchUrlError, FetchUrlPolicy};
 use reqwest::Url;
@@ -122,10 +122,15 @@ struct JwksState {
 }
 
 enum JwksCacheLookup {
-    Hit(DecodingKey),
+    Hit(CachedJwkKey),
     FreshMiss,
     StaleOrEmpty,
     NegativeMiss,
+}
+
+struct CachedJwkKey {
+    decoding_key: DecodingKey,
+    jwk: Jwk,
 }
 
 #[derive(Debug)]
@@ -170,11 +175,11 @@ impl JwksFetcher {
         }
         let now = Instant::now();
         match self.cached_key(kid, now).await? {
-            JwksCacheLookup::Hit(key) => return Ok(key),
+            JwksCacheLookup::Hit(key) => return Ok(key.decoding_key),
             JwksCacheLookup::NegativeMiss => {
                 if self.should_force_refresh(now).await {
                     match self.refresh_and_cached_key(kid, true).await? {
-                        JwksCacheLookup::Hit(key) => return Ok(key),
+                        JwksCacheLookup::Hit(key) => return Ok(key.decoding_key),
                         JwksCacheLookup::NegativeMiss
                         | JwksCacheLookup::FreshMiss
                         | JwksCacheLookup::StaleOrEmpty => {}
@@ -184,7 +189,7 @@ impl JwksFetcher {
             }
             JwksCacheLookup::FreshMiss => {}
             JwksCacheLookup::StaleOrEmpty => match self.refresh_and_cached_key(kid, false).await? {
-                JwksCacheLookup::Hit(key) => return Ok(key),
+                JwksCacheLookup::Hit(key) => return Ok(key.decoding_key),
                 JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
                 JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {
                     self.remember_unknown_kid(kid).await;
@@ -195,9 +200,58 @@ impl JwksFetcher {
 
         if self.should_force_refresh(Instant::now()).await {
             match self.refresh_and_cached_key(kid, true).await? {
-                JwksCacheLookup::Hit(key) => return Ok(key),
+                JwksCacheLookup::Hit(key) => return Ok(key.decoding_key),
                 JwksCacheLookup::NegativeMiss => return Err(OidcError::UnknownKid),
                 JwksCacheLookup::FreshMiss | JwksCacheLookup::StaleOrEmpty => {}
+            }
+        }
+        self.remember_unknown_kid(kid).await;
+        Err(OidcError::UnknownKid)
+    }
+
+    async fn key_for_kid_matching_alg(
+        &self,
+        kid: &str,
+        header_alg: Algorithm,
+    ) -> Result<DecodingKey, OidcError> {
+        let key = self.cached_or_refreshed_key(kid).await?;
+        validate_jwk_for_header(&key.jwk, header_alg)?;
+        Ok(key.decoding_key)
+    }
+
+    async fn cached_or_refreshed_key(&self, kid: &str) -> Result<CachedJwkKey, OidcError> {
+        if kid.is_empty() {
+            return Err(OidcError::MissingKid);
+        }
+        if kid.len() > DEFAULT_MAX_KID_BYTES {
+            return Err(OidcError::KidTooLong);
+        }
+        let now = Instant::now();
+        match self.cached_key(kid, now).await? {
+            JwksCacheLookup::Hit(key) => return Ok(key),
+            JwksCacheLookup::NegativeMiss => {
+                if self.should_force_refresh(now).await {
+                    if let JwksCacheLookup::Hit(key) =
+                        self.refresh_and_cached_key(kid, true).await?
+                    {
+                        return Ok(key);
+                    }
+                }
+                return Err(OidcError::UnknownKid);
+            }
+            JwksCacheLookup::FreshMiss => {}
+            JwksCacheLookup::StaleOrEmpty => {
+                if let JwksCacheLookup::Hit(key) = self.refresh_and_cached_key(kid, false).await? {
+                    return Ok(key);
+                }
+                self.remember_unknown_kid(kid).await;
+                return Err(OidcError::UnknownKid);
+            }
+        }
+
+        if self.should_force_refresh(Instant::now()).await {
+            if let JwksCacheLookup::Hit(key) = self.refresh_and_cached_key(kid, true).await? {
+                return Ok(key);
             }
         }
         self.remember_unknown_kid(kid).await;
@@ -246,7 +300,12 @@ impl JwksFetcher {
             .map_or(Ok(JwksCacheLookup::FreshMiss), |jwk| {
                 validate_jwk(jwk)?;
                 DecodingKey::from_jwk(jwk)
-                    .map(JwksCacheLookup::Hit)
+                    .map(|decoding_key| {
+                        JwksCacheLookup::Hit(CachedJwkKey {
+                            decoding_key,
+                            jwk: jwk.clone(),
+                        })
+                    })
                     .map_err(|_| OidcError::InvalidJwk)
             })
     }
@@ -330,6 +389,112 @@ fn validate_jwk(jwk: &Jwk) -> Result<(), OidcError> {
     Ok(())
 }
 
+fn validate_jwk_for_header(jwk: &Jwk, header_alg: Algorithm) -> Result<(), OidcError> {
+    validate_jwk(jwk)?;
+    if jwk_family(jwk) != algorithm_family(header_alg) {
+        return Err(OidcError::InvalidJwk);
+    }
+    if let Some(jwk_alg) = explicit_or_inferred_jwk_algorithm(jwk)? {
+        if jwk_alg != header_alg {
+            return Err(OidcError::InvalidJwk);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AlgorithmFamilyKind {
+    Hmac,
+    Rsa,
+    Ec,
+    Ed,
+}
+
+fn algorithm_family(algorithm: Algorithm) -> AlgorithmFamilyKind {
+    match algorithm {
+        Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => AlgorithmFamilyKind::Hmac,
+        Algorithm::RS256
+        | Algorithm::RS384
+        | Algorithm::RS512
+        | Algorithm::PS256
+        | Algorithm::PS384
+        | Algorithm::PS512 => AlgorithmFamilyKind::Rsa,
+        Algorithm::ES256 | Algorithm::ES384 => AlgorithmFamilyKind::Ec,
+        Algorithm::EdDSA => AlgorithmFamilyKind::Ed,
+    }
+}
+
+fn jwk_family(jwk: &Jwk) -> AlgorithmFamilyKind {
+    match &jwk.algorithm {
+        AlgorithmParameters::OctetKey(_) => AlgorithmFamilyKind::Hmac,
+        AlgorithmParameters::RSA(_) => AlgorithmFamilyKind::Rsa,
+        AlgorithmParameters::EllipticCurve(_) => AlgorithmFamilyKind::Ec,
+        AlgorithmParameters::OctetKeyPair(parameters) => {
+            if parameters.curve == EllipticCurve::Ed25519 {
+                AlgorithmFamilyKind::Ed
+            } else {
+                AlgorithmFamilyKind::Ec
+            }
+        }
+    }
+}
+
+fn explicit_or_inferred_jwk_algorithm(jwk: &Jwk) -> Result<Option<Algorithm>, OidcError> {
+    if let Some(algorithm) = jwk.common.key_algorithm {
+        return key_algorithm_to_jwt_algorithm(algorithm).map(Some);
+    }
+    match &jwk.algorithm {
+        AlgorithmParameters::EllipticCurve(parameters) => match parameters.curve {
+            EllipticCurve::P256 => Ok(Some(Algorithm::ES256)),
+            EllipticCurve::P384 => Ok(Some(Algorithm::ES384)),
+            _ => Ok(None),
+        },
+        AlgorithmParameters::OctetKeyPair(parameters)
+            if parameters.curve == EllipticCurve::Ed25519 =>
+        {
+            Ok(Some(Algorithm::EdDSA))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn key_algorithm_to_jwt_algorithm(algorithm: KeyAlgorithm) -> Result<Algorithm, OidcError> {
+    match algorithm {
+        KeyAlgorithm::HS256 => Ok(Algorithm::HS256),
+        KeyAlgorithm::HS384 => Ok(Algorithm::HS384),
+        KeyAlgorithm::HS512 => Ok(Algorithm::HS512),
+        KeyAlgorithm::ES256 => Ok(Algorithm::ES256),
+        KeyAlgorithm::ES384 => Ok(Algorithm::ES384),
+        KeyAlgorithm::RS256 => Ok(Algorithm::RS256),
+        KeyAlgorithm::RS384 => Ok(Algorithm::RS384),
+        KeyAlgorithm::RS512 => Ok(Algorithm::RS512),
+        KeyAlgorithm::PS256 => Ok(Algorithm::PS256),
+        KeyAlgorithm::PS384 => Ok(Algorithm::PS384),
+        KeyAlgorithm::PS512 => Ok(Algorithm::PS512),
+        KeyAlgorithm::EdDSA => Ok(Algorithm::EdDSA),
+        KeyAlgorithm::RSA1_5
+        | KeyAlgorithm::RSA_OAEP
+        | KeyAlgorithm::RSA_OAEP_256
+        | KeyAlgorithm::UNKNOWN_ALGORITHM => Err(OidcError::InvalidJwk),
+    }
+}
+
+fn assert_algorithm_family_is_not_mixed(algorithms: &[Algorithm]) {
+    let Some(first) = algorithms.first().copied() else {
+        return;
+    };
+    let first_is_hmac = algorithm_family(first) == AlgorithmFamilyKind::Hmac;
+    assert!(
+        algorithms
+            .iter()
+            .all(
+                |algorithm| (algorithm_family(*algorithm) == AlgorithmFamilyKind::Hmac)
+                    == first_is_hmac
+            ),
+        "allowed_algorithms must not mix symmetric and asymmetric algorithms"
+    );
+}
+
 fn evict_oldest_negative_entry(negative: &mut HashMap<String, Instant>) {
     if let Some(kid) = negative
         .iter()
@@ -400,6 +565,7 @@ pub struct TokenVerifier {
 impl TokenVerifier {
     #[must_use]
     pub fn new(config: TokenVerifierConfig, fetcher: Arc<JwksFetcher>) -> Self {
+        assert_algorithm_family_is_not_mixed(&config.allowed_algorithms);
         let allowed_clients = config.allowed_clients.iter().cloned().collect();
         let allowed_typ = config
             .allowed_typ
@@ -441,7 +607,10 @@ impl TokenVerifier {
             }
         }
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
-        let key = self.fetcher.key_for_kid(&kid).await?;
+        let key = self
+            .fetcher
+            .key_for_kid_matching_alg(&kid, header.alg)
+            .await?;
         let mut validation = Validation::new(header.alg);
         validation.algorithms = vec![header.alg];
         validation.set_issuer(&[self.config.issuer.as_str()]);
@@ -479,7 +648,10 @@ impl TokenVerifier {
             }
         }
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
-        let key = self.fetcher.key_for_kid(&kid).await?;
+        let key = self
+            .fetcher
+            .key_for_kid_matching_alg(&kid, header.alg)
+            .await?;
         let mut validation = Validation::new(header.alg);
         validation.algorithms = vec![header.alg];
         validation.set_issuer(&[self.config.issuer.as_str()]);
@@ -493,6 +665,7 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        self.enforce_multi_audience_azp(&data.claims, &audiences)?;
         let matched_client = self.match_client(&data.claims).ok().flatten();
         let scopes = self.scopes(&data.claims);
         Ok(VerifiedToken {
@@ -535,7 +708,10 @@ impl TokenVerifier {
             }
         }
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
-        let key = self.fetcher.key_for_kid(&kid).await?;
+        let key = self
+            .fetcher
+            .key_for_kid_matching_alg(&kid, header.alg)
+            .await?;
         let mut validation = Validation::new(header.alg);
         validation.algorithms = vec![header.alg];
         validation.leeway = self.config.leeway.as_secs();
@@ -598,6 +774,25 @@ impl TokenVerifier {
             }
         }
         Err(OidcError::ClientNotAllowed)
+    }
+
+    fn enforce_multi_audience_azp(
+        &self,
+        claims: &Claims,
+        accepted_audiences: &[String],
+    ) -> Result<(), OidcError> {
+        let Some(Audience::Many(audiences)) = claims.aud.as_ref() else {
+            return Ok(());
+        };
+        if audiences.len() <= 1 {
+            return Ok(());
+        }
+        let azp = claims.azp.as_deref().ok_or(OidcError::ClientNotAllowed)?;
+        if accepted_audiences.iter().any(|audience| audience == azp) {
+            Ok(())
+        } else {
+            Err(OidcError::ClientNotAllowed)
+        }
     }
 
     fn scopes(&self, claims: &Claims) -> Vec<String> {
@@ -926,6 +1121,50 @@ mod tests {
             Err(OidcError::InvalidJwk)
         ));
         validate_jwk(&large).expect("2048-bit RSA key is accepted");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "allowed_algorithms must not mix symmetric and asymmetric algorithms"
+    )]
+    fn oidc_verifier_rejects_mixed_symmetric_and_asymmetric_algorithms() {
+        assert_algorithm_family_is_not_mixed(&[Algorithm::RS256, Algorithm::HS256]);
+    }
+
+    #[test]
+    fn oidc_jwk_algorithm_must_match_header_algorithm() {
+        let rsa = rsa_jwk_with_modulus_bytes("rsa", 256);
+        validate_jwk_for_header(&rsa, Algorithm::RS256).expect("matching alg accepts");
+        assert!(matches!(
+            validate_jwk_for_header(&rsa, Algorithm::RS384),
+            Err(OidcError::InvalidJwk)
+        ));
+
+        let oct: Jwk = serde_json::from_value(json!({
+            "kty": "oct",
+            "kid": "oct",
+            "alg": "HS256",
+            "k": URL_SAFE_NO_PAD.encode(b"secret"),
+        }))
+        .expect("oct JWK parses");
+        validate_jwk_for_header(&oct, Algorithm::HS256).expect("matching alg accepts");
+        assert!(matches!(
+            validate_jwk_for_header(&oct, Algorithm::EdDSA),
+            Err(OidcError::InvalidJwk)
+        ));
+
+        let p256: Jwk = serde_json::from_value(json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0",
+            "y": "x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo",
+        }))
+        .expect("P-256 JWK parses");
+        validate_jwk_for_header(&p256, Algorithm::ES256).expect("matching curve accepts");
+        assert!(matches!(
+            validate_jwk_for_header(&p256, Algorithm::ES384),
+            Err(OidcError::InvalidJwk)
+        ));
     }
 
     fn verifier_for_header_tests() -> TokenVerifier {
@@ -1276,6 +1515,48 @@ mod tests {
             verifier.verify_related_token(&resource_audience).await,
             Err(OidcError::AudienceMismatch)
         ));
+    }
+
+    #[tokio::test]
+    async fn oidc_related_id_token_enforces_azp_for_multi_audience_tokens() {
+        let secret = b"registry-platform-id-token-azp-test-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec!["citizen-client".to_string()],
+            "kid",
+            secret,
+        )
+        .await;
+        let mut claims = test_claims(
+            Some("https://issuer.example"),
+            Some("citizen-client"),
+            Some("subject-1"),
+        );
+        claims.aud = Some(Audience::Many(vec![
+            "citizen-client".to_string(),
+            "other-audience".to_string(),
+        ]));
+        claims.azp = None;
+        let missing_azp = signed_hs256_token("kid", claims.clone(), secret, None);
+        assert!(matches!(
+            verifier.verify_related_token(&missing_azp).await,
+            Err(OidcError::ClientNotAllowed)
+        ));
+
+        claims.azp = Some("other-audience".to_string());
+        let wrong_azp = signed_hs256_token("kid", claims.clone(), secret, None);
+        assert!(matches!(
+            verifier.verify_related_token(&wrong_azp).await,
+            Err(OidcError::ClientNotAllowed)
+        ));
+
+        claims.azp = Some("citizen-client".to_string());
+        let valid = signed_hs256_token("kid", claims, secret, None);
+        verifier
+            .verify_related_token(&valid)
+            .await
+            .expect("azp matching client audience accepts");
     }
 
     #[test]
