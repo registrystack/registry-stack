@@ -162,6 +162,91 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
 }
 
 #[test]
+fn render_and_publish_cpsv_ap_service_catalogue() {
+    let manifest =
+        workspace_root().join("fixtures/cpsv-ap/health-linked-child-support.metadata.yaml");
+    let output = Command::new(bin())
+        .args(["render", manifest.to_str().unwrap(), "--format", "cpsv-ap"])
+        .output()
+        .expect("run cli");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let cpsv: serde_json::Value = serde_json::from_slice(&output.stdout).expect("cpsv json");
+    assert_eq!(
+        cpsv["@id"],
+        "https://child-support.example.gov/metadata/cpsv-ap"
+    );
+    assert!(cpsv["@graph"]
+        .as_array()
+        .expect("@graph")
+        .iter()
+        .any(|node| {
+            node["@type"] == "cpsv:PublicService"
+                && node["cv:holdsRequirement"][0]["@id"]
+                    == "https://child-support.example.gov/requirements/child-health-coverage"
+        }));
+    assert!(!String::from_utf8(output.stdout)
+        .expect("stdout utf8")
+        .contains("cv:hasInputType"));
+
+    let output = Command::new(bin())
+        .args([
+            "render",
+            manifest.to_str().unwrap(),
+            "--format",
+            "form-json-schema",
+            "--form",
+            "child-support-review-form",
+        ])
+        .output()
+        .expect("run cli");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let form_schema: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("form schema json");
+    assert_eq!(form_schema["properties"]["children"]["type"], "array");
+
+    let out = temp_dir("publish-cpsv-ap");
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run cli");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out.join("cpsv-ap").exists());
+    assert!(out.join("cpsv-ap.jsonld").exists());
+    assert!(out
+        .join("forms")
+        .join("child-support-review-form")
+        .join("schema.json")
+        .exists());
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs::read(out.join("index.json")).expect("index reads"))
+            .expect("index json");
+    assert_eq!(index["service_catalogues"][0]["url"], "/metadata/cpsv-ap");
+    assert_eq!(
+        index["form_schemas"][0]["url"],
+        "/metadata/forms/child-support-review-form/schema.json"
+    );
+    assert_index_urls_exist(&out, &index);
+}
+
+#[test]
 fn render_outputs_evidence_offerings_and_policy_artifacts() {
     let dir = temp_dir("render-evidence-and-policy");
     let manifest = dir.join("metadata.yaml");
@@ -401,11 +486,20 @@ fn assert_index_urls_exist(out: &Path, index: &serde_json::Value) {
     for entry in index["schemas"].as_array().expect("schemas") {
         assert_url_exists(out, entry["url"].as_str().expect("schema url"));
     }
+    for entry in index["form_schemas"].as_array().expect("form schemas") {
+        assert_url_exists(out, entry["url"].as_str().expect("form schema url"));
+    }
     for entry in index["profiles"].as_array().expect("profiles") {
         assert_url_exists(out, entry["url"].as_str().expect("profile url"));
     }
     for entry in index["dcat_profiles"].as_array().expect("dcat profiles") {
         assert_url_exists(out, entry["url"].as_str().expect("profile url"));
+    }
+    for entry in index["service_catalogues"]
+        .as_array()
+        .expect("service catalogues")
+    {
+        assert_url_exists(out, entry["url"].as_str().expect("service catalogue url"));
     }
 }
 

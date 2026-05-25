@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_manifest_core::{
-    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
+    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_cpsv_ap,
     render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
-    render_entity_shacl, render_ogc_records_items, render_policy_collection, render_shacl,
-    validate_manifest, MetadataError, MetadataManifest,
+    render_entity_shacl, render_form_schema_draft_2020_12, render_ogc_records_items,
+    render_policy_collection, render_shacl, validate_manifest, MetadataError, MetadataManifest,
 };
 use serde_json::{json, Value};
 
@@ -52,9 +52,236 @@ fn fixture(path: &str) -> MetadataManifest {
     serde_yml::from_str(raw).expect("fixture parses")
 }
 
+fn service_first_fixture() -> MetadataManifest {
+    serde_yml::from_str(include_str!(
+        "../../../fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
+    ))
+    .expect("service-first fixture parses")
+}
+
 fn assert_matches_golden(label: &str, actual: &Value, expected: &str) {
     let expected: Value = serde_json::from_str(expected).expect("golden fixture parses");
     assert_eq!(actual, &expected, "{label} golden fixture mismatch");
+}
+
+#[test]
+fn cpsv_ap_service_first_fixture_matches_contract_golden() {
+    let compiled = compile_manifest(&service_first_fixture()).expect("compile");
+    let cpsv = render_cpsv_ap(&compiled);
+
+    assert_matches_golden(
+        "CPSV-AP service-first fixture",
+        &cpsv,
+        include_str!("../../../fixtures/cpsv-ap/health-linked-child-support.cpsv-ap.jsonld"),
+    );
+    assert!(serde_json::to_string(&cpsv)
+        .expect("json serializes")
+        .find("cv:hasInputType")
+        .is_none());
+    assert_eq!(
+        cpsv["@context"]["registry_manifest"],
+        json!("https://registry-manifest.dev/ns/v1#")
+    );
+
+    let graph = cpsv["@graph"].as_array().expect("@graph");
+    assert_eq!(
+        cpsv["dcterms:hasPart"][0]["@id"],
+        "https://child-support.example.gov/services/health-linked-child-support"
+    );
+    assert!(
+        cpsv["dcat:service"]
+            .as_array()
+            .expect("catalog data services")
+            .iter()
+            .all(|service| service["@id"]
+                != "https://child-support.example.gov/services/health-linked-child-support"),
+        "dcat:service must point to dcat:DataService resources, not CPSV public services"
+    );
+    let service = graph
+        .iter()
+        .find(|node| {
+            node["@id"] == "https://child-support.example.gov/services/health-linked-child-support"
+        })
+        .expect("service node");
+    assert_eq!(service["@type"], "cpsv:PublicService");
+    assert_eq!(
+        service["cv:hasChannel"][0]["@id"],
+        "https://child-support.example.gov/services/health-linked-child-support/channels/online-application"
+    );
+    assert_eq!(
+        service["cv:holdsRequirement"][0]["@id"],
+        "https://child-support.example.gov/requirements/child-health-coverage"
+    );
+    let grouped_list = graph
+        .iter()
+        .find(|node| {
+            node["@id"]
+                == "https://child-support.example.gov/requirements/child-health-coverage#coverage-and-residence"
+        })
+        .expect("grouped evidence type list");
+    assert_eq!(grouped_list["@type"], "cccev:EvidenceTypeList");
+    assert_eq!(
+        grouped_list["cccev:specifiesEvidenceType"]
+            .as_array()
+            .expect("specified evidence types")
+            .len(),
+        2,
+        "one CCCEV evidence type list must preserve the grouped AND bundle"
+    );
+    let alternative_list = graph
+        .iter()
+        .find(|node| {
+            node["@id"]
+                == "https://child-support.example.gov/requirements/child-health-coverage#combined-support-record"
+        })
+        .expect("alternative evidence type list");
+    assert_eq!(
+        alternative_list["cccev:specifiesEvidenceType"][0]["@id"],
+        "https://child-support.example.gov/evidence-types/combined-support-record"
+    );
+
+    assert!(graph.iter().any(|node| {
+        node["@id"] == "https://child-support.example.gov/authorities/child-support-authority"
+            && node["@type"] == "cv:PublicOrganisation"
+    }));
+    assert!(graph.iter().any(|node| {
+        node["@id"] == "https://child-support.example.gov/evidence-types/child-health-coverage"
+            && node["@type"] == "cccev:EvidenceType"
+    }));
+    assert!(graph.iter().any(|node| {
+        node["@id"] == "https://health.example.gov/data-services/coverage-verification"
+            && node["@type"] == "dcat:DataService"
+    }));
+    assert!(
+        graph.iter().any(|node| {
+            node["@id"] == "#dataset-health-coverage" && has_json_type(node, "dcat:Dataset")
+        }),
+        "datasets served by rendered data services must be present in the CPSV graph"
+    );
+    assert!(graph.iter().any(|node| {
+        node["@id"] == "https://child-support.example.gov/forms/child-support-review"
+            && node["@type"]
+                .as_array()
+                .expect("form has type array")
+                .iter()
+                .any(|kind| kind == "registry_manifest:FormDefinition")
+            && node["registry_manifest:validatesWithJsonSchema"]["@id"]
+                == "https://child-support.example.gov/metadata/forms/child-support-review-form/schema.json"
+            && node["registry_manifest:hasSection"]
+                .as_array()
+                .expect("form sections")
+                .iter()
+                .any(|section| section["registry_manifest:repeatable"] == json!(true))
+    }));
+    let output = graph
+        .iter()
+        .find(|node| node["@id"] == "#dataset-child-support-cases")
+        .expect("produced output dataset");
+    assert!(
+        output["@type"]
+            .as_array()
+            .expect("output has type array")
+            .iter()
+            .any(|kind| kind == "cv:Output"),
+        "CPSV-AP output class is in the Core Vocabularies namespace"
+    );
+    assert!(graph.iter().any(|node| {
+        node["@id"] == "https://health.example.gov/services/health-coverage-registry"
+            && node["@type"] == "cpsv:PublicService"
+            && node["cpsv:produces"] == "#dataset-health-coverage"
+    }));
+}
+
+fn has_json_type(node: &Value, expected: &str) -> bool {
+    match node.get("@type") {
+        Some(Value::String(kind)) => kind == expected,
+        Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some(expected)),
+        _ => false,
+    }
+}
+
+#[test]
+fn form_profile_renders_validation_sections_and_schema() {
+    let compiled = compile_manifest(&service_first_fixture()).expect("compile");
+    let schema = render_form_schema_draft_2020_12(&compiled, "child-support-review-form")
+        .expect("form schema renders");
+
+    assert_eq!(
+        schema["$id"],
+        "https://child-support.example.gov/metadata/forms/child-support-review-form/schema.json"
+    );
+    assert!(schema["required"]
+        .as_array()
+        .expect("required")
+        .iter()
+        .any(|field| field == "supportType"));
+    assert_eq!(schema["properties"]["children"]["type"], "array");
+    assert_eq!(schema["properties"]["children"]["minItems"], 1);
+    assert_eq!(
+        schema["properties"]["children"]["items"]["properties"]["childBirthDate"]["format"],
+        "date"
+    );
+}
+
+#[test]
+fn validation_rejects_invalid_form_profile_references() {
+    let mut manifest = service_first_fixture();
+    let form = &mut manifest.forms[0];
+    form.validates_with
+        .as_mut()
+        .expect("fixture validation refs")
+        .json_schema = Some("missing-prefix:schema".to_string());
+    form.sections[0].fields[0].supports_requirement = Some("missing-requirement".to_string());
+
+    let error = validate_manifest(&manifest).expect_err("invalid form profile rejected");
+    match error {
+        MetadataError::Validation { errors } => {
+            assert!(errors
+                .iter()
+                .any(|error| error.path == "forms[0].validates_with.json_schema"));
+            assert!(errors.iter().any(|error| error
+                .path
+                .ends_with("sections[0].fields[0].supports_requirement")));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn validation_rejects_service_forms_owned_by_another_service() {
+    let mut manifest = service_first_fixture();
+    let first = manifest.public_services[0].clone();
+    let mut second = first.clone();
+    second.id = "other-service".to_string();
+    second.iri = Some("https://child-support.example.gov/services/other".to_string());
+    second.forms = first.forms.clone();
+    manifest.public_services.push(second);
+
+    let error = validate_manifest(&manifest).expect_err("mismatched form owner rejected");
+    match error {
+        MetadataError::Validation { errors } => assert!(errors.iter().any(|error| {
+            error.path == "public_services[1].forms[0]"
+                && error
+                    .message
+                    .contains("forms owned by the same public service")
+        })),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn validation_requires_public_service_description() {
+    let mut manifest = service_first_fixture();
+    manifest.public_services[0].description = None;
+
+    let error = validate_manifest(&manifest).expect_err("missing service description rejected");
+    match error {
+        MetadataError::Validation { errors } => assert!(errors.iter().any(|error| {
+            error.path == "public_services[0].description"
+                && error.message.contains("description is required")
+        })),
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -858,6 +1085,50 @@ datasets:
     assert!(
         requirement.get("cccev:isDerivedFrom").is_none(),
         "cccev:isDerivedFrom must be omitted when there are no reference frameworks, got {requirement}"
+    );
+}
+
+#[test]
+fn validation_rejects_grouped_evidence_list_that_does_not_prove_requirement() {
+    let manifest: MetadataManifest = serde_yml::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: grouped-evidence-validation
+  base_url: https://data.example.test
+  title: Grouped Evidence Validation
+  publisher:
+    name: Example Authority
+requirements:
+  - id: target_requirement
+    title: Target requirement
+    evidence_type_lists:
+      - id: grouped-option
+        evidence_types:
+          - unrelated_evidence
+  - id: unrelated_requirement
+    title: Unrelated requirement
+evidence_types:
+  - id: unrelated_evidence
+    title: Unrelated evidence
+    proves:
+      - unrelated_requirement
+"#,
+    )
+    .expect("manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("invalid evidence group rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "requirements[0].evidence_type_lists[0].evidence_types[0]"
+                && error
+                    .message
+                    .contains("listed evidence type must prove the owning requirement")
+        }),
+        "expected grouped evidence validation error, got {errors:#?}"
     );
 }
 

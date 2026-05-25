@@ -15,3 +15,6 @@ thiserror = { version = "2" }
 
 [dev-dependencies]
 serde_yml = { version = "0.0.12" }
+sophia_api = { version = "0.10.0" }
+sophia_jsonld = { version = "0.10.0" }
+sophia_term = { version = "0.10.0" }

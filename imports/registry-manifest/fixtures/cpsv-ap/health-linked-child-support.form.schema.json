@@ -1,0 +1,56 @@
+{
+  "$id": "https://child-support.example.gov/metadata/forms/child-support-review-form/schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Form used to start the eligibility review.",
+  "properties": {
+    "caseNote": {
+      "title": "Case note",
+      "type": "string",
+      "x-concept-uri": "https://child-support.example.gov/concepts/case-note"
+    },
+    "childIdentifier": {
+      "maxItems": 1,
+      "minItems": 1,
+      "title": "Child identifier",
+      "type": "string",
+      "x-concept-uri": "https://person-schema.example.gov/vocab/Person.identifier",
+      "x-supports-requirement": "child-health-coverage-requirement"
+    },
+    "children": {
+      "items": {
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "childBirthDate": {
+            "format": "date",
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Child birth date",
+            "type": "string",
+            "x-concept-uri": "https://person-schema.example.gov/vocab/Person.birthDate",
+            "x-supports-requirement": "child-health-coverage-requirement"
+          }
+        },
+        "required": [
+          "childBirthDate"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "supportType": {
+      "title": "Support type",
+      "type": "string",
+      "x-concept-uri": "https://child-support.example.gov/concepts/support-type"
+    }
+  },
+  "required": [
+    "supportType",
+    "childIdentifier",
+    "children"
+  ],
+  "title": "Child support eligibility review form",
+  "type": "object"
+}

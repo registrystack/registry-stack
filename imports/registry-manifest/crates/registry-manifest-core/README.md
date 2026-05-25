@@ -13,7 +13,7 @@ share the same metadata model.
   codelists, requirements, profiles, and evidence offerings.
 - Strict validation with unknown-field rejection through Serde.
 - Manifest compilation into lookup-friendly metadata models.
-- Pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, SHACL,
+- Pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL,
   JSON Schema Draft 2020-12, OGC API Records items, policies, and evidence
   offerings.
 
@@ -39,6 +39,17 @@ handling, `utoipa`, or `clap`.
 ```sh
 cargo test -p registry-manifest-core
 ```
+
+The CPSV-AP integration tests include a project contract validator named
+`validate_cpsv_ap_service_first_contract`. It first parses the rendered fixture
+through a JSON-LD-to-RDF parser, then checks the service-first profile contracts
+that Registry Manifest relies on. This is not a replacement for official SEMIC
+CPSV-AP SHACL/profile validation, which remains an external conformance check.
+
+The service-first form profile is intentionally local. It supports validation
+references, sections, repeatable sections, field cardinality, one-level
+conditional visibility, fulfillment modes, and generated JSON Schema artifacts
+for smoke-test payload validation.
 
 ## License
 

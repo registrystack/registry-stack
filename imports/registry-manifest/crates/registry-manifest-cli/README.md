@@ -19,6 +19,12 @@ Render one artifact:
 cargo run -p registry-manifest-cli -- render profiles/example-civil-registration/fixtures/metadata.yaml --format catalog
 ```
 
+Render a service-form JSON Schema:
+
+```sh
+cargo run -p registry-manifest-cli -- render fixtures/cpsv-ap/health-linked-child-support.metadata.yaml --format form-json-schema --form child-support-review-form
+```
+
 Publish a static metadata directory:
 
 ```sh
@@ -40,6 +46,7 @@ cargo run -p registry-manifest-cli -- validate-profiles profiles
 - `policy` with `--dataset <id>`
 - `dcat`
 - `bregdcat-ap`
+- `cpsv-ap`
 - `shacl`
 - `json-schema` with `--dataset <id> --entity <name>`
 - `ogc-records`

@@ -28,6 +28,14 @@ pub struct MetadataManifest {
     #[serde(default)]
     pub evidence_types: Vec<EvidenceTypeManifest>,
     #[serde(default)]
+    pub authorities: Vec<AuthorityManifest>,
+    #[serde(default)]
+    pub public_services: Vec<ServiceManifest>,
+    #[serde(default)]
+    pub data_services: Vec<DataServiceManifest>,
+    #[serde(default)]
+    pub forms: Vec<FormManifest>,
+    #[serde(default)]
     pub datasets: Vec<DatasetManifest>,
     #[serde(default)]
     pub codelists: Vec<CodelistManifest>,
@@ -105,6 +113,169 @@ pub struct PublisherManifest {
     pub iri: Option<String>,
     #[serde(default)]
     pub authority_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorityManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub authority_type: Option<String>,
+    #[serde(default)]
+    pub spatial: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    #[serde(default)]
+    pub competent_authority: Option<String>,
+    #[serde(default)]
+    pub jurisdiction: Option<String>,
+    #[serde(default)]
+    pub channels: Vec<ChannelManifest>,
+    #[serde(default)]
+    pub holds_requirements: Vec<String>,
+    #[serde(default)]
+    pub produces: Vec<String>,
+    #[serde(default)]
+    pub data_services: Vec<String>,
+    #[serde(default)]
+    pub forms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    #[serde(default)]
+    pub title: Option<LocalizedText>,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub access_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DataServiceManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub endpoint_description: Option<String>,
+    #[serde(default)]
+    pub serves_datasets: Vec<String>,
+    #[serde(default)]
+    pub conforms_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FormManifest {
+    pub id: String,
+    #[serde(default)]
+    pub iri: Option<String>,
+    pub title: LocalizedText,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    pub service: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub validates_with: Option<FormValidationManifest>,
+    #[serde(default)]
+    pub sections: Vec<FormSectionManifest>,
+    #[serde(default)]
+    pub fields: Vec<FormFieldManifest>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FormValidationManifest {
+    #[serde(default)]
+    pub json_schema: Option<String>,
+    #[serde(default)]
+    pub shacl: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FormSectionManifest {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<LocalizedText>,
+    #[serde(default)]
+    pub repeatable: bool,
+    #[serde(default)]
+    pub min_occurs: Option<u32>,
+    #[serde(default)]
+    pub max_occurs: Option<u32>,
+    #[serde(default)]
+    pub visible_when: Option<FormVisibilityManifest>,
+    #[serde(default)]
+    pub fields: Vec<FormFieldManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FormFieldManifest {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub label: LocalizedText,
+    #[serde(default)]
+    pub widget_type: Option<String>,
+    #[serde(default)]
+    pub data_type: Option<String>,
+    #[serde(default)]
+    pub concept: Option<String>,
+    #[serde(default)]
+    pub supports_requirement: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub min_occurs: Option<u32>,
+    #[serde(default)]
+    pub max_occurs: Option<u32>,
+    #[serde(default)]
+    pub visible_when: Option<FormVisibilityManifest>,
+    #[serde(default)]
+    pub fulfillment: Option<FormFulfillmentManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FormVisibilityManifest {
+    pub field: String,
+    pub equals: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FormFulfillmentManifest {
+    #[serde(default)]
+    pub modes: Vec<String>,
+    #[serde(default)]
+    pub preferred_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -236,6 +407,21 @@ pub struct RequirementManifest {
     pub procedure_contexts: Vec<String>,
     #[serde(default)]
     pub reference_frameworks: Vec<ReferenceFrameworkManifest>,
+    #[serde(default)]
+    pub evidence_type_lists: Vec<EvidenceTypeListManifest>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceTypeListManifest {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub title: Option<LocalizedText>,
+    #[serde(default)]
+    pub description: Option<LocalizedText>,
+    #[serde(default)]
+    pub evidence_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -492,6 +678,10 @@ pub struct CompiledMetadata {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CompiledMetadataInner {
     pub catalog: CompiledCatalog,
+    pub authorities: BTreeMap<String, CompiledAuthority>,
+    pub public_services: BTreeMap<String, CompiledService>,
+    pub data_services: BTreeMap<String, CompiledDataService>,
+    pub forms: BTreeMap<String, CompiledForm>,
     pub requirements: BTreeMap<String, CompiledRequirement>,
     pub evidence_types: BTreeMap<String, CompiledEvidenceType>,
     pub datasets: BTreeMap<String, CompiledDataset>,
@@ -513,6 +703,122 @@ pub struct CompiledCatalog {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authority_type: Option<String>,
     pub application_profiles: Vec<ApplicationProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledAuthority {
+    pub id: String,
+    pub iri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledService {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub competent_authority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<String>,
+    pub channels: Vec<CompiledChannel>,
+    pub holds_requirements: Vec<String>,
+    pub produces: Vec<String>,
+    pub data_services: Vec<String>,
+    pub forms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledChannel {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledDataService {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_description: Option<String>,
+    pub serves_datasets: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conforms_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledForm {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    pub service: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validates_with: Option<CompiledFormValidation>,
+    pub sections: Vec<CompiledFormSection>,
+    pub fields: Vec<CompiledFormField>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledFormValidation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shacl: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledFormSection {
+    pub id: String,
+    pub title: String,
+    pub repeatable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_occurs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_occurs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<FormVisibilityManifest>,
+    pub fields: Vec<CompiledFormField>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledFormField {
+    pub id: String,
+    pub name: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widget_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concept: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_requirement: Option<String>,
+    pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_occurs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_occurs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<FormVisibilityManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fulfillment: Option<FormFulfillmentManifest>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -544,6 +850,16 @@ pub struct CompiledRequirement {
     pub rdf_type: String,
     pub procedure_contexts: Vec<String>,
     pub reference_frameworks: Vec<CompiledReferenceFramework>,
+    pub evidence_type_lists: Vec<CompiledEvidenceTypeList>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CompiledEvidenceTypeList {
+    pub id: String,
+    pub iri: String,
+    pub title: String,
+    pub description: String,
+    pub evidence_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -714,6 +1030,38 @@ impl CompiledMetadata {
         self.inner.datasets.values()
     }
 
+    pub fn authorities(&self) -> impl Iterator<Item = &CompiledAuthority> {
+        self.inner.authorities.values()
+    }
+
+    pub fn authority(&self, authority_id: &str) -> Option<&CompiledAuthority> {
+        self.inner.authorities.get(authority_id)
+    }
+
+    pub fn public_services(&self) -> impl Iterator<Item = &CompiledService> {
+        self.inner.public_services.values()
+    }
+
+    pub fn public_service(&self, service_id: &str) -> Option<&CompiledService> {
+        self.inner.public_services.get(service_id)
+    }
+
+    pub fn data_services(&self) -> impl Iterator<Item = &CompiledDataService> {
+        self.inner.data_services.values()
+    }
+
+    pub fn data_service(&self, data_service_id: &str) -> Option<&CompiledDataService> {
+        self.inner.data_services.get(data_service_id)
+    }
+
+    pub fn forms(&self) -> impl Iterator<Item = &CompiledForm> {
+        self.inner.forms.values()
+    }
+
+    pub fn form(&self, form_id: &str) -> Option<&CompiledForm> {
+        self.inner.forms.get(form_id)
+    }
+
     pub fn requirements(&self) -> impl Iterator<Item = &CompiledRequirement> {
         self.inner.requirements.values()
     }
@@ -819,6 +1167,10 @@ impl CompiledMetadata {
         CompiledMetadata {
             inner: Arc::new(CompiledMetadataInner {
                 catalog: self.inner.catalog.clone(),
+                authorities: self.inner.authorities.clone(),
+                public_services: self.inner.public_services.clone(),
+                data_services: self.inner.data_services.clone(),
+                forms: self.inner.forms.clone(),
                 requirements,
                 evidence_types,
                 datasets,
@@ -904,6 +1256,8 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
 
     let requirement_ids = validate_requirements(manifest, &mut errors);
     let evidence_type_ids = validate_evidence_types(manifest, &requirement_ids, &mut errors);
+    validate_requirement_evidence_type_lists(manifest, &evidence_type_ids, &mut errors);
+    let service_refs = validate_service_catalog(manifest, &requirement_ids, &mut errors);
 
     let mut codelist_ids = BTreeSet::new();
     for (index, codelist) in manifest.codelists.iter().enumerate() {
@@ -995,6 +1349,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &mut errors,
         );
     }
+    validate_service_catalog_dataset_refs(manifest, &service_refs, &dataset_ids, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -1045,6 +1400,41 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let authorities = manifest
+        .authorities
+        .iter()
+        .map(|authority| {
+            (
+                authority.id.clone(),
+                compile_authority(manifest, &base_url, authority),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let data_services = manifest
+        .data_services
+        .iter()
+        .map(|data_service| {
+            (
+                data_service.id.clone(),
+                compile_data_service(manifest, &base_url, data_service),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let forms = manifest
+        .forms
+        .iter()
+        .map(|form| (form.id.clone(), compile_form(manifest, &base_url, form)))
+        .collect::<BTreeMap<_, _>>();
+    let public_services = manifest
+        .public_services
+        .iter()
+        .map(|service| {
+            (
+                service.id.clone(),
+                compile_service(manifest, &base_url, service),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let datasets = manifest
         .datasets
         .iter()
@@ -1090,6 +1480,10 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
                     .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
                 application_profiles: manifest.catalog.application_profiles.clone(),
             },
+            authorities,
+            public_services,
+            data_services,
+            forms,
             requirements,
             evidence_types,
             datasets,
@@ -1119,6 +1513,22 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     let evidence_types = compiled.evidence_types().collect::<Vec<_>>();
     if !evidence_types.is_empty() {
         catalog["evidence_types"] = json!(evidence_types);
+    }
+    let authorities = compiled.authorities().collect::<Vec<_>>();
+    if !authorities.is_empty() {
+        catalog["authorities"] = json!(authorities);
+    }
+    let public_services = compiled.public_services().collect::<Vec<_>>();
+    if !public_services.is_empty() {
+        catalog["public_services"] = json!(public_services);
+    }
+    let data_services = compiled.data_services().collect::<Vec<_>>();
+    if !data_services.is_empty() {
+        catalog["data_services"] = json!(data_services);
+    }
+    let forms = compiled.forms().collect::<Vec<_>>();
+    if !forms.is_empty() {
+        catalog["forms"] = json!(forms);
     }
     let evidence_offerings = compiled.evidence_offerings().collect::<Vec<_>>();
     if !evidence_offerings.is_empty() {
@@ -1206,6 +1616,91 @@ pub fn render_breg_dcat_ap(compiled: &CompiledMetadata) -> Value {
             })
             .collect(),
     );
+    catalog
+}
+
+pub fn render_cpsv_ap(compiled: &CompiledMetadata) -> Value {
+    let public_services = compiled
+        .public_services()
+        .map(|service| iri_object(&service.iri))
+        .chain(compiled.datasets().flat_map(|dataset| {
+            dataset
+                .public_services
+                .iter()
+                .map(|service| iri_object(&service.id))
+        }))
+        .collect::<Vec<_>>();
+    let data_services = compiled
+        .data_services()
+        .map(|service| iri_object(&service.iri))
+        .collect::<Vec<_>>();
+    let mut catalog = json!({
+        "@context": jsonld_context_with_service_catalogue_terms(),
+        "@id": format!("{}/metadata/cpsv-ap", compiled.catalog().base_url),
+        "@type": "dcat:Catalog",
+        "dcterms:identifier": compiled.catalog().id,
+        "dcterms:title": compiled.catalog().title,
+        "dcterms:description": compiled.catalog().description,
+        "dcterms:publisher": publisher_agent(compiled.catalog()),
+        "dcterms:conformsTo": "https://semiceu.github.io/CPSV-AP/releases/3.2.0/",
+        "dcterms:hasPart": public_services,
+        "dcat:service": data_services,
+    });
+    let mut graph = Vec::new();
+    graph.extend(compiled.authorities().map(service_authority_node));
+    graph.extend(
+        compiled
+            .public_services()
+            .map(|service| service_catalogue_public_service_node(compiled, service)),
+    );
+    graph.extend(compiled.datasets().flat_map(|dataset| {
+        dataset
+            .public_services
+            .iter()
+            .map(|service| public_service_node(compiled.catalog(), dataset, service))
+    }));
+    graph.extend(
+        compiled
+            .public_services()
+            .flat_map(|service| service.channels.iter().map(service_channel_node)),
+    );
+    graph.extend(
+        compiled
+            .data_services()
+            .map(|service| data_service_node(compiled, service)),
+    );
+    graph.extend(compiled.forms().map(|form| form_node(compiled, form)));
+    graph.extend(evidence_jsonld_nodes(compiled));
+    let output_dataset_ids = compiled
+        .public_services()
+        .flat_map(|service| service.produces.iter().cloned())
+        .chain(
+            compiled
+                .datasets()
+                .filter(|dataset| !dataset.public_services.is_empty())
+                .map(|dataset| dataset.dataset_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    graph.extend(
+        compiled
+            .datasets()
+            .filter(|dataset| output_dataset_ids.contains(&dataset.dataset_id))
+            .map(|dataset| cpsv_output_dataset_node(compiled, dataset)),
+    );
+    let served_dataset_ids = compiled
+        .data_services()
+        .flat_map(|service| service.serves_datasets.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    graph.extend(
+        compiled
+            .datasets()
+            .filter(|dataset| {
+                served_dataset_ids.contains(&dataset.dataset_id)
+                    && !output_dataset_ids.contains(&dataset.dataset_id)
+            })
+            .map(|dataset| base_dcat_dataset(compiled, dataset)),
+    );
+    catalog["@graph"] = Value::Array(graph);
     catalog
 }
 
@@ -1551,6 +2046,14 @@ pub fn render_entity_schema_draft_2020_12(
     Some(entity_json_schema(compiled, dataset, entity))
 }
 
+pub fn render_form_schema_draft_2020_12(
+    compiled: &CompiledMetadata,
+    form_id: &str,
+) -> Option<Value> {
+    let form = compiled.form(form_id)?;
+    Some(form_json_schema(form))
+}
+
 pub fn render_ogc_records_items(compiled: &CompiledMetadata) -> Value {
     let features = compiled
         .datasets()
@@ -1680,6 +2183,548 @@ fn validate_evidence_types<'a>(
         );
     }
     ids
+}
+
+fn validate_requirement_evidence_type_lists(
+    manifest: &MetadataManifest,
+    evidence_type_ids: &BTreeSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let evidence_type_proofs = manifest
+        .evidence_types
+        .iter()
+        .map(|evidence_type| {
+            (
+                evidence_type.id.as_str(),
+                evidence_type
+                    .proves
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for (requirement_index, requirement) in manifest.requirements.iter().enumerate() {
+        let total_lists = requirement.evidence_type_lists.len();
+        let mut list_ids = BTreeSet::new();
+        for (list_index, list) in requirement.evidence_type_lists.iter().enumerate() {
+            let path =
+                format!("requirements[{requirement_index}].evidence_type_lists[{list_index}]");
+            let list_id = evidence_type_list_manifest_id(list, list_index, total_lists);
+            validate_id(&list_id, format!("{path}.id"), errors);
+            if !list_ids.insert(list_id) {
+                errors.push(ValidationError::new(
+                    format!("{path}.id"),
+                    "evidence type list id must be unique per requirement",
+                ));
+            }
+            if let Some(title) = list.title.as_ref() {
+                validate_non_empty(&title.text(), format!("{path}.title"), errors);
+            }
+            if list.evidence_types.is_empty() {
+                errors.push(ValidationError::new(
+                    format!("{path}.evidence_types"),
+                    "evidence type list must include at least one evidence type",
+                ));
+            }
+
+            let mut listed_evidence_types = BTreeSet::new();
+            for (evidence_type_index, evidence_type_id) in list.evidence_types.iter().enumerate() {
+                let evidence_type_path = format!("{path}.evidence_types[{evidence_type_index}]");
+                validate_id(evidence_type_id, &evidence_type_path, errors);
+                if !listed_evidence_types.insert(evidence_type_id.as_str()) {
+                    errors.push(ValidationError::new(
+                        &evidence_type_path,
+                        "evidence type id must be unique within an evidence type list",
+                    ));
+                }
+                if !evidence_type_ids.contains(evidence_type_id.as_str()) {
+                    errors.push(ValidationError::new(
+                        &evidence_type_path,
+                        "evidence type list must reference a known evidence type",
+                    ));
+                    continue;
+                }
+                if !evidence_type_proofs
+                    .get(evidence_type_id.as_str())
+                    .is_some_and(|proves| proves.contains(requirement.id.as_str()))
+                {
+                    errors.push(ValidationError::new(
+                        &evidence_type_path,
+                        "listed evidence type must prove the owning requirement",
+                    ));
+                }
+            }
+        }
+    }
+}
+
+struct ServiceCatalogRefs<'a> {
+    service_ids: BTreeSet<&'a str>,
+    data_service_ids: BTreeSet<&'a str>,
+    form_ids: BTreeSet<&'a str>,
+    channel_ids: BTreeSet<String>,
+}
+
+fn validate_service_catalog<'a>(
+    manifest: &'a MetadataManifest,
+    requirement_ids: &BTreeSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) -> ServiceCatalogRefs<'a> {
+    let mut authority_ids = BTreeSet::new();
+    for (index, authority) in manifest.authorities.iter().enumerate() {
+        let path = format!("authorities[{index}]");
+        validate_id(&authority.id, format!("{path}.id"), errors);
+        if !authority_ids.insert(authority.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "authority id must be unique",
+            ));
+        }
+        validate_optional_uri(
+            authority.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_non_empty(&authority.name, format!("{path}.name"), errors);
+        validate_optional_uri(
+            authority.authority_type.as_deref(),
+            format!("{path}.authority_type"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_optional_uri(
+            authority.spatial.as_deref(),
+            format!("{path}.spatial"),
+            &manifest.vocabularies,
+            errors,
+        );
+    }
+
+    let mut service_ids = BTreeSet::new();
+    let mut channel_ids = BTreeSet::new();
+    for (index, service) in manifest.public_services.iter().enumerate() {
+        let path = format!("public_services[{index}]");
+        validate_id(&service.id, format!("{path}.id"), errors);
+        if !service_ids.insert(service.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "public service id must be unique",
+            ));
+        }
+        validate_optional_uri(
+            service.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_non_empty(&service.title.text(), format!("{path}.title"), errors);
+        match service.description.as_ref() {
+            Some(description) => {
+                validate_non_empty(&description.text(), format!("{path}.description"), errors);
+            }
+            None => errors.push(ValidationError::new(
+                format!("{path}.description"),
+                "public service description is required",
+            )),
+        }
+        if let Some(authority_id) = service.competent_authority.as_deref() {
+            validate_id(authority_id, format!("{path}.competent_authority"), errors);
+            if !authority_ids.contains(authority_id) {
+                errors.push(ValidationError::new(
+                    format!("{path}.competent_authority"),
+                    "public service competent_authority must reference a known authority",
+                ));
+            }
+        }
+        validate_optional_uri(
+            service.jurisdiction.as_deref(),
+            format!("{path}.jurisdiction"),
+            &manifest.vocabularies,
+            errors,
+        );
+        for (requirement_index, requirement_id) in service.holds_requirements.iter().enumerate() {
+            validate_id(
+                requirement_id,
+                format!("{path}.holds_requirements[{requirement_index}]"),
+                errors,
+            );
+            if !requirement_ids.contains(requirement_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("{path}.holds_requirements[{requirement_index}]"),
+                    "public service holds_requirements must reference a known requirement",
+                ));
+            }
+        }
+        for (channel_index, channel) in service.channels.iter().enumerate() {
+            let channel_path = format!("{path}.channels[{channel_index}]");
+            validate_id(&channel.id, format!("{channel_path}.id"), errors);
+            let channel_key = format!("{}:{}", service.id, channel.id);
+            if !channel_ids.insert(channel_key) {
+                errors.push(ValidationError::new(
+                    format!("{channel_path}.id"),
+                    "channel id must be unique within a public service",
+                ));
+            }
+            validate_optional_uri(
+                channel.iri.as_deref(),
+                format!("{channel_path}.iri"),
+                &manifest.vocabularies,
+                errors,
+            );
+            validate_optional_uri(
+                channel.kind.as_deref(),
+                format!("{channel_path}.kind"),
+                &manifest.vocabularies,
+                errors,
+            );
+            if let Some(access_url) = channel.access_url.as_deref() {
+                validate_http_url(access_url, format!("{channel_path}.access_url"), errors);
+            }
+        }
+        for (index, data_service_id) in service.data_services.iter().enumerate() {
+            validate_id(
+                data_service_id,
+                format!("{path}.data_services[{index}]"),
+                errors,
+            );
+        }
+        for (index, form_id) in service.forms.iter().enumerate() {
+            validate_id(form_id, format!("{path}.forms[{index}]"), errors);
+        }
+    }
+
+    let mut data_service_ids = BTreeSet::new();
+    for (index, data_service) in manifest.data_services.iter().enumerate() {
+        let path = format!("data_services[{index}]");
+        validate_id(&data_service.id, format!("{path}.id"), errors);
+        if !data_service_ids.insert(data_service.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "data service id must be unique",
+            ));
+        }
+        validate_optional_uri(
+            data_service.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_non_empty(&data_service.title.text(), format!("{path}.title"), errors);
+        if let Some(endpoint_url) = data_service.endpoint_url.as_deref() {
+            validate_http_url(endpoint_url, format!("{path}.endpoint_url"), errors);
+        }
+        if let Some(endpoint_description) = data_service.endpoint_description.as_deref() {
+            validate_http_url(
+                endpoint_description,
+                format!("{path}.endpoint_description"),
+                errors,
+            );
+        }
+        validate_optional_uri(
+            data_service.conforms_to.as_deref(),
+            format!("{path}.conforms_to"),
+            &manifest.vocabularies,
+            errors,
+        );
+    }
+    for (service_index, service) in manifest.public_services.iter().enumerate() {
+        for (index, data_service_id) in service.data_services.iter().enumerate() {
+            if !data_service_ids.contains(data_service_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("public_services[{service_index}].data_services[{index}]"),
+                    "public service data_services must reference a known data service",
+                ));
+            }
+        }
+    }
+
+    let mut form_ids = BTreeSet::new();
+    let mut form_service_by_id = BTreeMap::new();
+    for (index, form) in manifest.forms.iter().enumerate() {
+        let path = format!("forms[{index}]");
+        validate_id(&form.id, format!("{path}.id"), errors);
+        if !form_ids.insert(form.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "form id must be unique",
+            ));
+        }
+        form_service_by_id.insert(form.id.as_str(), form.service.as_str());
+        validate_optional_uri(
+            form.iri.as_deref(),
+            format!("{path}.iri"),
+            &manifest.vocabularies,
+            errors,
+        );
+        validate_non_empty(&form.title.text(), format!("{path}.title"), errors);
+        validate_id(&form.service, format!("{path}.service"), errors);
+        if !service_ids.contains(form.service.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.service"),
+                "form service must reference a known public service",
+            ));
+        }
+        if let Some(validation) = form.validates_with.as_ref() {
+            validate_optional_uri(
+                validation.json_schema.as_deref(),
+                format!("{path}.validates_with.json_schema"),
+                &manifest.vocabularies,
+                errors,
+            );
+            validate_optional_uri(
+                validation.shacl.as_deref(),
+                format!("{path}.validates_with.shacl"),
+                &manifest.vocabularies,
+                errors,
+            );
+        }
+        if let Some(channel_id) = form.channel.as_deref() {
+            validate_id(channel_id, format!("{path}.channel"), errors);
+            if !channel_ids.contains(&format!("{}:{channel_id}", form.service)) {
+                errors.push(ValidationError::new(
+                    format!("{path}.channel"),
+                    "form channel must reference a channel on the form service",
+                ));
+            }
+        }
+        let mut field_ids = BTreeSet::new();
+        for (field_index, field) in form.fields.iter().enumerate() {
+            let field_path = format!("{path}.fields[{field_index}]");
+            validate_form_field(
+                field,
+                &field_path,
+                &mut field_ids,
+                requirement_ids,
+                &manifest.vocabularies,
+                errors,
+            );
+        }
+        let mut section_ids = BTreeSet::new();
+        for (section_index, section) in form.sections.iter().enumerate() {
+            let section_path = format!("{path}.sections[{section_index}]");
+            validate_id(&section.id, format!("{section_path}.id"), errors);
+            if !section_ids.insert(section.id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("{section_path}.id"),
+                    "form section id must be unique within a form",
+                ));
+            }
+            if let Some(title) = section.title.as_ref() {
+                validate_non_empty(&title.text(), format!("{section_path}.title"), errors);
+            }
+            validate_occurs(
+                section.min_occurs,
+                section.max_occurs,
+                format!("{section_path}.min_occurs"),
+                errors,
+            );
+            if let Some(visible_when) = section.visible_when.as_ref() {
+                validate_visibility(visible_when, format!("{section_path}.visible_when"), errors);
+            }
+            for (field_index, field) in section.fields.iter().enumerate() {
+                let field_path = format!("{section_path}.fields[{field_index}]");
+                validate_form_field(
+                    field,
+                    &field_path,
+                    &mut field_ids,
+                    requirement_ids,
+                    &manifest.vocabularies,
+                    errors,
+                );
+            }
+        }
+    }
+    for (service_index, service) in manifest.public_services.iter().enumerate() {
+        for (index, form_id) in service.forms.iter().enumerate() {
+            if !form_ids.contains(form_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("public_services[{service_index}].forms[{index}]"),
+                    "public service forms must reference a known form",
+                ));
+            } else if form_service_by_id.get(form_id.as_str()) != Some(&service.id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("public_services[{service_index}].forms[{index}]"),
+                    "public service forms must reference forms owned by the same public service",
+                ));
+            }
+        }
+    }
+
+    ServiceCatalogRefs {
+        service_ids,
+        data_service_ids,
+        form_ids,
+        channel_ids,
+    }
+}
+
+fn validate_form_field<'a>(
+    field: &'a FormFieldManifest,
+    path: &str,
+    field_ids: &mut BTreeSet<&'a str>,
+    requirement_ids: &BTreeSet<&str>,
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    validate_id(&field.id, format!("{path}.id"), errors);
+    if !field_ids.insert(field.id.as_str()) {
+        errors.push(ValidationError::new(
+            format!("{path}.id"),
+            "form field id must be unique within a form",
+        ));
+    }
+    if let Some(name) = field.name.as_deref() {
+        validate_non_empty(name, format!("{path}.name"), errors);
+    }
+    validate_non_empty(&field.label.text(), format!("{path}.label"), errors);
+    validate_optional_uri(
+        field.concept.as_deref(),
+        format!("{path}.concept"),
+        vocabularies,
+        errors,
+    );
+    validate_optional_uri(
+        field.data_type.as_deref(),
+        format!("{path}.data_type"),
+        vocabularies,
+        errors,
+    );
+    if let Some(requirement_id) = field.supports_requirement.as_deref() {
+        validate_id(
+            requirement_id,
+            format!("{path}.supports_requirement"),
+            errors,
+        );
+        if !requirement_ids.contains(requirement_id) {
+            errors.push(ValidationError::new(
+                format!("{path}.supports_requirement"),
+                "form field supports_requirement must reference a known requirement",
+            ));
+        }
+    }
+    validate_occurs(
+        field.min_occurs,
+        field.max_occurs,
+        format!("{path}.min_occurs"),
+        errors,
+    );
+    if let Some(visible_when) = field.visible_when.as_ref() {
+        validate_visibility(visible_when, format!("{path}.visible_when"), errors);
+    }
+    if let Some(fulfillment) = field.fulfillment.as_ref() {
+        for (index, mode) in fulfillment.modes.iter().enumerate() {
+            validate_fulfillment_mode(mode, format!("{path}.fulfillment.modes[{index}]"), errors);
+        }
+        if let Some(preferred_mode) = fulfillment.preferred_mode.as_deref() {
+            validate_fulfillment_mode(
+                preferred_mode,
+                format!("{path}.fulfillment.preferred_mode"),
+                errors,
+            );
+            if !fulfillment.modes.is_empty()
+                && !fulfillment.modes.iter().any(|mode| mode == preferred_mode)
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}.fulfillment.preferred_mode"),
+                    "preferred fulfillment mode must be listed in modes",
+                ));
+            }
+        }
+    }
+}
+
+fn validate_occurs(
+    min_occurs: Option<u32>,
+    max_occurs: Option<u32>,
+    path: impl Into<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let (Some(min), Some(max)) = (min_occurs, max_occurs) {
+        if max < min {
+            errors.push(ValidationError::new(
+                path,
+                "max_occurs must be greater than or equal to min_occurs",
+            ));
+        }
+    }
+}
+
+fn validate_visibility(
+    visible_when: &FormVisibilityManifest,
+    path: impl Into<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let path = path.into();
+    validate_non_empty(&visible_when.field, format!("{path}.field"), errors);
+    validate_non_empty(&visible_when.equals, format!("{path}.equals"), errors);
+}
+
+fn validate_fulfillment_mode(
+    mode: &str,
+    path: impl Into<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if !matches!(
+        mode,
+        "manual_input"
+            | "file_upload"
+            | "registry_lookup"
+            | "oots_evidence_exchange"
+            | "self_declaration"
+            | "known_from_context"
+    ) {
+        errors.push(ValidationError::new(
+            path,
+            "fulfillment mode must be manual_input, file_upload, registry_lookup, oots_evidence_exchange, self_declaration, or known_from_context",
+        ));
+    }
+}
+
+fn validate_service_catalog_dataset_refs(
+    manifest: &MetadataManifest,
+    service_refs: &ServiceCatalogRefs<'_>,
+    dataset_ids: &BTreeSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    for (service_index, service) in manifest.public_services.iter().enumerate() {
+        for (index, dataset_id) in service.produces.iter().enumerate() {
+            validate_id(
+                dataset_id,
+                format!("public_services[{service_index}].produces[{index}]"),
+                errors,
+            );
+            if !dataset_ids.contains(dataset_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("public_services[{service_index}].produces[{index}]"),
+                    "public service produces must reference a known dataset",
+                ));
+            }
+        }
+    }
+    for (index, data_service) in manifest.data_services.iter().enumerate() {
+        for (dataset_index, dataset_id) in data_service.serves_datasets.iter().enumerate() {
+            validate_id(
+                dataset_id,
+                format!("data_services[{index}].serves_datasets[{dataset_index}]"),
+                errors,
+            );
+            if !dataset_ids.contains(dataset_id.as_str()) {
+                errors.push(ValidationError::new(
+                    format!("data_services[{index}].serves_datasets[{dataset_index}]"),
+                    "data service serves_datasets must reference a known dataset",
+                ));
+            }
+        }
+    }
+    let _ = (
+        &service_refs.service_ids,
+        &service_refs.data_service_ids,
+        &service_refs.form_ids,
+        &service_refs.channel_ids,
+    );
 }
 
 fn validate_entities(
@@ -2179,6 +3224,217 @@ fn policy_left_operand_requires_iri(left_operand: &str) -> bool {
     )
 }
 
+fn compile_authority(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    authority: &AuthorityManifest,
+) -> CompiledAuthority {
+    CompiledAuthority {
+        id: authority.id.clone(),
+        iri: authority
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/authorities/{}", authority.id)),
+        name: authority.name.clone(),
+        authority_type: authority
+            .authority_type
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+        spatial: authority
+            .spatial
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+    }
+}
+
+fn compile_service(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    service: &ServiceManifest,
+) -> CompiledService {
+    CompiledService {
+        id: service.id.clone(),
+        iri: service
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/public-services/{}", service.id)),
+        title: service.title.text(),
+        description: service
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        competent_authority: service.competent_authority.clone(),
+        jurisdiction: service
+            .jurisdiction
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+        channels: service
+            .channels
+            .iter()
+            .map(|channel| compile_channel(manifest, base_url, &service.id, channel))
+            .collect(),
+        holds_requirements: service.holds_requirements.clone(),
+        produces: service.produces.clone(),
+        data_services: service.data_services.clone(),
+        forms: service.forms.clone(),
+    }
+}
+
+fn compile_channel(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    service_id: &str,
+    channel: &ChannelManifest,
+) -> CompiledChannel {
+    CompiledChannel {
+        id: channel.id.clone(),
+        iri: channel
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| {
+                format!(
+                    "{base_url}/metadata/public-services/{service_id}/channels/{}",
+                    channel.id
+                )
+            }),
+        title: channel
+            .title
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_else(|| channel.id.clone()),
+        description: channel
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        kind: channel
+            .kind
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+        access_url: channel.access_url.clone(),
+    }
+}
+
+fn compile_data_service(
+    manifest: &MetadataManifest,
+    base_url: &str,
+    data_service: &DataServiceManifest,
+) -> CompiledDataService {
+    CompiledDataService {
+        id: data_service.id.clone(),
+        iri: data_service
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/data-services/{}", data_service.id)),
+        title: data_service.title.text(),
+        description: data_service
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        endpoint_url: data_service.endpoint_url.clone(),
+        endpoint_description: data_service.endpoint_description.clone(),
+        serves_datasets: data_service.serves_datasets.clone(),
+        conforms_to: data_service
+            .conforms_to
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+    }
+}
+
+fn compile_form(manifest: &MetadataManifest, base_url: &str, form: &FormManifest) -> CompiledForm {
+    CompiledForm {
+        id: form.id.clone(),
+        iri: form
+            .iri
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+            .unwrap_or_else(|| format!("{base_url}/metadata/forms/{}", form.id)),
+        title: form.title.text(),
+        description: form
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        service: form.service.clone(),
+        channel: form.channel.clone(),
+        validates_with: form
+            .validates_with
+            .as_ref()
+            .map(|validation| CompiledFormValidation {
+                json_schema: validation
+                    .json_schema
+                    .as_deref()
+                    .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+                shacl: validation
+                    .shacl
+                    .as_deref()
+                    .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+            }),
+        sections: form
+            .sections
+            .iter()
+            .map(|section| CompiledFormSection {
+                id: section.id.clone(),
+                title: section
+                    .title
+                    .as_ref()
+                    .map(LocalizedText::text)
+                    .unwrap_or_else(|| section.id.clone()),
+                repeatable: section.repeatable,
+                min_occurs: section.min_occurs,
+                max_occurs: section.max_occurs,
+                visible_when: section.visible_when.clone(),
+                fields: section
+                    .fields
+                    .iter()
+                    .map(|field| compile_form_field(manifest, field))
+                    .collect(),
+            })
+            .collect(),
+        fields: form
+            .fields
+            .iter()
+            .map(|field| compile_form_field(manifest, field))
+            .collect(),
+    }
+}
+
+fn compile_form_field(manifest: &MetadataManifest, field: &FormFieldManifest) -> CompiledFormField {
+    CompiledFormField {
+        id: field.id.clone(),
+        name: field.name.clone().unwrap_or_else(|| field.id.clone()),
+        label: field.label.text(),
+        widget_type: field.widget_type.clone(),
+        data_type: field
+            .data_type
+            .as_deref()
+            .and_then(|iri| expand_form_data_type(iri, &manifest.vocabularies)),
+        concept: field
+            .concept
+            .as_deref()
+            .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
+        supports_requirement: field.supports_requirement.clone(),
+        required: field.required,
+        min_occurs: field.min_occurs,
+        max_occurs: field.max_occurs,
+        visible_when: field.visible_when.clone(),
+        fulfillment: field.fulfillment.clone(),
+    }
+}
+
+fn expand_form_data_type(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<String> {
+    if let Some(suffix) = uri.strip_prefix("xsd:") {
+        return Some(format!("http://www.w3.org/2001/XMLSchema#{suffix}"));
+    }
+    expand_uri(uri, vocabularies)
+}
+
 fn compile_dataset(
     manifest: &MetadataManifest,
     base_url: &str,
@@ -2269,13 +3525,14 @@ fn compile_requirement(
     base_url: &str,
     requirement: &RequirementManifest,
 ) -> CompiledRequirement {
+    let iri = requirement
+        .iri
+        .as_deref()
+        .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
+        .unwrap_or_else(|| format!("{base_url}/metadata/requirements/{}", requirement.id));
     CompiledRequirement {
         id: requirement.id.clone(),
-        iri: requirement
-            .iri
-            .as_deref()
-            .and_then(|iri| expand_uri(iri, &manifest.vocabularies))
-            .unwrap_or_else(|| format!("{base_url}/metadata/requirements/{}", requirement.id)),
+        iri: iri.clone(),
         title: requirement.title.text(),
         description: requirement
             .description
@@ -2298,6 +3555,42 @@ fn compile_requirement(
                 })
             })
             .collect(),
+        evidence_type_lists: requirement
+            .evidence_type_lists
+            .iter()
+            .enumerate()
+            .map(|(index, list)| compile_evidence_type_list(requirement, &iri, list, index))
+            .collect(),
+    }
+}
+
+fn compile_evidence_type_list(
+    requirement: &RequirementManifest,
+    requirement_iri: &str,
+    list: &EvidenceTypeListManifest,
+    index: usize,
+) -> CompiledEvidenceTypeList {
+    let list_id =
+        evidence_type_list_manifest_id(list, index, requirement.evidence_type_lists.len());
+    CompiledEvidenceTypeList {
+        iri: evidence_type_list_iri_from_id(requirement_iri, &list_id),
+        title: list
+            .title
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_else(|| {
+                format!(
+                    "Evidence type list {list_id} for {}",
+                    requirement.title.text()
+                )
+            }),
+        description: list
+            .description
+            .as_ref()
+            .map(LocalizedText::text)
+            .unwrap_or_default(),
+        id: list_id,
+        evidence_types: list.evidence_types.clone(),
     }
 }
 
@@ -2915,6 +4208,289 @@ fn public_service_node(
     node
 }
 
+fn service_catalogue_public_service_node(
+    compiled: &CompiledMetadata,
+    service: &CompiledService,
+) -> Value {
+    let mut node = json!({
+        "@id": service.iri,
+        "@type": "cpsv:PublicService",
+        "dcterms:identifier": service.id,
+        "dcterms:title": service.title,
+        "dcterms:description": service.description,
+    });
+    if let Some(authority_id) = service.competent_authority.as_deref() {
+        if let Some(authority) = compiled.authority(authority_id) {
+            node["cv:hasCompetentAuthority"] = iri_object(&authority.iri);
+        }
+    } else {
+        node["cv:hasCompetentAuthority"] = public_organisation_agent(compiled.catalog());
+    }
+    if let Some(jurisdiction) = service.jurisdiction.as_deref() {
+        node["dcterms:spatial"] = iri_object(jurisdiction);
+    }
+    if !service.channels.is_empty() {
+        node["cv:hasChannel"] = Value::Array(
+            service
+                .channels
+                .iter()
+                .map(|channel| iri_object(&channel.iri))
+                .collect(),
+        );
+    }
+    let requirements = service
+        .holds_requirements
+        .iter()
+        .filter_map(|id| compiled.requirement(id))
+        .map(|requirement| iri_object(&requirement.iri))
+        .collect::<Vec<_>>();
+    if !requirements.is_empty() {
+        node["cv:holdsRequirement"] = Value::Array(requirements);
+    }
+    let produced = service
+        .produces
+        .iter()
+        .filter_map(|id| compiled.dataset(id))
+        .map(dataset_url)
+        .map(|iri| iri_object(&iri))
+        .collect::<Vec<_>>();
+    if !produced.is_empty() {
+        node["cpsv:produces"] = Value::Array(produced);
+    }
+    let data_services = service
+        .data_services
+        .iter()
+        .filter_map(|id| compiled.data_service(id))
+        .map(|data_service| iri_object(&data_service.iri))
+        .collect::<Vec<_>>();
+    if !data_services.is_empty() {
+        node["registry_manifest:usesDataService"] = Value::Array(data_services);
+    }
+    let forms = service
+        .forms
+        .iter()
+        .filter_map(|id| compiled.form(id))
+        .map(|form| iri_object(&form.iri))
+        .collect::<Vec<_>>();
+    if !forms.is_empty() {
+        node["registry_manifest:hasForm"] = Value::Array(forms);
+    }
+    node
+}
+
+fn service_authority_node(authority: &CompiledAuthority) -> Value {
+    let mut node = json!({
+        "@id": authority.iri,
+        "@type": "cv:PublicOrganisation",
+        "dcterms:identifier": authority.id,
+        "dcterms:title": authority.name,
+        "skos:prefLabel": authority.name,
+    });
+    if let Some(authority_type) = authority.authority_type.as_deref() {
+        node["dcterms:type"] = json!(authority_type);
+    }
+    if let Some(spatial) = authority.spatial.as_deref() {
+        node["dcterms:spatial"] = iri_object(spatial);
+    }
+    node
+}
+
+fn service_channel_node(channel: &CompiledChannel) -> Value {
+    let mut node = json!({
+        "@id": channel.iri,
+        "@type": "cv:Channel",
+        "dcterms:identifier": channel.id,
+        "dcterms:title": channel.title,
+        "dcterms:description": channel.description,
+    });
+    if let Some(kind) = channel.kind.as_deref() {
+        node["dcterms:type"] = iri_object(kind);
+    }
+    if let Some(access_url) = channel.access_url.as_deref() {
+        node["dcat:accessURL"] = json!(access_url);
+    }
+    node
+}
+
+fn data_service_node(compiled: &CompiledMetadata, data_service: &CompiledDataService) -> Value {
+    let mut node = json!({
+        "@id": data_service.iri,
+        "@type": "dcat:DataService",
+        "dcterms:identifier": data_service.id,
+        "dcterms:title": data_service.title,
+        "dcterms:description": data_service.description,
+    });
+    if let Some(endpoint_url) = data_service.endpoint_url.as_deref() {
+        node["dcat:endpointURL"] = json!(endpoint_url);
+    }
+    if let Some(endpoint_description) = data_service.endpoint_description.as_deref() {
+        node["dcat:endpointDescription"] = json!(endpoint_description);
+    }
+    if let Some(conforms_to) = data_service.conforms_to.as_deref() {
+        node["dcterms:conformsTo"] = json!(conforms_to);
+    }
+    let datasets = data_service
+        .serves_datasets
+        .iter()
+        .filter_map(|id| compiled.dataset(id))
+        .map(dataset_url)
+        .map(|iri| iri_object(&iri))
+        .collect::<Vec<_>>();
+    if !datasets.is_empty() {
+        node["dcat:servesDataset"] = Value::Array(datasets);
+    }
+    node
+}
+
+fn form_node(compiled: &CompiledMetadata, form: &CompiledForm) -> Value {
+    let mut node = json!({
+        "@id": form.iri,
+        "@type": ["registry_manifest:FormDefinition", "registry_manifest:Form"],
+        "dcterms:identifier": form.id,
+        "dcterms:title": form.title,
+        "dcterms:description": form.description,
+    });
+    if let Some(service) = compiled.public_service(&form.service) {
+        node["registry_manifest:forPublicService"] = iri_object(&service.iri);
+    }
+    if let Some(channel_id) = form.channel.as_deref() {
+        if let Some(service) = compiled.public_service(&form.service) {
+            if let Some(channel) = service
+                .channels
+                .iter()
+                .find(|candidate| candidate.id == channel_id)
+            {
+                node["registry_manifest:forChannel"] = iri_object(&channel.iri);
+            }
+        }
+    }
+    if let Some(validation) = form.validates_with.as_ref() {
+        if let Some(json_schema) = validation.json_schema.as_deref() {
+            node["registry_manifest:validatesWithJsonSchema"] = iri_object(json_schema);
+        }
+        if let Some(shacl) = validation.shacl.as_deref() {
+            node["registry_manifest:validatesWithShacl"] = iri_object(shacl);
+        }
+    }
+    if !form.sections.is_empty() {
+        node["registry_manifest:hasSection"] = Value::Array(
+            form.sections
+                .iter()
+                .map(|section| {
+                    let mut section_node = json!({
+                        "@id": format!("{}#section-{}", form.iri, section.id),
+                        "@type": "registry_manifest:FormSection",
+                        "dcterms:identifier": section.id,
+                        "dcterms:title": section.title,
+                        "registry_manifest:repeatable": section.repeatable,
+                    });
+                    if let Some(min_occurs) = section.min_occurs {
+                        section_node["registry_manifest:minOccurs"] = json!(min_occurs);
+                    }
+                    if let Some(max_occurs) = section.max_occurs {
+                        section_node["registry_manifest:maxOccurs"] = json!(max_occurs);
+                    }
+                    if let Some(visible_when) = section.visible_when.as_ref() {
+                        section_node["registry_manifest:visibleWhen"] =
+                            visibility_node(visible_when);
+                    }
+                    if !section.fields.is_empty() {
+                        section_node["registry_manifest:hasField"] = Value::Array(
+                            section
+                                .fields
+                                .iter()
+                                .map(|field| form_field_node(compiled, form, field))
+                                .collect(),
+                        );
+                    }
+                    section_node
+                })
+                .collect(),
+        );
+    }
+    let fields = compiled_form_fields(form);
+    if !fields.is_empty() {
+        node["registry_manifest:hasField"] = Value::Array(
+            fields
+                .into_iter()
+                .map(|field| form_field_node(compiled, form, field))
+                .collect(),
+        );
+    }
+    node
+}
+
+fn compiled_form_fields(form: &CompiledForm) -> Vec<&CompiledFormField> {
+    form.fields
+        .iter()
+        .chain(
+            form.sections
+                .iter()
+                .flat_map(|section| section.fields.iter()),
+        )
+        .collect()
+}
+
+fn form_field_node(
+    compiled: &CompiledMetadata,
+    form: &CompiledForm,
+    field: &CompiledFormField,
+) -> Value {
+    let mut node = json!({
+        "@id": format!("{}#field-{}", form.iri, field.id),
+        "@type": "registry_manifest:FormField",
+        "dcterms:identifier": field.id,
+        "registry_manifest:fieldName": field.name,
+        "rdfs:label": field.label,
+        "registry_manifest:required": field.required,
+    });
+    if let Some(widget_type) = field.widget_type.as_deref() {
+        node["registry_manifest:widgetType"] = json!(widget_type);
+    }
+    if let Some(data_type) = field.data_type.as_deref() {
+        node["registry_manifest:dataType"] = iri_object(data_type);
+    }
+    if let Some(concept) = field.concept.as_deref() {
+        node["cccev:hasConcept"] = iri_object(concept);
+    }
+    if let Some(requirement_id) = field.supports_requirement.as_deref() {
+        if let Some(requirement) = compiled.requirement(requirement_id) {
+            node["registry_manifest:supportsRequirement"] = iri_object(&requirement.iri);
+        }
+    }
+    if let Some(min_occurs) = field.min_occurs {
+        node["registry_manifest:minOccurs"] = json!(min_occurs);
+    }
+    if let Some(max_occurs) = field.max_occurs {
+        node["registry_manifest:maxOccurs"] = json!(max_occurs);
+    }
+    if let Some(visible_when) = field.visible_when.as_ref() {
+        node["registry_manifest:visibleWhen"] = visibility_node(visible_when);
+    }
+    if let Some(fulfillment) = field.fulfillment.as_ref() {
+        if !fulfillment.modes.is_empty() {
+            node["registry_manifest:fulfillmentMode"] = json!(fulfillment.modes);
+        }
+        if let Some(preferred_mode) = fulfillment.preferred_mode.as_deref() {
+            node["registry_manifest:preferredFulfillmentMode"] = json!(preferred_mode);
+        }
+    }
+    node
+}
+
+fn visibility_node(visible_when: &FormVisibilityManifest) -> Value {
+    json!({
+        "registry_manifest:field": visible_when.field,
+        "registry_manifest:equals": visible_when.equals,
+    })
+}
+
+fn cpsv_output_dataset_node(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> Value {
+    let mut node = base_dcat_dataset(compiled, dataset);
+    node["@type"] = json!(["dcat:Dataset", "cv:Output"]);
+    node
+}
+
 fn public_organisation_agent(catalog: &CompiledCatalog) -> Value {
     let mut agent = publisher_agent(catalog);
     agent["@type"] = json!(["foaf:Agent", "cv:PublicOrganisation"]);
@@ -2935,7 +4511,7 @@ fn public_organisation_agent(catalog: &CompiledCatalog) -> Value {
 fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
     let mut nodes = Vec::new();
     for requirement in compiled.requirements() {
-        let evidence_types = evidence_types_for_requirement(compiled, &requirement.id);
+        let evidence_type_lists = evidence_type_lists_for_requirement(compiled, requirement);
         let information_concepts = compiled
             .evidence_types()
             .filter(|evidence_type| evidence_type.proves.contains(&requirement.id))
@@ -2944,15 +4520,9 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             .into_iter()
             .map(|iri| iri_object(iri))
             .collect::<Vec<_>>();
-        let evidence_type_lists = evidence_types
+        let evidence_type_list_refs = evidence_type_lists
             .iter()
-            .map(|evidence_type| {
-                iri_object(&evidence_type_list_iri(
-                    &requirement.iri,
-                    &evidence_type.id,
-                    evidence_types.len() > 1,
-                ))
-            })
+            .map(|list| iri_object(&list.iri))
             .collect::<Vec<_>>();
         let mut requirement_node = json!({
             "@id": requirement.iri,
@@ -2961,7 +4531,7 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             "dcterms:title": requirement.title,
             "skos:prefLabel": requirement.title,
             "dcterms:description": requirement.description,
-            "cccev:hasEvidenceTypeList": evidence_type_lists,
+            "cccev:hasEvidenceTypeList": evidence_type_list_refs,
         });
         if !information_concepts.is_empty() {
             requirement_node["cccev:hasConcept"] = Value::Array(information_concepts);
@@ -2975,22 +4545,22 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
             requirement_node["cccev:isDerivedFrom"] = Value::Array(derived_from);
         }
         nodes.push(requirement_node);
-        for evidence_type in &evidence_types {
-            nodes.push(json!({
-                "@id": evidence_type_list_iri(
-                    &requirement.iri,
-                    &evidence_type.id,
-                    evidence_types.len() > 1,
-                ),
+        for list in evidence_type_lists {
+            let mut list_node = json!({
+                "@id": list.iri,
                 "@type": "cccev:EvidenceTypeList",
-                "dcterms:identifier": evidence_type_list_identifier(
-                    &requirement.id,
-                    &evidence_type.id,
-                    evidence_types.len() > 1,
-                ),
-                "skos:prefLabel": format!("Evidence type {} for {}", evidence_type.title, requirement.title),
-                "cccev:specifiesEvidenceType": [iri_object(&evidence_type.iri)],
-            }));
+                "dcterms:identifier": list.id,
+                "skos:prefLabel": list.title,
+                "cccev:specifiesEvidenceType": list
+                    .evidence_types
+                    .iter()
+                    .map(|evidence_type| iri_object(&evidence_type.iri))
+                    .collect::<Vec<_>>(),
+            });
+            if !list.description.is_empty() {
+                list_node["dcterms:description"] = json!(list.description);
+            }
+            nodes.push(list_node);
         }
         for framework in &requirement.reference_frameworks {
             nodes.push(json!({
@@ -3015,19 +4585,30 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
                     let requirement = compiled
                         .requirements()
                         .find(|candidate| candidate.id == *requirement_id)?;
-                    let evidence_types = evidence_types_for_requirement(compiled, requirement_id);
-                    Some(iri_object(&evidence_type_list_iri(
-                        &requirement.iri,
-                        &evidence_type.id,
-                        evidence_types.len() > 1,
-                    )))
+                    Some(
+                        evidence_type_lists_for_requirement(compiled, requirement)
+                            .into_iter()
+                            .filter(|list| {
+                                list.evidence_types
+                                    .iter()
+                                    .any(|candidate| candidate.id == evidence_type.id)
+                            })
+                            .map(|list| iri_object(&list.iri))
+                            .collect::<Vec<_>>(),
+                    )
                 })
+                .flatten()
                 .collect::<Vec<_>>(),
         }));
     }
     for concept_iri in compiled
         .evidence_types()
         .flat_map(|evidence_type| evidence_type.information_concepts.iter())
+        .chain(compiled.forms().flat_map(|form| {
+            compiled_form_fields(form)
+                .into_iter()
+                .filter_map(|field| field.concept.as_ref())
+        }))
         .collect::<BTreeSet<_>>()
     {
         let identifier = information_concept_identifier(concept_iri);
@@ -3052,6 +4633,7 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
         });
         if let Some(endpoint_url) = offering.access.endpoint_url.as_deref() {
             let mut service = json!({
+                "@id": format!("{}#evidence-service", offering.iri),
                 "@type": "dcat:DataService",
                 "dcat:endpointURL": endpoint_url,
             });
@@ -3066,6 +4648,53 @@ fn evidence_jsonld_nodes(compiled: &CompiledMetadata) -> Vec<Value> {
         nodes.push(node);
     }
     nodes
+}
+
+struct EvidenceTypeListRendering<'a> {
+    id: String,
+    iri: String,
+    title: String,
+    description: String,
+    evidence_types: Vec<&'a CompiledEvidenceType>,
+}
+
+fn evidence_type_lists_for_requirement<'a>(
+    compiled: &'a CompiledMetadata,
+    requirement: &'a CompiledRequirement,
+) -> Vec<EvidenceTypeListRendering<'a>> {
+    if !requirement.evidence_type_lists.is_empty() {
+        return requirement
+            .evidence_type_lists
+            .iter()
+            .map(|list| EvidenceTypeListRendering {
+                id: list.id.clone(),
+                iri: list.iri.clone(),
+                title: list.title.clone(),
+                description: list.description.clone(),
+                evidence_types: list
+                    .evidence_types
+                    .iter()
+                    .filter_map(|id| compiled.evidence_type(id))
+                    .collect(),
+            })
+            .collect();
+    }
+
+    let evidence_types = evidence_types_for_requirement(compiled, &requirement.id);
+    let disambiguate = evidence_types.len() > 1;
+    evidence_types
+        .into_iter()
+        .map(|evidence_type| EvidenceTypeListRendering {
+            id: evidence_type_list_identifier(&requirement.id, &evidence_type.id, disambiguate),
+            iri: evidence_type_list_iri(&requirement.iri, &evidence_type.id, disambiguate),
+            title: format!(
+                "Evidence type {} for {}",
+                evidence_type.title, requirement.title
+            ),
+            description: String::new(),
+            evidence_types: vec![evidence_type],
+        })
+        .collect()
 }
 
 fn evidence_types_for_requirement<'a>(
@@ -3092,6 +4721,28 @@ fn evidence_type_list_iri(
         format!("{requirement_iri}-{suffix}")
     } else {
         format!("{requirement_iri}#{suffix}")
+    }
+}
+
+fn evidence_type_list_manifest_id(
+    list: &EvidenceTypeListManifest,
+    index: usize,
+    total_lists: usize,
+) -> String {
+    list.id.clone().unwrap_or_else(|| {
+        if total_lists == 1 {
+            "evidence-type-list".to_string()
+        } else {
+            format!("evidence-type-list-{}", index + 1)
+        }
+    })
+}
+
+fn evidence_type_list_iri_from_id(requirement_iri: &str, list_id: &str) -> String {
+    if requirement_iri.contains('#') {
+        format!("{requirement_iri}-{list_id}")
+    } else {
+        format!("{requirement_iri}#{list_id}")
     }
 }
 
@@ -3326,6 +4977,110 @@ fn entity_json_schema(
     })
 }
 
+fn form_json_schema(form: &CompiledForm) -> Value {
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+
+    for field in &form.fields {
+        add_form_field_schema(field, &mut properties, &mut required);
+    }
+    for section in &form.sections {
+        if section.repeatable {
+            let mut item_properties = serde_json::Map::new();
+            let mut item_required = Vec::new();
+            for field in &section.fields {
+                add_form_field_schema(field, &mut item_properties, &mut item_required);
+            }
+            let mut item_schema = json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": item_properties,
+                "required": item_required,
+            });
+            if let Some(min_occurs) = section.min_occurs {
+                item_schema["minProperties"] = json!(min_occurs);
+            }
+            let mut section_schema = json!({
+                "type": "array",
+                "items": item_schema,
+            });
+            if let Some(min_occurs) = section.min_occurs {
+                section_schema["minItems"] = json!(min_occurs);
+            }
+            if let Some(max_occurs) = section.max_occurs {
+                section_schema["maxItems"] = json!(max_occurs);
+            }
+            properties.insert(section.id.clone(), section_schema);
+            if section.min_occurs.unwrap_or_default() > 0 {
+                required.push(section.id.clone());
+            }
+        } else {
+            for field in &section.fields {
+                add_form_field_schema(field, &mut properties, &mut required);
+            }
+        }
+    }
+
+    json!({
+        "$schema": JSON_SCHEMA_DRAFT_2020_12,
+        "$id": form
+            .validates_with
+            .as_ref()
+            .and_then(|validation| validation.json_schema.as_deref())
+            .unwrap_or(&form.iri),
+        "title": form.title,
+        "description": form.description,
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn add_form_field_schema(
+    field: &CompiledFormField,
+    properties: &mut serde_json::Map<String, Value>,
+    required: &mut Vec<String>,
+) {
+    let mut schema = json_schema_for_form_field(field);
+    schema["title"] = json!(field.label);
+    if let Some(concept) = field.concept.as_deref() {
+        schema["x-concept-uri"] = json!(concept);
+    }
+    if let Some(requirement_id) = field.supports_requirement.as_deref() {
+        schema["x-supports-requirement"] = json!(requirement_id);
+    }
+    if let Some(min_occurs) = field.min_occurs {
+        schema["minItems"] = json!(min_occurs);
+    }
+    if let Some(max_occurs) = field.max_occurs {
+        schema["maxItems"] = json!(max_occurs);
+    }
+    properties.insert(field.name.clone(), schema);
+    if field.required || field.min_occurs.unwrap_or_default() > 0 {
+        required.push(field.name.clone());
+    }
+}
+
+fn json_schema_for_form_field(field: &CompiledFormField) -> Value {
+    match field.data_type.as_deref() {
+        Some("http://www.w3.org/2001/XMLSchema#boolean") => json!({ "type": "boolean" }),
+        Some("http://www.w3.org/2001/XMLSchema#decimal")
+        | Some("http://www.w3.org/2001/XMLSchema#double")
+        | Some("http://www.w3.org/2001/XMLSchema#float") => json!({ "type": "number" }),
+        Some("http://www.w3.org/2001/XMLSchema#integer")
+        | Some("http://www.w3.org/2001/XMLSchema#int")
+        | Some("http://www.w3.org/2001/XMLSchema#long") => json!({ "type": "integer" }),
+        Some("http://www.w3.org/2001/XMLSchema#date") => {
+            json!({ "type": "string", "format": "date" })
+        }
+        Some("http://www.w3.org/2001/XMLSchema#dateTime") => {
+            json!({ "type": "string", "format": "date-time" })
+        }
+        _ => json!({ "type": "string" }),
+    }
+}
+
 fn json_schema_for_field(field: &CompiledField) -> Value {
     let mut schema = match field.field_type {
         FieldType::String | FieldType::Code => json!({ "type": "string" }),
@@ -3418,7 +5173,7 @@ fn validate_cardinality(value: &str, path: impl Into<String>, errors: &mut Vec<V
 }
 
 fn is_supported_application_profile(id: &str) -> bool {
-    matches!(id, "bregdcat-ap" | "dcat-ap")
+    matches!(id, "bregdcat-ap" | "cpsv-ap" | "dcat-ap")
 }
 
 fn validate_http_url(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
@@ -3502,9 +5257,13 @@ fn expand_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<Stri
             "cpsv" => Some("http://purl.org/vocab/cpsv#"),
             "dcat" => Some("http://www.w3.org/ns/dcat#"),
             "dcterms" => Some("http://purl.org/dc/terms/"),
+            "cv" => Some("http://data.europa.eu/m8g/"),
+            "dcatap" => Some("http://data.europa.eu/r5r/"),
+            "eli" => Some("http://data.europa.eu/eli/ontology#"),
             "odrl" => Some("http://www.w3.org/ns/odrl/2/"),
-            "registry_manifest" => Some("https://jeremi.github.io/registry-manifest/ns#"),
+            "registry_manifest" => Some("https://registry-manifest.dev/ns/v1#"),
             "registry_relay" => Some("https://registry-relay.dev/ns#"),
+            "xsd" => Some("http://www.w3.org/2001/XMLSchema#"),
             _ => None,
         })?;
     Some(format!("{base}{suffix}"))
@@ -3712,7 +5471,7 @@ fn jsonld_context() -> Value {
         "odrl": "http://www.w3.org/ns/odrl/2/",
         "sh": "http://www.w3.org/ns/shacl#",
         "skos": "http://www.w3.org/2004/02/skos/core#",
-        "registry_manifest": "https://jeremi.github.io/registry-manifest/ns#",
+        "registry_manifest": "https://registry-manifest.dev/ns/v1#",
         "xsd": "http://www.w3.org/2001/XMLSchema#",
         "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },
@@ -3785,10 +5544,12 @@ fn jsonld_context_with_public_service_terms() -> Value {
             "cpsv:holdsRequirement".to_string(),
             json!({ "@type": "@id" }),
         );
+        object.insert("cv:hasChannel".to_string(), json!({ "@type": "@id" }));
         object.insert(
             "cv:hasCompetentAuthority".to_string(),
             json!({ "@type": "@id" }),
         );
+        object.insert("cv:holdsRequirement".to_string(), json!({ "@type": "@id" }));
     }
     context
 }
@@ -3811,6 +5572,28 @@ fn jsonld_context_with_evidence_terms() -> Value {
             "registry_manifest:evidenceService",
             "registry_manifest:issuingAuthority",
             "registry_manifest:servesEntity",
+            "registry_manifest:usesDataService",
+            "registry_manifest:dataType",
+        ] {
+            object.insert(term.to_string(), json!({ "@type": "@id" }));
+        }
+    }
+    context
+}
+
+fn jsonld_context_with_service_catalogue_terms() -> Value {
+    let mut context = jsonld_context_with_evidence_terms();
+    if let Some(object) = context.as_object_mut() {
+        for term in [
+            "dcat:service",
+            "registry_manifest:forChannel",
+            "registry_manifest:forPublicService",
+            "registry_manifest:hasField",
+            "registry_manifest:hasForm",
+            "registry_manifest:hasSection",
+            "registry_manifest:supportsRequirement",
+            "registry_manifest:validatesWithJsonSchema",
+            "registry_manifest:validatesWithShacl",
         ] {
             object.insert(term.to_string(), json!({ "@type": "@id" }));
         }

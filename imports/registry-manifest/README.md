@@ -83,6 +83,7 @@ cargo build --workspace --all-targets
 - `policy` with `--dataset <id>`
 - `dcat`
 - `bregdcat-ap`
+- `cpsv-ap`
 - `shacl`
 - `json-schema` with `--dataset <id> --entity <name>`
 - `ogc-records`

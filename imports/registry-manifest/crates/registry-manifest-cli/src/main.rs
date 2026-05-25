@@ -6,10 +6,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use registry_manifest_core::{
-    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
+    compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_cpsv_ap,
     render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
-    render_evidence_offering, render_evidence_offerings, render_ogc_records_items,
-    render_policy_collection, render_shacl, MetadataError, MetadataManifest,
+    render_evidence_offering, render_evidence_offerings, render_form_schema_draft_2020_12,
+    render_ogc_records_items, render_policy_collection, render_shacl, MetadataError,
+    MetadataManifest,
 };
 use serde::Deserialize;
 use serde_yml::Value;
@@ -77,6 +78,10 @@ fn render_command(args: &[String]) -> Result<(), String> {
             ensure_dcat_profile_available(&compiled, "bregdcat-ap")?;
             render_breg_dcat_ap(&compiled)
         }
+        "cpsv-ap" => {
+            ensure_dcat_profile_available(&compiled, "cpsv-ap")?;
+            render_cpsv_ap(&compiled)
+        }
         "shacl" => render_shacl(&compiled),
         "json-schema" => {
             let dataset = option_value(args, "--dataset").ok_or_else(|| {
@@ -87,6 +92,12 @@ fn render_command(args: &[String]) -> Result<(), String> {
             })?;
             render_entity_schema_draft_2020_12(&compiled, &dataset, &entity)
                 .ok_or_else(|| format!("entity not found: {dataset}/{entity}"))?
+        }
+        "form-json-schema" => {
+            let form = option_value(args, "--form")
+                .ok_or_else(|| "form-json-schema render requires --form <id>".to_string())?;
+            render_form_schema_draft_2020_12(&compiled, &form)
+                .ok_or_else(|| format!("form not found: {form}"))?
         }
         "ogc-records" => render_ogc_records_items(&compiled),
         other => return Err(format!("unsupported render format: {other}")),
@@ -101,6 +112,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
     let out = PathBuf::from(out);
     fs::create_dir_all(out.join("schema")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(out.join("forms")).map_err(|error| error.to_string())?;
     fs::create_dir_all(out.join("profiles")).map_err(|error| error.to_string())?;
     fs::create_dir_all(out.join("evidence-offerings")).map_err(|error| error.to_string())?;
     fs::create_dir_all(out.join("policies")).map_err(|error| error.to_string())?;
@@ -117,7 +129,19 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     )?;
     write_json(out.join("dcat.jsonld"), &render_base_dcat(&compiled))?;
     let mut dcat_profiles = Vec::new();
+    let mut service_catalogues = Vec::new();
     for profile in &compiled.catalog().application_profiles {
+        if profile.id == "cpsv-ap" {
+            let service_catalogue = render_cpsv_ap(&compiled);
+            write_json(out.join("cpsv-ap"), &service_catalogue)?;
+            write_json(out.join("cpsv-ap.jsonld"), &service_catalogue)?;
+            service_catalogues.push(serde_json::json!({
+                "id": profile.id,
+                "version": profile.version,
+                "url": "/metadata/cpsv-ap",
+            }));
+            continue;
+        }
         if let Some(document) = render_dcat_profile(&compiled, &profile.id) {
             let filename = format!("dcat.{}.jsonld", profile.id);
             write_json(out.join(&filename), &document)?;
@@ -161,6 +185,20 @@ fn publish_command(args: &[String]) -> Result<(), String> {
                 "url": relative,
             }));
         }
+    }
+
+    let mut form_schemas = Vec::new();
+    for form in compiled.forms() {
+        let form_dir = out.join("forms").join(&form.id);
+        fs::create_dir_all(&form_dir).map_err(|error| error.to_string())?;
+        let relative = format!("/metadata/forms/{}/schema.json", form.id);
+        let schema =
+            render_form_schema_draft_2020_12(&compiled, &form.id).expect("compiled form renders");
+        write_json(form_dir.join("schema.json"), &schema)?;
+        form_schemas.push(serde_json::json!({
+            "form": form.id,
+            "url": relative,
+        }));
     }
 
     let mut evidence_offerings = Vec::new();
@@ -210,8 +248,10 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         "policy_documents": policy_documents,
         "dcat": "/metadata/dcat.jsonld",
         "dcat_profiles": dcat_profiles,
+        "service_catalogues": service_catalogues,
         "shacl": "/metadata/shacl.jsonld",
         "schemas": schemas,
+        "form_schemas": form_schemas,
         "profiles": profiles,
         "application_profiles": application_profiles,
     });
@@ -672,5 +712,5 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: registry-manifest validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|shacl|json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--offering <id>] | publish <metadata.yaml> --out <dir>".to_string()
+    "usage: registry-manifest validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|cpsv-ap|shacl|json-schema|form-json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--form <id>] [--offering <id>] | publish <metadata.yaml> --out <dir>".to_string()
 }

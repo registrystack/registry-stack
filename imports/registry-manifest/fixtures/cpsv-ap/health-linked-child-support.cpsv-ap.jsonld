@@ -1,0 +1,796 @@
+{
+  "@context": {
+    "adms": "http://www.w3.org/ns/adms#",
+    "adms:status": {
+      "@type": "@id"
+    },
+    "cccev": "http://data.europa.eu/m8g/",
+    "cccev:hasConcept": {
+      "@type": "@id"
+    },
+    "cccev:hasEvidenceTypeList": {
+      "@type": "@id"
+    },
+    "cccev:isDerivedFrom": {
+      "@type": "@id"
+    },
+    "cccev:isSpecifiedIn": {
+      "@type": "@id"
+    },
+    "cccev:specifiesEvidenceType": {
+      "@type": "@id"
+    },
+    "cpsv": "http://purl.org/vocab/cpsv#",
+    "cpsv:holdsRequirement": {
+      "@type": "@id"
+    },
+    "cpsv:produces": {
+      "@type": "@id"
+    },
+    "cv": "http://data.europa.eu/m8g/",
+    "cv:hasChannel": {
+      "@type": "@id"
+    },
+    "cv:hasCompetentAuthority": {
+      "@type": "@id"
+    },
+    "cv:holdsRequirement": {
+      "@type": "@id"
+    },
+    "dcat": "http://www.w3.org/ns/dcat#",
+    "dcat:accessService": {
+      "@type": "@id"
+    },
+    "dcat:accessURL": {
+      "@type": "@id"
+    },
+    "dcat:dataset": {
+      "@type": "@id"
+    },
+    "dcat:distribution": {
+      "@type": "@id"
+    },
+    "dcat:endpointDescription": {
+      "@type": "@id"
+    },
+    "dcat:endpointURL": {
+      "@type": "@id"
+    },
+    "dcat:landingPage": {
+      "@type": "@id"
+    },
+    "dcat:mediaType": {
+      "@type": "@id"
+    },
+    "dcat:servesDataset": {
+      "@type": "@id"
+    },
+    "dcat:service": {
+      "@type": "@id"
+    },
+    "dcat:theme": {
+      "@type": "@id"
+    },
+    "dcat:themeTaxonomy": {
+      "@type": "@id"
+    },
+    "dcatap": "http://data.europa.eu/r5r/",
+    "dcatap:applicableLegislation": {
+      "@type": "@id"
+    },
+    "dcterms": "http://purl.org/dc/terms/",
+    "dcterms:accessRights": {
+      "@type": "@id"
+    },
+    "dcterms:accrualPeriodicity": {
+      "@type": "@id"
+    },
+    "dcterms:conformsTo": {
+      "@type": "@id"
+    },
+    "dcterms:format": {
+      "@type": "@id"
+    },
+    "dcterms:isPartOf": {
+      "@type": "@id"
+    },
+    "dcterms:spatial": {
+      "@type": "@id"
+    },
+    "dcterms:type": {
+      "@type": "@id"
+    },
+    "eli": "http://data.europa.eu/eli/ontology#",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "odrl": "http://www.w3.org/ns/odrl/2/",
+    "odrl:action": {
+      "@type": "@id"
+    },
+    "odrl:assignee": {
+      "@type": "@id"
+    },
+    "odrl:assigner": {
+      "@type": "@id"
+    },
+    "odrl:hasPolicy": {
+      "@type": "@id"
+    },
+    "odrl:leftOperand": {
+      "@type": "@id"
+    },
+    "odrl:operator": {
+      "@type": "@id"
+    },
+    "odrl:profile": {
+      "@type": "@id"
+    },
+    "odrl:target": {
+      "@type": "@id"
+    },
+    "odrl:uid": {
+      "@type": "@id"
+    },
+    "odrl:unit": {
+      "@type": "@id"
+    },
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "rdfs:seeAlso": {
+      "@type": "@id"
+    },
+    "registry_manifest": "https://registry-manifest.dev/ns/v1#",
+    "registry_manifest:dataType": {
+      "@type": "@id"
+    },
+    "registry_manifest:evidenceService": {
+      "@type": "@id"
+    },
+    "registry_manifest:evidenceType": {
+      "@type": "@id"
+    },
+    "registry_manifest:forChannel": {
+      "@type": "@id"
+    },
+    "registry_manifest:forPublicService": {
+      "@type": "@id"
+    },
+    "registry_manifest:hasField": {
+      "@type": "@id"
+    },
+    "registry_manifest:hasForm": {
+      "@type": "@id"
+    },
+    "registry_manifest:hasSection": {
+      "@type": "@id"
+    },
+    "registry_manifest:issuingAuthority": {
+      "@type": "@id"
+    },
+    "registry_manifest:servesEntity": {
+      "@type": "@id"
+    },
+    "registry_manifest:supportsRequirement": {
+      "@type": "@id"
+    },
+    "registry_manifest:usesDataService": {
+      "@type": "@id"
+    },
+    "registry_manifest:validatesWithJsonSchema": {
+      "@type": "@id"
+    },
+    "registry_manifest:validatesWithShacl": {
+      "@type": "@id"
+    },
+    "sh": "http://www.w3.org/ns/shacl#",
+    "sh:class": {
+      "@type": "@id"
+    },
+    "sh:datatype": {
+      "@type": "@id"
+    },
+    "sh:nodeKind": {
+      "@type": "@id"
+    },
+    "sh:path": {
+      "@type": "@id"
+    },
+    "sh:targetClass": {
+      "@type": "@id"
+    },
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "skos:hasTopConcept": {
+      "@type": "@id"
+    },
+    "skos:inScheme": {
+      "@type": "@id"
+    },
+    "xsd": "http://www.w3.org/2001/XMLSchema#"
+  },
+  "@graph": [
+    {
+      "@id": "https://child-support.example.gov/authorities/child-support-authority",
+      "@type": "cv:PublicOrganisation",
+      "dcterms:identifier": "child-support-authority",
+      "dcterms:spatial": {
+        "@id": "http://publications.europa.eu/resource/authority/country/THA"
+      },
+      "dcterms:title": "Child Support Authority",
+      "dcterms:type": "http://data.europa.eu/eli/ontology#PublicAuthority",
+      "skos:prefLabel": "Child Support Authority"
+    },
+    {
+      "@id": "https://child-support.example.gov/services/health-linked-child-support",
+      "@type": "cpsv:PublicService",
+      "cpsv:produces": [
+        {
+          "@id": "#dataset-child-support-cases"
+        }
+      ],
+      "cv:hasChannel": [
+        {
+          "@id": "https://child-support.example.gov/services/health-linked-child-support/channels/online-application"
+        }
+      ],
+      "cv:hasCompetentAuthority": {
+        "@id": "https://child-support.example.gov/authorities/child-support-authority"
+      },
+      "cv:holdsRequirement": [
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+        }
+      ],
+      "dcterms:description": "Review child support eligibility using health coverage evidence.",
+      "dcterms:identifier": "health-linked-child-support",
+      "dcterms:spatial": {
+        "@id": "http://publications.europa.eu/resource/authority/country/THA"
+      },
+      "dcterms:title": "Health-linked child support eligibility review",
+      "registry_manifest:hasForm": [
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review"
+        }
+      ],
+      "registry_manifest:usesDataService": [
+        {
+          "@id": "https://health.example.gov/data-services/coverage-verification"
+        }
+      ]
+    },
+    {
+      "@id": "https://health.example.gov/services/health-coverage-registry",
+      "@type": "cpsv:PublicService",
+      "cpsv:holdsRequirement": [
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+        },
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+        },
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+        }
+      ],
+      "cpsv:produces": "#dataset-health-coverage",
+      "cv:hasCompetentAuthority": {
+        "@id": "https://child-support.example.gov/authorities/child-support-authority",
+        "@type": [
+          "foaf:Agent",
+          "cv:PublicOrganisation"
+        ],
+        "dcterms:identifier": "child-support-authority",
+        "dcterms:spatial": {
+          "@id": "http://publications.europa.eu/resource/authority/country/EUR",
+          "@type": "dcterms:Location"
+        },
+        "dcterms:title": "Child Support Authority",
+        "dcterms:type": "http://data.europa.eu/eli/ontology#PublicAuthority",
+        "foaf:name": "Child Support Authority",
+        "skos:prefLabel": "Child Support Authority"
+      },
+      "dcterms:description": "Public registry service that maintains health coverage data.",
+      "dcterms:identifier": "https://health.example.gov/services/health-coverage-registry",
+      "dcterms:title": "Health coverage registry service"
+    },
+    {
+      "@id": "https://child-support.example.gov/services/health-linked-child-support/channels/online-application",
+      "@type": "cv:Channel",
+      "dcat:accessURL": "https://child-support.example.gov/apply",
+      "dcterms:description": "",
+      "dcterms:identifier": "online-application",
+      "dcterms:title": "Online application",
+      "dcterms:type": {
+        "@id": "http://data.europa.eu/m8g/OnlineChannel"
+      }
+    },
+    {
+      "@id": "https://health.example.gov/data-services/coverage-verification",
+      "@type": "dcat:DataService",
+      "dcat:endpointDescription": "https://health.example.gov/openapi/coverage.yaml",
+      "dcat:endpointURL": "https://health.example.gov/api/coverage/verify",
+      "dcat:servesDataset": [
+        {
+          "@id": "#dataset-health-coverage"
+        }
+      ],
+      "dcterms:conformsTo": "https://spec.openapis.org/oas/v3.1.0",
+      "dcterms:description": "Verifies whether a child has active health coverage.",
+      "dcterms:identifier": "health-coverage-verification-api",
+      "dcterms:title": "Health coverage verification API"
+    },
+    {
+      "@id": "https://child-support.example.gov/forms/child-support-review",
+      "@type": [
+        "registry_manifest:FormDefinition",
+        "registry_manifest:Form"
+      ],
+      "dcterms:description": "Form used to start the eligibility review.",
+      "dcterms:identifier": "child-support-review-form",
+      "dcterms:title": "Child support eligibility review form",
+      "registry_manifest:forChannel": {
+        "@id": "https://child-support.example.gov/services/health-linked-child-support/channels/online-application"
+      },
+      "registry_manifest:forPublicService": {
+        "@id": "https://child-support.example.gov/services/health-linked-child-support"
+      },
+      "registry_manifest:hasField": [
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#field-support_type",
+          "@type": "registry_manifest:FormField",
+          "cccev:hasConcept": {
+            "@id": "https://child-support.example.gov/concepts/support-type"
+          },
+          "dcterms:identifier": "support_type",
+          "rdfs:label": "Support type",
+          "registry_manifest:dataType": {
+            "@id": "xsd:string"
+          },
+          "registry_manifest:fieldName": "supportType",
+          "registry_manifest:fulfillmentMode": [
+            "manual_input"
+          ],
+          "registry_manifest:preferredFulfillmentMode": "manual_input",
+          "registry_manifest:required": true,
+          "registry_manifest:widgetType": "select"
+        },
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#field-case_note",
+          "@type": "registry_manifest:FormField",
+          "cccev:hasConcept": {
+            "@id": "https://child-support.example.gov/concepts/case-note"
+          },
+          "dcterms:identifier": "case_note",
+          "rdfs:label": "Case note",
+          "registry_manifest:dataType": {
+            "@id": "xsd:string"
+          },
+          "registry_manifest:fieldName": "caseNote",
+          "registry_manifest:required": false,
+          "registry_manifest:widgetType": "textarea"
+        },
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#field-child_identifier",
+          "@type": "registry_manifest:FormField",
+          "cccev:hasConcept": {
+            "@id": "https://person-schema.example.gov/vocab/Person.identifier"
+          },
+          "dcterms:identifier": "child_identifier",
+          "rdfs:label": "Child identifier",
+          "registry_manifest:dataType": {
+            "@id": "xsd:string"
+          },
+          "registry_manifest:fieldName": "childIdentifier",
+          "registry_manifest:fulfillmentMode": [
+            "manual_input",
+            "registry_lookup",
+            "oots_evidence_exchange"
+          ],
+          "registry_manifest:maxOccurs": 1,
+          "registry_manifest:minOccurs": 1,
+          "registry_manifest:preferredFulfillmentMode": "registry_lookup",
+          "registry_manifest:required": true,
+          "registry_manifest:supportsRequirement": {
+            "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+          },
+          "registry_manifest:widgetType": "text"
+        },
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#field-child_birth_date",
+          "@type": "registry_manifest:FormField",
+          "cccev:hasConcept": {
+            "@id": "https://person-schema.example.gov/vocab/Person.birthDate"
+          },
+          "dcterms:identifier": "child_birth_date",
+          "rdfs:label": "Child birth date",
+          "registry_manifest:dataType": {
+            "@id": "xsd:date"
+          },
+          "registry_manifest:fieldName": "childBirthDate",
+          "registry_manifest:maxOccurs": 1,
+          "registry_manifest:minOccurs": 1,
+          "registry_manifest:required": true,
+          "registry_manifest:supportsRequirement": {
+            "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+          },
+          "registry_manifest:widgetType": "date"
+        }
+      ],
+      "registry_manifest:hasSection": [
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#section-applicant",
+          "@type": "registry_manifest:FormSection",
+          "dcterms:identifier": "applicant",
+          "dcterms:title": "Applicant",
+          "registry_manifest:hasField": [
+            {
+              "@id": "https://child-support.example.gov/forms/child-support-review#field-child_identifier",
+              "@type": "registry_manifest:FormField",
+              "cccev:hasConcept": {
+                "@id": "https://person-schema.example.gov/vocab/Person.identifier"
+              },
+              "dcterms:identifier": "child_identifier",
+              "rdfs:label": "Child identifier",
+              "registry_manifest:dataType": {
+                "@id": "xsd:string"
+              },
+              "registry_manifest:fieldName": "childIdentifier",
+              "registry_manifest:fulfillmentMode": [
+                "manual_input",
+                "registry_lookup",
+                "oots_evidence_exchange"
+              ],
+              "registry_manifest:maxOccurs": 1,
+              "registry_manifest:minOccurs": 1,
+              "registry_manifest:preferredFulfillmentMode": "registry_lookup",
+              "registry_manifest:required": true,
+              "registry_manifest:supportsRequirement": {
+                "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+              },
+              "registry_manifest:widgetType": "text"
+            }
+          ],
+          "registry_manifest:maxOccurs": 1,
+          "registry_manifest:minOccurs": 1,
+          "registry_manifest:repeatable": false
+        },
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#section-children",
+          "@type": "registry_manifest:FormSection",
+          "dcterms:identifier": "children",
+          "dcterms:title": "Children",
+          "registry_manifest:hasField": [
+            {
+              "@id": "https://child-support.example.gov/forms/child-support-review#field-child_birth_date",
+              "@type": "registry_manifest:FormField",
+              "cccev:hasConcept": {
+                "@id": "https://person-schema.example.gov/vocab/Person.birthDate"
+              },
+              "dcterms:identifier": "child_birth_date",
+              "rdfs:label": "Child birth date",
+              "registry_manifest:dataType": {
+                "@id": "xsd:date"
+              },
+              "registry_manifest:fieldName": "childBirthDate",
+              "registry_manifest:maxOccurs": 1,
+              "registry_manifest:minOccurs": 1,
+              "registry_manifest:required": true,
+              "registry_manifest:supportsRequirement": {
+                "@id": "https://child-support.example.gov/requirements/child-health-coverage"
+              },
+              "registry_manifest:widgetType": "date"
+            }
+          ],
+          "registry_manifest:minOccurs": 1,
+          "registry_manifest:repeatable": true
+        },
+        {
+          "@id": "https://child-support.example.gov/forms/child-support-review#section-health_linked",
+          "@type": "registry_manifest:FormSection",
+          "dcterms:identifier": "health_linked",
+          "dcterms:title": "Health service context",
+          "registry_manifest:repeatable": false,
+          "registry_manifest:visibleWhen": {
+            "registry_manifest:equals": "health_linked",
+            "registry_manifest:field": "supportType"
+          }
+        }
+      ],
+      "registry_manifest:validatesWithJsonSchema": {
+        "@id": "https://child-support.example.gov/metadata/forms/child-support-review-form/schema.json"
+      },
+      "registry_manifest:validatesWithShacl": {
+        "@id": "https://child-support.example.gov/metadata/forms/child-support-review-form/shacl"
+      }
+    },
+    {
+      "@id": "https://child-support.example.gov/requirements/child-health-coverage",
+      "@type": "http://data.europa.eu/m8g/Requirement",
+      "cccev:hasConcept": [
+        {
+          "@id": "https://person-schema.example.gov/vocab/Person.address"
+        },
+        {
+          "@id": "https://person-schema.example.gov/vocab/Person.birthDate"
+        },
+        {
+          "@id": "https://person-schema.example.gov/vocab/Person.identifier"
+        }
+      ],
+      "cccev:hasEvidenceTypeList": [
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage#coverage-and-residence"
+        },
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage#combined-support-record"
+        }
+      ],
+      "dcterms:description": "Eligibility requires proof that the child is enrolled in active health coverage.",
+      "dcterms:identifier": "child-health-coverage-requirement",
+      "dcterms:title": "Child has active health coverage",
+      "skos:prefLabel": "Child has active health coverage"
+    },
+    {
+      "@id": "https://child-support.example.gov/requirements/child-health-coverage#coverage-and-residence",
+      "@type": "cccev:EvidenceTypeList",
+      "cccev:specifiesEvidenceType": [
+        {
+          "@id": "https://child-support.example.gov/evidence-types/child-health-coverage"
+        },
+        {
+          "@id": "https://child-support.example.gov/evidence-types/child-residence"
+        }
+      ],
+      "dcterms:description": "A grouped option requiring both active health coverage and residence evidence.",
+      "dcterms:identifier": "coverage-and-residence",
+      "skos:prefLabel": "Health coverage and residence evidence"
+    },
+    {
+      "@id": "https://child-support.example.gov/requirements/child-health-coverage#combined-support-record",
+      "@type": "cccev:EvidenceTypeList",
+      "cccev:specifiesEvidenceType": [
+        {
+          "@id": "https://child-support.example.gov/evidence-types/combined-support-record"
+        }
+      ],
+      "dcterms:description": "An alternative single evidence record that satisfies the same requirement.",
+      "dcterms:identifier": "combined-support-record",
+      "skos:prefLabel": "Combined support record evidence"
+    },
+    {
+      "@id": "https://child-support.example.gov/evidence-types/child-health-coverage",
+      "@type": "cccev:EvidenceType",
+      "cccev:isSpecifiedIn": [
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage#coverage-and-residence"
+        }
+      ],
+      "dcterms:description": "Evidence confirming a child's active health coverage status.",
+      "dcterms:identifier": "child-health-coverage-evidence",
+      "dcterms:title": "Child health coverage evidence",
+      "skos:prefLabel": "Child health coverage evidence"
+    },
+    {
+      "@id": "https://child-support.example.gov/evidence-types/child-residence",
+      "@type": "cccev:EvidenceType",
+      "cccev:isSpecifiedIn": [
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage#coverage-and-residence"
+        }
+      ],
+      "dcterms:description": "Evidence confirming the child's household residence.",
+      "dcterms:identifier": "child-residence-evidence",
+      "dcterms:title": "Child residence evidence",
+      "skos:prefLabel": "Child residence evidence"
+    },
+    {
+      "@id": "https://child-support.example.gov/evidence-types/combined-support-record",
+      "@type": "cccev:EvidenceType",
+      "cccev:isSpecifiedIn": [
+        {
+          "@id": "https://child-support.example.gov/requirements/child-health-coverage#combined-support-record"
+        }
+      ],
+      "dcterms:description": "Combined evidence record covering health coverage and residence.",
+      "dcterms:identifier": "combined-support-record-evidence",
+      "dcterms:title": "Combined support record evidence",
+      "skos:prefLabel": "Combined support record evidence"
+    },
+    {
+      "@id": "https://child-support.example.gov/concepts/case-note",
+      "@type": "cccev:InformationConcept",
+      "dcterms:identifier": "case-note",
+      "skos:prefLabel": "case-note"
+    },
+    {
+      "@id": "https://child-support.example.gov/concepts/support-type",
+      "@type": "cccev:InformationConcept",
+      "dcterms:identifier": "support-type",
+      "skos:prefLabel": "support-type"
+    },
+    {
+      "@id": "https://person-schema.example.gov/vocab/Person.address",
+      "@type": "cccev:InformationConcept",
+      "dcterms:identifier": "Person.address",
+      "skos:prefLabel": "Person.address"
+    },
+    {
+      "@id": "https://person-schema.example.gov/vocab/Person.birthDate",
+      "@type": "cccev:InformationConcept",
+      "dcterms:identifier": "Person.birthDate",
+      "skos:prefLabel": "Person.birthDate"
+    },
+    {
+      "@id": "https://person-schema.example.gov/vocab/Person.identifier",
+      "@type": "cccev:InformationConcept",
+      "dcterms:identifier": "Person.identifier",
+      "skos:prefLabel": "Person.identifier"
+    },
+    {
+      "@id": "https://health.example.gov/evidence-offerings/child-residence",
+      "@type": "registry_manifest:EvidenceOffering",
+      "dcterms:description": "Residence authority route for child residence evidence.",
+      "dcterms:identifier": "child-residence-evidence-offering",
+      "dcterms:title": "Child residence evidence offering",
+      "registry_manifest:accessKind": "evidence-verification-api",
+      "registry_manifest:evidenceService": {
+        "@id": "https://health.example.gov/evidence-offerings/child-residence#evidence-service",
+        "@type": "dcat:DataService",
+        "dcat:endpointDescription": "https://health.example.gov/openapi/residence.yaml",
+        "dcat:endpointURL": "https://health.example.gov/api/residence/verify",
+        "dcterms:conformsTo": "https://spec.openapis.org/oas/v3.1.0"
+      },
+      "registry_manifest:evidenceType": {
+        "@id": "https://child-support.example.gov/evidence-types/child-residence"
+      },
+      "registry_manifest:issuingAuthority": {
+        "@id": "https://health.example.gov/authorities/residence-authority",
+        "@type": "foaf:Agent",
+        "dcterms:identifier": "residence-authority",
+        "foaf:name": "Residence Authority",
+        "registry_manifest:country": "TH"
+      },
+      "registry_manifest:servesEntity": "#dataset-health-coverage-entity-coverage"
+    },
+    {
+      "@id": "https://health.example.gov/evidence-offerings/combined-support-record",
+      "@type": "registry_manifest:EvidenceOffering",
+      "dcterms:description": "Combined evidence route for health coverage and residence.",
+      "dcterms:identifier": "combined-support-record-evidence-offering",
+      "dcterms:title": "Combined support record evidence offering",
+      "registry_manifest:accessKind": "evidence-verification-api",
+      "registry_manifest:evidenceService": {
+        "@id": "https://health.example.gov/evidence-offerings/combined-support-record#evidence-service",
+        "@type": "dcat:DataService",
+        "dcat:endpointDescription": "https://health.example.gov/openapi/support-record.yaml",
+        "dcat:endpointURL": "https://health.example.gov/api/support-record/verify",
+        "dcterms:conformsTo": "https://spec.openapis.org/oas/v3.1.0"
+      },
+      "registry_manifest:evidenceType": {
+        "@id": "https://child-support.example.gov/evidence-types/combined-support-record"
+      },
+      "registry_manifest:issuingAuthority": {
+        "@id": "https://health.example.gov/authorities/support-data-authority",
+        "@type": "foaf:Agent",
+        "dcterms:identifier": "support-data-authority",
+        "foaf:name": "Support Data Authority",
+        "registry_manifest:country": "TH"
+      },
+      "registry_manifest:servesEntity": "#dataset-health-coverage-entity-coverage"
+    },
+    {
+      "@id": "https://health.example.gov/evidence-offerings/child-health-coverage",
+      "@type": "registry_manifest:EvidenceOffering",
+      "dcterms:description": "Health authority route for child health coverage evidence.",
+      "dcterms:identifier": "health-coverage-evidence-offering",
+      "dcterms:title": "Health coverage evidence offering",
+      "registry_manifest:accessKind": "evidence-verification-api",
+      "registry_manifest:evidenceService": {
+        "@id": "https://health.example.gov/evidence-offerings/child-health-coverage#evidence-service",
+        "@type": "dcat:DataService",
+        "dcat:endpointDescription": "https://health.example.gov/openapi/coverage.yaml",
+        "dcat:endpointURL": "https://health.example.gov/api/coverage/verify",
+        "dcterms:conformsTo": "https://spec.openapis.org/oas/v3.1.0"
+      },
+      "registry_manifest:evidenceType": {
+        "@id": "https://child-support.example.gov/evidence-types/child-health-coverage"
+      },
+      "registry_manifest:issuingAuthority": {
+        "@id": "https://health.example.gov/authorities/health-authority",
+        "@type": "foaf:Agent",
+        "dcterms:identifier": "health-authority",
+        "foaf:name": "Health Authority",
+        "registry_manifest:country": "TH"
+      },
+      "registry_manifest:servesEntity": "#dataset-health-coverage-entity-coverage"
+    },
+    {
+      "@id": "#dataset-child-support-cases",
+      "@type": [
+        "dcat:Dataset",
+        "cv:Output"
+      ],
+      "dcat:landingPage": "#dataset-child-support-cases",
+      "dcterms:conformsTo": [],
+      "dcterms:description": "Case records produced by the eligibility review.",
+      "dcterms:identifier": "child-support-cases",
+      "dcterms:title": "Child Support Cases",
+      "odrl:hasPolicy": {
+        "@id": "#policy-child-support-cases-offer",
+        "@type": "odrl:Offer",
+        "odrl:assigner": {
+          "@id": "https://child-support.example.gov/authorities/child-support-authority"
+        },
+        "odrl:permission": [
+          {
+            "odrl:action": {
+              "@id": "odrl:use"
+            },
+            "odrl:assigner": {
+              "@id": "https://child-support.example.gov/authorities/child-support-authority"
+            },
+            "odrl:target": {
+              "@id": "#dataset-child-support-cases"
+            }
+          }
+        ],
+        "odrl:uid": "#policy-child-support-cases-offer"
+      }
+    },
+    {
+      "@id": "#dataset-health-coverage",
+      "@type": [
+        "dcat:Dataset",
+        "cv:Output"
+      ],
+      "dcat:landingPage": "#dataset-health-coverage",
+      "dcterms:conformsTo": [],
+      "dcterms:description": "Registry data used to verify child health coverage.",
+      "dcterms:identifier": "health-coverage",
+      "dcterms:title": "Health Coverage",
+      "odrl:hasPolicy": {
+        "@id": "#policy-health-coverage-offer",
+        "@type": "odrl:Offer",
+        "odrl:assigner": {
+          "@id": "https://child-support.example.gov/authorities/child-support-authority"
+        },
+        "odrl:permission": [
+          {
+            "odrl:action": {
+              "@id": "odrl:use"
+            },
+            "odrl:assigner": {
+              "@id": "https://child-support.example.gov/authorities/child-support-authority"
+            },
+            "odrl:target": {
+              "@id": "#dataset-health-coverage"
+            }
+          }
+        ],
+        "odrl:uid": "#policy-health-coverage-offer"
+      }
+    }
+  ],
+  "@id": "https://child-support.example.gov/metadata/cpsv-ap",
+  "@type": "dcat:Catalog",
+  "dcat:service": [
+    {
+      "@id": "https://health.example.gov/data-services/coverage-verification"
+    }
+  ],
+  "dcterms:conformsTo": "https://semiceu.github.io/CPSV-AP/releases/3.2.0/",
+  "dcterms:description": "Service-first metadata for a child support eligibility review.",
+  "dcterms:hasPart": [
+    {
+      "@id": "https://child-support.example.gov/services/health-linked-child-support"
+    },
+    {
+      "@id": "https://health.example.gov/services/health-coverage-registry"
+    }
+  ],
+  "dcterms:identifier": "health-linked-child-support",
+  "dcterms:publisher": {
+    "@id": "https://child-support.example.gov/authorities/child-support-authority",
+    "@type": "foaf:Agent",
+    "dcterms:type": "http://data.europa.eu/eli/ontology#PublicAuthority",
+    "foaf:name": "Child Support Authority"
+  },
+  "dcterms:title": "Health-linked Child Support Service Catalogue"
+}
