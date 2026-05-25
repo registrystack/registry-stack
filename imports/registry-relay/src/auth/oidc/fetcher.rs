@@ -25,10 +25,6 @@ use serde::Deserialize;
 
 use super::jwks::{JwksFetchError, JwksFetcher};
 
-/// Connect timeout for both discovery and JWKS fetches. Tighter than
-/// the overall request timeout so a hung TCP handshake fails fast.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Overall request timeout (connect + headers + body) for both
 /// discovery and JWKS fetches. Sized for the typical sub-second JWKS
 /// response with generous headroom for a slow IdP.
@@ -39,23 +35,19 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// 30s overall timeout fires.
 const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
 
-/// HTTP JWKS fetcher. One instance per OIDC provider; cloning is cheap
-/// because the inner [`reqwest::Client`] is internally `Arc`d.
+/// HTTP JWKS fetcher. One instance per OIDC provider.
 pub struct ReqwestJwksFetcher {
-    client: reqwest::Client,
     jwks_url: String,
 }
 
 impl ReqwestJwksFetcher {
     /// Build a fetcher that points at an explicit JWKS endpoint.
     ///
-    /// Returns an error only if the [`reqwest::Client`] cannot be built
-    /// (e.g. TLS backend initialisation failure on this host).
+    /// Returns an error if the URL is not fetchable under the OIDC URL policy.
     pub fn from_jwks_url(jwks_url: impl Into<String>) -> Result<Self, JwksFetchError> {
         let jwks_url = jwks_url.into();
         validate_fetch_url(&jwks_url, "jwks")?;
-        let client = build_client()?;
-        Ok(Self { client, jwks_url })
+        Ok(Self { jwks_url })
     }
 
     /// Resolve a JWKS URL from an OIDC discovery document, then build a
@@ -70,7 +62,6 @@ impl ReqwestJwksFetcher {
         discovery_url: impl AsRef<str>,
         expected_issuer: &str,
     ) -> Result<Self, JwksFetchError> {
-        let client = build_client()?;
         let discovery_url = discovery_url.as_ref();
         let validated_url = validate_fetch_url_for_immediate_fetch(discovery_url, "discovery")?;
         let response = validated_url
@@ -90,10 +81,7 @@ impl ReqwestJwksFetcher {
             .await
             .map_err(|err| JwksFetchError::Transport(format!("discovery: {err}")))?;
         let jwks_uri = validate_discovery_document_bytes(&Bytes::from(body), expected_issuer)?;
-        Ok(Self {
-            client,
-            jwks_url: jwks_uri,
-        })
+        Ok(Self { jwks_url: jwks_uri })
     }
 
     /// JWKS URL the fetcher will request. Useful for startup logs.
@@ -109,7 +97,6 @@ impl ReqwestJwksFetcher {
     ) -> PlatformJwksFetcher {
         PlatformJwksFetcher::new_with_fetch_url_policy(
             self.jwks_url.clone(),
-            self.client.clone(),
             platform_jwks_config(cache_ttl, refresh_cooldown),
             FetchUrlPolicy::dev(),
         )
@@ -124,15 +111,6 @@ impl JwksFetcher for ReqwestJwksFetcher {
     ) -> PlatformJwksFetcher {
         self.platform_fetcher(cache_ttl, refresh_cooldown)
     }
-}
-
-fn build_client() -> Result<reqwest::Client, JwksFetchError> {
-    reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| JwksFetchError::Transport(format!("client build failed: {err}")))
 }
 
 fn fetch_url_policy() -> FetchUrlPolicy {

@@ -221,7 +221,7 @@ fn proof_payload(jti: &str) -> Value {
 }
 
 fn sign_holder_proof(holder: &PrivateJwk, payload: Value) -> String {
-    let header = json!({"alg": "EdDSA", "typ": "JWT", "kid": "did:key:z6Mkholder#key-1"});
+    let header = json!({"alg": "EdDSA", "typ": "kb+jwt", "kid": "did:key:z6Mkholder#key-1"});
     let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header JSON"));
     let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload JSON"));
     let signing_input = format!("{header_b64}.{payload_b64}");

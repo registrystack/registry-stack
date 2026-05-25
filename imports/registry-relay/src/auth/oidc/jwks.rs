@@ -160,10 +160,6 @@ impl JwksFetcher for StaticFetcher {
         });
         PlatformJwksFetcher::new_with_fetch_url_policy(
             format!("http://{addr}/jwks"),
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("static jwks client"),
             platform_jwks_config(cache_ttl, refresh_cooldown),
             registry_platform_httputil::FetchUrlPolicy::dev(),
         )

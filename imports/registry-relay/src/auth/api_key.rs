@@ -164,6 +164,7 @@ fn fingerprint_format_message(error: FingerprintFormatError) -> &'static str {
             "API key fingerprint must contain 64 lowercase hex characters"
         }
         FingerprintFormatError::InvalidHex => "API key fingerprint must contain lowercase hex only",
+        _ => "API key fingerprint is invalid",
     }
 }
 
