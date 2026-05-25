@@ -225,6 +225,7 @@ pub fn validate_holder_proof(
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SdJwtError {
     #[error("invalid SD-JWT input")]
     InvalidInput,

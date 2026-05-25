@@ -20,6 +20,7 @@ pub const MIN_API_KEY_ENTROPY_BYTES: usize = 32;
 /// Error returned when an `Authorization: Bearer` value does not match the
 /// platform's RFC 6750 profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BearerParseError {
     /// The value is shorter than `Bearer <token>`.
     #[error("Authorization header must be 'Bearer <token>'")]
@@ -75,6 +76,7 @@ pub fn parse_bearer_token(header: &str) -> Result<&str, BearerParseError> {
 
 /// Error returned for malformed API-key fingerprints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum FingerprintFormatError {
     /// The fingerprint must start with `sha256:`.
     #[error("API key fingerprint must start with sha256:")]
@@ -125,6 +127,7 @@ pub fn verify_api_key(plaintext: &str, fingerprint: &str) -> Result<bool, Finger
 /// Error returned when a raw API key is too small to satisfy the platform
 /// entropy floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum EntropyError {
     /// Raw keys must contain at least [`MIN_API_KEY_ENTROPY_BYTES`] bytes.
     #[error("API key must contain at least {min} bytes of random material; got {actual}")]

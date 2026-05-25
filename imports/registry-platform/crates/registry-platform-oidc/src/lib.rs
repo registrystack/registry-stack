@@ -1,3 +1,10 @@
+//! OIDC discovery, JWKS caching, and JWT verification for registry services.
+//!
+//! This crate is a verifier-side helper for resource servers. It validates
+//! issuer, audience, token type, algorithm, key id, time bounds, optional client
+//! identity, and scopes; it does not implement browser login, OAuth
+//! authorization endpoints, PKCE, token minting, or refresh flows.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -136,7 +143,6 @@ struct CachedJwkKey {
 #[derive(Debug)]
 pub struct JwksFetcher {
     jwks_uri: String,
-    _client: reqwest::Client,
     config: JwksFetcherConfig,
     fetch_url_policy: FetchUrlPolicy,
     state: RwLock<JwksState>,
@@ -145,20 +151,18 @@ pub struct JwksFetcher {
 
 impl JwksFetcher {
     #[must_use]
-    pub fn new(jwks_uri: String, client: reqwest::Client, config: JwksFetcherConfig) -> Self {
-        Self::new_with_fetch_url_policy(jwks_uri, client, config, FetchUrlPolicy::strict())
+    pub fn new(jwks_uri: String, config: JwksFetcherConfig) -> Self {
+        Self::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::strict())
     }
 
     #[must_use]
     pub fn new_with_fetch_url_policy(
         jwks_uri: String,
-        client: reqwest::Client,
         config: JwksFetcherConfig,
         fetch_url_policy: FetchUrlPolicy,
     ) -> Self {
         Self {
             jwks_uri,
-            _client: client,
             config,
             fetch_url_policy,
             state: RwLock::new(JwksState::default()),
@@ -895,6 +899,7 @@ fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum OidcError {
     #[error("transport error: {0}")]
     Transport(#[source] reqwest::Error),
@@ -1066,7 +1071,6 @@ mod tests {
         let jwks_uri = serve_jwks(document, Arc::new(AtomicUsize::new(0))).await;
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         ));
@@ -1170,7 +1174,6 @@ mod tests {
     fn verifier_for_header_tests() -> TokenVerifier {
         let fetcher = Arc::new(JwksFetcher::new(
             "http://127.0.0.1/jwks".to_string(),
-            reqwest::Client::new(),
             JwksFetcherConfig::defaults(),
         ));
         TokenVerifier::new(
@@ -1193,7 +1196,6 @@ mod tests {
     fn oidc_allowed_clients_matches_azp_then_client_id_never_sub() {
         let fetcher = Arc::new(JwksFetcher::new(
             "http://127.0.0.1/jwks".to_string(),
-            reqwest::Client::new(),
             JwksFetcherConfig::defaults(),
         ));
         let verifier = TokenVerifier::new(
@@ -1631,7 +1633,6 @@ mod tests {
         let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         );
@@ -1657,7 +1658,6 @@ mod tests {
         let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         );
@@ -1690,7 +1690,6 @@ mod tests {
         let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         );
@@ -1723,7 +1722,6 @@ mod tests {
         let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         );
@@ -1772,7 +1770,6 @@ mod tests {
         let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         ));
@@ -1803,7 +1800,6 @@ mod tests {
         config.cache_ttl = Duration::from_millis(500);
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             config,
             FetchUrlPolicy::dev(),
         ));
@@ -1839,7 +1835,6 @@ mod tests {
         let jwks_uri = serve_jwks(Arc::clone(&document), Arc::clone(&requests)).await;
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
-            reqwest::Client::new(),
             jwks_test_config(),
             FetchUrlPolicy::dev(),
         );
@@ -1866,12 +1861,8 @@ mod tests {
         let mut config = jwks_test_config();
         config.refresh_cooldown = Duration::from_millis(50);
         config.negative_cache_ttl = Duration::from_secs(3600);
-        let fetcher = JwksFetcher::new_with_fetch_url_policy(
-            jwks_uri,
-            reqwest::Client::new(),
-            config,
-            FetchUrlPolicy::dev(),
-        );
+        let fetcher =
+            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
 
         fetcher
             .key_for_kid("old-kid")
@@ -1906,7 +1897,6 @@ mod tests {
     async fn jwks_refresh_validates_url_before_fetching() {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             "http://10.0.0.1/jwks".to_string(),
-            reqwest::Client::new(),
             JwksFetcherConfig::defaults(),
             FetchUrlPolicy::dev(),
         );

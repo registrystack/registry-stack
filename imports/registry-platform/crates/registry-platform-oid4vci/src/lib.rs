@@ -222,6 +222,7 @@ pub struct ValidatedProof {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProofError {
     #[error("proof must be a compact JWT")]
     MalformedJwt,

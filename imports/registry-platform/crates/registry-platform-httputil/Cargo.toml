@@ -10,7 +10,6 @@ publish = false
 [features]
 default = ["rustls"]
 rustls = ["reqwest/rustls-tls"]
-native-tls = ["reqwest/native-tls"]
 
 [dependencies]
 bytes.workspace = true

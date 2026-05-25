@@ -113,7 +113,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
     .expect("discovery fetch succeeds");
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         discovery.jwks_uri,
-        client,
         JwksFetcherConfig {
             cache_ttl: Duration::from_secs(60),
             negative_cache_ttl: Duration::from_millis(10),

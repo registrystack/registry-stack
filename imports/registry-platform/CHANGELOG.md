@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.2
+
+- Hardened OIDC verifier policy against mixed symmetric/asymmetric algorithm
+  allowlists, JWK/header algorithm mismatches, and multi-audience ID-token
+  `azp` gaps.
+- Tightened OID4VCI proof validation, SD-JWT holder-proof headers, and JWK
+  thumbprint construction.
+- Added OpenID4VCI metadata primitives consumed by Registry Witness.
+
+## v0.1.1
+
+- Hardened shared security primitives for registry consumers, including
+  outbound fetch validation, auth helpers, audit handling, and credential key
+  utilities.
+
 ## v0.1.0
 
 - Initial registry-platform workspace with eight crates: audit, authcommon,

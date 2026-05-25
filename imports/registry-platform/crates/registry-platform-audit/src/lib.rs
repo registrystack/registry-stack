@@ -130,6 +130,7 @@ pub trait AuditSink: Send + Sync {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AuditError {
     #[error("audit JSON serialization or parsing failed: {0}")]
     Json(#[source] serde_json::Error),
@@ -604,6 +605,7 @@ impl ChainVerificationAnchors {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChainVerificationError {
     #[error("audit chain line {line} is not valid JSON: {message}")]
     InvalidJson { line: usize, message: String },

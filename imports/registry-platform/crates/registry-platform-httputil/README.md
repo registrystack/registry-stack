@@ -56,9 +56,6 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 ## Features
 
 - Default: `rustls`.
-- Optional: `native-tls`.
-
-Use one TLS backend at a time in consumers.
 
 ## Testing
 

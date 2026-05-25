@@ -67,6 +67,7 @@ impl OutboundClientBuilder {
 
 /// Errors returned by [`read_bounded`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum BoundedReadError {
     /// The response advertised a body larger than the caller's limit.
     #[error("response content-length {content_length} exceeds limit {max_bytes}")]
@@ -379,6 +380,7 @@ impl ValidatedFetchUrl {
 
 /// Errors returned by [`FetchUrlPolicy::validate`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FetchUrlError {
     /// The URL's scheme is not in the policy allowlist.
     #[error("URL scheme '{scheme}' is not allowed")]

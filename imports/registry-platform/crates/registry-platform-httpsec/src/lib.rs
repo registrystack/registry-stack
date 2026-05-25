@@ -1,3 +1,9 @@
+//! HTTP security helpers for Axum/Tower registry services.
+//!
+//! The crate keeps browser-facing defaults small and explicit: CORS validation,
+//! common security headers, request-body limits, and RFC 7807/9457-style
+//! Problem Details responses.
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -77,6 +83,7 @@ impl CorsPolicy {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CorsValidationError {
     #[error("wildcard CORS origin is not allowed")]
     WildcardOrigin,

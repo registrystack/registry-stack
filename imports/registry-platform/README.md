@@ -52,9 +52,7 @@ registry-platform-httputil = { git = "https://github.com/jeremi/registry-platfor
 registry-platform-oidc = { git = "https://github.com/jeremi/registry-platform", tag = "v0.1.2" }
 ```
 
-The `registry-platform-httputil` crate defaults to `rustls`. Use
-`default-features = false` with the `native-tls` feature only when a consumer has
-a concrete platform requirement.
+The `registry-platform-httputil` crate uses `rustls` for outbound HTTPS.
 
 ## Development
 

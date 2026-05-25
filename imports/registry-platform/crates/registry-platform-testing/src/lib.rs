@@ -192,7 +192,10 @@ pub fn sign_openid4vci_proof_jwt(
     now_unix_seconds: i64,
 ) -> String {
     let holder = PrivateJwk::parse(private_jwk).expect("fixture holder JWK parses");
+    let holder_id = registry_platform_crypto::did_jwk_from_public_jwk(&holder.public())
+        .expect("fixture holder public JWK encodes as did:jwk");
     let mut claims = Map::new();
+    claims.insert("iss".to_string(), Value::String(holder_id));
     claims.insert("aud".to_string(), Value::String(audience.to_string()));
     claims.insert("iat".to_string(), json!(now_unix_seconds));
     claims.insert("exp".to_string(), json!(now_unix_seconds + 60));
@@ -446,7 +449,6 @@ mod tests {
 
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             discovery.jwks_uri,
-            client,
             JwksFetcherConfig {
                 cache_ttl: Duration::from_secs(60),
                 negative_cache_ttl: Duration::from_millis(1),

@@ -183,6 +183,7 @@ impl PublicJwk {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum JwkError {
     #[error("invalid JWK JSON: {0}")]
     Json(#[from] serde_json::Error),
@@ -193,6 +194,7 @@ pub enum JwkError {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CryptoError {
     #[error("invalid key: {0}")]
     InvalidKey(#[from] JwkError),
@@ -217,6 +219,7 @@ pub struct ValidatedDid {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DidError {
     #[error("DID must start with did:")]
     MissingPrefix,
@@ -321,6 +324,7 @@ pub fn validate_did_web(s: &str) -> Result<(), DidError> {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum JcsError {
     #[error("JCS does not support non-finite numbers")]
     InvalidNumber,

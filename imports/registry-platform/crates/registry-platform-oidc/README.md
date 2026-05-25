@@ -39,7 +39,6 @@ let discovery = fetch_discovery(
 
 let fetcher = Arc::new(JwksFetcher::new(
     discovery.jwks_uri,
-    client,
     JwksFetcherConfig::defaults(),
 ));
 
