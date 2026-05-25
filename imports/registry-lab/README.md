@@ -109,7 +109,10 @@ Run the live-service demos:
 just relay-postgres  # Relay ignored Postgres integration test
 just relay-zitadel   # Relay ignored Zitadel integration test
 just oidc-relay      # separate OIDC-protected Relay node
-just citizen-self-attestation # optional eSignet-backed citizen Witness flow
+just citizen-login  # print local eSignet login URL
+just citizen-code   # exchange returned code and run flow
+just citizen-token  # run flow with exported tokens
+just citizen-oid4vci-token # optional OID4VCI endpoint probe with exported tokens
 just live-stories    # print narrated discovery queries and write artifacts
 ```
 
@@ -172,12 +175,85 @@ token carrying the subject-binding claim and `auth_time`, or the eSignet-style
 split where UserInfo carries the subject claim and the ID token carries
 `auth_time`/`acr`. For stock local eSignet tokens that omit `scope`, the demo
 uses `ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled` and relies on issuer,
-client/audience, assurance, and subject binding instead. The script generates
+client/audience, assurance, and subject binding instead. If a live eSignet
+profile uses a separate signed UserInfo issuer, mixed token/UserInfo algorithms,
+missing access-token `typ`, or a 1200s token lifetime, the script detects or
+accepts explicit env overrides for those settings. The script generates
 `output/citizen-self-attestation/citizen-civil-witness.yaml`, starts a host-side
 Witness against the existing civil Relay, evaluates `person-is-alive` for the
 token-bound citizen, and proves `NID-1002` is denied. See
-`docs/citizen-self-attestation-esignet-use-case.md` for the use case and setup
-details.
+`output/citizen-self-attestation/report.md` and
+`output/citizen-self-attestation/flow-transcript.txt` for the redacted evidence
+trail, and `docs/citizen-self-attestation-esignet-use-case.md` for the use case
+and setup details.
+
+For the local eSignet profile used by the lab, prefer the Just wrappers:
+
+```bash
+just citizen-login
+```
+
+Open the printed `http://localhost:3000/authorize?...` URL, authenticate as the
+citizen, and leave the terminal running. The recipe waits on
+`http://127.0.0.1:4325/callback`, captures the browser redirect, and writes
+`output/citizen-self-attestation/esignet-callback.env`. The local wrapper also
+requests `scope=openid profile`, `acr_values=mosip:idp:acr:generated-code`, and
+the OIDC `claims` parameter needed for signed UserInfo to include
+`individual_id`. The login command prints the seeded demo login values:
+`NID-1001` with generated code `111111`, and PIN `545411` if the UI asks for a
+static code.
+
+Then run:
+
+```bash
+just citizen-code
+```
+
+`citizen-code` reads the saved callback code. If the local live eSignet setup
+created `/tmp/esignet-live-test/client-private.pem`, it uses that client key;
+otherwise set `ESIGNET_CLIENT_PRIVATE_KEY_FILE=/path/to/client-private-key.pem`.
+The command narrates the verified token metadata, UserInfo subject binding,
+Witness discovery, successful self claim, other-person denial, and audit check
+without printing raw tokens.
+
+If you already have tokens:
+
+```bash
+ESIGNET_CITIZEN_ACCESS_TOKEN="<access-token>" \
+ESIGNET_CITIZEN_ID_TOKEN="<id-token>" \
+just citizen-token
+```
+
+Inspect the latest result with:
+
+```bash
+just citizen-report
+```
+
+The optional OID4VCI probe is deliberately outside `just quick`. It reuses the
+same citizen eSignet login/code/token flow, starts the citizen Witness with an
+OID4VCI config block, and writes evidence under `output/citizen-oid4vci`:
+
+```bash
+just citizen-oid4vci-login
+just citizen-oid4vci-code
+```
+
+or, when tokens are already available:
+
+```bash
+ESIGNET_CITIZEN_ACCESS_TOKEN="<access-token>" \
+ESIGNET_CITIZEN_ID_TOKEN="<id-token>" \
+just citizen-oid4vci-token
+```
+
+The probe checks issuer metadata, credential offer, nonce, holder proof, and
+credential issuance. It prints each endpoint result in plain language, redacts
+tokens and credential values, and writes `output/citizen-oid4vci/report.md`,
+endpoint status files, request bodies, and response bodies. The nonce request is
+bound to the selected `credential_configuration_id`, matching the Witness nonce
+replay checks. To test the same facade with Walt Wallet API or Inji/Mimoto, see
+`docs/wallet-interop-testing.md`.
 
 ## OpenFn Sidecar Demo
 

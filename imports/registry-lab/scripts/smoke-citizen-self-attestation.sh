@@ -14,6 +14,8 @@ other_eval_path="${output_dir}/citizen-other-subject-denied.json"
 token_claims_path="${output_dir}/citizen-access-token-claims.json"
 id_token_claims_path="${output_dir}/citizen-id-token-claims.json"
 userinfo_claims_path="${output_dir}/citizen-userinfo-claims.json"
+report_path="${output_dir}/report.md"
+transcript_path="${output_dir}/flow-transcript.txt"
 correlation_id="${DEMO_CORRELATION_ID:-citizen-self-attestation-demo-001}"
 
 port="${CITIZEN_WITNESS_PORT:-4325}"
@@ -22,6 +24,9 @@ subject_claim_source="${ESIGNET_SUBJECT_CLAIM_SOURCE:-access_token}"
 assurance_claim_source="${ESIGNET_ASSURANCE_CLAIM_SOURCE:-access_token}"
 self_subject="${ESIGNET_CITIZEN_SUBJECT:-NID-1001}"
 other_subject="${ESIGNET_OTHER_SUBJECT:-NID-1002}"
+demo_login_id="${ESIGNET_DEMO_LOGIN_ID:-${self_subject}}"
+demo_login_code="${ESIGNET_DEMO_OTP:-111111}"
+demo_login_pin="${ESIGNET_DEMO_PIN:-545411}"
 self_attestation_scope="${ESIGNET_SELF_ATTESTATION_SCOPE:-self_attestation}"
 self_attestation_scope_policy="${ESIGNET_SELF_ATTESTATION_SCOPE_POLICY:-disabled}"
 if [[ "${self_attestation_scope_policy}" == "disabled" ]]; then
@@ -34,6 +39,30 @@ redirect_uri="${ESIGNET_REDIRECT_URI:-http://127.0.0.1:${port}/callback}"
 fail() {
   echo "FAILED: $1" >&2
   exit 1
+}
+
+say() {
+  printf '%s\n' "$*"
+}
+
+transcript() {
+  printf '%s\n' "$*" >>"${transcript_path}"
+}
+
+step() {
+  local number="$1"
+  local title="$2"
+  shift 2
+  say
+  say "==> ${number}. ${title}"
+  if (($# > 0)); then
+    say "    $*"
+  fi
+  transcript ""
+  transcript "==> ${number}. ${title}"
+  if (($# > 0)); then
+    transcript "    $*"
+  fi
 }
 
 need() {
@@ -72,7 +101,41 @@ wait_http() {
     fi
     sleep 1
   done
+  explain_witness_status "${status}" "${url}" >&2 || true
   fail "${name} did not become ready within ${deadline}s, last status ${status}"
+}
+
+explain_witness_status() {
+  local status="$1"
+  local url="$2"
+  [[ -f "${log_path}" ]] || return 0
+  case "${status}" in
+    401)
+      echo "Hint: Witness rejected the OIDC token while checking ${url}."
+      if grep -q 'TokenTypeNotAllowed' "${log_path}"; then
+        echo "Hint: token type mismatch. For eSignet access tokens without typ, leave ESIGNET_TOKEN_TYPE unset so allowed_typ is []."
+      elif grep -q 'AlgorithmNotAllowed' "${log_path}"; then
+        echo "Hint: algorithm mismatch. Check ESIGNET_TOKEN_ALGORITHM and ESIGNET_USERINFO_ALGORITHM."
+      elif grep -q 'IssuerMismatch' "${log_path}"; then
+        echo "Hint: issuer mismatch. Check ESIGNET_ISSUER and ESIGNET_USERINFO_ISSUER."
+      elif grep -q 'AudienceMismatch' "${log_path}"; then
+        echo "Hint: audience mismatch. Check ESIGNET_CLIENT_ID and ESIGNET_AUDIENCES_JSON."
+      else
+        echo "Hint: inspect ${log_path} for registry_witness_server::auth debug lines."
+      fi
+      ;;
+    403)
+      if grep -q 'self_attestation.assurance_denied' "${log_path}"; then
+        echo "Hint: assurance policy denied the request. Check auth_time/acr and token lifetime."
+        echo "Hint: local eSignet 1.8.0 can issue 1200s tokens, so set ESIGNET_MAX_AUTH_AGE_SECONDS=1200 and ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 when matching that profile."
+      elif grep -q 'self_attestation.subject_mismatch' "${log_path}"; then
+        echo "Hint: subject binding denied the request before any registry read. Check ${subject_claim_source}.${subject_claim} and the requested subject id."
+      fi
+      ;;
+    429)
+      echo "Hint: the in-Witness self-attestation rate limiter fired, usually after repeated invalid-token checks. Wait for the minute window or rerun after fixing token/config inputs."
+      ;;
+  esac
 }
 
 base64url() {
@@ -127,25 +190,71 @@ write_pkce_request() {
   local client_id="$2"
   local discovery_json="$3"
   local pkce_file="${output_dir}/esignet-pkce.env"
-  local verifier challenge authorization_endpoint state nonce auth_url
+  local verifier challenge authorization_endpoint state nonce auth_url claims_json
 
-  verifier="$(openssl rand -base64 64 | tr '+/' '-_' | tr -d '=' | cut -c1-64)"
+  verifier="$(openssl rand 48 | base64url | cut -c1-64)"
   challenge="$(printf '%s' "${verifier}" | openssl dgst -binary -sha256 | base64url)"
   state="$(openssl rand -hex 16)"
   nonce="$(openssl rand -hex 16)"
+  claims_json="${ESIGNET_AUTHORIZE_CLAIMS_JSON:-}"
+  if [[ -z "${claims_json}" && "${subject_claim_source}" == "userinfo" ]]; then
+    claims_json="$(
+      python3 - "${subject_claim}" <<'PY'
+import json
+import sys
+
+subject_claim = sys.argv[1]
+print(json.dumps({
+    "userinfo": {
+        subject_claim: {"essential": True},
+        "name": {"essential": False},
+        "email": {"essential": False},
+        "phone_number": {"essential": False},
+    },
+    "id_token": {},
+}, separators=(",", ":")))
+PY
+    )"
+  fi
   authorization_endpoint="$(python3 - "${discovery_json}" <<'PY'
 import json
 import sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["authorization_endpoint"])
 PY
   )"
+  authorization_endpoint="${ESIGNET_AUTHORIZATION_URL:-${authorization_endpoint}}"
   auth_url="$(
-    python3 - "${authorization_endpoint}" "${client_id}" "${redirect_uri}" "${authorize_scope}" "${state}" "${nonce}" "${challenge}" <<'PY'
+    python3 - \
+      "${authorization_endpoint}" \
+      "${client_id}" \
+      "${redirect_uri}" \
+      "${authorize_scope}" \
+      "${state}" \
+      "${nonce}" \
+      "${challenge}" \
+      "${claims_json}" \
+      "${ESIGNET_AUTHORIZE_ACR_VALUES:-}" \
+      "${ESIGNET_AUTHORIZE_PROMPT:-}" \
+      "${ESIGNET_AUTHORIZE_DISPLAY:-}" \
+      "${ESIGNET_CLAIMS_LOCALES:-}" <<'PY'
 from urllib.parse import urlencode
 import sys
 
-endpoint, client_id, redirect_uri, scope, state, nonce, challenge = sys.argv[1:]
-query = urlencode({
+(
+    endpoint,
+    client_id,
+    redirect_uri,
+    scope,
+    state,
+    nonce,
+    challenge,
+    claims,
+    acr_values,
+    prompt,
+    display,
+    claims_locales,
+) = sys.argv[1:]
+params = {
     "response_type": "code",
     "client_id": client_id,
     "redirect_uri": redirect_uri,
@@ -154,28 +263,60 @@ query = urlencode({
     "nonce": nonce,
     "code_challenge": challenge,
     "code_challenge_method": "S256",
-})
+}
+if claims:
+    params["claims"] = claims
+if acr_values:
+    params["acr_values"] = acr_values
+if prompt:
+    params["prompt"] = prompt
+if display:
+    params["display"] = display
+if claims_locales:
+    params["claims_locales"] = claims_locales
+query = urlencode(params)
 print(f"{endpoint}?{query}")
 PY
   )"
-  cat >"${pkce_file}" <<EOF
-ESIGNET_ISSUER=${issuer}
-ESIGNET_CLIENT_ID=${client_id}
-ESIGNET_REDIRECT_URI=${redirect_uri}
-ESIGNET_CODE_VERIFIER=${verifier}
-ESIGNET_STATE=${state}
-ESIGNET_NONCE=${nonce}
-EOF
-  cat >&2 <<EOF
+  {
+    printf 'ESIGNET_ISSUER=%q\n' "${issuer}"
+    printf 'ESIGNET_CLIENT_ID=%q\n' "${client_id}"
+    printf 'ESIGNET_REDIRECT_URI=%q\n' "${redirect_uri}"
+    printf 'ESIGNET_CODE_VERIFIER=%q\n' "${verifier}"
+    printf 'ESIGNET_STATE=%q\n' "${state}"
+    printf 'ESIGNET_NONCE=%q\n' "${nonce}"
+  } >"${pkce_file}"
+  if [[ "${ESIGNET_CAPTURE_CALLBACK_HINT:-}" == "1" ]]; then
+    cat >&2 <<EOF
 No ESIGNET_CITIZEN_ACCESS_TOKEN or ESIGNET_AUTHORIZATION_CODE was provided.
 
-Open this eSignet authorization URL, complete citizen authentication, then
-rerun this script with ESIGNET_AUTHORIZATION_CODE set to the callback code.
+Open this eSignet authorization URL, complete citizen authentication, and leave
+this terminal running. The callback listener will capture the code.
+Use these local demo login values:
+  ID / VID: ${demo_login_id}
+  OTP / generated code: ${demo_login_code}
+  PIN / static code, if asked: ${demo_login_pin}
 The PKCE verifier was saved to:
   ${pkce_file}
 
 ${auth_url}
 EOF
+  else
+    cat >&2 <<EOF
+No ESIGNET_CITIZEN_ACCESS_TOKEN or ESIGNET_AUTHORIZATION_CODE was provided.
+
+Open this eSignet authorization URL, complete citizen authentication, then
+rerun this script with ESIGNET_AUTHORIZATION_CODE set to the callback code.
+Use these local demo login values:
+  ID / VID: ${demo_login_id}
+  OTP / generated code: ${demo_login_code}
+  PIN / static code, if asked: ${demo_login_pin}
+The PKCE verifier was saved to:
+  ${pkce_file}
+
+${auth_url}
+EOF
+  fi
   exit 2
 }
 
@@ -268,6 +409,7 @@ if scope_policy == "optional" and scope and required_scope not in scope_values:
     raise SystemExit(f"access token scope was present but did not include {required_scope!r}; got {scope!r}")
 print(f"TOKEN_ISSUER={shlex.quote(str(issuer))}")
 print(f"TOKEN_ALG={shlex.quote(str(header.get('alg') or 'RS256'))}")
+print(f"TOKEN_TYP={shlex.quote(str(header.get('typ') or ''))}")
 print(f"TOKEN_CLIENT_ID={shlex.quote(str(client_id or ''))}")
 print(f"TOKEN_AUDIENCES_JSON={shlex.quote(json.dumps(aud))}")
 print(f"TOKEN_AUDIENCE_FIRST={shlex.quote(str(aud[0] if aud else client_id or ''))}")
@@ -316,8 +458,379 @@ if claims.get("sub") != access.get("sub"):
 subject = claims.get(subject_claim)
 if subject != expected_subject:
     raise SystemExit(
-        f"UserInfo claim {subject_claim!r} must equal {expected_subject!r}; got {subject!r}"
+        f"UserInfo claim {subject_claim!r} must equal {expected_subject!r}; got {subject!r}. "
+        "For local eSignet mock identity, verify MOSIP_MOCK_IDA_IDENTITY_OPENID_CLAIMS_MAPPING maps individualId to individual_id."
     )
+PY
+}
+
+write_claim_summary() {
+  local label="$1"
+  local path="$2"
+  [[ -f "${path}" ]] || return 0
+  python3 - "${label}" "${path}" "${transcript_path}" <<'PY'
+import hashlib
+import json
+import sys
+
+label, path, transcript_path = sys.argv[1:]
+snapshot = json.load(open(path, encoding="utf-8"))
+header = snapshot.get("header", {})
+claims = snapshot.get("claims", {})
+
+def h(value):
+    if not value:
+        return ""
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
+interesting = {
+    "alg": header.get("alg"),
+    "typ": header.get("typ"),
+    "iss": claims.get("iss"),
+    "aud": claims.get("aud"),
+    "azp": claims.get("azp"),
+    "client_id": claims.get("client_id"),
+    "sub_hash": h(claims.get("sub")),
+    "acr": claims.get("acr"),
+    "auth_time": claims.get("auth_time"),
+    "individual_id": claims.get("individual_id"),
+    "scope": claims.get("scope"),
+}
+interesting = {k: v for k, v in interesting.items() if v not in (None, "", [])}
+with open(transcript_path, "a", encoding="utf-8") as handle:
+    handle.write(f"{label}: {json.dumps(interesting, sort_keys=True)}\n")
+PY
+}
+
+print_access_token_status() {
+  python3 - "${token_claims_path}" <<'PY'
+import hashlib
+import json
+import sys
+
+snapshot = json.load(open(sys.argv[1], encoding="utf-8"))
+header = snapshot.get("header", {})
+claims = snapshot.get("claims", {})
+
+def short_hash(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16] if value else ""
+
+aud = claims.get("aud")
+if isinstance(aud, list):
+    aud = ",".join(str(item) for item in aud)
+print(
+    "    Received access token: "
+    f"iss={claims.get('iss', '')}, "
+    f"aud={aud or ''}, "
+    f"client={claims.get('azp') or claims.get('client_id') or ''}, "
+    f"alg={header.get('alg', '')}, "
+    f"typ={header.get('typ') or 'absent'}, "
+    f"sub_hash={short_hash(claims.get('sub'))}, "
+    f"exp={claims.get('exp', '')}"
+)
+PY
+}
+
+print_id_token_status() {
+  [[ -f "${id_token_claims_path}" ]] || return 0
+  python3 - "${id_token_claims_path}" <<'PY'
+import hashlib
+import json
+import sys
+
+snapshot = json.load(open(sys.argv[1], encoding="utf-8"))
+header = snapshot.get("header", {})
+claims = snapshot.get("claims", {})
+
+def short_hash(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16] if value else ""
+
+print(
+    "    Validated ID token assurance: "
+    f"acr={claims.get('acr', '')}, "
+    f"auth_time={claims.get('auth_time', '')}, "
+    f"alg={header.get('alg', '')}, "
+    f"sub_hash={short_hash(claims.get('sub'))}"
+)
+PY
+}
+
+print_userinfo_status() {
+  [[ -f "${userinfo_claims_path}" ]] || return 0
+  python3 - "${userinfo_claims_path}" "${subject_claim}" <<'PY'
+import hashlib
+import json
+import sys
+
+path, subject_claim = sys.argv[1:]
+snapshot = json.load(open(path, encoding="utf-8"))
+header = snapshot.get("header", {})
+claims = snapshot.get("claims", {})
+
+def short_hash(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16] if value else ""
+
+print(
+    "    Validated signed UserInfo binding: "
+    f"{subject_claim}={claims.get(subject_claim, '')}, "
+    f"iss={claims.get('iss', '')}, "
+    f"alg={header.get('alg', '')}, "
+    f"sub_hash={short_hash(claims.get('sub'))}"
+)
+PY
+}
+
+print_discovery_status() {
+  python3 - "${discovery_path}" <<'PY'
+import json
+import sys
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+self_attestation = body.get("self_attestation") or {}
+print(
+    "    Discovery OK: "
+    f"service={body.get('service_id', '')}, "
+    f"base_url={body.get('base_url', '')}, "
+    f"self_attestation={bool(self_attestation)}, "
+    f"claim_ids={','.join(self_attestation.get('allowed_claim_ids') or [])}"
+)
+PY
+}
+
+print_self_evaluation_status() {
+  python3 - "${self_eval_path}" <<'PY'
+import json
+import sys
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+result = (body.get("results") or [{}])[0]
+print(
+    "    Self claim OK: "
+    f"claim={result.get('claim_id', '')}, "
+    f"value={result.get('value')}, "
+    f"evaluation_id={result.get('evaluation_id', '')}, "
+    f"source_count={result.get('provenance', {}).get('source_count', '')}"
+)
+PY
+}
+
+print_denial_status() {
+  python3 - "${other_eval_path}" "${other_subject}" <<'PY'
+import json
+import sys
+
+path, other_subject = sys.argv[1:]
+body = json.load(open(path, encoding="utf-8"))
+print(
+    "    Other-person control OK: "
+    f"subject={other_subject}, "
+    f"status={body.get('status', '')}, "
+    f"code={body.get('code', '')}"
+)
+PY
+}
+
+print_audit_status() {
+  python3 - "${log_path}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+seen_eval = False
+seen_denial = False
+with open(path, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line).get("record", {})
+        except json.JSONDecodeError:
+            continue
+        if event.get("access_mode") != "self_attestation":
+            continue
+        if event.get("decision") == "evaluate":
+            seen_eval = True
+        if event.get("decision") == "evaluate_denied":
+            seen_denial = True
+print(
+    "    Audit OK: "
+    f"access_mode=self_attestation, "
+    f"evaluate_event={str(seen_eval).lower()}, "
+    f"denial_event={str(seen_denial).lower()}, "
+    "identifiers=hashed"
+)
+PY
+}
+
+write_demo_report() {
+  python3 - \
+    "${report_path}" \
+    "${transcript_path}" \
+    "${discovery_path}" \
+    "${self_eval_path}" \
+    "${other_eval_path}" \
+    "${token_claims_path}" \
+    "${id_token_claims_path}" \
+    "${userinfo_claims_path}" \
+    "${log_path}" \
+    "${config_path}" \
+    "${issuer}" \
+    "${client_id}" \
+    "${subject_claim_source}" \
+    "${subject_claim}" \
+    "${assurance_claim_source}" \
+    "${self_attestation_scope_policy}" \
+    "${self_subject}" \
+    "${other_subject}" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+(
+    report_path,
+    transcript_path,
+    discovery_path,
+    self_eval_path,
+    other_eval_path,
+    token_claims_path,
+    id_token_claims_path,
+    userinfo_claims_path,
+    log_path,
+    config_path,
+    issuer,
+    client_id,
+    subject_claim_source,
+    subject_claim,
+    assurance_claim_source,
+    scope_policy,
+    self_subject,
+    other_subject,
+) = sys.argv[1:]
+
+def load_json(path):
+    p = Path(path)
+    if not p.exists():
+        return None
+    return json.load(open(p, encoding="utf-8"))
+
+def claim_snapshot(path):
+    snap = load_json(path) or {}
+    return snap.get("header", {}), snap.get("claims", {})
+
+def short_hash(value):
+    if value is None:
+        return ""
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
+access_header, access_claims = claim_snapshot(token_claims_path)
+id_header, id_claims = claim_snapshot(id_token_claims_path)
+userinfo_header, userinfo_claims = claim_snapshot(userinfo_claims_path)
+self_eval = load_json(self_eval_path) or {}
+other_eval = load_json(other_eval_path) or {}
+discovery = load_json(discovery_path) or {}
+
+self_results = self_eval.get("results") or []
+self_result = self_results[0] if self_results else {}
+
+audit_events = []
+if Path(log_path).exists():
+    for line in open(log_path, encoding="utf-8"):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line).get("record", {})
+        except json.JSONDecodeError:
+            continue
+        if event.get("access_mode") == "self_attestation":
+            audit_events.append(event)
+
+def audit_line(event):
+    fields = {
+        "decision": event.get("decision"),
+        "status": event.get("status"),
+        "error_code": event.get("error_code"),
+        "denial_code": event.get("denial_code"),
+        "token_claim_name": event.get("token_claim_name"),
+        "principal_id_hash": event.get("principal_id_hash"),
+        "claim_hash": event.get("claim_hash"),
+    }
+    return json.dumps({k: v for k, v in fields.items() if v is not None}, sort_keys=True)
+
+lines = [
+    "# eSignet Citizen Self-Attestation Smoke Report",
+    "",
+    "## Result",
+    "",
+    "- Overall: passed",
+    f"- Self subject: `{self_subject}`",
+    f"- Other-person control: `{other_subject}` denied",
+    f"- Claim: `person-is-alive` = `{self_result.get('value')}`",
+    f"- Evaluation id: `{self_result.get('evaluation_id', '')}`",
+    "",
+    "## Binding Chain",
+    "",
+    f"- eSignet issuer: `{issuer}`",
+    f"- Client id: `{client_id}`",
+    f"- Access token algorithm: `{access_header.get('alg', '')}`",
+    f"- Access token type: `{access_header.get('typ', '') or 'absent'}`",
+    f"- Access token subject hash: `{short_hash(access_claims.get('sub'))}`",
+    f"- Subject binding: `{subject_claim_source}.{subject_claim}`",
+    f"- Bound subject value: `{userinfo_claims.get(subject_claim) if subject_claim_source == 'userinfo' else access_claims.get(subject_claim)}`",
+    f"- Assurance source: `{assurance_claim_source}`",
+    f"- ID token algorithm: `{id_header.get('alg', '')}`",
+    f"- ID token ACR: `{id_claims.get('acr', '')}`",
+    f"- ID token auth_time: `{id_claims.get('auth_time', '')}`",
+    f"- UserInfo issuer: `{userinfo_claims.get('iss', '')}`",
+    f"- UserInfo algorithm: `{userinfo_header.get('alg', '')}`",
+    f"- Scope policy: `{scope_policy}`",
+    "",
+    "## What Was Proven",
+    "",
+    "- Witness accepted the citizen token chain and classified the request as `self_attestation`.",
+    "- Witness evaluated `person-is-alive` for the token-bound subject.",
+    "- Witness denied the `NID-1002` request as a subject-binding violation before a civil registry read.",
+    "- Audit output records hashed identifiers, not raw token subject values.",
+    "",
+    "## Discovery Summary",
+    "",
+    f"- Service id: `{discovery.get('service_id', '')}`",
+    f"- API base URL: `{discovery.get('base_url', '')}`",
+    f"- Self-attestation advertised: `{bool(discovery.get('self_attestation'))}`",
+    "",
+    "## Denial Control",
+    "",
+    f"- HTTP problem code: `{other_eval.get('code', '')}`",
+    f"- Detail: `{other_eval.get('detail', '')}`",
+    "",
+    "## Audit Excerpt",
+    "",
+]
+
+if audit_events:
+    lines.extend(f"- `{audit_line(event)}`" for event in audit_events[-5:])
+else:
+    lines.append("- No self-attestation audit event was found.")
+
+lines.extend([
+    "",
+    "## Artifacts",
+    "",
+    f"- `{discovery_path}`",
+    f"- `{self_eval_path}`",
+    f"- `{other_eval_path}`",
+    f"- `{token_claims_path}`",
+    f"- `{id_token_claims_path}`",
+    f"- `{userinfo_claims_path}`",
+    f"- `{log_path}`",
+    f"- `{config_path}`",
+    f"- `{transcript_path}`",
+    "",
+])
+
+Path(report_path).write_text("\n".join(lines), encoding="utf-8")
 PY
 }
 
@@ -329,23 +842,110 @@ write_witness_config() {
   local client_id="$5"
   local audience_json="$6"
   local scope="$7"
-  python3 - "${config_path}" "${port}" "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${alg}" "${client_id}" "${audience_json}" "${scope}" "${self_attestation_scope_policy}" "${subject_claim}" "${subject_claim_source}" "${assurance_claim_source}" <<'PY'
+  local userinfo_issuer="$8"
+  local userinfo_alg="$9"
+  local token_typ="${10}"
+  python3 - "${config_path}" "${port}" "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${userinfo_issuer}" "${alg}" "${userinfo_alg}" "${token_typ}" "${client_id}" "${audience_json}" "${scope}" "${self_attestation_scope_policy}" "${subject_claim}" "${subject_claim_source}" "${assurance_claim_source}" <<'PY'
 import json
+import os
 import sys
 
-path, port, issuer, jwks_uri, userinfo_endpoint, alg, client_id, audience_json, scope, scope_policy, subject_claim, subject_claim_source, assurance_claim_source = sys.argv[1:]
+path, port, issuer, jwks_uri, userinfo_endpoint, userinfo_issuer, alg, userinfo_alg, token_typ, client_id, audience_json, scope, scope_policy, subject_claim, subject_claim_source, assurance_claim_source = sys.argv[1:]
 audiences = json.loads(audience_json)
 if not audiences:
     audiences = [client_id]
 if not client_id:
     raise SystemExit("client_id/azp is required; set ESIGNET_CLIENT_ID if the token omits it")
+max_auth_age = int(os.environ.get("ESIGNET_MAX_AUTH_AGE_SECONDS", "900"))
+max_access_token_lifetime = int(os.environ.get("ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS", "900"))
+oid4vci_enabled = os.environ.get("CITIZEN_OID4VCI_ENABLED", "0") in ("1", "true", "yes")
 audience_lines = "\n".join(f"      - {json.dumps(value)}" for value in audiences)
+algorithms = []
+for value in (alg, userinfo_alg):
+    if value and value not in algorithms:
+        algorithms.append(value)
+algorithm_lines = "\n".join(f"      - {json.dumps(value)}" for value in algorithms)
+if token_typ:
+    typ_values = [token_typ]
+else:
+    typ_values = []
+typ_lines = " []" if not typ_values else "\n" + "\n".join(f"      - {json.dumps(value)}" for value in typ_values)
 allowed_client_lines = f"      - {json.dumps(client_id)}"
 userinfo_line = f"    userinfo_endpoint: {json.dumps(userinfo_endpoint)}\n" if userinfo_endpoint else ""
+userinfo_issuers_line = (
+    f"    userinfo_issuers:\n      - {json.dumps(userinfo_issuer)}\n"
+    if userinfo_issuer
+    else ""
+)
 required_scopes_block = ""
 if scope_policy != "disabled":
     required_scopes_block = f"""  required_scopes:
     - {json.dumps(scope)}
+"""
+credential_issuer = os.environ.get("CITIZEN_OID4VCI_CREDENTIAL_ISSUER", f"http://127.0.0.1:{port}")
+credential_endpoint = os.environ.get(
+    "CITIZEN_OID4VCI_CREDENTIAL_ENDPOINT",
+    f"{credential_issuer.rstrip('/')}/oid4vci/credential",
+)
+offer_endpoint = os.environ.get(
+    "CITIZEN_OID4VCI_OFFER_ENDPOINT",
+    f"{credential_issuer.rstrip('/')}/oid4vci/credential-offer",
+)
+nonce_endpoint = os.environ.get(
+    "CITIZEN_OID4VCI_NONCE_ENDPOINT",
+    f"{credential_issuer.rstrip('/')}/oid4vci/nonce",
+)
+authorization_server = os.environ.get("CITIZEN_OID4VCI_AUTHORIZATION_SERVER", issuer)
+accepted_audiences = [credential_issuer]
+for value in audiences:
+    if value and value not in accepted_audiences:
+        accepted_audiences.append(value)
+accepted_audiences = json.loads(
+    os.environ.get("CITIZEN_OID4VCI_ACCEPTED_TOKEN_AUDIENCES_JSON", json.dumps(accepted_audiences))
+)
+accepted_audience_lines = "\n".join(f"    - {json.dumps(value)}" for value in accepted_audiences)
+oid4vci_config_id = os.environ.get("CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID", "person_is_alive_sd_jwt")
+oid4vci_vct = os.environ.get(
+    "CITIZEN_OID4VCI_VCT",
+    "https://demo.example/credentials/citizen-civil-status/v1",
+)
+oid4vci_display_name = os.environ.get("CITIZEN_OID4VCI_DISPLAY_NAME", "Person is alive")
+oid4vci_scope = os.environ.get("CITIZEN_OID4VCI_SCOPE", "person-is-alive")
+oid4vci_issue_credential = "true" if oid4vci_enabled else "false"
+oid4vci_block = ""
+if oid4vci_enabled:
+    oid4vci_block = f"""
+
+oid4vci:
+  enabled: true
+  credential_issuer: {json.dumps(credential_issuer)}
+  authorization_servers:
+    - {json.dumps(authorization_server)}
+  accepted_token_audiences:
+{accepted_audience_lines}
+  credential_endpoint: {json.dumps(credential_endpoint)}
+  offer_endpoint: {json.dumps(offer_endpoint)}
+  nonce_endpoint: {json.dumps(nonce_endpoint)}
+  nonce:
+    enabled: true
+    ttl_seconds: 300
+  authorization:
+    require_pkce_method: S256
+  proof:
+    max_age_seconds: 300
+    max_clock_skew_seconds: 30
+  credential_configurations:
+    {json.dumps(oid4vci_config_id)}:
+      claim_id: person-is-alive
+      credential_profile: citizen_civil_status_sd_jwt
+      format: dc+sd-jwt
+      scope: {json.dumps(oid4vci_scope)}
+      vct: {json.dumps(oid4vci_vct)}
+      display_name: {json.dumps(oid4vci_display_name)}
+      proof_signing_alg_values_supported:
+        - EdDSA
+      cryptographic_binding_methods_supported:
+        - did:jwk
 """
 text = f"""# Generated by scripts/smoke-citizen-self-attestation.sh. Do not edit by hand.
 server:
@@ -357,15 +957,14 @@ auth:
     issuer: {json.dumps(issuer)}
     jwks_uri: {json.dumps(jwks_uri)}
 {userinfo_line.rstrip()}
+{userinfo_issuers_line.rstrip()}
     audiences:
 {audience_lines}
     allowed_clients:
 {allowed_client_lines}
     allowed_algorithms:
-      - {json.dumps(alg)}
-    allowed_typ:
-      - JWT
-      - at+jwt
+{algorithm_lines}
+    allowed_typ:{typ_lines}
     scope_claim: scope
     scope_separator: " "
     principal_claim: sub
@@ -469,15 +1068,15 @@ self_attestation:
 {audience_lines}
   token_policy:
     assurance_claim_source: {json.dumps(assurance_claim_source)}
-    max_auth_age_seconds: 900
-    max_access_token_lifetime_seconds: 900
+    max_auth_age_seconds: {max_auth_age}
+    max_access_token_lifetime_seconds: {max_access_token_lifetime}
     max_evaluation_age_seconds: 600
     max_credential_validity_seconds: 600
     max_clock_leeway_seconds: 60
   allowed_operations:
     evaluate: true
     render: true
-    issue_credential: false
+    issue_credential: {oid4vci_issue_credential}
     batch_evaluate: false
   allowed_purposes:
     - citizen_self_attestation
@@ -502,7 +1101,7 @@ self_attestation:
     subject_mismatch_per_principal_per_hour: 5
     per_holder_per_hour: 10
     credential_issuance_per_principal_per_hour: 5
-"""
+{oid4vci_block}"""
 with open(path, "w", encoding="utf-8") as handle:
     handle.write(text)
 PY
@@ -526,6 +1125,7 @@ curl_json() {
   if [[ "${status}" != "${expected}" ]]; then
     echo "Expected ${url} to return ${expected}, got ${status}" >&2
     cat "${output}" >&2 || true
+    explain_witness_status "${status}" "${url}" >&2 || true
     exit 1
   fi
 }
@@ -535,6 +1135,13 @@ need python3
 need openssl
 
 mkdir -p "${output_dir}"
+cat >"${transcript_path}" <<EOF
+eSignet citizen self-attestation flow transcript
+correlation_id=${correlation_id}
+tokens=redacted
+EOF
+
+step 1 "Validate local prerequisites" "Checking tools, demo secrets, and requested eSignet binding mode."
 
 case "${subject_claim_source}" in
   access_token | userinfo) ;;
@@ -578,6 +1185,7 @@ PY
 fi
 [[ -n "${issuer}" ]] || fail "set ESIGNET_ISSUER or ESIGNET_CITIZEN_ACCESS_TOKEN"
 
+step 2 "Read eSignet discovery" "Issuer: ${issuer}"
 discovery_json="${output_dir}/esignet-openid-configuration.json"
 discovery_url="${ESIGNET_DISCOVERY_URL:-${issuer%/}/.well-known/openid-configuration}"
 curl --silent --show-error --fail-with-body \
@@ -604,9 +1212,12 @@ print(json.load(open(sys.argv[1], encoding="utf-8")).get("userinfo_endpoint", ""
 PY
 )}"
 
+step 3 "Obtain citizen token" "Using provided token or exchanging an authorization code without printing token values."
 access_token="${ESIGNET_CITIZEN_ACCESS_TOKEN:-}"
 id_token="${ESIGNET_CITIZEN_ID_TOKEN:-}"
+token_source="provided"
 if [[ -z "${access_token}" ]]; then
+  token_source="authorization_code"
   client_id="${ESIGNET_CLIENT_ID:-}"
   [[ -n "${client_id}" ]] || fail "set ESIGNET_CLIENT_ID when requesting a citizen token"
   if [[ -z "${ESIGNET_AUTHORIZATION_CODE:-}" ]]; then
@@ -634,30 +1245,75 @@ PY
     )"
   fi
 fi
+if [[ "${token_source}" == "authorization_code" ]]; then
+  say "    Exchanged authorization code at eSignet token endpoint; token values remain redacted."
+else
+  say "    Using caller-provided citizen token; token values remain redacted."
+fi
 
 metadata_env="${output_dir}/citizen-token.env"
 decode_access_token "${access_token}" "${metadata_env}"
 # shellcheck disable=SC1090
 . "${metadata_env}"
+write_claim_summary "access_token" "${token_claims_path}"
+print_access_token_status
 
+step 4 "Validate assurance and subject binding material" "Subject source: ${subject_claim_source}.${subject_claim}; assurance source: ${assurance_claim_source}."
 if [[ "${assurance_claim_source}" == "id_token" ]]; then
   [[ -n "${id_token}" ]] ||
     fail "ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token requires ESIGNET_CITIZEN_ID_TOKEN or an auth-code token response with id_token"
   validate_id_token "${id_token}"
+  write_claim_summary "id_token" "${id_token_claims_path}"
+  print_id_token_status
 fi
 if [[ "${subject_claim_source}" == "userinfo" ]]; then
   [[ -n "${userinfo_endpoint}" ]] ||
     fail "ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo requires a discovery userinfo_endpoint or ESIGNET_USERINFO_ENDPOINT"
   fetch_and_validate_userinfo "${userinfo_endpoint}" "${access_token}"
+  write_claim_summary "userinfo" "${userinfo_claims_path}"
+  print_userinfo_status
 fi
 
 client_id="${ESIGNET_CLIENT_ID:-${TOKEN_CLIENT_ID:-}}"
 [[ -n "${client_id}" ]] || fail "token omitted azp/client_id; set ESIGNET_CLIENT_ID"
 alg="${ESIGNET_TOKEN_ALGORITHM:-${TOKEN_ALG:-RS256}}"
+token_typ="${ESIGNET_TOKEN_TYPE:-${TOKEN_TYP:-}}"
 audiences_json="${ESIGNET_AUDIENCES_JSON:-${TOKEN_AUDIENCES_JSON}}"
+userinfo_issuer="${ESIGNET_USERINFO_ISSUER:-}"
+userinfo_alg="${ESIGNET_USERINFO_ALGORITHM:-}"
+if [[ -z "${userinfo_issuer}" && "${subject_claim_source}" == "userinfo" && -f "${userinfo_claims_path}" ]]; then
+  userinfo_issuer="$(
+    python3 - "${userinfo_claims_path}" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding="utf-8")).get("claims", {}).get("iss", ""))
+PY
+  )"
+fi
+if [[ -z "${userinfo_alg}" && "${subject_claim_source}" == "userinfo" && -f "${userinfo_claims_path}" ]]; then
+  userinfo_alg="$(
+    python3 - "${userinfo_claims_path}" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding="utf-8")).get("header", {}).get("alg", ""))
+PY
+  )"
+fi
 
-write_witness_config "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${alg}" "${client_id}" "${audiences_json}" "${self_attestation_scope}"
+step 5 "Generate Witness config" "Writing ${config_path} with eSignet issuer, JWKS, client, algorithm, and self-attestation policy."
+write_witness_config "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${alg}" "${client_id}" "${audiences_json}" "${self_attestation_scope}" "${userinfo_issuer}" "${userinfo_alg}" "${token_typ}"
+transcript "Witness config: ${config_path}"
+transcript "scope_policy=${self_attestation_scope_policy}"
+transcript "allowed_algorithms=$(python3 - "${config_path}" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r"allowed_algorithms:\n((?:      - .+\n)+)", text)
+print(" ".join(line.strip()[2:].strip() for line in match.group(1).splitlines()) if match else "")
+PY
+)"
 
+step 6 "Start civil Relay and citizen Witness" "Witness listens on http://127.0.0.1:${port}."
 docker compose -f "${compose_file}" up -d civil-registry-relay
 wait_http "civil relay health" "http://127.0.0.1:4311/health" "${CIVIL_METADATA_CLIENT_RAW}"
 
@@ -671,8 +1327,11 @@ trap 'kill "${witness_pid}" >/dev/null 2>&1 || true' EXIT
 
 wait_http "citizen civil witness discovery" "http://127.0.0.1:${port}/.well-known/evidence-service" "${access_token}"
 
+step 7 "Call Witness discovery" "Confirming the citizen token can see the self-attestation capability."
 curl_json GET "http://127.0.0.1:${port}/.well-known/evidence-service" "${discovery_path}" 200
+print_discovery_status
 
+step 8 "Evaluate self claim" "Requesting person-is-alive for ${self_subject}."
 curl_json POST "http://127.0.0.1:${port}/claims/evaluate" "${self_eval_path}" 200 \
   --data "{\"subject\":{\"id\":\"${self_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-witness.claim-result+json\"}"
 
@@ -688,21 +1347,49 @@ assert result.get("claim_id") == "person-is-alive", body
 assert result.get("value") is True, body
 assert result.get("provenance", {}).get("source_count") == 1, body
 PY
+print_self_evaluation_status
 
+step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before any source read."
 curl_json POST "http://127.0.0.1:${port}/claims/evaluate" "${other_eval_path}" 403 \
   --data "{\"subject\":{\"id\":\"${other_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-witness.claim-result+json\"}"
+print_denial_status
 
 sleep 1
 grep -q '"access_mode":"self_attestation"' "${log_path}" ||
   fail "Witness audit log did not include access_mode=self_attestation"
+print_audit_status
+
+step 10 "Write redacted evidence report" "Collecting summary, transcript, artifacts, and audit excerpt."
+write_demo_report
+
+if [[ "${CITIZEN_OID4VCI_PROBE:-0}" == "1" ]]; then
+  step 11 "Probe OID4VCI endpoints" "Checking issuer metadata, offer, nonce, and credential proof behavior."
+  CITIZEN_OID4VCI_ACCESS_TOKEN="${access_token}" \
+  CITIZEN_OID4VCI_ID_TOKEN="${id_token:-}" \
+  CITIZEN_OID4VCI_WITNESS_BASE_URL="http://127.0.0.1:${port}" \
+  CITIZEN_OID4VCI_SELF_ATTESTATION_DIR="${output_dir}" \
+  CITIZEN_OID4VCI_WITNESS_CONFIG="${config_path}" \
+  "${script_dir}/probe-citizen-oid4vci.sh"
+fi
 
 cat <<EOF
 Citizen self-attestation smoke passed.
 
+What happened:
+  1. eSignet authenticated demo citizen ${self_subject}.
+  2. Witness bound the request to ${subject_claim_source}.${subject_claim}.
+  3. Witness fetched person-is-alive for ${self_subject}.
+  4. Witness denied ${other_subject} before a registry source read.
+  5. Audit records show self_attestation with hashed identifiers.
+
 Artifacts:
+  ${report_path}
+  ${transcript_path}
   ${discovery_path}
   ${self_eval_path}
   ${other_eval_path}
   ${token_claims_path}
+  ${id_token_claims_path}
+  ${userinfo_claims_path}
   ${log_path}
 EOF

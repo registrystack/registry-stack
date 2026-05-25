@@ -75,6 +75,195 @@ oidc-relay:
 citizen-self-attestation:
     scripts/smoke-citizen-self-attestation.sh
 
+# Print the local eSignet authorization URL and save PKCE state.
+citizen-self-attestation-esignet-login:
+    @set +e; \
+    ESIGNET_ISSUER=http://localhost:8088 \
+    ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
+    ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
+    ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \
+    ESIGNET_USERINFO_ENDPOINT=http://localhost:8088/v1/esignet/oidc/userinfo \
+    ESIGNET_CLIENT_ID=registry-lab-live-client \
+    ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
+    ESIGNET_SUBJECT_CLAIM=individual_id \
+    ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
+    ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled \
+    ESIGNET_AUTHORIZE_SCOPE='openid profile' \
+    ESIGNET_AUTHORIZE_ACR_VALUES=mosip:idp:acr:generated-code \
+    ESIGNET_AUTHORIZE_PROMPT=login \
+    ESIGNET_AUTHORIZE_DISPLAY=popup \
+    ESIGNET_CLAIMS_LOCALES=en \
+    ESIGNET_MAX_AUTH_AGE_SECONDS=1200 \
+    ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
+    ESIGNET_CAPTURE_CALLBACK_HINT=1 \
+    ESIGNET_CITIZEN_ACCESS_TOKEN= \
+    ESIGNET_CITIZEN_ID_TOKEN= \
+    ESIGNET_AUTHORIZATION_CODE= \
+    scripts/smoke-citizen-self-attestation.sh; \
+    status=$?; \
+    if [ "$status" -eq 2 ]; then scripts/capture-esignet-callback.py; exit 0; fi; \
+    exit "$status"
+
+# Exchange the returned eSignet code and run the citizen self-attestation smoke.
+citizen-self-attestation-esignet-code:
+    @test -n "${ESIGNET_AUTHORIZATION_CODE:-}" || test -f output/citizen-self-attestation/esignet-callback.env || (echo "Run just citizen-login first, or set ESIGNET_AUTHORIZATION_CODE." >&2; exit 1)
+    @test -n "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" || test -f /tmp/esignet-live-test/client-private.pem || (echo "Set ESIGNET_CLIENT_PRIVATE_KEY_FILE to the client RSA private key." >&2; exit 1)
+    @set -a; \
+    if [ -z "${ESIGNET_AUTHORIZATION_CODE:-}" ] && [ -f output/citizen-self-attestation/esignet-callback.env ]; then . output/citizen-self-attestation/esignet-callback.env; fi; \
+    if [ -z "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" ] && [ -f /tmp/esignet-live-test/client-private.pem ]; then ESIGNET_CLIENT_PRIVATE_KEY_FILE=/tmp/esignet-live-test/client-private.pem; fi; \
+    set +a; \
+    ESIGNET_ISSUER=http://localhost:8088 \
+    ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
+    ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
+    ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \
+    ESIGNET_USERINFO_ENDPOINT=http://localhost:8088/v1/esignet/oidc/userinfo \
+    ESIGNET_CLIENT_ID=registry-lab-live-client \
+    ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
+    ESIGNET_SUBJECT_CLAIM=individual_id \
+    ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
+    ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled \
+    ESIGNET_AUTHORIZE_SCOPE='openid profile' \
+    ESIGNET_AUTHORIZE_ACR_VALUES=mosip:idp:acr:generated-code \
+    ESIGNET_AUTHORIZE_PROMPT=login \
+    ESIGNET_AUTHORIZE_DISPLAY=popup \
+    ESIGNET_CLAIMS_LOCALES=en \
+    ESIGNET_MAX_AUTH_AGE_SECONDS=1200 \
+    ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
+    scripts/smoke-citizen-self-attestation.sh
+
+# Run the local eSignet citizen smoke with ESIGNET_CITIZEN_ACCESS_TOKEN and ESIGNET_CITIZEN_ID_TOKEN from the environment.
+citizen-self-attestation-esignet-token:
+    @test -n "${ESIGNET_CITIZEN_ACCESS_TOKEN:-}" || (echo "Set ESIGNET_CITIZEN_ACCESS_TOKEN." >&2; exit 1)
+    @test -n "${ESIGNET_CITIZEN_ID_TOKEN:-}" || (echo "Set ESIGNET_CITIZEN_ID_TOKEN." >&2; exit 1)
+    @ESIGNET_ISSUER=http://localhost:8088 \
+    ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
+    ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
+    ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \
+    ESIGNET_USERINFO_ENDPOINT=http://localhost:8088/v1/esignet/oidc/userinfo \
+    ESIGNET_CLIENT_ID=registry-lab-live-client \
+    ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
+    ESIGNET_SUBJECT_CLAIM=individual_id \
+    ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
+    ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled \
+    ESIGNET_AUTHORIZE_SCOPE='openid profile' \
+    ESIGNET_AUTHORIZE_ACR_VALUES=mosip:idp:acr:generated-code \
+    ESIGNET_AUTHORIZE_PROMPT=login \
+    ESIGNET_AUTHORIZE_DISPLAY=popup \
+    ESIGNET_CLAIMS_LOCALES=en \
+    ESIGNET_MAX_AUTH_AGE_SECONDS=1200 \
+    ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
+    scripts/smoke-citizen-self-attestation.sh
+
+# Show the latest citizen self-attestation evidence report.
+citizen-self-attestation-report:
+    less output/citizen-self-attestation/report.md
+
+# Wait for the eSignet browser redirect and save the callback code.
+citizen-self-attestation-callback:
+    scripts/capture-esignet-callback.py
+
+# Print the local eSignet citizen login URL.
+citizen-login: citizen-self-attestation-esignet-login
+
+# Exchange the local eSignet callback code and run the citizen flow.
+citizen-code: citizen-self-attestation-esignet-code
+
+# Run the local eSignet citizen flow with exported tokens.
+citizen-token: citizen-self-attestation-esignet-token
+
+# Show the latest local eSignet citizen evidence report.
+citizen-report: citizen-self-attestation-report
+
+# Wait for the local eSignet citizen callback.
+citizen-callback: citizen-self-attestation-callback
+
+# Print the local eSignet login URL for the optional citizen OID4VCI probe.
+citizen-oid4vci-login:
+    @set +e; \
+    ESIGNET_ISSUER=http://localhost:8088 \
+    ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
+    ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
+    ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \
+    ESIGNET_USERINFO_ENDPOINT=http://localhost:8088/v1/esignet/oidc/userinfo \
+    ESIGNET_CLIENT_ID=registry-lab-live-client \
+    ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
+    ESIGNET_SUBJECT_CLAIM=individual_id \
+    ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
+    ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled \
+    ESIGNET_AUTHORIZE_SCOPE='openid profile' \
+    ESIGNET_AUTHORIZE_ACR_VALUES=mosip:idp:acr:generated-code \
+    ESIGNET_AUTHORIZE_PROMPT=login \
+    ESIGNET_AUTHORIZE_DISPLAY=popup \
+    ESIGNET_CLAIMS_LOCALES=en \
+    ESIGNET_MAX_AUTH_AGE_SECONDS=1200 \
+    ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
+    ESIGNET_CAPTURE_CALLBACK_HINT=1 \
+    ESIGNET_CITIZEN_ACCESS_TOKEN= \
+    ESIGNET_CITIZEN_ID_TOKEN= \
+    ESIGNET_AUTHORIZATION_CODE= \
+    scripts/smoke-citizen-oid4vci.sh; \
+    status=$?; \
+    if [ "$status" -eq 2 ]; then scripts/capture-esignet-callback.py; exit 0; fi; \
+    exit "$status"
+
+# Exchange the local eSignet callback code and probe citizen OID4VCI endpoints.
+citizen-oid4vci-code:
+    @test -n "${ESIGNET_AUTHORIZATION_CODE:-}" || test -f output/citizen-self-attestation/esignet-callback.env || (echo "Run just citizen-oid4vci-login first, or set ESIGNET_AUTHORIZATION_CODE." >&2; exit 1)
+    @test -n "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" || test -f /tmp/esignet-live-test/client-private.pem || (echo "Set ESIGNET_CLIENT_PRIVATE_KEY_FILE to the client RSA private key." >&2; exit 1)
+    @set -a; \
+    if [ -z "${ESIGNET_AUTHORIZATION_CODE:-}" ] && [ -f output/citizen-self-attestation/esignet-callback.env ]; then . output/citizen-self-attestation/esignet-callback.env; fi; \
+    if [ -z "${ESIGNET_CLIENT_PRIVATE_KEY_FILE:-}" ] && [ -f /tmp/esignet-live-test/client-private.pem ]; then ESIGNET_CLIENT_PRIVATE_KEY_FILE=/tmp/esignet-live-test/client-private.pem; fi; \
+    set +a; \
+    ESIGNET_ISSUER=http://localhost:8088 \
+    ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
+    ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
+    ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \
+    ESIGNET_USERINFO_ENDPOINT=http://localhost:8088/v1/esignet/oidc/userinfo \
+    ESIGNET_CLIENT_ID=registry-lab-live-client \
+    ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
+    ESIGNET_SUBJECT_CLAIM=individual_id \
+    ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
+    ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled \
+    ESIGNET_AUTHORIZE_SCOPE='openid profile' \
+    ESIGNET_AUTHORIZE_ACR_VALUES=mosip:idp:acr:generated-code \
+    ESIGNET_AUTHORIZE_PROMPT=login \
+    ESIGNET_AUTHORIZE_DISPLAY=popup \
+    ESIGNET_CLAIMS_LOCALES=en \
+    ESIGNET_MAX_AUTH_AGE_SECONDS=1200 \
+    ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
+    scripts/smoke-citizen-oid4vci.sh
+
+# Run the citizen OID4VCI probe with exported eSignet tokens.
+citizen-oid4vci-token:
+    @test -n "${ESIGNET_CITIZEN_ACCESS_TOKEN:-}" || (echo "Set ESIGNET_CITIZEN_ACCESS_TOKEN." >&2; exit 1)
+    @test -n "${ESIGNET_CITIZEN_ID_TOKEN:-}" || (echo "Set ESIGNET_CITIZEN_ID_TOKEN." >&2; exit 1)
+    @ESIGNET_ISSUER=http://localhost:8088 \
+    ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
+    ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
+    ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \
+    ESIGNET_USERINFO_ENDPOINT=http://localhost:8088/v1/esignet/oidc/userinfo \
+    ESIGNET_CLIENT_ID=registry-lab-live-client \
+    ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
+    ESIGNET_SUBJECT_CLAIM=individual_id \
+    ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
+    ESIGNET_SELF_ATTESTATION_SCOPE_POLICY=disabled \
+    ESIGNET_AUTHORIZE_SCOPE='openid profile' \
+    ESIGNET_AUTHORIZE_ACR_VALUES=mosip:idp:acr:generated-code \
+    ESIGNET_AUTHORIZE_PROMPT=login \
+    ESIGNET_AUTHORIZE_DISPLAY=popup \
+    ESIGNET_CLAIMS_LOCALES=en \
+    ESIGNET_MAX_AUTH_AGE_SECONDS=1200 \
+    ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
+    scripts/smoke-citizen-oid4vci.sh
+
+# Probe an already-running citizen Witness OID4VCI surface with exported tokens.
+citizen-oid4vci-probe:
+    scripts/probe-citizen-oid4vci.sh
+
+# Show the latest citizen OID4VCI probe report.
+citizen-oid4vci-report:
+    less output/citizen-oid4vci/report.md
+
 # Run live-service stories with narrated discovery queries and generated artifacts.
 live-stories:
     scripts/demo-live-stories.sh

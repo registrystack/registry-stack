@@ -69,6 +69,10 @@ The optional smoke script writes artifacts under
   `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo`.
 - `citizen-civil-witness.log`: Witness startup and audit output, including
   `access_mode=self_attestation`.
+- `flow-transcript.txt`: redacted step-by-step transcript with token hashes,
+  issuers, audiences, algorithms, and binding choices.
+- `report.md`: short human-readable evidence report with the successful claim,
+  denied other-person control, and self-attestation audit excerpt.
 
 Optional follow-up evidence can add SD-JWT VC issuance from the successful
 evaluation once the wallet holder binding is available in the lab.
@@ -84,9 +88,8 @@ just build
 just up
 
 ESIGNET_CITIZEN_ACCESS_TOKEN="<jwt-access-token>" \
-ESIGNET_SELF_ATTESTATION_SCOPE_POLICY="disabled" \
-ESIGNET_SELF_ATTESTATION_SCOPE="self_attestation" \
-just citizen-self-attestation
+ESIGNET_CITIZEN_ID_TOKEN="<jwt-id-token>" \
+just citizen-token
 ```
 
 The supplied JWT access token must:
@@ -111,42 +114,101 @@ client/audience, current authentication assurance, and an exact subject-binding
 match before any registry read.
 
 For eSignet deployments that keep civil attributes in UserInfo and assurance
-fields in the ID token, run with:
+fields in the ID token, the local lab wrapper already sets:
 
 ```bash
-ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo \
-ESIGNET_SUBJECT_CLAIM=individual_id \
-ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token \
 ESIGNET_CITIZEN_ACCESS_TOKEN="<jwt-access-token>" \
 ESIGNET_CITIZEN_ID_TOKEN="<jwt-id-token>" \
-just citizen-self-attestation
+just citizen-token
 ```
 
 Witness fetches the UserInfo endpoint itself with the access token and verifies
 the returned signed JWT before accepting the subject-binding claim. The UserInfo
 response must be JWS/JWT, not an encrypted JWE, for this lab path.
 
+### Local eSignet Mock Identity
+
+When testing against a local eSignet mock identity store, seed the authenticated
+citizen so the signed UserInfo JWT contains the same national identifier used by
+the lab fixtures:
+
+```json
+{
+  "individual_id": "NID-1001",
+  "name": "Amina Diallo",
+  "given_name": "Amina",
+  "family_name": "Diallo"
+}
+```
+
+The required binding value is `individual_id=NID-1001` when running with
+`ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo` and
+`ESIGNET_SUBJECT_CLAIM=individual_id`. `scripts/generate-fixtures.py` seeds
+`NID-1001` as Amina Diallo in the civil registry with `deceased=false`, so the
+smoke expects `person-is-alive` to evaluate to true for `NID-1001`. The negative
+control remains `NID-1002`, which must be denied because it does not match the
+token-bound UserInfo subject.
+
 If a token is not already available, the script can prepare the Authorization
 Code with PKCE request and later exchange the returned code with
 private-key-jwt client authentication:
 
 ```bash
-ESIGNET_ISSUER="https://esignet.example" \
-ESIGNET_CLIENT_ID="registry-lab-citizen-client" \
-just citizen-self-attestation
+just citizen-login
 
-ESIGNET_AUTHORIZATION_CODE="<callback-code>" \
-ESIGNET_CLIENT_PRIVATE_KEY_FILE="./local/esignet-client-private-key.pem" \
-just citizen-self-attestation
+just citizen-code
 ```
 
 For local eSignet deployments where discovery is not under the issuer root,
-also set `ESIGNET_DISCOVERY_URL`, for example
-`http://127.0.0.1:8088/v1/esignet/oidc/.well-known/openid-configuration`.
+the `citizen-*` wrappers set the lab defaults for issuer, discovery, JWKS,
+browser authorization URL, UserInfo, subject binding, assurance source, and
+token lifetime. The local wrapper opens authorization through
+`http://localhost:3000/authorize` because eSignet's backend discovery endpoint
+on port `8088` is not the browser UI route. Use the lower-level
+`just citizen-self-attestation` recipe when testing a different eSignet profile.
 
-The first command prints the authorization URL and writes the PKCE verifier to
-`output/citizen-self-attestation/esignet-pkce.env`. The second command exchanges
-the code and runs the Witness smoke.
+The first command prints the authorization URL, writes the PKCE verifier to
+`output/citizen-self-attestation/esignet-pkce.env`, and waits on
+`http://127.0.0.1:4325/callback` to capture the browser redirect. The callback
+code is saved to `output/citizen-self-attestation/esignet-callback.env`. The
+second command exchanges the saved code and runs the Witness smoke. If the local
+live eSignet setup did not create `/tmp/esignet-live-test/client-private.pem`,
+set `ESIGNET_CLIENT_PRIVATE_KEY_FILE` when running `just citizen-code`.
+The login command prints the local demo values (`NID-1001`, generated code
+`111111`, and PIN `545411` if static-code auth appears). The code command prints
+safe, redacted checkpoints for the access token, ID token assurance, signed
+UserInfo binding, discovery, successful self claim, failed other-person control,
+and audit proof.
+
+## Optional OID4VCI Probe
+
+The OID4VCI commands are optional and are not part of `just quick`. They reuse
+the same eSignet login/code/token flow, enable an OID4VCI block in the generated
+citizen Witness config, and write endpoint evidence under
+`output/citizen-oid4vci/`:
+
+```bash
+just citizen-oid4vci-login
+just citizen-oid4vci-code
+```
+
+or:
+
+```bash
+ESIGNET_CITIZEN_ACCESS_TOKEN="<jwt-access-token>" \
+ESIGNET_CITIZEN_ID_TOKEN="<jwt-id-token>" \
+just citizen-oid4vci-token
+```
+
+The probe reads `/.well-known/openid-credential-issuer`, requests
+`/oid4vci/credential-offer`, requests `/oid4vci/nonce` with the selected
+`credential_configuration_id`, generates an ephemeral holder proof JWT, and posts
+an OID4VCI credential request. It prints what each endpoint returned without
+printing bearer tokens or credential values. If the active Witness does not
+expose OID4VCI endpoints yet, the command fails and leaves `report.md`, status
+files, headers, request bodies, and response bodies under
+`output/citizen-oid4vci/` rather than passing silently. For real wallet checks
+with Walt Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
 ## Integration Decision
 
@@ -163,8 +225,17 @@ access token, use the implemented companion-token path:
 - `self_attestation.subject_binding.claim_source: userinfo`
 - `self_attestation.token_policy.assurance_claim_source: id_token`
 - `auth.oidc.userinfo_endpoint` from eSignet discovery
+- `auth.oidc.userinfo_issuers` set to the signed UserInfo `iss` when it differs
+  from the access-token issuer, for example `http://localhost:8088/v1/esignet`
+- `auth.oidc.allowed_algorithms` includes both the access-token algorithm and
+  the signed UserInfo algorithm when eSignet uses different algorithms
+- `auth.oidc.allowed_typ: []` only for eSignet deployments whose access token
+  omits `typ`; keep the stricter default when the header is present
 - `self_attestation.scope_policy: disabled` when the eSignet access token does
   not carry a useful `scope` claim
+- `ESIGNET_MAX_AUTH_AGE_SECONDS` and
+  `ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS` can be raised explicitly for live
+  eSignet profiles that issue longer-lived tokens, for example 1200 seconds
 
 Do not move the claim binding into an unverified request field.
 
