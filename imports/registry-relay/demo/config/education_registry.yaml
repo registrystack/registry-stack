@@ -47,11 +47,6 @@ auth:
         - admin
         - education_registry:metadata
 
-claim_verification:
-  binding_key_id: demo-evidence-v1
-  # Env value format: hex:<64+ lowercase hex chars>
-  # demo/scripts/generate_demo_keys.py emits this value for local review.
-  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
 audit:
   sink: stdout
@@ -394,18 +389,6 @@ datasets:
             - field: scholarship_eligible
               ops: [eq]
           allowed_expansions: [school, guardians, enrollments, support_needs, attendance_summaries]
-        claim_verification:
-          rulesets:
-            education-student-v1:
-              mode: normalized_exact
-              required_claims: [id, enrollment_status, grade_level, home_district]
-              candidate_lookup: [id]
-              match_fields:
-                id: id
-                enrollment_status: enrollment_status
-                grade_level: grade_level
-                home_district: home_district
-              expose_ambiguous: false
         aggregates:
           - id: by_school_grade_status
             description: Count of students by school, grade level, and enrollment status

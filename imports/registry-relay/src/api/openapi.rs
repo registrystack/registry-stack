@@ -274,26 +274,6 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     );
 
     paths.insert(
-        "/evidence-offerings/{offering_id}/verifications".to_string(),
-        evidence_verification_path_item(),
-    );
-    set_json_response_example(
-        &mut paths,
-        "/evidence-offerings/{offering_id}/verifications",
-        "post",
-        "200",
-        "verification_match",
-        "Completed registry-backed evidence verification.",
-        evidence_verification_response_example(),
-    );
-    tag(
-        &mut paths,
-        "/evidence-offerings/{offering_id}/verifications",
-        "post",
-        TAG_CATALOG,
-    );
-
-    paths.insert(
         "/metadata/dcat".to_string(),
         jsonld_path_item(
             "get_metadata_dcat",
@@ -1663,12 +1643,14 @@ fn evidence_offering_list_example() -> Value {
 fn evidence_offering_example() -> Value {
     json!({
         "access": {
-            "conforms_to": "https://demo.example.gov/standards/registry-relay/evidence-verification-v1",
-            "kind": "registry-relay-verification",
+            "conforms_to": "https://demo.example.gov/standards/registry-witness/evidence-v1",
+            "discovery_url": "https://witness.demo.example.gov/.well-known/registry-witness",
+            "endpoint_url": "https://witness.demo.example.gov/evidence-offerings/benefits-person/verifications",
+            "kind": "registry-witness",
             "ruleset": "benefits-person-v1",
         },
         "dataset_id": "benefits_casework",
-        "description": "Registry Relay verification for submitted benefits person eligibility status and role facts.",
+        "description": "Registry Witness verification for submitted benefits person eligibility status and role facts.",
         "entity": "person",
         "evidence_type": {
             "id": "benefits_person_record_evidence",
@@ -1698,31 +1680,6 @@ fn evidence_offering_example() -> Value {
     })
 }
 
-fn evidence_verification_response_example() -> Value {
-    json!({
-        "verification_id": "01J8W7Q9M5CN4M6G0Q9Z5T2R7A",
-        "decision": "match",
-        "checked_at": "2026-05-16T08:00:00Z",
-        "requirement": "https://demo.example.gov/requirements/benefits-person",
-        "evidence_type": "https://demo.example.gov/evidence-types/benefits-person-record",
-        "evidence_offering": "https://demo.example.gov/evidence-offerings/benefits-person",
-        "issuing_authority": {
-            "country": "ZZ",
-            "id": "ministry_of_social_affairs",
-            "iri": "did:web:social-affairs.demo.example.gov",
-            "name": "Ministry of Social Affairs",
-        },
-        "jurisdiction": { "country": "ZZ", "region": null },
-        "level_of_assurance": "substantial",
-        "dataset_id": "benefits_casework",
-        "entity": "person",
-        "claim_salt": "9fd0e3c8d2f84b6e",
-        "claim_hash": "sha256:2b7f4f1a3f3a0b5c7a9f7f62c1e2d4b0a6c3e8d1f9a4b5c6d7e8f90123456789",
-        "evidence_hash": null,
-        "ingest_version": null,
-    })
-}
-
 // --- schemas --------------------------------------------------------
 
 fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
@@ -1748,14 +1705,6 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
         evidence_offering_list_schema(),
     );
     schemas.insert("EvidenceOffering".to_string(), evidence_offering_schema());
-    schemas.insert(
-        "EvidenceVerificationRequest".to_string(),
-        evidence_verification_request_schema(),
-    );
-    schemas.insert(
-        "EvidenceVerificationResponse".to_string(),
-        evidence_verification_response_schema(),
-    );
     if provenance_enabled(config) {
         schemas.insert(
             "DidDocument".to_string(),
@@ -2234,7 +2183,7 @@ fn evidence_offering_schema() -> Value {
                 "type": "object",
                 "required": ["kind", "ruleset"],
                 "properties": {
-                    "kind": { "type": "string", "enum": ["registry-relay-verification", "registry-witness"] },
+                    "kind": { "type": "string", "enum": ["registry-witness"] },
                     "conforms_to": { "type": ["string", "null"], "format": "uri" },
                     "endpoint_url": { "type": ["string", "null"], "format": "uri" },
                     "discovery_url": { "type": ["string", "null"], "format": "uri" },
@@ -2246,88 +2195,6 @@ fn evidence_offering_schema() -> Value {
             "policy": { "type": ["object", "null"], "additionalProperties": true },
         },
         "additionalProperties": true,
-    })
-}
-
-fn evidence_verification_request_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["claims"],
-        "properties": {
-            "subject": {
-                "type": "object",
-                "description": "Optional targeted registry subject. The offering binding must explicitly allow targeted verification.",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "Known entity primary key to verify against.",
-                    },
-                },
-                "additionalProperties": false,
-            },
-            "claims": {
-                "type": "object",
-                "description": "Caller-submitted facts. Per-ruleset shape is configured by the deployment; V1 matching is `normalized_exact` only.",
-                "additionalProperties": true,
-                "examples": [{
-                    "given_name": "Camille",
-                    "family_name": "Durand",
-                    "date_of_birth": "1992-04-18",
-                }],
-            },
-            "evidence": {
-                "type": "array",
-                "description": "Optional metadata about external documents or artifacts the caller already holds. Raw evidence is not echoed by default.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": true,
-                },
-            },
-        },
-        "additionalProperties": false,
-        "examples": [{
-            "claims": {
-                "given_name": "Camille",
-                "family_name": "Durand",
-                "date_of_birth": "1992-04-18",
-            },
-        }],
-    })
-}
-
-fn evidence_verification_response_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": [
-            "verification_id",
-            "decision",
-            "checked_at",
-            "requirement",
-            "evidence_type",
-            "evidence_offering",
-            "issuing_authority",
-            "dataset_id",
-            "entity",
-            "claim_salt",
-            "claim_hash"
-        ],
-        "properties": {
-            "verification_id": { "type": "string" },
-            "decision": { "type": "string", "enum": ["match", "mismatch", "ambiguous"] },
-            "checked_at": { "type": "string", "format": "date-time" },
-            "requirement": { "type": "string", "format": "uri" },
-            "evidence_type": { "type": "string", "format": "uri" },
-            "evidence_offering": { "type": "string", "format": "uri" },
-            "issuing_authority": { "type": "object", "additionalProperties": true },
-            "jurisdiction": { "type": ["object", "null"], "additionalProperties": true },
-            "level_of_assurance": { "type": ["string", "null"] },
-            "dataset_id": { "type": "string" },
-            "entity": { "type": "string" },
-            "claim_salt": { "type": "string" },
-            "claim_hash": { "type": "string" },
-            "evidence_hash": { "type": ["string", "null"] },
-            "ingest_version": { "type": ["string", "null"] },
-        },
     })
 }
 
@@ -3230,79 +3097,6 @@ fn problem_response(description: &str) -> Value {
     })
 }
 
-fn evidence_verification_response_headers() -> Value {
-    json!({
-        "Cache-Control": {
-            "description": "`no-store`; evidence verification responses must not be cached.",
-            "schema": { "type": "string", "const": "no-store" },
-        },
-        "Vary": {
-            "description": "At least `Authorization, Accept`.",
-            "schema": { "type": "string", "examples": ["Authorization, Accept"] },
-        },
-    })
-}
-
-fn evidence_verification_path_item() -> Value {
-    json!({
-        "post": {
-            "summary": "Create evidence verification",
-            "operationId": "create_evidence_offering_verification",
-            "description": "Verifies caller-submitted claims against the registry binding selected by the evidence offering. The offering determines the dataset, entity, lookup keys, and ruleset; callers cannot select legacy verification rulesets directly.",
-            "parameters": [
-                path_parameter("offering_id", "Evidence offering identifier"),
-                optional_purpose_header_parameter(),
-                {
-                    "name": "Accept",
-                    "in": "header",
-                    "required": false,
-                    "description": "Use `application/json` or omit for the default JSON response. Use `application/vnd.registry-relay.evidence-verification+jwt` to request a signed server-to-server receipt when provenance is enabled and the media type is configured.",
-                    "schema": {
-                        "type": "string",
-                        "enum": [
-                            "application/json",
-                            "application/vnd.registry-relay.evidence-verification+jwt"
-                        ],
-                    },
-                }
-            ],
-            "requestBody": {
-                "required": true,
-                "content": {
-                    "application/json": {
-                        "schema": { "$ref": "#/components/schemas/EvidenceVerificationRequest" }
-                    }
-                }
-            },
-            "responses": {
-                "200": {
-                    "description": "Completed evidence verification decision.",
-                    "headers": evidence_verification_response_headers(),
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/EvidenceVerificationResponse" }
-                        },
-                        "application/vnd.registry-relay.evidence-verification+jwt": {
-                            "schema": {
-                                "type": "string",
-                                "description": "Compact JWS signed evidence-verification receipt.",
-                                "examples": ["eyJhbGciOiJFZERTQSIsInR5cCI6ImV2aWRlbmNlLXZlcmlmaWNhdGlvbi1yZWNlaXB0K2p3dCJ9..."]
-                            }
-                        }
-                    }
-                },
-                "400": problem_response("Malformed request body, missing required claims, or missing required `Data-Purpose` header."),
-                "401": problem_response("Missing or invalid bearer credential."),
-                "404": problem_response("Evidence offering is unknown or hidden from the caller. Runtime code is `offering.not_found`."),
-                "406": problem_response("Requested evidence-verification JWT receipt format is not enabled for this deployment or offering."),
-                "413": problem_response("Request body exceeds the configured verification limit (`internal.payload_too_large`)."),
-                "503": problem_response("Configured entity resource is unavailable."),
-                "default": problem_response("Problem Details error response."),
-            }
-        }
-    })
-}
-
 fn entity_collection_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
     let mut parameters = pagination_parameters();
     parameters.push(query_parameter(
@@ -3497,16 +3291,6 @@ fn purpose_header_parameter() -> Value {
     purpose_header_parameter_with_required(true)
 }
 
-fn optional_purpose_header_parameter() -> Value {
-    let mut parameter = purpose_header_parameter_with_required(false);
-    if let Some(description) = parameter.get("description").and_then(Value::as_str) {
-        parameter["description"] = json!(format!(
-            "{description} Required when the selected evidence offering's bound entity requires a purpose-of-use header."
-        ));
-    }
-    parameter
-}
-
 fn purpose_header_parameter_with_required(required: bool) -> Value {
     json!({
         "name": "Data-Purpose",
@@ -3583,8 +3367,6 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use serde_json::Value;
-
     use super::*;
     use crate::config::{
         AdmsStatus, AuthMode, ClaimValidity, GatewayIssuerConfig, IssuerConfig,
@@ -3598,10 +3380,6 @@ mod tests {
             env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
             env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
             env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-            env::set_var(
-                "CLAIM_VERIFICATION_BINDING_KEY",
-                "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            );
             env::set_var(
                 "REGISTRY_RELAY_AUDIT_HASH_SECRET",
                 "relay-openapi-audit-secret-32-bytes",
@@ -3699,53 +3477,6 @@ mod tests {
     }
 
     #[test]
-    fn evidence_verification_openapi_path_documents_contract() {
-        let config = load_example_config();
-        let doc = openapi_document(&catalog_with_individual(), &config);
-        let op = &doc["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"];
-
-        assert_eq!(op["operationId"], "create_evidence_offering_verification");
-        assert_eq!(
-            op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
-            "#/components/schemas/EvidenceVerificationRequest"
-        );
-        assert_eq!(
-            op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
-            "#/components/schemas/EvidenceVerificationResponse"
-        );
-        assert!(
-            op["responses"]["200"]["content"]
-                .as_object()
-                .expect("content object")
-                .contains_key("application/vnd.registry-relay.evidence-verification+jwt"),
-            "signed receipt media type should be documented"
-        );
-        assert_eq!(
-            op["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"],
-            "no-store"
-        );
-        assert_eq!(
-            op["responses"]["413"]["content"]["application/problem+json"]["schema"]["$ref"],
-            "#/components/schemas/ProblemDetails"
-        );
-        assert!(op["description"]
-            .as_str()
-            .expect("description")
-            .contains("callers cannot select legacy verification rulesets directly"));
-        assert!(op["responses"]["404"]["description"]
-            .as_str()
-            .expect("404 description")
-            .contains("offering.not_found"));
-
-        let paths = doc["paths"].as_object().expect("paths object");
-        assert!(!paths.contains_key("/datasets/social_registry/individual/verify"));
-        assert!(!paths.contains_key("/datasets/social_registry/individual/claim-verifications"));
-        assert!(
-            !paths.contains_key("/datasets/social_registry/individual/claim-verification-rulesets")
-        );
-    }
-
-    #[test]
     fn evidence_verification_components_are_registered() {
         let config = load_example_config();
         let doc = openapi_document(&catalog_with_individual(), &config);
@@ -3755,25 +3486,14 @@ mod tests {
 
         assert!(schemas.contains_key("EvidenceOfferingList"));
         assert!(schemas.contains_key("EvidenceOffering"));
-        assert!(schemas.contains_key("EvidenceVerificationRequest"));
-        assert!(schemas.contains_key("EvidenceVerificationResponse"));
+        assert!(!schemas.contains_key("EvidenceVerificationRequest"));
+        assert!(!schemas.contains_key("EvidenceVerificationResponse"));
         assert!(!schemas.contains_key("ClaimVerificationRequest"));
         assert!(!schemas.contains_key("ClaimVerificationResponse"));
 
-        let request = &schemas["EvidenceVerificationRequest"];
-        assert!(request["properties"]["ruleset"].is_null());
-        assert_eq!(request["required"], json!(["claims"]));
-        assert_eq!(
-            request["properties"]["claims"]["additionalProperties"],
-            Value::Bool(true)
-        );
-        assert_eq!(
-            schemas["EvidenceVerificationResponse"]["properties"]["decision"]["enum"],
-            json!(["match", "mismatch", "ambiguous"])
-        );
         assert_eq!(
             schemas["EvidenceOffering"]["properties"]["access"]["properties"]["kind"]["enum"],
-            json!(["registry-relay-verification", "registry-witness"])
+            json!(["registry-witness"])
         );
     }
 

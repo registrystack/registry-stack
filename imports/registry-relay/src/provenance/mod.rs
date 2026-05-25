@@ -7,7 +7,6 @@
 //! * [`signer`]: [`Signer`] trait + error types.
 //! * [`signers`]: concrete implementations (software in V1).
 //! * [`jwt_vc`]: VC-JWT envelope encoder (VCDM 2.0).
-//! * [`jwt_receipt`]: evidence-verification compact JWT receipt encoder.
 //! * [`claim`]: per-claim-type `credentialSubject` builders.
 //! * [`did_web`]: gateway-mode DID Document builder.
 //! * [`resources`]: in-tree bytes for schemas and JSON-LD contexts.
@@ -19,17 +18,15 @@
 //! Handlers ask it to produce a [`SignedVc`] for the response that
 //! would otherwise be served as plain JSON.
 
+use registry_platform_crypto::PublicJwk;
 use std::sync::Arc;
 use std::time::Duration;
-
-use registry_platform_crypto::PublicJwk;
 use time::OffsetDateTime;
 
 use crate::config::{IssuerConfig, ProvenanceConfig, RetiredKeyConfig, SignerConfig};
 
 pub mod claim;
 pub mod did_web;
-pub mod jwt_receipt;
 pub mod jwt_vc;
 pub mod negotiate;
 pub mod publicschema;
@@ -38,15 +35,9 @@ pub mod sdjwt;
 pub mod signer;
 pub mod signers;
 
-pub use jwt_receipt::{
-    EvidenceVerificationReceiptInputs, SignedReceipt, EVIDENCE_VERIFICATION_RECEIPT_MEDIA_TYPE,
-    EVIDENCE_VERIFICATION_RECEIPT_TYPE,
-};
 pub use jwt_vc::{ClaimType, SignedEnvelope, VcCredentialProfile, VcEnvelopeInputs};
 pub use negotiate::{negotiate, NegotiationOutcome};
 pub use signer::{Signer, SignerError, SigningAlgorithm};
-
-const MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY: Duration = Duration::from_secs(5 * 60);
 
 /// Issuer mode resolved at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,31 +185,6 @@ pub struct IssuanceContext {
     pub issued_at: OffsetDateTime,
 }
 
-/// Per-request inputs gathered by the evidence-verification HTTP handler
-/// when the caller negotiated a signed receipt.
-#[derive(Debug, Clone)]
-pub struct EvidenceVerificationReceiptContext {
-    pub subject: String,
-    pub audience: String,
-    pub verification_id: String,
-    pub decision: String,
-    pub requirement: Option<String>,
-    pub evidence_type: String,
-    pub evidence_offering: String,
-    pub issuing_authority: serde_json::Value,
-    pub jurisdiction: Option<serde_json::Value>,
-    pub level_of_assurance: Option<String>,
-    pub dataset: String,
-    pub entity: String,
-    pub purpose_declared: Option<String>,
-    pub checked_at: String,
-    pub claim_salt: String,
-    pub claim_hash: String,
-    pub evidence_hash: Option<String>,
-    pub cccev_evidence: serde_json::Value,
-    pub issued_at: OffsetDateTime,
-}
-
 /// Output of [`ProvenanceState::issue`]. The handler emits the
 /// compact JWS on the wire and forwards the metadata to the audit
 /// layer via [`crate::audit::ProvenanceIssuanceExt`].
@@ -314,64 +280,6 @@ impl ProvenanceState {
             exp: envelope.exp,
         })
     }
-
-    /// Issue a signed evidence-verification JWT receipt.
-    ///
-    /// The receipt validity is capped at five minutes so server-to-server
-    /// evidence receipts stay short-lived.
-    pub fn issue_evidence_verification_receipt(
-        &self,
-        ctx: EvidenceVerificationReceiptContext,
-    ) -> Result<SignedReceipt, IssueError> {
-        let cfg = &self.inner;
-        let validity = MAX_EVIDENCE_VERIFICATION_RECEIPT_VALIDITY;
-        let valid_until = ctx
-            .issued_at
-            .checked_add(time::Duration::try_from(validity).map_err(|err| {
-                tracing::error!(error = %err, "provenance.evidence_verification.validity_overflow");
-                IssueError::IssuanceFailed
-            })?)
-            .ok_or_else(|| {
-                tracing::error!("provenance.evidence_verification.validity_add_overflow");
-                IssueError::IssuanceFailed
-            })?;
-        let receipt = jwt_receipt::encode(
-            cfg.signer.as_ref(),
-            EvidenceVerificationReceiptInputs {
-                issuer: cfg.issuer_did.clone(),
-                subject: ctx.subject,
-                audience: ctx.audience,
-                issued_at: ctx.issued_at,
-                valid_until,
-                verification_id: ctx.verification_id,
-                decision: ctx.decision,
-                requirement: ctx.requirement,
-                evidence_type: ctx.evidence_type,
-                evidence_offering: ctx.evidence_offering,
-                issuing_authority: ctx.issuing_authority,
-                jurisdiction: ctx.jurisdiction,
-                level_of_assurance: ctx.level_of_assurance,
-                dataset: ctx.dataset,
-                entity: ctx.entity,
-                purpose_declared: ctx.purpose_declared,
-                checked_at: ctx.checked_at,
-                claim_salt: ctx.claim_salt,
-                claim_hash: ctx.claim_hash,
-                evidence_hash: ctx.evidence_hash,
-                cccev_evidence: ctx.cccev_evidence,
-            },
-        )
-        .map_err(|err| {
-            map_receipt_encode_error(&err);
-            match err {
-                jwt_receipt::EncodeError::Signer(SignerError::Unavailable) => {
-                    IssueError::SignerUnavailable
-                }
-                _ => IssueError::IssuanceFailed,
-            }
-        })?;
-        Ok(receipt)
-    }
 }
 
 fn map_encode_error(err: &jwt_vc::EncodeError) {
@@ -384,20 +292,6 @@ fn map_encode_error(err: &jwt_vc::EncodeError) {
         }
         jwt_vc::EncodeError::TimestampFormat => {
             tracing::error!(event = "provenance.timestamp_format_failed");
-        }
-    }
-}
-
-fn map_receipt_encode_error(err: &jwt_receipt::EncodeError) {
-    match err {
-        jwt_receipt::EncodeError::Signer(SignerError::Unavailable) => {
-            tracing::warn!(event = "provenance.evidence_verification.signer_unavailable");
-        }
-        jwt_receipt::EncodeError::Signer(other) => {
-            tracing::error!(
-                event = "provenance.evidence_verification.sign_failed",
-                error = %other
-            );
         }
     }
 }

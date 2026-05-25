@@ -85,7 +85,9 @@ fn all_variants() -> Vec<Error> {
         Error::RuntimeBinding(RuntimeBindingError::TableMissing),
         Error::RuntimeBinding(RuntimeBindingError::FieldMissing),
         Error::RuntimeBinding(RuntimeBindingError::FilterMissing),
+        Error::RuntimeBinding(RuntimeBindingError::ScopeMissing),
         Error::RuntimeBinding(RuntimeBindingError::RelationshipMissing),
+        Error::RuntimeBinding(RuntimeBindingError::UnsupportedEvidenceOffering),
         // ogc.*
         Error::Ogc(OgcError::CollectionNotFound),
         Error::Ogc(OgcError::FeatureNotFound),
@@ -218,7 +220,15 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
         (
+            "runtime.binding.scope_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
             "runtime.binding.relationship_missing",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "runtime.binding.unsupported_evidence_offering",
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
         ("ogc.collection_not_found", StatusCode::NOT_FOUND),

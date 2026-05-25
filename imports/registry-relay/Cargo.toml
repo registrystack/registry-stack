@@ -37,7 +37,6 @@ tower-http = { version = "0.6", features = [
     "request-id",
     "cors",
     "timeout",
-    "limit",
     "set-header",
 ] }
 
@@ -167,10 +166,6 @@ harness = false
 
 [[bench]]
 name = "audit_bench"
-harness = false
-
-[[bench]]
-name = "claim_verification_bench"
 harness = false
 
 # Slim DWARF in dev builds. Each of the 50 integration test files links

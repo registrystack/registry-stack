@@ -65,7 +65,7 @@ fn software_signer_signs_and_round_trips() {
         "sub": "did:web:example:entity:hello",
         "iat": 1_700_000_000,
         "vc_claim": {
-            "kind": "verify_result",
+            "kind": "aggregate_result",
             "match": true,
         },
     });

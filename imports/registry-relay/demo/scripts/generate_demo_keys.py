@@ -8,8 +8,7 @@ Each persona gets a freshly generated raw key (32 random bytes, base64url-encode
 no padding) and a SHA-256 fingerprint of that key. The fingerprint is what goes
 in the registry-relay config's hash_env; the raw key is what Bruno sends as Bearer.
 
-The script also emits the internal HMAC binding key used by evidence
-verification rulesets and a local Ed25519 JWK for the focused Evidence Server
+The script also emits a local Ed25519 JWK for the focused Registry Witness
 demo issuer.
 
 Re-running always generates fresh keys. Old keys are not preserved.
@@ -63,11 +62,6 @@ def generate_raw_key() -> str:
     """Return 32 random bytes as a base64url string with no padding."""
     raw = secrets.token_bytes(32)
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
-def generate_claim_verification_binding_key() -> str:
-    """Return the configured hex: form expected by the ruleset hasher."""
-    return f"hex:{secrets.token_bytes(32).hex()}"
 
 
 def generate_audit_hash_secret() -> str:
@@ -159,7 +153,6 @@ def self_verify(pairs: list[tuple[str, str, str]]) -> None:
 
 def format_export_block(
     pairs: list[tuple[str, str, str]],
-    claim_verification_binding_key: str,
     audit_hash_secret: str,
     registry_witness_issuer_jwk: str,
 ) -> str:
@@ -168,9 +161,6 @@ def format_export_block(
         var = env_var_name(persona)
         lines.append(f"export {var}_RAW='{raw}'")
         lines.append(f"export {var}_HASH='{fingerprint}'")
-    lines.append(
-        f"export CLAIM_VERIFICATION_BINDING_KEY='{claim_verification_binding_key}'"
-    )
     lines.append(f"export REGISTRY_RELAY_AUDIT_HASH_SECRET='{audit_hash_secret}'")
     lines.append(f"export REGISTRY_WITNESS_ISSUER_JWK='{registry_witness_issuer_jwk}'")
     return "\n".join(lines) + "\n"
@@ -218,7 +208,6 @@ def main() -> int:
     try:
         pairs = generate_pairs()
         self_verify(pairs)
-        claim_verification_binding_key = generate_claim_verification_binding_key()
         audit_hash_secret = generate_audit_hash_secret()
         registry_witness_issuer_jwk = generate_registry_witness_issuer_jwk()
     except RuntimeError as exc:
@@ -227,7 +216,6 @@ def main() -> int:
 
     export_block = format_export_block(
         pairs,
-        claim_verification_binding_key,
         audit_hash_secret,
         registry_witness_issuer_jwk,
     )
@@ -238,7 +226,7 @@ def main() -> int:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(export_block, encoding="utf-8")
         print(
-            f"wrote {len(pairs)} key pairs, evidence-verification binding key, audit hash secret, and Evidence Server issuer JWK to {dest}",
+            f"wrote {len(pairs)} key pairs, audit hash secret, and Registry Witness issuer JWK to {dest}",
             file=sys.stderr,
         )
 

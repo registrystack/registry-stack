@@ -358,67 +358,19 @@ production identity mapping. The generated `*-sd-jwt-summary.json`,
 `*-issuer-jwks-summary.json`, and `*-production-readiness-gaps.json` artifacts
 make those boundaries visible for reviewers.
 
-## Narrated evidence-offerings demo
+## Evidence Offering Discovery
 
-For an educational walkthrough that prints each step and writes full responses
-to disk, start the combined demo and run:
+Relay publishes evidence offering metadata for Registry Witness discovery:
 
-```bash
-just demo-run demo/config/all_demos.yaml
+```http
+GET /metadata/evidence-offerings
+GET /metadata/evidence-offerings/{offering_id}
 ```
 
-In another shell:
-
-```bash
-python3 demo/scripts/evidence_offerings_demo.py --scenario benefits
-```
-
-The script demonstrates the complete chain:
-
-```text
-Requirement -> Evidence Type -> Evidence Offering -> Registry Binding -> Verification Decision
-```
-
-It discovers evidence offerings, inspects the benefits person offering, verifies
-submitted status facts for `per-2001`, submits a mismatching predicate, proves
-that the verification persona cannot read the source person row, and shows that
-the old dataset-first verification route has been retired. Full responses are
-written under `demo/output/evidence-offerings-demo/`.
-
-Run the education story instead with:
-
-```bash
-python3 demo/scripts/evidence_offerings_demo.py --scenario education
-```
-
-The standards bundle also demonstrates domain-specific evidence discovery for
-farmer-registration and disability-status checks:
-
-```bash
-just demo-run demo/config/all_standards.yaml spdci-api-standards,standards-cel-mapping
-python3 demo/scripts/evidence_offerings_demo.py --scenario farmer
-python3 demo/scripts/evidence_offerings_demo.py --scenario disability
-```
-
-Those scenarios show that semantic discovery returns only providers that
-publish the requested evidence type, verifies submitted facts through the
-declared offering, and keeps the verification persona away from source rows.
-
-The `--signed-receipt` flag requests
-`application/vnd.registry-relay.evidence-verification+jwt` for the matching
-step. The stock demo configs keep provenance signing disabled, so use that flag
-only with a config that enables `provenance.accepted_media_types` for the
-evidence-verification receipt media type and supplies a signer JWK.
-
-```bash
-python3 demo/scripts/evidence_offerings_demo.py --scenario benefits --signed-receipt
-```
-
-Keep custom predicate logic outside the relay when possible. The relay's v1
-evidence checks are deterministic `normalized_exact` rulesets over configured
-registry fields. Domain-specific calculations should be materialized by the
-source adapter or represented as explicit registry fields, then verified through
-an evidence offering.
+Registry Witness owns the claim definitions, rules, evidence rendering, and
+credential issuance. Keep custom predicate logic outside Relay. Domain-specific
+calculations should be materialized by the source adapter or represented as
+explicit registry fields, then verified through Registry Witness.
 
 ## Bruno collection
 
@@ -434,7 +386,7 @@ The environment file pre-fills the cross-demo defaults the requests reference:
 | `schoolId` | `sch-3001` | School id used by school-construction flow |
 | `facilityId` | `fac-4001` | Facility id used by clinic-rehab flow |
 | `studentAlias` | `stu-2001` | Student id used by scholarship + subject lookups |
-| `benefitsPersonAlias` | `per-2001` | Benefits person id used by evidence verification and subject lookups |
+| `benefitsPersonAlias` | `per-2001` | Benefits person id used by subject lookups |
 | `canonicalId` | `sub-9001` | Canonical subject id used by registry lookups |
 | `metadataKey` / `aggregateKey` / `rowsKey` / `evidenceVerificationKey` / `linkageKey` / `adminKey` | from the keygen output | Per-persona raw bearer tokens |
 
@@ -474,20 +426,17 @@ Start the server with the combined config:
 just demo-run
 ```
 
-In Bruno, run the `Cross-Demo Workflows` folder requests 11 through 14
+In Bruno, run the `Cross-Demo Workflows` folder requests 12 through 14
 in order:
 
-1. **`11-scholarship-verify-student.bru`** uses `evidenceVerificationKey`
-   (`verification_service`) to call `POST /evidence-offerings/{{studentEvidenceOfferingId}}/verifications`.
-   Returns 200 with a verification decision and receipt metadata without giving back any row content.
-2. **`12-scholarship-subject-lookup.bru`** uses `linkageKey`
+1. **`12-scholarship-subject-lookup.bru`** uses `linkageKey`
    (`linkage_service`) to call `GET /datasets/subject_registry/subject?education_student_alias={{studentAlias}}`.
    This is the only call in the flow that returns the cross-dataset alias
    mapping. The response carries the matching `benefits_household_alias`.
-3. **`13-scholarship-read-household.bru`** uses `rowsKey`
+2. **`13-scholarship-read-household.bru`** uses `rowsKey`
    (`casework_system`) with the alias from step 2 to call
    `GET /datasets/benefits_casework/household?id=<benefits_household_alias>`.
-4. **`14-scholarship-benefits-district-aggregate.bru`** uses `aggregateKey`
+3. **`14-scholarship-benefits-district-aggregate.bru`** uses `aggregateKey`
    (`planning_analyst`) to run a benefits aggregate that gives the
    district-level eligibility picture without enumerating households.
 

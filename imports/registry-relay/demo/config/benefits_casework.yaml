@@ -47,11 +47,6 @@ auth:
         - admin
         - benefits_casework:metadata
 
-claim_verification:
-  binding_key_id: demo-evidence-v1
-  # Env value format: hex:<64+ lowercase hex chars>
-  # demo/scripts/generate_demo_keys.py emits this value for local review.
-  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
 audit:
   sink: stdout
@@ -357,17 +352,6 @@ datasets:
             - field: eligibility_status
               ops: [eq, in]
           allowed_expansions: [household]
-        claim_verification:
-          rulesets:
-            benefits-person-v1:
-              mode: normalized_exact
-              required_claims: [id, eligibility_status, benefit_role]
-              candidate_lookup: [id]
-              match_fields:
-                id: id
-                eligibility_status: eligibility_status
-                benefit_role: benefit_role
-              expose_ambiguous: false
         aggregates:
           - id: by_district_age_band
             description: Count of persons by household district and age band

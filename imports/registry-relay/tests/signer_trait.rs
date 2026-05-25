@@ -75,7 +75,7 @@ fn software_signer_produces_three_segment_jws_with_expected_header() {
     let payload = json!({
         "iss": "did:web:example",
         "sub": "did:web:example:entity:42",
-        "claim": "verify_result",
+        "claim": "aggregate_result",
     });
     let jws = signer.sign(header.clone(), payload.clone()).expect("sign");
     let parts: Vec<&str> = jws.split('.').collect();

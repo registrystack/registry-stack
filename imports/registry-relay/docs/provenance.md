@@ -43,7 +43,6 @@ provenance:
   schema_base_url: https://data.example.gov/schemas
   context_base_url: https://data.example.gov/contexts
   claim_validity:
-    verify_result:    5m
     aggregate_result: 1h
     entity_record:    24h
   issuer:
@@ -348,7 +347,6 @@ provenance:
   schema_base_url: https://data.example.gov/schemas
   context_base_url: https://data.example.gov/contexts
   claim_validity:
-    verify_result: 5m
     aggregate_result: 1h
     entity_record: 24h
   issuer:
@@ -382,7 +380,6 @@ provenance:
   schema_base_url: https://relay.example.gov/schemas
   context_base_url: https://relay.example.gov/contexts
   claim_validity:
-    verify_result: 5m
     aggregate_result: 1h
     entity_record: 24h
   issuer:

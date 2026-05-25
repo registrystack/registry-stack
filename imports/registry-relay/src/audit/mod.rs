@@ -139,7 +139,6 @@ pub enum EndpointKind {
     Dataset,
     Schema,
     Verify,
-    EvidenceVerification,
     Rows,
     AggregateList,
     Aggregate,
@@ -835,22 +834,12 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Admin
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
-    } else if path.starts_with("/evidence-offerings/") {
-        classify_evidence_offering_endpoint(path)
     } else if path.starts_with("/ogc/v1/") {
         classify_ogc_endpoint(path)
     } else if path.starts_with("/datasets/") {
         classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
-    }
-}
-
-fn classify_evidence_offering_endpoint(path: &str) -> EndpointKind {
-    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
-    match segments.as_slice() {
-        ["evidence-offerings", _offering, "verifications"] => EndpointKind::EvidenceVerification,
-        _ => EndpointKind::Other,
     }
 }
 
@@ -985,7 +974,7 @@ mod tests {
         );
         assert_eq!(
             classify_endpoint("/evidence-offerings/person-evidence/verifications"),
-            EndpointKind::EvidenceVerification
+            EndpointKind::Other
         );
         assert_eq!(classify_endpoint("/claims/evaluate"), EndpointKind::Other);
         assert_eq!(classify_endpoint("/credentials/issue"), EndpointKind::Other);

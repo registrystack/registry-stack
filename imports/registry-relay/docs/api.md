@@ -47,7 +47,6 @@ GET /datasets/{dataset_id}/{entity}/schema
 GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-POST /evidence-offerings/{offering_id}/verifications
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
@@ -211,29 +210,7 @@ GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/individual_name_evidence
 ```
 
-Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data.
-
-Evidence verification is a `POST` to one declared offering. It compares submitted claims against registry facts through the offering's configured verification binding. It can return a verification receipt or attestation of that comparison, but it does not issue official source credentials or make policy or eligibility decisions. V1 supports `normalized_exact` matching with configured candidate lookup fields only. JSON is the default response, and signed server-to-server receipts use `application/vnd.registry-relay.evidence-verification+jwt`, not `application/vc+jwt`:
-
-```http
-POST /evidence-offerings/individual_name_evidence/verifications HTTP/1.1
-Authorization: Bearer <api-key>
-Content-Type: application/json
-Accept: application/json
-Data-Purpose: https://data.example.gov/purposes/identity-verification
-
-{
-  "claims": {
-    "given_name": "Camille",
-    "family_name": "Durand",
-    "date_of_birth": "1992-04-18"
-  }
-}
-```
-
-Responses include `Cache-Control: no-store` and `Vary: Authorization, Accept`. They return `decision`, `verification_id`, `claim_salt`, `claim_hash`, the evidence offering IRI, evidence type IRI, requirement IRI, and metadata for the comparison, but they do not echo raw submitted claims, issue source documents, or decide downstream eligibility. Unknown claim keys are rejected. `Data-Purpose` values must be absolute IRIs and, when the offering declares `policy.purpose`, must be in that allowlist. Header names are case-insensitive; examples use this casing for readability.
-
-Unknown, hidden, or unauthorized offerings return the same not-found style response so callers cannot distinguish unavailable offerings or entities by probing. See [evidence-verification.md](evidence-verification.md) for full request, response, privacy, and signed-receipt examples.
+Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Evidence offerings are discovery records for Registry Witness. Relay publishes `access.kind: registry-witness` metadata with the advertised Witness endpoint or discovery URL; clients submit claims and evidence to Registry Witness, not Relay.
 
 Aggregates are predeclared in config. Clients can list available aggregates and execute one by id:
 

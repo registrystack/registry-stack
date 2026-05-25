@@ -41,18 +41,7 @@ auth:
         - social_registry:metadata
         - social_registry:evidence_verification
 
-claim_verification:
-  binding_key_id: example-v1
-  # Env value format: hex:<64+ lowercase hex chars>
-  # Generate with: printf 'hex:%s\n' "$(openssl rand -hex 32)"
-  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
-evidence_verification:
-  rate_limit:
-    enabled: true
-    burst: 120
-    window_seconds: 60
-    max_buckets: 8192
 
 datasets:
   - id: social_registry
@@ -241,16 +230,6 @@ datasets:
               min_group_size: 5
               suppression: omit
 
-        claim_verification:
-          rulesets:
-            identity-match-v1:
-              mode: normalized_exact
-              required_claims: [id]
-              candidate_lookup: [id]
-              match_fields:
-                id: id
-              expose_ambiguous: false
-              scope: social_registry:evidence_verification
 
 audit:
   sink: stdout            # stdout | file | syslog
@@ -280,7 +259,6 @@ audit:
 #   accepted_media_types:
 #     - application/vc+jwt
 #     - application/jwt
-#     - application/vnd.registry-relay.evidence-verification+jwt
 #   schema_base_url: https://data.example.gov/schemas
 #   context_base_url: https://data.example.gov/contexts
 #   claim_validity:

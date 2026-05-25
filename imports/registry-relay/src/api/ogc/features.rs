@@ -1516,7 +1516,6 @@ mod tests {
                 metadata_scope: "metadata".to_string(),
                 aggregate_scope: "aggregate".to_string(),
                 read_scope: "rows".to_string(),
-                claim_verification_scope: None,
                 evidence_verification_scope: String::new(),
             },
             api: EntityApiConfig {
@@ -1528,7 +1527,6 @@ mod tests {
                 allowed_expansions: Vec::new(),
             },
             spatial: None,
-            claim_verification: None,
         }
     }
 

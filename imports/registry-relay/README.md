@@ -27,7 +27,7 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [docs/metadata.md](docs/metadata.md): portable metadata manifests, static publication, and `/metadata/*` routes.
 - [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
   Registry Relay publication choices, and downstream interpretation boundaries.
-- [docs/evidence-verification.md](docs/evidence-verification.md): evidence verification guide, examples, privacy model, and signed receipts.
+- [docs/evidence-verification.md](docs/evidence-verification.md): Registry Witness discovery notes.
 - [registry-witness](https://github.com/jeremi/registry-witness): standalone Registry Witness
   workspace for registry-backed claim evaluation, rendering, and credential
   issuance.
@@ -197,16 +197,13 @@ GET /datasets/{dataset_id}/{entity}/schema
 GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-POST /evidence-offerings/{offering_id}/verifications
 GET /datasets/{dataset_id}/{entity}/aggregates
 GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
 ```
 
-`POST /evidence-offerings/{offering_id}/verifications` is Relay-native and
-only executes offerings whose metadata declares
-`access.kind: registry-relay-verification`. Offerings with
-`access.kind: registry-witness` are discovery records; clients call the
-advertised Registry Witness endpoint directly.
+Evidence offerings are discovery records only. Relay publishes offerings whose
+metadata declares `access.kind: registry-witness`; clients call the advertised
+Registry Witness endpoint directly for claim and evidence verification.
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
 
@@ -310,7 +307,7 @@ For production, mount a deployment-specific config, mount source data read-only,
 
 ## Signed Verifiable Credentials (Opt-In)
 
-The gateway can return W3C Verifiable Credentials (compact JWS) for supported evidence-verification, aggregate, and entity-record responses. The feature is off by default; enable it by adding a `provenance:` block to the config (see [config/example.yaml](config/example.yaml) for the template). Callers opt in per request with:
+The gateway can return W3C Verifiable Credentials (compact JWS) for supported aggregate and entity-record responses. The feature is off by default; enable it by adding a `provenance:` block to the config (see [config/example.yaml](config/example.yaml) for the template). Callers opt in per request with:
 
 ```http
 Accept: application/vc+jwt

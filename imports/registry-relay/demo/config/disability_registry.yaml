@@ -66,11 +66,6 @@ auth:
         - social_registry:metadata
         - farmer_registry:metadata
 
-claim_verification:
-  binding_key_id: demo-disability-v1
-  # Env value format: hex:<64+ lowercase hex chars>
-  # demo/scripts/generate_demo_keys.py emits this value for local review.
-  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
 standards:
   spdci:
@@ -321,16 +316,6 @@ datasets:
               ops: [eq, in]
             - field: home_district
               ops: [eq, in]
-        claim_verification:
-          rulesets:
-            disability-status-v1:
-              mode: normalized_exact
-              required_claims: [member_identifier, disability_status]
-              candidate_lookup: [member_identifier]
-              match_fields:
-                member_identifier: member_identifier
-                disability_status: disability_status
-              expose_ambiguous: false
 
 
   - id: civil_registry
@@ -594,15 +579,6 @@ datasets:
               ops: [eq, in]
             - field: poverty_score
               ops: [eq, gte, lte]
-        claim_verification:
-          rulesets:
-            social-group-v1:
-              mode: normalized_exact
-              required_claims: [group_id]
-              candidate_lookup: [group_id]
-              match_fields:
-                group_id: group_id
-              subject_id_claim: group_id
 
 
   - id: farmer_registry
@@ -749,14 +725,3 @@ datasets:
               ops: [eq, in]
             - field: district
               ops: [eq, in]
-        claim_verification:
-          rulesets:
-            farmer-status-v1:
-              mode: normalized_exact
-              required_claims: [national_id, farm_type, district]
-              candidate_lookup: [national_id]
-              match_fields:
-                national_id: national_id
-                farm_type: farm_type
-                district: district
-              subject_id_claim: national_id

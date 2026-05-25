@@ -19,7 +19,6 @@ use registry_relay::config::{
     FilterOp, MaterializationMode, OidcAlgorithm, RefreshConfig, Sensitivity, SourceConfig,
     Suppression, UpdateFrequency,
 };
-use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -62,42 +61,6 @@ fn write_config(tmp: &TempDir, body: &str) -> PathBuf {
 }
 
 fn minimal_config(dataset_body: &str) -> String {
-    let claim_verification = if dataset_body.contains("claim_verification:") {
-        env::set_var(
-            "TEST_CLAIM_VERIFICATION_BINDING_KEY",
-            "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        );
-        r#"
-claim_verification:
-  binding_key_id: test-v1
-  binding_key_env: TEST_CLAIM_VERIFICATION_BINDING_KEY
-"#
-    } else {
-        ""
-    };
-    format!(
-        r#"
-server:
-  bind: 127.0.0.1:0
-catalog:
-  title: Test
-  base_url: https://data.example.test
-  publisher: Test
-vocabularies: {{}}
-auth:
-  mode: api_key
-  api_keys: []
-{claim_verification}
-datasets:
-{dataset_body}
-audit:
-  sink: stdout
-  format: jsonl
-"#
-    )
-}
-
-fn minimal_config_without_claim_verification_runtime(dataset_body: &str) -> String {
     format!(
         r#"
 server:
@@ -115,76 +78,6 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
-"#
-    )
-}
-
-fn claim_verification_config_with_binding_env(env_name: &str) -> String {
-    minimal_config(&claim_verification_dataset(
-        "          claim_verification_scope: social_registry:claim_verification\n",
-        r#"
-            birth-certificate-request-v1:
-              mode: normalized_exact
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-"#,
-    ))
-    .replace("TEST_CLAIM_VERIFICATION_BINDING_KEY", env_name)
-}
-
-fn claim_verification_dataset(access_scope_line: &str, claim_verification_body: &str) -> String {
-    format!(
-        r#"
-  - id: social_registry
-    title: Social Registry
-    description: Synthetic registry
-    owner: Test
-    sensitivity: personal
-    access_rights: restricted
-    update_frequency: monthly
-    defaults:
-      refresh:
-        mode: manual
-    tables:
-      - id: people_table
-        source:
-          type: file
-          path: fixtures/people.csv
-        primary_key: person_id
-        schema:
-          strict: true
-          fields:
-            - name: person_id
-              type: string
-              nullable: false
-            - name: given_name
-              type: string
-            - name: family_name
-              type: string
-            - name: date_of_birth
-              type: date
-    entities:
-      - name: person
-        table: people_table
-        fields:
-          - name: id
-            from: person_id
-          - name: given_name
-          - name: family_name
-          - name: date_of_birth
-        access:
-          metadata_scope: social_registry:metadata
-          aggregate_scope: social_registry:aggregate
-          read_scope: social_registry:rows
-{access_scope_line}
-        api:
-          default_limit: 100
-          max_limit: 1000
-        claim_verification:
-          rulesets:
-{claim_verification_body}
 "#
     )
 }
@@ -219,11 +112,6 @@ fn example_config_loads_and_validates() {
     env::set_var("STATS_OFFICE_API_KEY_HASH", key_a);
     env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", key_b);
     env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", key_c);
-    env::set_var(
-        "CLAIM_VERIFICATION_BINDING_KEY",
-        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    );
-
     let config = config::load(&example_path()).expect("example config must load");
 
     assert_eq!(config.server.bind.to_string(), "0.0.0.0:8080");
@@ -469,93 +357,8 @@ fn allowed_filter_unknown_field_rejected() {
 }
 
 #[test]
-fn claim_verification_ruleset_loads_and_compiles_defaults() {
+fn legacy_claim_verification_config_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            birth-certificate-request-v1:
-              mode: normalized_exact
-              required_claims: [given_name, family_name]
-              candidate_lookup: [family_name]
-              match_fields:
-                given_name: given_name
-                family_name: family_name
-                registry_id: id
-              subject_id_claim: registry_id
-              allow_subject_id_targeting: true
-"#,
-        )),
-    );
-
-    let config = config::load(&config_path).expect("claim verification config loads");
-    let entity = &config.datasets[0].entities[0];
-    assert_eq!(
-        entity.access.claim_verification_required_scope(),
-        Some("social_registry:claim_verification")
-    );
-    let ruleset = entity
-        .claim_verification
-        .as_ref()
-        .expect("claim verification")
-        .rulesets
-        .get("birth-certificate-request-v1")
-        .expect("ruleset");
-    assert!(!ruleset.expose_ambiguous);
-    assert!(!ruleset.diagnostics);
-    assert!(ruleset.allow_subject_id_targeting);
-    assert_eq!(
-        ruleset.required_scope(&entity.access),
-        Some("social_registry:claim_verification")
-    );
-
-    let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
-    let compiled_entity = registry
-        .dataset("social_registry")
-        .and_then(|dataset| dataset.entity("person"))
-        .expect("compiled person entity");
-    assert!(compiled_entity.claim_verification.is_some());
-}
-
-#[test]
-fn claim_verification_ruleset_without_scope_loads_as_deny_by_default() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "",
-            r#"
-            request-v1:
-              mode: normalized_exact
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-"#,
-        )),
-    );
-
-    let config = config::load(&config_path).expect("scope-less ruleset still loads");
-    let entity = &config.datasets[0].entities[0];
-    let ruleset = entity
-        .claim_verification
-        .as_ref()
-        .expect("claim verification")
-        .rulesets
-        .get("request-v1")
-        .expect("ruleset");
-    assert_eq!(ruleset.required_scope(&entity.access), None);
-}
-
-#[test]
-fn claim_verification_scope_is_valid_for_api_keys() {
-    let tmp = TempDir::new().expect("tempdir");
-    env::set_var(
-        "TEST_KEY_HASH_CLAIM_VERIFICATION",
-        make_fingerprint(b"claim-verification-scope-test"),
-    );
     let body = minimal_config(
         r#"
   - id: social_registry
@@ -565,253 +368,60 @@ fn claim_verification_scope_is_valid_for_api_keys() {
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    tables: []
-    entities: []
-"#,
-    )
-    .replace(
-        "api_keys: []",
-        r#"api_keys:
-    - id: verifier
-      hash_env: TEST_KEY_HASH_CLAIM_VERIFICATION
-      scopes:
-        - social_registry:claim_verification
-        - social_registry:claim_verification:birth-certificate-request-v1"#,
-    );
-    let config_path = write_config(&tmp, &body);
-
-    config::load(&config_path).expect("claim verification scopes must validate");
-}
-
-#[test]
-fn claim_verification_requires_stable_binding_key_config() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config_without_claim_verification_runtime(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            birth-certificate-request-v1:
-              mode: normalized_exact
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-"#,
-        )),
-    );
-    let result = config::load(&config_path);
-    assert_config_code(result, "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_unencoded_binding_key() {
-    let tmp = TempDir::new().expect("tempdir");
-    let body =
-        claim_verification_config_with_binding_env("TEST_CLAIM_VERIFICATION_UNENCODED_BINDING_KEY");
-    env::set_var(
-        "TEST_CLAIM_VERIFICATION_UNENCODED_BINDING_KEY",
-        "0123456789abcdef0123456789abcdef",
-    );
-    let config_path = write_config(&tmp, &body);
-
-    let result = config::load(&config_path);
-    assert_config_code(result, "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_uppercase_binding_key_hex() {
-    let tmp = TempDir::new().expect("tempdir");
-    let body =
-        claim_verification_config_with_binding_env("TEST_CLAIM_VERIFICATION_UPPERCASE_BINDING_KEY");
-    env::set_var(
-        "TEST_CLAIM_VERIFICATION_UPPERCASE_BINDING_KEY",
-        "hex:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-    );
-    let config_path = write_config(&tmp, &body);
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_short_binding_key_hex() {
-    let tmp = TempDir::new().expect("tempdir");
-    let body =
-        claim_verification_config_with_binding_env("TEST_CLAIM_VERIFICATION_SHORT_BINDING_KEY");
-    env::set_var(
-        "TEST_CLAIM_VERIFICATION_SHORT_BINDING_KEY",
-        "hex:0123456789abcdef0123456789abcdef",
-    );
-    let config_path = write_config(&tmp, &body);
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_odd_length_binding_key_hex() {
-    let tmp = TempDir::new().expect("tempdir");
-    let body =
-        claim_verification_config_with_binding_env("TEST_CLAIM_VERIFICATION_ODD_BINDING_KEY");
-    env::set_var(
-        "TEST_CLAIM_VERIFICATION_ODD_BINDING_KEY",
-        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
-    );
-    let config_path = write_config(&tmp, &body);
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_non_hex_binding_key_chars() {
-    let tmp = TempDir::new().expect("tempdir");
-    let body =
-        claim_verification_config_with_binding_env("TEST_CLAIM_VERIFICATION_NON_HEX_BINDING_KEY");
-    env::set_var(
-        "TEST_CLAIM_VERIFICATION_NON_HEX_BINDING_KEY",
-        "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg",
-    );
-    let config_path = write_config(&tmp, &body);
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_unset_binding_key_env() {
-    let tmp = TempDir::new().expect("tempdir");
-    let env_name = "TEST_CLAIM_VERIFICATION_UNSET_BINDING_KEY";
-    env::remove_var(env_name);
-    let body = claim_verification_config_with_binding_env(env_name);
-    let config_path = write_config(&tmp, &body);
-
-    assert_config_code(config::load(&config_path), "config.missing_secret");
-}
-
-#[test]
-fn claim_verification_rejects_unknown_match_field() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            request-v1:
-              mode: normalized_exact
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: missing_field
-"#,
-        )),
-    );
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_empty_ruleset_id() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            "":
-              mode: normalized_exact
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-"#,
-        )),
-    );
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_empty_required_claims() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            request-v1:
-              mode: normalized_exact
-              required_claims: []
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-"#,
-        )),
-    );
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_unsupported_mode_as_validation_error() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            request-v1:
-              mode: fuzzy
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-"#,
-        )),
-    );
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_subject_id_claim_not_in_match_fields() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: people_table
+        source:
+          type: file
+          path: fixtures/people.csv
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: given_name
+              type: string
+    entities:
+      - name: person
+        table: people_table
+        fields:
+          - name: id
+            from: person_id
+          - name: given_name
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+          claim_verification_scope: social_registry:claim_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+        claim_verification:
+          rulesets:
             request-v1:
               mode: normalized_exact
               required_claims: [given_name]
               candidate_lookup: [given_name]
               match_fields:
                 given_name: given_name
-              subject_id_claim: registry_id
 "#,
-        )),
     );
-
-    assert_config_code(config::load(&config_path), "config.validation_error");
-}
-
-#[test]
-fn claim_verification_rejects_diagnostics_true_in_v1() {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = write_config(
-        &tmp,
-        &minimal_config(&claim_verification_dataset(
-            "          claim_verification_scope: social_registry:claim_verification\n",
-            r#"
-            request-v1:
-              mode: normalized_exact
-              required_claims: [given_name]
-              candidate_lookup: [given_name]
-              match_fields:
-                given_name: given_name
-              diagnostics: true
-"#,
-        )),
+    let body = body.replace(
+        "auth:\n  mode: api_key\n  api_keys: []",
+        r#"auth:
+  mode: api_key
+  api_keys: []
+claim_verification:
+  binding_key_id: legacy
+  binding_key_env: REMOVED"#,
     );
+    let config_path = write_config(&tmp, &body);
 
-    assert_config_code(config::load(&config_path), "config.validation_error");
+    assert_config_code(config::load(&config_path), "config.parse_error");
 }
 
 #[test]

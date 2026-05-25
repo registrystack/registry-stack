@@ -1227,16 +1227,7 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         .any(|parameter| parameter["name"] == "id" && parameter["in"] == "path"));
 
     assert!(body["paths"]["/datasets/social_registry/household/verify"].is_null());
-    let evidence_post = &body["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"];
-    assert_eq!(
-        evidence_post["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
-        "#/components/schemas/EvidenceVerificationResponse"
-    );
-    assert!(evidence_post["parameters"]
-        .as_array()
-        .expect("evidence parameters")
-        .iter()
-        .any(|parameter| parameter["name"] == "offering_id" && parameter["in"] == "path"));
+    assert!(body["paths"]["/evidence-offerings/{offering_id}/verifications"].is_null());
 
     let relationship_get =
         &body["paths"]["/datasets/social_registry/household/{id}/members"]["get"];
@@ -1293,11 +1284,6 @@ async fn openapi_json_includes_catalog_response_examples_for_redoc() {
         (
             "/metadata/evidence-offerings/{offering_id}",
             "get",
-            "application/json",
-        ),
-        (
-            "/evidence-offerings/{offering_id}/verifications",
-            "post",
             "application/json",
         ),
         ("/metadata/dcat", "get", "application/ld+json"),
@@ -1507,10 +1493,6 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
         serde_json::json!(["Catalog"])
     );
     assert_eq!(
-        body["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"]["tags"],
-        serde_json::json!(["Catalog"])
-    );
-    assert_eq!(
         body["paths"]["/datasets"]["get"]["tags"],
         serde_json::json!(["Catalog"])
     );
@@ -1624,10 +1606,7 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
             "{path} must declare a stable operationId"
         );
     }
-    assert_eq!(
-        body["paths"]["/evidence-offerings/{offering_id}/verifications"]["post"]["operationId"],
-        "create_evidence_offering_verification"
-    );
+    assert!(body["paths"]["/evidence-offerings/{offering_id}/verifications"].is_null());
 
     // ---- 3.1 nullability for the nullable `region` field ----
     let region =

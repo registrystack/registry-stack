@@ -369,7 +369,6 @@ fn endpoint_kind_renders_canonical_strings() {
         (Dataset, "dataset"),
         (Schema, "schema"),
         (Verify, "verify"),
-        (EvidenceVerification, "evidence_verification"),
         (Rows, "rows"),
         (AggregateList, "aggregate_list"),
         (Aggregate, "aggregate"),

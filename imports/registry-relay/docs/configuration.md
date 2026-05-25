@@ -580,48 +580,21 @@ Relationships are dataset-local in V1. Cross-dataset workflows should compose cl
 
 ### Evidence Verification
 
-Evidence verification exposes declared metadata offerings and an offering-bound verification endpoint:
+Evidence offerings expose Registry Witness discovery metadata:
 
 ```http
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
-POST /evidence-offerings/{offering_id}/verifications
 ```
 
-The portable metadata manifest declares the public offering, while runtime entity access declares the scope required to execute the offering's verification binding. The expected runtime shape is:
+Relay does not verify claims or evidence. `registry-witness` is the only claim/evidence verifier. The portable metadata manifest declares public offerings with `access.kind: registry-witness`, `endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the Witness service that owns verification.
 
 ```yaml
-claim_verification:
-  binding_key_id: social-registry-v1
-  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
-
-evidence_verification:
-  rate_limit:
-    enabled: true
-    burst: 120
-    window_seconds: 60
-    max_buckets: 8192
-
 access:
   evidence_verification_scope: social_registry:evidence_verification
-
-claim_verification:
-  rulesets:
-    identity-match-v1:
-      mode: normalized_exact
-      required_claims: [given_name, family_name, date_of_birth]
-      candidate_lookup: [family_name, date_of_birth]
-      match_fields:
-        given_name: given_name
-        family_name: family_name
-        date_of_birth: date_of_birth
-      allow_subject_id_targeting: false
-      diagnostics: false
-      expose_ambiguous: false
-      scope: social_registry:evidence_verification
 ```
 
-V1 supports `normalized_exact` only. `binding_key_env` must point at a stable high-entropy secret encoded as `hex:<64-or-more-lowercase-hex-chars>`, where the decoded key is at least 32 bytes. For example, generate it with `printf 'hex:%s\n' "$(openssl rand -hex 32)"`. Registry Relay derives offering-scoped HMAC keys from that secret, and the same decoded key must remain available after process restarts so `claim_hash` and `evidence_hash` remain interpretable. The endpoint defaults to JSON. Signed JWT receipts use `application/vnd.registry-relay.evidence-verification+jwt` when provenance is enabled and that media type is listed in `provenance.accepted_media_types`; otherwise strict receipt requests return `406`. Header names are case-insensitive, so `Data-Purpose` and `data-purpose` are equivalent; values must be absolute IRIs and must match `policy.purpose` when an offering declares one. The built-in rate limiter is per principal and offering. See [evidence-verification.md](evidence-verification.md) for request and response examples.
+`evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local verification endpoint.
 
 `example-person-schema` is optional and requires a binary built with
 `--features publicschema-cel`. When present, entity-record VC issuance
@@ -659,7 +632,7 @@ Supported measure functions include the configured V1 set used by tests and exam
 
 ## Provenance
 
-The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`. Evidence-verification receipts use the same signer but are not VC-JWTs; add `application/vnd.registry-relay.evidence-verification+jwt` to `provenance.accepted_media_types` only for deployments that want that receipt profile.
+The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed VC-JWT responses with `Accept: application/vc+jwt`.
 
 See [provenance.md](provenance.md) for the full signer, DID, schema, context, and rotation contract.
 

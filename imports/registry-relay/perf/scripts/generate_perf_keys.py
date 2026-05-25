@@ -17,16 +17,14 @@ the output path. Raw tokens and hashes are never printed to stdout.
 
 Also emits:
 
-- CLAIM_VERIFICATION_BINDING_KEY: hex: prefixed 32-byte secret for the
-  internal matching HMAC key used by evidence verification.
 - REGISTRY_RELAY_AUDIT_HASH_SECRET: per-deployment audit HMAC secret used to
   hash sensitive audit identifiers.
 - REGISTRY_RELAY_PROVENANCE_JWK: JSON-encoded Ed25519 private JWK used by
-  the provenance signer to issue signed evidence-verification receipts.
+  the provenance signer to issue signed VC-JWT responses.
 
 If the env file already exists and is being reused (--force not set), this
 script exits without writing. When --force is set a new file is written with
-fresh values for all variables (tokens, binding key, signing JWK).
+fresh values for all variables (tokens, audit secret, signing JWK).
 
 Usage:
     uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env
@@ -68,11 +66,6 @@ def sha256_fingerprint(raw: str) -> str:
 def generate_token() -> str:
     """Return a URL-safe random token (~32 bytes of entropy, 43 chars)."""
     return secrets.token_urlsafe(32)
-
-
-def generate_binding_key() -> str:
-    """Return a hex: prefixed 32-byte random secret for matching HMAC."""
-    return f"hex:{secrets.token_hex(32)}"
 
 
 def generate_audit_hash_secret() -> str:
@@ -120,7 +113,6 @@ def generate_provenance_jwk() -> str:
 
 def build_env_lines(
     tokens: dict[str, str],
-    binding_key: str,
     audit_hash_secret: str,
     provenance_jwk: str,
 ) -> list[str]:
@@ -149,10 +141,6 @@ def build_env_lines(
         fingerprint = sha256_fingerprint(tokens[key_id])
         lines.append(f"{hash_env}={fingerprint}")
     lines += [
-        "#",
-        "# Evidence verification HMAC binding key (hex:<64 lowercase hex chars>).",
-        "# Must remain stable across server restarts so claim_hash values stay interpretable.",
-        f"CLAIM_VERIFICATION_BINDING_KEY={binding_key}",
         "#",
         "# Audit HMAC secret for sensitive audit identifiers.",
         "# Must remain stable across server restarts for consistent audit lookups.",
@@ -192,14 +180,13 @@ def main() -> None:
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Generate one random token per keyed entry, the HMAC binding key, and
-    # the Ed25519 private JWK for the provenance signer.
+    # Generate one random token per keyed entry, the audit secret, and the
+    # Ed25519 private JWK for the provenance signer.
     tokens: dict[str, str] = {key_id: generate_token() for key_id, _, _ in KEY_DEFS}
-    binding_key = generate_binding_key()
     audit_hash_secret = generate_audit_hash_secret()
     provenance_jwk = generate_provenance_jwk()
 
-    env_lines = build_env_lines(tokens, binding_key, audit_hash_secret, provenance_jwk)
+    env_lines = build_env_lines(tokens, audit_hash_secret, provenance_jwk)
     env_content = "\n".join(env_lines) + "\n"
 
     env_path.write_text(env_content, encoding="utf-8")
@@ -220,7 +207,6 @@ def main() -> None:
         "REGISTRY_RELAY_DATASET_ID",
         "REGISTRY_RELAY_ENTITY",
     ] + [hash_env for _, hash_env, _ in KEY_DEFS] + [
-        "CLAIM_VERIFICATION_BINDING_KEY",
         "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         "REGISTRY_RELAY_PROVENANCE_JWK",
     ]

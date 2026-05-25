@@ -10,7 +10,6 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::{col, lit};
 use serde_json::Value;
 
-use crate::claim_verification::normalize_claim_value_for_match;
 use crate::config::{FilterOp, RelationshipKind};
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{Error, FilterError, InternalError, SchemaError};
@@ -75,21 +74,6 @@ pub struct EntityRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntityExists {
     pub exists: bool,
-    pub ingest_version: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClaimVerificationQuery {
-    pub match_values: BTreeMap<String, Value>,
-    pub candidate_values: BTreeMap<String, Value>,
-    pub subject_id: Option<Value>,
-    pub limit: usize,
-    pub scan_limit: usize,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClaimVerificationMatch {
-    pub count: usize,
     pub ingest_version: Option<String>,
 }
 
@@ -249,83 +233,6 @@ impl EntityQueryEngine {
         Ok(EntityExists {
             exists: !result.rows.is_empty(),
             ingest_version: table_version(&result.versions, &entity.table_id),
-        })
-    }
-
-    pub async fn verify_claims_normalized_exact(
-        &self,
-        dataset_id: &str,
-        entity_name: &str,
-        query: ClaimVerificationQuery,
-    ) -> Result<ClaimVerificationMatch, Error> {
-        let entity = self.entity(dataset_id, entity_name)?;
-        let mut projected = Vec::new();
-        for field_name in query
-            .match_values
-            .keys()
-            .chain(query.candidate_values.keys())
-        {
-            projected.push(entity_field(entity, field_name)?);
-        }
-        projected.sort_by(|left, right| left.name.cmp(&right.name));
-        projected.dedup_by(|left, right| left.name == right.name);
-        if query.subject_id.is_some()
-            && !projected
-                .iter()
-                .any(|field| field.name == entity.primary_key.name)
-        {
-            projected.push(&entity.primary_key);
-        }
-        let filters = query
-            .candidate_values
-            .iter()
-            .map(|(field, value)| EntityFilter::eq(field.clone(), value.clone()))
-            .collect();
-        let result = self
-            .execute_entity_query(
-                dataset_id,
-                entity,
-                &projected,
-                filters,
-                Some(query.scan_limit.saturating_add(1)),
-                None,
-            )
-            .await?;
-        let ingest_version = table_version(&result.versions, &entity.table_id);
-        if result.rows.len() > query.scan_limit {
-            return Ok(ClaimVerificationMatch {
-                count: query.limit,
-                ingest_version,
-            });
-        }
-        let mut count = 0usize;
-        for row in result.rows {
-            if let Some(subject_id) = &query.subject_id {
-                let Some(row_subject) = row.get(&entity.primary_key.name) else {
-                    continue;
-                };
-                if normalize_claim_value_for_match(row_subject)
-                    != normalize_claim_value_for_match(subject_id)
-                {
-                    continue;
-                }
-            }
-            let matched = query.match_values.iter().all(|(field_name, expected)| {
-                row.get(field_name).is_some_and(|actual| {
-                    normalize_claim_value_for_match(actual)
-                        == normalize_claim_value_for_match(expected)
-                })
-            });
-            if matched {
-                count = count.saturating_add(1);
-                if count >= query.limit {
-                    break;
-                }
-            }
-        }
-        Ok(ClaimVerificationMatch {
-            count,
-            ingest_version,
         })
     }
 

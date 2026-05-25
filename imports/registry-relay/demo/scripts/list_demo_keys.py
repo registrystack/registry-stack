@@ -54,8 +54,7 @@ OPENAPI_WORDS = {
     "aggregate": ["List aggregates", "Run aggregate"],
     "rows": ["List records", "Get record", "Get relationship"],
     "verify": [],
-    "evidence_verification": ["Create evidence verification"],
-    "claim_verification": [],
+    "evidence_verification": ["Discover Registry Witness offerings"],
     "admin": ["Admin operation"],
 }
 
@@ -180,7 +179,6 @@ def levels_for(key: DemoKey) -> list[str]:
         "rows",
         "verify",
         "evidence_verification",
-        "claim_verification",
         "admin",
         "other",
     ]

@@ -638,26 +638,21 @@ Each Relay metadata manifest must advertise:
 - entity schemas;
 - evidence offerings;
 - policy metadata where relevant;
-- Evidence Server endpoint and discovery URL for external offerings.
+- Registry Witness endpoint and discovery URL for external offerings.
 
 Static metadata publication is required in v1:
 
 - generate a static bundle before or during Compose startup;
 - serve the bundle from `static-metadata-publisher`;
 - include evidence offerings and policy metadata;
-- the demo client must discover at least one Evidence Server endpoint from the
+- the demo client must discover at least one Registry Witness endpoint from the
   static metadata bundle, not only from Relay-hosted metadata.
 
-For external Evidence Server offerings:
+For external Registry Witness offerings:
 
-- `access.kind` must be `evidence-server`;
+- `access.kind` must be `registry-witness`;
 - Relay metadata may advertise endpoint and discovery URLs;
-- Relay must not execute the offering through
-  `POST /evidence-offerings/{offering_id}/verifications`.
-
-Relay-native offerings are optional in this demo. If included, they must be
-clearly labeled as Relay-native and must not be confused with Evidence Server
-claim evaluation.
+- Relay must not execute the offering locally.
 
 ## Data Requirements
 

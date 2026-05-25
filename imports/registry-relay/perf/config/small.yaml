@@ -40,22 +40,16 @@ auth:
       scopes:
         - clinic_capacity:evidence_verification
 
-claim_verification:
-  binding_key_id: perf-clinic-capacity-v1
-  # Env value format: hex:<64 lowercase hex chars>
-  # generate_perf_keys.py emits CLAIM_VERIFICATION_BINDING_KEY.
-  binding_key_env: CLAIM_VERIFICATION_BINDING_KEY
 
-# Provenance signer for the evidence-verification JWT receipt path.
+# Provenance signer for VC-JWT response checks.
 # See perf/config/medium.yaml for the full comment.
 provenance:
   enabled: true
   accepted_media_types:
-    - application/vnd.registry-relay.evidence-verification+jwt
+    - application/vc+jwt
   schema_base_url: http://127.0.0.1:18080/schemas
   context_base_url: http://127.0.0.1:18080/contexts
   claim_validity:
-    verify_result: 5m
     aggregate_result: 1h
     entity_record: 24h
   issuer:
@@ -161,23 +155,6 @@ datasets:
                 column: capacity
             disclosure_control:
               min_group_size: 1
-        claim_verification:
-          rulesets:
-            # Drives the match and mismatch decision paths.
-            # candidate_lookup on id (unique primary key) returns at most one candidate.
-            # Match: submit id + correct category.
-            # Mismatch: submit id + wrong category (candidate found, match_fields fail).
-            facility-identity-v1:
-              mode: normalized_exact
-              required_claims: [id, category]
-              candidate_lookup: [id]
-              match_fields:
-                id: id
-                category: category
-              allow_subject_id_targeting: false
-              diagnostics: false
-              expose_ambiguous: false
-              scope: clinic_capacity:evidence_verification
 
             # Drives the ambiguous decision path.
             # candidate_lookup on region_code (20 distinct values, ~50 rows each in 1k)

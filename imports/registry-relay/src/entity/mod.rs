@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use crate::config::{
-    Config, DatasetConfig, EntityAccessConfig, EntityApiConfig, EntityClaimVerificationConfig,
-    EntityConfig, EntityRelationshipConfig, FieldType, ResourceConfig, SpatialBboxFieldsConfig,
+    Config, DatasetConfig, EntityAccessConfig, EntityApiConfig, EntityConfig,
+    EntityRelationshipConfig, FieldType, ResourceConfig, SpatialBboxFieldsConfig,
     SpatialGeometryConfig,
 };
 use crate::error::{ConfigError, Error};
@@ -34,7 +34,6 @@ pub struct EntityModel {
     pub access: EntityAccessConfig,
     pub api: EntityApiConfig,
     pub spatial: Option<EntitySpatialModel>,
-    pub claim_verification: Option<EntityClaimVerificationConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,7 +111,6 @@ fn compile_dataset(dataset: &DatasetConfig) -> Result<DatasetEntities, Error> {
                 access: entity.access.clone(),
                 api: entity.api.clone(),
                 spatial,
-                claim_verification: entity.claim_verification.clone(),
             },
         );
     }

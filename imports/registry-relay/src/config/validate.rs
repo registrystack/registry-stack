@@ -12,18 +12,17 @@ use std::env;
 use std::net::IpAddr;
 use std::time::Duration;
 
-use crate::claim_verification::{decode_binding_key, ClaimVerificationKeyError};
 use crate::error::{ConfigError, Error, RuntimeBindingError};
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_crypto::{validate_did, DidMethod};
+use registry_platform_httpsec::CorsPolicy;
 
 use super::capabilities::source_capabilities;
 use super::{
-    AggregateConfig, AllowedFilter, AuthMode, ClaimVerificationRulesetConfig, Config,
-    DatasetConfig, EntityConfig, EntityRelationshipConfig, EntitySpatialConfig,
-    EvidenceVerificationRateLimitConfig, FieldConfig, FieldType, OidcConfig, RefreshConfig,
-    RelationshipKind, ResourceConfig, SourceConfig, SpatialBboxFieldsConfig, SpatialGeometryConfig,
-    CRS84,
+    AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
+    EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, OidcConfig,
+    RefreshConfig, RelationshipKind, ResourceConfig, SourceConfig, SpatialBboxFieldsConfig,
+    SpatialGeometryConfig, CRS84,
 };
 
 /// Prefix for the special `admin` scope.
@@ -46,47 +45,11 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
-    validate_claim_verification_runtime(config).map_err(Error::from)?;
-    validate_evidence_verification_runtime(config).map_err(Error::from)?;
     if let Some(provenance) = &config.provenance {
         validate_provenance(provenance).map_err(Error::from)?;
     }
     validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
-    Ok(())
-}
-
-fn validate_evidence_verification_runtime(config: &Config) -> Result<(), ConfigError> {
-    validate_evidence_rate_limit(&config.evidence_verification.rate_limit)
-}
-
-fn validate_evidence_rate_limit(
-    rate_limit: &EvidenceVerificationRateLimitConfig,
-) -> Result<(), ConfigError> {
-    if !rate_limit.enabled {
-        return Ok(());
-    }
-    if rate_limit.burst == 0 {
-        tracing::error!(
-            code = "config.validation_error",
-            "evidence_verification.rate_limit.burst must be greater than zero when enabled"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    if rate_limit.window_seconds == 0 {
-        tracing::error!(
-            code = "config.validation_error",
-            "evidence_verification.rate_limit.window_seconds must be greater than zero when enabled"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    if rate_limit.max_buckets == 0 {
-        tracing::error!(
-            code = "config.validation_error",
-            "evidence_verification.rate_limit.max_buckets must be greater than zero when enabled"
-        );
-        return Err(ConfigError::ValidationError);
-    }
     Ok(())
 }
 
@@ -166,23 +129,6 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FilterMissing);
                 }
             }
-            if let Some(claim_verification) = &entity.claim_verification {
-                for (ruleset_id, ruleset) in &claim_verification.rulesets {
-                    for field in ruleset.match_fields.values() {
-                        if !metadata_entity.fields.contains_key(field) {
-                            tracing::error!(
-                                code = "runtime.binding.field_missing",
-                                dataset_id = %dataset.id,
-                                entity = %entity.name,
-                                ruleset = %ruleset_id,
-                                field = %field,
-                                "claim verification binding references a field not declared in the metadata manifest"
-                            );
-                            return Err(RuntimeBindingError::FieldMissing);
-                        }
-                    }
-                }
-            }
             for relationship in &entity.relationships {
                 if !metadata_dataset.entities.contains_key(&relationship.target) {
                     tracing::error!(
@@ -224,7 +170,7 @@ pub fn validate_runtime_bindings(
             }
         }
         for offering in metadata_dataset.evidence_offerings.values() {
-            let entity = dataset
+            let _entity = dataset
                 .entities
                 .iter()
                 .find(|entity| entity.name == offering.entity)
@@ -260,41 +206,15 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FieldMissing);
                 }
             }
-            if offering.access.kind == "registry-witness" {
-                continue;
-            }
-            if entity.access.evidence_verification_scope.trim().is_empty() {
+            if offering.access.kind != "registry-witness" {
                 tracing::error!(
-                    code = "runtime.binding.scope_missing",
+                    code = "runtime.binding.unsupported_evidence_offering",
                     dataset_id = %dataset.id,
                     offering = %offering.id,
-                    entity = %offering.entity,
-                    "evidence offering runtime entity must declare evidence_verification_scope"
+                    access_kind = %offering.access.kind,
+                    "Registry Relay only supports external Registry Witness evidence offerings"
                 );
-                return Err(RuntimeBindingError::ScopeMissing);
-            }
-            let Some(claim_verification) = &entity.claim_verification else {
-                tracing::error!(
-                    code = "runtime.binding.ruleset_missing",
-                    dataset_id = %dataset.id,
-                    offering = %offering.id,
-                    entity = %offering.entity,
-                    "evidence offering references an entity without claim verification rulesets"
-                );
-                return Err(RuntimeBindingError::FieldMissing);
-            };
-            if !claim_verification
-                .rulesets
-                .contains_key(&offering.access.ruleset)
-            {
-                tracing::error!(
-                    code = "runtime.binding.ruleset_missing",
-                    dataset_id = %dataset.id,
-                    offering = %offering.id,
-                    ruleset = %offering.access.ruleset,
-                    "evidence offering references an unknown claim verification ruleset"
-                );
-                return Err(RuntimeBindingError::FieldMissing);
+                return Err(RuntimeBindingError::UnsupportedEvidenceOffering);
             }
         }
     }
@@ -1024,44 +944,36 @@ fn validate_server(config: &Config) -> Result<(), ConfigError> {
             return Err(ConfigError::ValidationError);
         }
     }
-    for origin in &config.server.cors.allowed_origins {
-        if !is_valid_cors_origin(origin) {
-            tracing::error!(
-                code = "config.validation_error",
-                "cors allowed_origins entry must be scheme://host[:port] with no path or query; wildcard '*' is not permitted"
-            );
-            return Err(ConfigError::ValidationError);
-        }
+    if let Err(err) = platform_cors_policy(config).validate() {
+        tracing::error!(
+            code = "config.validation_error",
+            error = %err,
+            "server.cors failed shared platform validation"
+        );
+        return Err(ConfigError::ValidationError);
     }
     Ok(())
 }
 
-/// Validate a CORS origin entry.
-///
-/// Accepts `scheme://host` or `scheme://host:port`. Rejects `*`,
-/// origins with a path component, query strings, or missing scheme.
+fn platform_cors_policy(config: &Config) -> CorsPolicy {
+    CorsPolicy {
+        allowed_origins: config.server.cors.allowed_origins.clone(),
+        allowed_methods: Vec::new(),
+        allowed_headers: Vec::new(),
+        allow_credentials: false,
+    }
+}
+
+#[cfg(test)]
 fn is_valid_cors_origin(s: &str) -> bool {
-    // Reject the wildcard explicitly; it would allow any origin.
-    if s == "*" {
-        return false;
+    CorsPolicy {
+        allowed_origins: vec![s.to_string()],
+        allowed_methods: Vec::new(),
+        allowed_headers: Vec::new(),
+        allow_credentials: false,
     }
-    // Must start with a scheme followed by "://".
-    let after_scheme = match s.split_once("://") {
-        Some((scheme, rest)) if !scheme.is_empty() => rest,
-        _ => return false,
-    };
-    if after_scheme.is_empty() {
-        return false;
-    }
-    // No path or query allowed after the host[:port] portion.
-    if after_scheme.contains('/') || after_scheme.contains('?') || after_scheme.contains('#') {
-        return false;
-    }
-    // The host portion must be non-empty (port after ':' is optional).
-    let host = after_scheme
-        .split_once(':')
-        .map_or(after_scheme, |(h, _)| h);
-    !host.is_empty()
+    .validate()
+    .is_ok()
 }
 
 fn is_trusted_proxy_spec(s: &str) -> bool {
@@ -1402,15 +1314,6 @@ fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
                 "evidence_verification_scope",
                 false,
             )?;
-            if let Some(scope) = &entity.access.claim_verification_scope {
-                validate_entity_scope(
-                    scope,
-                    dataset_id,
-                    &entity.name,
-                    "claim_verification_scope",
-                    true,
-                )?;
-            }
         }
     }
     Ok(())
@@ -1475,7 +1378,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification|claim_verification>'"
+            "scope must be 'admin' or '<dataset_id>:<metadata|aggregate|rows|verify|evidence_verification>'"
         );
         ConfigError::ValidationError
     })?;
@@ -1485,7 +1388,7 @@ fn validate_scope(
             code = "config.validation_error",
             api_key_id = %api_key_id,
             scope = %scope,
-            "unknown scope level (allowed: metadata, aggregate, rows, verify, evidence_verification, claim_verification)"
+            "unknown scope level (allowed: metadata, aggregate, rows, verify, evidence_verification)"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -1506,18 +1409,10 @@ fn validate_scope(
 fn is_valid_scope_level(level: &str) -> bool {
     matches!(
         level,
-        "metadata"
-            | "aggregate"
-            | "rows"
-            | "verify"
-            | "evidence_verification"
-            | "claim_verification"
+        "metadata" | "aggregate" | "rows" | "verify" | "evidence_verification"
     ) || level
-        .strip_prefix("claim_verification:")
-        .is_some_and(|ruleset| !ruleset.trim().is_empty())
-        || level
-            .strip_prefix("evidence_verification:")
-            .is_some_and(|suffix| !suffix.trim().is_empty())
+        .strip_prefix("evidence_verification:")
+        .is_some_and(|suffix| !suffix.trim().is_empty())
 }
 
 fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
@@ -1555,67 +1450,6 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
             );
             return Err(ConfigError::ValidationError);
         }
-    }
-    Ok(())
-}
-
-fn validate_claim_verification_runtime(config: &Config) -> Result<(), ConfigError> {
-    let requires_runtime = config.datasets.iter().any(|dataset| {
-        dataset
-            .entities
-            .iter()
-            .any(|entity| entity.claim_verification.is_some())
-    });
-    if !requires_runtime {
-        return Ok(());
-    }
-    let Some(binding) = &config.claim_verification else {
-        tracing::error!(
-            code = "config.validation_error",
-            "claim_verification runtime block is required when an entity declares claim_verification"
-        );
-        return Err(ConfigError::ValidationError);
-    };
-    if binding.binding_key_id.trim().is_empty() {
-        tracing::error!(
-            code = "config.validation_error",
-            "claim_verification.binding_key_id must not be empty"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    if binding.binding_key_env.trim().is_empty() {
-        tracing::error!(
-            code = "config.validation_error",
-            "claim_verification.binding_key_env must not be empty"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    let key = env::var(&binding.binding_key_env).map_err(|_| {
-        tracing::error!(
-            code = "config.missing_secret",
-            binding_key_env = %binding.binding_key_env,
-            "claim_verification.binding_key_env environment variable is not set"
-        );
-        ConfigError::MissingSecret
-    })?;
-    if let Err(reason) = decode_binding_key(&key) {
-        let detail = match reason {
-            ClaimVerificationKeyError::MissingPrefix => {
-                "claim_verification binding key must use the hex:<lowercase-hex> format"
-            }
-            ClaimVerificationKeyError::InvalidHex => {
-                "claim_verification binding key must contain lowercase hexadecimal bytes"
-            }
-            ClaimVerificationKeyError::TooShort => {
-                "claim_verification binding key must decode to at least 32 bytes"
-            }
-        };
-        tracing::error!(
-            code = "config.validation_error",
-            binding_key_env = %binding.binding_key_env,
-            "{detail}"
-        );
-        return Err(ConfigError::ValidationError);
     }
     Ok(())
 }
@@ -2166,7 +2000,6 @@ fn validate_entities(
         let exposed_fields = exposed_entity_fields(entity, table)?;
         validate_entity_primary_key(dataset, entity, table, &exposed_fields)?;
         validate_entity_filters(dataset, entity, &exposed_fields)?;
-        validate_entity_claim_verification(dataset, entity, &exposed_fields)?;
         validate_entity_aggregates(dataset, entity, &exposed_fields)?;
         validate_entity_spatial(dataset, entity, table, &exposed_fields, &mut collection_ids)?;
         validate_entity_relationships(dataset, entity, table, &tables, &entities)?;
@@ -2362,149 +2195,6 @@ fn validate_entity_filters(
     }
 
     Ok(())
-}
-
-fn validate_entity_claim_verification(
-    dataset: &DatasetConfig,
-    entity: &EntityConfig,
-    exposed_fields: &BTreeMap<String, String>,
-) -> Result<(), ConfigError> {
-    let Some(claim_verification) = &entity.claim_verification else {
-        return Ok(());
-    };
-    if claim_verification.rulesets.is_empty() {
-        tracing::error!(
-            code = "config.validation_error",
-            dataset_id = %dataset.id,
-            entity = %entity.name,
-            "claim_verification.rulesets must not be empty when claim_verification is configured"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    for (ruleset_id, ruleset) in &claim_verification.rulesets {
-        if ruleset_id.trim().is_empty() || !is_valid_ruleset_id(ruleset_id) {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                entity = %entity.name,
-                ruleset = %ruleset_id,
-                "claim verification ruleset id must not be empty and may contain lower-case letters, digits, underscores, and hyphens"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if ruleset.mode != ClaimVerificationRulesetConfig::NORMALIZED_EXACT_MODE {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                entity = %entity.name,
-                ruleset = %ruleset_id,
-                "claim verification ruleset mode is not supported"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if ruleset
-            .scope
-            .as_deref()
-            .is_some_and(|scope| scope.trim().is_empty())
-        {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                entity = %entity.name,
-                ruleset = %ruleset_id,
-                "claim verification ruleset scope must not be empty when configured"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if ruleset.diagnostics {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                entity = %entity.name,
-                ruleset = %ruleset_id,
-                "claim verification diagnostics are reserved and must be false in v1"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if ruleset.required_claims.is_empty()
-            || ruleset.candidate_lookup.is_empty()
-            || ruleset.match_fields.is_empty()
-        {
-            tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                entity = %entity.name,
-                ruleset = %ruleset_id,
-                "claim verification rulesets must declare required_claims, candidate_lookup, and match_fields"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        for claim in ruleset
-            .required_claims
-            .iter()
-            .chain(ruleset.candidate_lookup.iter())
-        {
-            if claim.trim().is_empty() || !ruleset.match_fields.contains_key(claim) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    dataset_id = %dataset.id,
-                    entity = %entity.name,
-                    ruleset = %ruleset_id,
-                    claim = %claim,
-                    "required_claims and candidate_lookup entries must be non-empty and present in match_fields"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-        for (claim, field) in &ruleset.match_fields {
-            if claim.trim().is_empty() || field.trim().is_empty() {
-                tracing::error!(
-                    code = "config.validation_error",
-                    dataset_id = %dataset.id,
-                    entity = %entity.name,
-                    ruleset = %ruleset_id,
-                    "claim verification match_fields keys and values must not be empty"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-            if !exposed_fields.contains_key(field) {
-                tracing::error!(
-                    code = "config.validation_error",
-                    dataset_id = %dataset.id,
-                    entity = %entity.name,
-                    ruleset = %ruleset_id,
-                    field = %field,
-                    "claim verification match_fields references a non-exposed field"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-        if let Some(subject_id_claim) = &ruleset.subject_id_claim {
-            if subject_id_claim.trim().is_empty()
-                || !ruleset.match_fields.contains_key(subject_id_claim)
-            {
-                tracing::error!(
-                    code = "config.validation_error",
-                    dataset_id = %dataset.id,
-                    entity = %entity.name,
-                    ruleset = %ruleset_id,
-                    claim = %subject_id_claim,
-                    "subject_id_claim must be present in match_fields"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_valid_ruleset_id(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_ascii_lowercase() || first.is_ascii_digit())
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
 }
 
 fn validate_entity_aggregates(

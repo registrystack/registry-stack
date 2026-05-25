@@ -50,20 +50,19 @@
 //! * Route handlers live in `crate::api`; this module only wires those
 //!   routers together with shared state and cross-cutting middleware.
 
-use std::env;
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::MatchedPath;
-use axum::http::{HeaderName, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_audit::AuditKeyHasher;
-use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::limit::RequestBodyLimitLayer;
+use registry_platform_httpsec::{apply_conditional_corp, request_body_limit, CorsPolicy};
+use tower_http::cors::CorsLayer;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };
@@ -72,11 +71,9 @@ use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use ulid::Ulid;
 
-use crate::api::EvidenceVerificationLimiter;
 use crate::api::{self, CursorSigner};
 use crate::audit::{self, AuditPipeline, AuditSettings};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
-use crate::claim_verification::{decode_binding_key, ClaimVerificationHasher};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
@@ -101,6 +98,7 @@ const X_FRAME_OPTIONS: HeaderName = HeaderName::from_static("x-frame-options");
 const PERMISSIONS_POLICY: HeaderName = HeaderName::from_static("permissions-policy");
 const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
     HeaderName::from_static("cross-origin-opener-policy");
+#[cfg(test)]
 const CROSS_ORIGIN_RESOURCE_POLICY: HeaderName =
     HeaderName::from_static("cross-origin-resource-policy");
 
@@ -206,7 +204,6 @@ fn build_app_with_provenance_metadata_and_metrics(
     let protected: Router<()> = Router::new()
         .merge(api::datasets_router())
         .merge(api::entity_router())
-        .merge(api::evidence_offerings_router())
         .merge(api::aggregates_router())
         .merge(api::metadata_router())
         .merge(api::openapi_router());
@@ -226,17 +223,9 @@ fn build_app_with_provenance_metadata_and_metrics(
     // verification uses a configured stable HMAC key so audit hashes
     // survive process restarts.
     let cursor_signer = Arc::new(CursorSigner::new_random());
-    let claim_verification_hasher = claim_verification_hasher_from_config(&config)?.map(Arc::new);
-    let evidence_verification_limiter = Arc::new(EvidenceVerificationLimiter::new(
-        &config.evidence_verification.rate_limit,
-    ));
     let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
         .layer(Extension(cursor_signer))
-        .layer(Extension(evidence_verification_limiter))
         .layer(Extension(config));
-    if let Some(hasher) = claim_verification_hasher {
-        router = router.layer(Extension(hasher));
-    }
     if let Some(state) = provenance {
         router = router.layer(Extension(state));
     }
@@ -244,20 +233,6 @@ fn build_app_with_provenance_metadata_and_metrics(
         router = router.layer(Extension(metadata));
     }
     Ok(router)
-}
-
-fn claim_verification_hasher_from_config(
-    config: &Config,
-) -> Result<Option<ClaimVerificationHasher>, ConfigError> {
-    let Some(binding) = &config.claim_verification else {
-        return Ok(None);
-    };
-    let key = env::var(&binding.binding_key_env).map_err(|_| ConfigError::MissingSecret)?;
-    let key = decode_binding_key(&key).map_err(|_| ConfigError::ValidationError)?;
-    Ok(Some(ClaimVerificationHasher::new(
-        binding.binding_key_id.clone(),
-        key,
-    )))
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -449,7 +424,7 @@ fn apply_cross_cutting_layers_with_metrics(
             StatusCode::REQUEST_TIMEOUT,
             config.server.request_timeout,
         ))
-        .layer(RequestBodyLimitLayer::new(REQUEST_BODY_LIMIT_BYTES))
+        .layer(request_body_limit(REQUEST_BODY_LIMIT_BYTES))
         .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
         .layer(cors)
@@ -520,17 +495,7 @@ async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
         CROSS_ORIGIN_OPENER_POLICY,
         HeaderValue::from_static("same-origin"),
     );
-    // CORP same-origin would defeat a deliberate CORS allowance under
-    // COEP. If the CORS layer already approved this response for
-    // cross-origin use (signalled by `Access-Control-Allow-Origin`),
-    // emit `cross-origin` so the browser can actually use it; otherwise
-    // keep the stricter default so internal endpoints stay locked down.
-    let corp_value = if headers.contains_key(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN) {
-        HeaderValue::from_static("cross-origin")
-    } else {
-        HeaderValue::from_static("same-origin")
-    };
-    headers.insert(CROSS_ORIGIN_RESOURCE_POLICY, corp_value);
+    apply_conditional_corp(&mut response);
     // HSTS is intentionally omitted at the application layer. Production
     // deployments terminate TLS upstream (load balancer / ingress) and
     // own the HSTS policy there; local development runs plain HTTP on
@@ -631,35 +596,28 @@ async fn normalize_internal_error_response(request: Request<Body>, next: Next) -
 /// V1 uses default-deny CORS. When `allowed_origins` is empty,
 /// `CorsLayer::new()` is returned (no origin gets
 /// `Access-Control-Allow-Origin`, which is the deny case).
-/// When non-empty, each origin is parsed as a [`HeaderValue`] and the
-/// list installed via [`AllowOrigin::list`]. A malformed origin is
-/// treated as a startup-time mis-config; the parse failure is logged
-/// and the layer falls back to deny-all so the gateway still starts.
+/// When non-empty, the shared Registry Platform CORS policy validates
+/// and builds the concrete Tower layer.
 fn build_cors_layer(cors: &CorsConfig) -> CorsLayer {
-    if cors.allowed_origins.is_empty() {
+    let policy = platform_cors_policy(cors);
+    if let Err(err) = policy.validate() {
+        tracing::error!(
+            code = %Error::from(ConfigError::ValidationError).code(),
+            error = %err,
+            "cors policy failed platform validation; falling back to deny-all"
+        );
         return CorsLayer::new();
     }
-    let mut parsed = Vec::with_capacity(cors.allowed_origins.len());
-    for origin in &cors.allowed_origins {
-        match HeaderValue::from_str(origin) {
-            Ok(value) => parsed.push(value),
-            Err(_) => {
-                // The config validator does not currently re-check
-                // origin syntax (it is parsed as a plain `String`), so
-                // we degrade gracefully here
-                // rather than panic at startup.
-                tracing::error!(
-                    code = %Error::from(ConfigError::ValidationError).code(),
-                    origin = %origin,
-                    "cors allowed_origins entry is not a valid header value; dropping it"
-                );
-            }
-        }
+    policy.layer()
+}
+
+fn platform_cors_policy(cors: &CorsConfig) -> CorsPolicy {
+    CorsPolicy {
+        allowed_origins: cors.allowed_origins.clone(),
+        allowed_methods: vec![Method::GET, Method::POST, Method::OPTIONS],
+        allowed_headers: Vec::new(),
+        allow_credentials: false,
     }
-    if parsed.is_empty() {
-        return CorsLayer::new();
-    }
-    CorsLayer::new().allow_origin(AllowOrigin::list(parsed))
 }
 
 #[cfg(test)]
@@ -683,10 +641,6 @@ mod tests {
             std::env::set_var("STATS_OFFICE_API_KEY_HASH", fingerprint);
             std::env::set_var("PROGRAM_SYSTEM_API_KEY_HASH", fingerprint);
             std::env::set_var("VERIFICATION_SERVICE_API_KEY_HASH", fingerprint);
-            std::env::set_var(
-                "CLAIM_VERIFICATION_BINDING_KEY",
-                "hex:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            );
             std::env::set_var(
                 "REGISTRY_RELAY_AUDIT_HASH_SECRET",
                 "relay-audit-test-secret-32-bytes-minimum",
@@ -1005,26 +959,5 @@ mod tests {
         let record = captured_audit_record(&records[0]);
         assert_eq!(record["error_code"], "internal.uri_too_long");
         assert_eq!(record["status_code"], 414);
-    }
-
-    #[test]
-    fn claim_verification_hasher_returns_error_when_env_var_missing() {
-        use crate::config::ClaimVerificationConfig;
-
-        let mut config = load_example_config();
-        // Override the binding_key_env to a name that is guaranteed
-        // absent from the test process environment.
-        config.claim_verification = Some(ClaimVerificationConfig {
-            binding_key_id: "test-key".to_string(),
-            binding_key_env: "REGISTRY_RELAY_TEST_CLAIM_KEY_ABSENT_12345".to_string(),
-        });
-        // Ensure the env var is not set.
-        unsafe { std::env::remove_var("REGISTRY_RELAY_TEST_CLAIM_KEY_ABSENT_12345") };
-
-        let result = claim_verification_hasher_from_config(&config);
-        assert!(
-            matches!(result, Err(crate::error::ConfigError::MissingSecret)),
-            "expected MissingSecret, got {result:?}"
-        );
     }
 }
