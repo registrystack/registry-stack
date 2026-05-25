@@ -16,6 +16,7 @@ registry-witness-cel = ["dep:cel-mapper-core"]
 registry-witness-core.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
+registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oid4vci.workspace = true
@@ -40,7 +41,6 @@ utoipa.workspace = true
 
 [dev-dependencies]
 axum-test = { version = "20" }
-registry-platform-crypto.workspace = true
 registry-platform-testing.workspace = true
 registry-witness-openfn-sidecar = { version = "0.2.1", path = "../registry-witness-openfn-sidecar" }
 serde_norway.workspace = true

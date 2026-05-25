@@ -13,6 +13,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_platform_audit::{verify_jsonl_lines, AuditEnvelope};
+use registry_platform_crypto::{did_jwk_from_public_jwk, PrivateJwk};
 use registry_platform_testing::{sign_openid4vci_proof_jwt, MockIdp};
 use registry_witness_core::{
     EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, SelfAttestationClaimSource,
@@ -30,6 +31,7 @@ use time::OffsetDateTime;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
 
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_WITNESS_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
@@ -37,7 +39,12 @@ fn set_audit_secret() {
 
 fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    sign_openid4vci_proof_jwt(TEST_ISSUER_JWK, audience, Some(nonce), now)
+    sign_openid4vci_proof_jwt(TEST_HOLDER_JWK, audience, Some(nonce), now)
+}
+
+fn holder_did_jwk() -> String {
+    let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
+    did_jwk_from_public_jwk(&holder.public()).expect("holder did:jwk encodes")
 }
 
 async fn registry_data_api(
@@ -823,6 +830,21 @@ async fn oid4vci_metadata_offer_and_nonce_are_public() {
         offer_body["credential_configuration_ids"][0],
         json!("person_is_alive_sd_jwt")
     );
+    let filtered_offer = server
+        .get("/oid4vci/credential-offer?credential_configuration_id=person_is_alive_sd_jwt")
+        .await;
+    filtered_offer.assert_status_ok();
+    let filtered_offer_body: Value = filtered_offer.json();
+    assert_eq!(
+        filtered_offer_body["credential_configuration_ids"],
+        json!(["person_is_alive_sd_jwt"])
+    );
+    let unknown_offer = server
+        .get("/oid4vci/credential-offer?credential_configuration_id=unknown")
+        .await;
+    unknown_offer.assert_status(StatusCode::BAD_REQUEST);
+    let unknown_offer_body: Value = unknown_offer.json();
+    assert_eq!(unknown_offer_body["error"], json!("invalid_request"));
 
     let nonce = server.post("/oid4vci/nonce").json(&json!({})).await;
     nonce.assert_status_ok();
@@ -952,6 +974,120 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     assert!(body["c_nonce"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
+
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    let credential_audit = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/oid4vci/credential")
+                && record["decision"] == json!("credential_issued")
+                && record["status"] == json!(200)
+        })
+        .expect("OID4VCI credential audit record exists");
+    assert_eq!(credential_audit["access_mode"], json!("self_attestation"));
+    assert_eq!(credential_audit["protocol"], json!("openid4vci"));
+    assert_eq!(
+        credential_audit["credential_configuration_id"],
+        json!("person_is_alive_sd_jwt")
+    );
+    assert_eq!(
+        credential_audit["credential_profile"],
+        json!("civil_status_sd_jwt")
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/datasets/people/person",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-witness-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+
+    let evaluate = server
+        .post("/claims/evaluate")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "subject": {
+                "id": "person-1",
+                "id_type": "national_id"
+            },
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/dc+sd-jwt"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluate_body: Value = evaluate.json();
+    let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned");
+
+    let issue = server
+        .post("/credentials/issue")
+        .add_header("authorization", authorization)
+        .json(&json!({
+            "evaluation_id": evaluation_id,
+            "credential_profile": "civil_status_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "holder": {
+                "binding": "did",
+                "id": holder_did_jwk(),
+                "proof": sign_oid4vci_proof("registry-witness", "nonce-1")
+            }
+        }))
+        .await;
+    issue.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = issue.json();
+    assert_eq!(body["code"], json!("credential.holder_proof_required"));
 
     idp.stop().await;
 }
@@ -1099,7 +1235,7 @@ async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
     assert_eq!(body["code"], json!("self_attestation.denied"));
     assert_eq!(
         body["type"],
-        json!("https://data.example.gov/problems/self_attestation/denied")
+        json!("https://docs.registry-witness.dev/problems/self_attestation/denied")
     );
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
@@ -1210,7 +1346,7 @@ async fn error_responses_match_rfc_7807_shape() {
     assert_eq!(body["code"], json!("auth.missing_credential"));
     assert!(body["type"]
         .as_str()
-        .is_some_and(|value| value.starts_with("https://data.example.gov/problems/")));
+        .is_some_and(|value| value.starts_with("https://docs.registry-witness.dev/problems/")));
     assert!(body["detail"].as_str().is_some());
 }
 

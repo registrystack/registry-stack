@@ -781,6 +781,10 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_profile: Option<ConfigMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<ConfigMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_configuration_id: Option<ConfigMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder_binding_mode: Option<ConfigMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_bucket: Option<RateLimitBucket>,
@@ -882,6 +886,8 @@ mod tests {
             token_claim_name: Some(bounded("national_id")),
             correlation_id: Some(bounded("req-123")),
             credential_profile: None,
+            protocol: Some(bounded("openid4vci")),
+            credential_configuration_id: Some(bounded("person_is_alive_sd_jwt")),
             holder_binding_mode: None,
             rate_limit_bucket: None,
             policy_version: Some(bounded("citizen-v1")),
@@ -896,6 +902,11 @@ mod tests {
         );
         assert_eq!(value["token_claim_name"], json!("national_id"));
         assert_eq!(value["correlation_id"], json!("req-123"));
+        assert_eq!(value["protocol"], json!("openid4vci"));
+        assert_eq!(
+            value["credential_configuration_id"],
+            json!("person_is_alive_sd_jwt")
+        );
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
         assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());

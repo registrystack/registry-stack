@@ -1,6 +1,7 @@
 /target/
 demo/var/
 /.security-review/
+/.release-review/
 
 # Python bytecode (perf scripts and stub)
 __pycache__/

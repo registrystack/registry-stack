@@ -4,6 +4,9 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use axum::body::Body;
+use axum::extract::MatchedPath;
+use axum::http::Request;
 use clap::{Parser, Subcommand};
 use registry_witness_core::StandaloneRegistryWitnessConfig;
 use registry_witness_server::{openapi_document, standalone_router};
@@ -47,7 +50,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.validate()?;
 
     let bind = config.server.bind;
-    let app = standalone_router(config)?.layer(TraceLayer::new_for_http());
+    let app = standalone_router(config)?.layer(TraceLayer::new_for_http().make_span_with(
+        |request: &Request<Body>| {
+            let matched_path = request
+                .extensions()
+                .get::<MatchedPath>()
+                .map(MatchedPath::as_str)
+                .unwrap_or_else(|| request.uri().path());
+            tracing::info_span!(
+                "http_request",
+                method = %request.method(),
+                matched_path,
+            )
+        },
+    ));
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let local_addr: SocketAddr = listener.local_addr()?;
     tracing::info!(%local_addr, "registry witness listening");

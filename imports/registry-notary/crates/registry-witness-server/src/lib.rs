@@ -7,6 +7,8 @@ pub mod runtime;
 pub mod self_attestation_rate_limit;
 pub mod standalone;
 
+pub(crate) const PROBLEM_TYPE_BASE_URL: &str = "https://docs.registry-witness.dev/problems";
+
 pub use api::*;
 pub use openapi::*;
 pub use runtime::*;

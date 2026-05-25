@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{OnceCell, Semaphore};
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
@@ -871,7 +871,7 @@ async fn auth_audit_middleware(
     next: Next,
 ) -> Response {
     let method = request.method().to_string();
-    let path = request.uri().path().to_string();
+    let path = audit_path(&request);
     let correlation_id = correlation_id_from_headers(request.headers());
     if is_public_probe_path(&path) {
         return next.run(request).await;
@@ -891,6 +891,8 @@ async fn auth_audit_middleware(
             denial_code: Some(SelfAttestationDenialCode::RateLimited),
             token_claim_name: None,
             credential_profile: None,
+            protocol: None,
+            credential_configuration_id: None,
             holder_binding_mode: None,
             rate_limit_bucket: rate_error
                 .bucket()
@@ -928,6 +930,8 @@ async fn auth_audit_middleware(
                     denial_code: Some(SelfAttestationDenialCode::RateLimited),
                     token_claim_name: None,
                     credential_profile: None,
+                    protocol: None,
+                    credential_configuration_id: None,
                     holder_binding_mode: None,
                     rate_limit_bucket: rate_error
                         .bucket()
@@ -977,6 +981,14 @@ async fn auth_audit_middleware(
         Ok(()) => response,
         Err(error) => audit_error_response(error),
     }
+}
+
+fn audit_path(request: &Request) -> String {
+    request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string())
 }
 
 fn client_address_identifier(request: &Request) -> String {
@@ -1053,6 +1065,9 @@ fn build_audit_event(
     let denial_code = audit.and_then(|context| context.denial_code);
     let token_claim_name = audit.and_then(|context| context.token_claim_name.clone());
     let credential_profile = audit.and_then(|context| context.credential_profile.clone());
+    let protocol = audit.and_then(|context| context.protocol.clone());
+    let credential_configuration_id =
+        audit.and_then(|context| context.credential_configuration_id.clone());
     let holder_binding_mode = audit.and_then(|context| context.holder_binding_mode.clone());
     let rate_limit_bucket = audit.and_then(|context| context.rate_limit_bucket.clone());
     let policy_hash = audit.and_then(|context| context.policy_hash.clone());
@@ -1088,6 +1103,8 @@ fn build_audit_event(
         token_claim_name,
         correlation_id: Some(correlation_id),
         credential_profile,
+        protocol,
+        credential_configuration_id,
         holder_binding_mode,
         rate_limit_bucket,
         policy_version: None,
@@ -1517,7 +1534,7 @@ fn audit_error_response(error: AuditError) -> Response {
     let mut response = (
         status,
         Json(json!({
-            "type": "https://data.example.gov/problems/audit/write_failed",
+            "type": format!("{}/audit/write_failed", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Audit write failed",
             "status": status.as_u16(),
             "detail": "audit event could not be written",
@@ -2364,6 +2381,8 @@ mod tests {
             token_claim_name: None,
             correlation_id: None,
             credential_profile: None,
+            protocol: None,
+            credential_configuration_id: None,
             holder_binding_mode: None,
             rate_limit_bucket: None,
             policy_version: None,
@@ -2407,6 +2426,13 @@ mod tests {
                 registry_witness_core::ConfigMetadata::new("national_id").expect("bounded"),
             ),
             credential_profile: None,
+            protocol: Some(
+                registry_witness_core::ConfigMetadata::new("openid4vci").expect("bounded"),
+            ),
+            credential_configuration_id: Some(
+                registry_witness_core::ConfigMetadata::new("person_is_alive_sd_jwt")
+                    .expect("bounded"),
+            ),
             holder_binding_mode: None,
             rate_limit_bucket: None,
             policy_hash: None,
@@ -2435,6 +2461,17 @@ mod tests {
         assert_eq!(
             event.denial_code,
             Some(SelfAttestationDenialCode::SubjectMismatch)
+        );
+        assert_eq!(
+            event.protocol.as_ref().map(|value| value.as_str()),
+            Some("openid4vci")
+        );
+        assert_eq!(
+            event
+                .credential_configuration_id
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("person_is_alive_sd_jwt")
         );
     }
 

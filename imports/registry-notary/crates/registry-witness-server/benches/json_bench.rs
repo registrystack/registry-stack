@@ -47,6 +47,8 @@ fn build_audit_event() -> EvidenceAuditEvent {
         token_claim_name: None,
         correlation_id: None,
         credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_version: None,

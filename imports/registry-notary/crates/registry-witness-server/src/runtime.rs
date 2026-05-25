@@ -176,15 +176,16 @@ fn cache_key_for_binding(
 use cel_mapper_core::{
     MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
 };
+use registry_platform_audit::AuditKeyHasher;
 use registry_witness_core::{
     AccessMode, BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
     BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
     BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimProvenance,
     ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
-    EvaluateRequest, EvidenceConfig, EvidenceError, EvidenceFormat, EvidencePrincipal, Hashed,
+    EvaluateRequest, EvidenceConfig, EvidenceError, EvidenceFormat, EvidencePrincipal,
     RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
-    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectBinding,
-    SubjectRequest, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
+    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
     SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
     SD_JWT_VC_SIGNING_ALG,
 };
@@ -198,6 +199,8 @@ use tokio::task::JoinSet;
 #[cfg(feature = "registry-witness-cel")]
 use tokio::time::timeout;
 use ulid::Ulid;
+
+use crate::self_attestation_rate_limit::SelfAttestationRateLimitKeys;
 
 #[cfg(feature = "registry-witness-cel")]
 const CEL_EVALUATION_TIMEOUT: Duration = Duration::from_millis(500);
@@ -683,13 +686,37 @@ impl EvidenceStore {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RegistryWitnessRuntime;
+#[derive(Debug, Clone)]
+pub struct RegistryWitnessRuntime {
+    self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+}
+
+impl Default for RegistryWitnessRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RegistryWitnessRuntime {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::new_with_audit_hasher(AuditKeyHasher::unkeyed_dev_only())
+    }
+
+    #[must_use]
+    pub fn new_with_audit_hasher(audit_hasher: AuditKeyHasher) -> Self {
+        Self::new_with_self_attestation_rate_keys(Arc::new(SelfAttestationRateLimitKeys::new(
+            audit_hasher,
+        )))
+    }
+
+    #[must_use]
+    pub fn new_with_self_attestation_rate_keys(
+        self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    ) -> Self {
+        Self {
+            self_attestation_rate_keys,
+        }
     }
 
     pub fn service_document(evidence: &EvidenceConfig) -> Value {
@@ -866,7 +893,11 @@ impl RegistryWitnessRuntime {
         request: EvaluateRequest,
         header_purpose: Option<&str>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
-        let source_capability = source_capability_for_principal(principal, &request.claims)?;
+        let source_capability = source_capability_for_principal(
+            &self.self_attestation_rate_keys,
+            principal,
+            &request.claims,
+        )?;
         self.evaluate_with_source_capability(
             evidence,
             source,
@@ -981,7 +1012,11 @@ impl RegistryWitnessRuntime {
         if request.claims.is_empty() || request.subjects.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
-        let source_capability = source_capability_for_principal(principal, &request.claims)?;
+        let source_capability = source_capability_for_principal(
+            &self.self_attestation_rate_keys,
+            principal,
+            &request.claims,
+        )?;
         let max_subjects = max_batch_subjects(&evidence, &request.claims)?;
         if request.subjects.len() > max_subjects {
             return Err(EvidenceError::BatchTooLarge);
@@ -1555,6 +1590,7 @@ fn require_claim_access<R: SourceReader + ?Sized>(
 }
 
 fn source_capability_for_principal(
+    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
     principal: &EvidencePrincipal,
     requested_claims: &[String],
 ) -> Result<SourceCapability, EvidenceError> {
@@ -1582,12 +1618,12 @@ fn source_capability_for_principal(
                     reason: SelfAttestationDenialCode::SubjectClaimMissing,
                 },
             )?;
+            let subject_binding_hash = self_attestation_rate_keys
+                .subject_binding(subject_binding_value.as_str())
+                .map_err(|error| error.evidence_error())?;
             Ok(SourceCapability::SelfAttestation {
                 claim_id,
-                subject_binding_hash: Hashed::<SubjectBinding>::from_hash(format!(
-                    "sha256:{}",
-                    sha256_hex(subject_binding_value.as_str().as_bytes())
-                )),
+                subject_binding_hash,
             })
         }
         AccessMode::Unknown => Err(EvidenceError::SelfAttestationInvalidToken),
@@ -2534,6 +2570,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_witness_core::Hashed;
 
     #[derive(Debug, Default)]
     struct CountingSource {
@@ -2678,6 +2715,39 @@ mod tests {
             claim_id: BoundedClaimId::new(claim_id).expect("claim id is bounded"),
             subject_binding_hash: Hashed::from_hash("sha256:test"),
         }
+    }
+
+    #[test]
+    fn self_attestation_source_capability_uses_keyed_subject_binding_hash() {
+        const ENV: &str = "TEST_RUNTIME_AUDIT_HASH_SECRET";
+        std::env::set_var(ENV, "0123456789abcdef0123456789abcdef");
+        let keys = SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::from_env(ENV).expect("test audit hasher loads"),
+        );
+        let mut principal = self_attestation_principal();
+        principal.verified_claims = Some(
+            serde_json::from_value(json!({
+                "issuer": "https://id.example.gov",
+                "audiences": ["registry-witness"],
+                "subject_binding_claim": "national_id",
+                "subject_binding_value": "12345678901"
+            }))
+            .expect("verified claims parse"),
+        );
+
+        let capability =
+            source_capability_for_principal(&keys, &principal, &["selected".to_string()])
+                .expect("source capability builds");
+        let SourceCapability::SelfAttestation {
+            subject_binding_hash,
+            ..
+        } = capability
+        else {
+            panic!("expected self-attestation capability");
+        };
+
+        assert!(subject_binding_hash.as_str().starts_with("hmac-sha256:"));
+        assert!(!subject_binding_hash.as_str().contains("12345678901"));
     }
 
     #[test]

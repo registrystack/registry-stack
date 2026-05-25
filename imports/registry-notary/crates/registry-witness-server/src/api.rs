@@ -4,7 +4,7 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::body::{to_bytes, Body, Bytes};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
@@ -13,6 +13,7 @@ use axum::{Extension, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_platform_audit::AuditKeyHasher;
+use registry_platform_crypto::PublicJwk;
 use registry_platform_oid4vci::{
     validate_proof_jwt, CredentialConfigurationMetadata, CredentialIssuerMetadata, CredentialOffer,
     CredentialRequest as Oid4vciCredentialRequest, CredentialResponse as Oid4vciCredentialResponse,
@@ -30,6 +31,7 @@ use registry_witness_core::{
     StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
     FORMAT_SD_JWT_VC,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -323,6 +325,8 @@ pub struct EvidenceAuditContext {
     pub denial_code: Option<SelfAttestationDenialCode>,
     pub token_claim_name: Option<ConfigMetadata>,
     pub credential_profile: Option<ConfigMetadata>,
+    pub protocol: Option<ConfigMetadata>,
+    pub credential_configuration_id: Option<ConfigMetadata>,
     pub holder_binding_mode: Option<ConfigMetadata>,
     pub rate_limit_bucket: Option<RateLimitBucket>,
     pub policy_hash: Option<Hashed<PolicyIdentifier>>,
@@ -378,6 +382,7 @@ async fn oid4vci_issuer_metadata(
 
 async fn oid4vci_credential_offer(
     state: Option<Extension<Arc<RegistryWitnessApiState>>>,
+    Query(query): Query<Oid4vciCredentialOfferQuery>,
 ) -> Response {
     let Some(Extension(state)) = state else {
         return oid4vci_error_response(Oid4vciWireError::ServerError);
@@ -385,18 +390,31 @@ async fn oid4vci_credential_offer(
     if !state.oid4vci.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
-    Json(CredentialOffer::authorization_code(
-        state.oid4vci.credential_issuer.clone(),
+    let credential_configuration_ids = if let Some(id) = query.credential_configuration_id {
+        if !state.oid4vci.credential_configurations.contains_key(&id) {
+            return oid4vci_error_response(Oid4vciWireError::InvalidRequest);
+        }
+        vec![id]
+    } else {
         state
             .oid4vci
             .credential_configurations
             .keys()
             .cloned()
-            .collect(),
-        "registry-witness:self-attestation",
+            .collect()
+    };
+    Json(CredentialOffer::authorization_code(
+        state.oid4vci.credential_issuer.clone(),
+        credential_configuration_ids,
+        generate_nonce().unwrap_or_else(|_| "registry-witness:self-attestation".to_string()),
         state.oid4vci.authorization_servers.first().cloned(),
     ))
     .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct Oid4vciCredentialOfferQuery {
+    credential_configuration_id: Option<String>,
 }
 
 async fn oid4vci_nonce(
@@ -494,6 +512,20 @@ async fn oid4vci_credential(
         Ok(proof) => proof,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidProof),
     };
+    let profile = match evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+    {
+        Some(profile) => profile,
+        None => return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType),
+    };
+    let issuer = match state.issuers.issuer(&configuration.credential_profile) {
+        Ok(issuer) => issuer,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    };
+    if holder_key_matches_issuer_key(&validated_proof.holder_jwk, &issuer.public_jwk()) {
+        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+    }
     if state.oid4vci.nonce.enabled {
         let Some(nonce) = validated_proof.nonce.as_deref() else {
             return oid4vci_error_response(Oid4vciWireError::InvalidProof);
@@ -526,7 +558,18 @@ async fn oid4vci_credential(
     let request = EvaluateRequest {
         subject: match oid4vci_bound_subject(&state.self_attestation, &principal) {
             Ok(subject) => subject,
-            Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidToken),
+            Err(_) => {
+                let mut response = oid4vci_error_response(Oid4vciWireError::InvalidToken);
+                attach_oid4vci_self_attestation_denial_audit(
+                    &mut response,
+                    "oid4vci_credential_denied",
+                    std::slice::from_ref(&configuration.claim_id),
+                    configuration_id,
+                    Some(SelfAttestationDenialCode::InvalidToken),
+                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                );
+                return response;
+            }
         },
         claims: vec![configuration.claim_id.clone()],
         disclosure: None,
@@ -539,24 +582,50 @@ async fn oid4vci_credential(
             request.purpose = Some(context.purpose.clone());
             context
         }
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::AccessDenied),
+        Err(error) => {
+            let denial_code = denial_code_from_error(&error);
+            let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
+            attach_oid4vci_self_attestation_denial_audit(
+                &mut response,
+                "oid4vci_credential_denied",
+                &request.claims,
+                configuration_id,
+                denial_code,
+                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
     };
-    let results = match RegistryWitnessRuntime::new()
-        .evaluate_with_source_capability(
-            Arc::clone(&state.evidence),
-            Arc::clone(&state.source),
-            &state.store,
-            &principal,
-            context.source_capability,
-            request,
-            None,
-            Some(context.metadata.clone()),
-            None,
-        )
-        .await
+    let results = match RegistryWitnessRuntime::new_with_self_attestation_rate_keys(Arc::clone(
+        &state.self_attestation_rate_keys,
+    ))
+    .evaluate_with_source_capability(
+        Arc::clone(&state.evidence),
+        Arc::clone(&state.source),
+        &state.store,
+        &principal,
+        context.source_capability,
+        request,
+        None,
+        Some(context.metadata.clone()),
+        None,
+    )
+    .await
     {
         Ok(results) => results,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::AccessDenied),
+        Err(error) => {
+            let denial_code = denial_code_from_error(&error);
+            let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
+            attach_oid4vci_self_attestation_denial_audit(
+                &mut response,
+                "oid4vci_credential_denied",
+                std::slice::from_ref(&configuration.claim_id),
+                configuration_id,
+                denial_code,
+                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
     };
     let evaluation_id = results
         .first()
@@ -565,13 +634,6 @@ async fn oid4vci_credential(
     let evaluation = match state.store.get(&evaluation_id) {
         Some(evaluation) => evaluation,
         None => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    let profile = match evidence
-        .credential_profiles
-        .get(&configuration.credential_profile)
-    {
-        Some(profile) => profile,
-        None => return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType),
     };
     if let Err(error) = require_self_attestation_stored_access(
         &state,
@@ -595,10 +657,6 @@ async fn oid4vci_credential(
     ) {
         return oid4vci_error_response(oid4vci_error_from_evidence(&error));
     }
-    let issuer = match state.issuers.issuer(&configuration.credential_profile) {
-        Ok(issuer) => issuer,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
     let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
     let signed = match sd_jwt::issue(
         profile,
@@ -651,9 +709,13 @@ async fn oid4vci_credential(
         &evaluation_id,
         &evaluation.claim_ids,
         evaluation.results.len() as u64,
-        configuration_id,
-        profile,
-        context.metadata.policy_hash,
+        SelfAttestationCredentialAuditDetails {
+            profile_id: &configuration.credential_profile,
+            holder_binding_mode: &profile.holder_binding.mode,
+            policy_hash: context.metadata.policy_hash,
+            protocol: Some("openid4vci"),
+            credential_configuration_id: Some(configuration_id),
+        },
     );
     response
 }
@@ -845,7 +907,9 @@ async fn evaluate(
             }
         }
     }
-    let runtime = RegistryWitnessRuntime::new();
+    let runtime = RegistryWitnessRuntime::new_with_self_attestation_rate_keys(Arc::clone(
+        &state.self_attestation_rate_keys,
+    ));
     let requested_claims = request.claims.clone();
     let self_attestation_policy_hash = self_attestation_context
         .as_ref()
@@ -965,7 +1029,9 @@ async fn batch_evaluate(
         );
         return response;
     }
-    let runtime = RegistryWitnessRuntime::new();
+    let runtime = RegistryWitnessRuntime::new_with_self_attestation_rate_keys(Arc::clone(
+        &state.self_attestation_rate_keys,
+    ));
     let requested_claims = request.claims.clone();
     let requested_subject_count = request.subjects.len();
     let evaluation_future = runtime.batch_evaluate(
@@ -1072,7 +1138,9 @@ async fn render(
     {
         return evidence_error_response(error);
     }
-    let runtime = RegistryWitnessRuntime::new();
+    let runtime = RegistryWitnessRuntime::new_with_self_attestation_rate_keys(Arc::clone(
+        &state.self_attestation_rate_keys,
+    ));
     let runtime_principal = runtime_principal_for_stored_evaluation(&principal, &evaluation);
     match runtime.render(evidence, &state.store, &runtime_principal, request) {
         Ok(value) => {
@@ -1352,9 +1420,13 @@ async fn issue_credential(
             &request.evaluation_id,
             &evaluation.claim_ids,
             evaluation.results.len() as u64,
-            profile_id,
-            profile,
-            metadata.policy_hash.clone(),
+            SelfAttestationCredentialAuditDetails {
+                profile_id,
+                holder_binding_mode: &profile.holder_binding.mode,
+                policy_hash: metadata.policy_hash.clone(),
+                protocol: None,
+                credential_configuration_id: None,
+            },
         );
     } else {
         attach_evidence_audit(
@@ -1462,7 +1534,11 @@ fn oid4vci_metadata(config: &Oid4vciConfig) -> CredentialIssuerMetadata {
     CredentialIssuerMetadata::new(
         config.credential_issuer.clone(),
         config.credential_endpoint.clone(),
-        config.nonce_endpoint.clone(),
+        config
+            .nonce
+            .enabled
+            .then(|| config.nonce_endpoint.clone())
+            .flatten(),
         config.authorization_servers.clone(),
         config
             .credential_configurations
@@ -1483,6 +1559,19 @@ fn oid4vci_configuration_metadata(
         configuration.display_name.clone(),
         configuration.vct.clone(),
     )
+}
+
+fn holder_key_matches_issuer_key(holder_jwk: &PublicJwk, issuer_jwk: &Value) -> bool {
+    let Ok(issuer) = PublicJwk::parse(&issuer_jwk.to_string()) else {
+        return false;
+    };
+    let Ok(issuer_jkt) = issuer.jkt() else {
+        return false;
+    };
+    let Ok(holder_jkt) = holder_jwk.jkt() else {
+        return false;
+    };
+    issuer_jkt == holder_jkt
 }
 
 fn oid4vci_configuration_for_request<'a>(
@@ -2340,10 +2429,20 @@ fn attach_evidence_audit(
         denial_code: None,
         token_claim_name: None,
         credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash: None,
     });
+}
+
+struct SelfAttestationCredentialAuditDetails<'a> {
+    profile_id: &'a str,
+    holder_binding_mode: &'a str,
+    policy_hash: Option<Hashed<PolicyIdentifier>>,
+    protocol: Option<&'a str>,
+    credential_configuration_id: Option<&'a str>,
 }
 
 fn attach_self_attestation_credential_audit(
@@ -2351,9 +2450,7 @@ fn attach_self_attestation_credential_audit(
     evaluation_id: &str,
     claim_ids: &[String],
     row_count: u64,
-    profile_id: &str,
-    profile: &CredentialProfileConfig,
-    policy_hash: Option<Hashed<PolicyIdentifier>>,
+    details: SelfAttestationCredentialAuditDetails<'_>,
 ) {
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id: Some(evaluation_id.to_string()),
@@ -2363,10 +2460,16 @@ fn attach_self_attestation_credential_audit(
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,
         token_claim_name: None,
-        credential_profile: ConfigMetadata::new(profile_id).ok(),
-        holder_binding_mode: ConfigMetadata::new(profile.holder_binding.mode.clone()).ok(),
+        credential_profile: ConfigMetadata::new(details.profile_id).ok(),
+        protocol: details
+            .protocol
+            .and_then(|value| ConfigMetadata::new(value).ok()),
+        credential_configuration_id: details
+            .credential_configuration_id
+            .and_then(|value| ConfigMetadata::new(value).ok()),
+        holder_binding_mode: ConfigMetadata::new(details.holder_binding_mode).ok(),
         rate_limit_bucket: None,
-        policy_hash,
+        policy_hash: details.policy_hash,
     });
 }
 
@@ -2387,6 +2490,8 @@ fn attach_self_attestation_success_audit(
         denial_code: None,
         token_claim_name: None,
         credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash,
@@ -2409,6 +2514,33 @@ fn attach_self_attestation_audit(
         denial_code,
         token_claim_name: token_claim_name.and_then(|name| ConfigMetadata::new(name).ok()),
         credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_hash: None,
+    });
+}
+
+fn attach_oid4vci_self_attestation_denial_audit(
+    response: &mut Response,
+    decision: &str,
+    claim_ids: &[String],
+    credential_configuration_id: &str,
+    denial_code: Option<SelfAttestationDenialCode>,
+    token_claim_name: Option<&str>,
+) {
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id: None,
+        verification_decision: Some(decision.to_string()),
+        claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        row_count: None,
+        access_mode: Some(AccessMode::SelfAttestation),
+        denial_code,
+        token_claim_name: token_claim_name.and_then(|name| ConfigMetadata::new(name).ok()),
+        credential_profile: None,
+        protocol: ConfigMetadata::new("openid4vci").ok(),
+        credential_configuration_id: ConfigMetadata::new(credential_configuration_id).ok(),
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash: None,
@@ -2430,6 +2562,8 @@ fn attach_self_attestation_rate_limit_audit(
         denial_code: Some(SelfAttestationDenialCode::RateLimited),
         token_claim_name: None,
         credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
         holder_binding_mode: None,
         rate_limit_bucket: bucket.and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
         policy_hash: None,
@@ -2441,7 +2575,7 @@ pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
     let audit_code = error.audit_code().to_string();
     let status = evidence_status(&error);
     let body = json!({
-        "type": format!("https://data.example.gov/problems/{}", code.replace('.', "/")),
+        "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('.', "/")),
         "title": evidence_title(&error),
         "status": status.as_u16(),
         "detail": evidence_detail(&error),
@@ -2791,6 +2925,8 @@ mod tests {
     // registry-witness-core::sd_jwt tests so behavior is consistent.
     const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
     const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
+    const ISSUER_PRIV_D_B64: &str = "f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys";
+    const ISSUER_PUB_X_B64: &str = "pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec";
     const SUBJECT_BINDING_CLAIM: &str = "https://id.example.gov/claims/national_id";
 
     fn holder_did_jwk() -> String {
@@ -2926,6 +3062,20 @@ mod tests {
                 ["name"],
             "Person is alive"
         );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["scope"],
+            "person_is_alive"
+        );
+        assert_eq!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]
+                ["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"][0],
+            "EdDSA"
+        );
+        let mut without_nonce = oid4vci_config();
+        without_nonce.nonce.enabled = false;
+        let without_nonce =
+            serde_json::to_value(oid4vci_metadata(&without_nonce)).expect("metadata serializes");
+        assert!(without_nonce.get("nonce_endpoint").is_none());
         let text = metadata.to_string();
         assert!(!text.contains("token_env"));
         assert!(!text.contains("source_connections"));
@@ -2990,6 +3140,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "registry-witness-cel")]
     #[tokio::test]
     async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
         let reads = Arc::new(AtomicUsize::new(0));
@@ -3109,6 +3260,101 @@ mod tests {
             .expect("body reads");
         let replay_body: Value = serde_json::from_slice(&replay_body).expect("error body parses");
         assert_eq!(replay_body["error"], "invalid_proof");
+    }
+
+    #[tokio::test]
+    async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(EvidenceStore::default());
+        let mut self_attestation = self_attestation_config();
+        self_attestation
+            .allowed_formats
+            .push(FORMAT_SD_JWT_VC.to_string());
+        let mut evidence = evidence_config();
+        evidence
+            .claims
+            .first_mut()
+            .expect("claim exists")
+            .formats
+            .push(FORMAT_SD_JWT_VC.to_string());
+        evidence
+            .claims
+            .first_mut()
+            .expect("claim exists")
+            .credential_profiles
+            .push("civil_status_sd_jwt".to_string());
+        evidence.credential_profiles.insert(
+            "civil_status_sd_jwt".to_string(),
+            serde_json::from_value(json!({
+                "format": FORMAT_SD_JWT_VC,
+                "issuer": "did:web:issuer.example",
+                "issuer_key_env": "ISSUER_KEY",
+                "vct": "https://issuer.example/credentials/civil-status",
+                "validity_seconds": 600,
+                "holder_binding": {
+                    "mode": "did",
+                    "proof_of_possession": "required",
+                    "allowed_did_methods": ["did:jwk"]
+                },
+                "allowed_claims": ["person-is-alive"],
+                "disclosure": { "allowed": ["predicate"] }
+            }))
+            .expect("profile parses"),
+        );
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-witness-citizen".to_string()];
+        let state = Arc::new(
+            RegistryWitnessApiState::new_with_self_attestation_and_oid4vci(
+                Arc::new(evidence),
+                Arc::new(self_attestation),
+                Arc::new(oid4vci),
+                Arc::new(CountingSource {
+                    reads: Arc::clone(&reads),
+                }),
+                Arc::clone(&store),
+                Arc::new(HolderIssuerResolver),
+            ),
+        );
+        let nonce = "nonce-equal-key";
+        let nonce_key = state
+            .self_attestation_rate_keys
+            .oid4vci_nonce(
+                &state.oid4vci.credential_issuer,
+                "person_is_alive_sd_jwt",
+                nonce,
+            )
+            .expect("nonce hashes");
+        store
+            .insert_oid4vci_nonce(
+                nonce_key.clone(),
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
+            )
+            .expect("nonce inserts");
+
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(fresh_oidc_principal(
+                Some("client_id:citizen-portal"),
+                &["self_attestation"],
+            ))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce),
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        store
+            .consume_oid4vci_nonce(&nonce_key)
+            .expect("nonce is not consumed before equal-key denial");
     }
 
     #[test]
@@ -3656,8 +3902,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "registry-witness-cel")]
     struct StaticIssuerResolver;
 
+    #[cfg(feature = "registry-witness-cel")]
     impl EvidenceIssuerResolver for StaticIssuerResolver {
         fn issuer(
             &self,
@@ -3667,11 +3915,25 @@ mod tests {
                 &json!({
                     "kty": "OKP",
                     "crv": "Ed25519",
-                    "d": HOLDER_PRIV_D_B64,
-                    "x": HOLDER_PUB_X_B64,
+                    "d": ISSUER_PRIV_D_B64,
+                    "x": ISSUER_PUB_X_B64,
                     "alg": "EdDSA"
                 })
                 .to_string(),
+                "did:web:issuer.example#key-1".to_string(),
+            )
+        }
+    }
+
+    struct HolderIssuerResolver;
+
+    impl EvidenceIssuerResolver for HolderIssuerResolver {
+        fn issuer(
+            &self,
+            _profile_id: &str,
+        ) -> Result<registry_witness_core::sd_jwt::EvidenceIssuer, EvidenceError> {
+            registry_witness_core::sd_jwt::EvidenceIssuer::from_jwk_str(
+                &holder_private_jwk(),
                 "did:web:issuer.example#key-1".to_string(),
             )
         }
@@ -3767,6 +4029,40 @@ mod tests {
             "alg": "EdDSA"
         })
         .to_string()
+    }
+
+    fn issuer_private_jwk() -> String {
+        json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "d": ISSUER_PRIV_D_B64,
+            "x": ISSUER_PUB_X_B64,
+            "alg": "EdDSA"
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn oid4vci_rejects_holder_key_equal_to_issuer_key() {
+        let issuer = registry_witness_core::sd_jwt::EvidenceIssuer::from_jwk_str(
+            &issuer_private_jwk(),
+            "did:web:issuer.example#key-1".to_string(),
+        )
+        .expect("issuer parses");
+        let issuer_public =
+            PublicJwk::parse(&issuer.public_jwk().to_string()).expect("issuer public parses");
+        let holder_public = PrivateJwk::parse(&holder_private_jwk())
+            .expect("holder parses")
+            .public();
+
+        assert!(holder_key_matches_issuer_key(
+            &issuer_public,
+            &issuer.public_jwk()
+        ));
+        assert!(!holder_key_matches_issuer_key(
+            &holder_public,
+            &issuer.public_jwk()
+        ));
     }
 
     fn evaluation_for_proof() -> registry_witness_core::StoredEvaluation {
