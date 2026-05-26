@@ -457,8 +457,10 @@ or backend runtime details.
 1. Birth Registration To Child Support: Registry Witness verifies civil facts and
    issues a demo-grade credential without exposing raw civil rows.
 2. Household Benefit Review From Registry Data: the client performs a protected
-   Relay row read and aggregate consultation with `Data-Purpose`, then writes a
-   demo household-benefit decision artifact without writing back to Relay.
+   Relay row read, dataset-scoped aggregate consultation, and OGC EDR `/area`
+   aggregate over configured district geometries with `Data-Purpose`, then
+   writes a demo household-benefit decision artifact without writing back to
+   Relay.
 3. Cross-Authority Conditional Support: static metadata leads the client to a
    shared Registry Witness claim that depends on civil, social protection, and
    health authorities.
@@ -469,7 +471,13 @@ Every client request sends `x-request-id` using
 ## Notes
 
 The Relay demo image is built by `Dockerfile.registry-relay` with
-`spdci-api-standards,standards-cel-mapping` so DCI source routes are available.
+`spdci-api-standards,standards-cel-mapping,ogcapi-edr` so DCI source routes and
+the aggregate-only OGC EDR `/area` surface are available.
+
+The social protection walkthrough uses the dataset-scoped aggregate endpoint at
+`/datasets/social_protection_registry/aggregates/households_by_eligibility_band`
+and the EDR collection at
+`/ogc/edr/v1/collections/social_protection_households_by_district`.
 
 Registry Witness exposes OpenAPI at `/openapi.json` under the same auth boundary
 as the rest of the Registry Witness API. The demo client and smoke script fetch

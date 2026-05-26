@@ -113,6 +113,15 @@ ENROLLMENTS = [
     ["ENR-800", "HH-800", "PER-2008", "NID-2008", "HEALTH_LINKED_SUPPORT", "inactive", 0.0, dt.date(2025, 4, 4)],
 ]
 
+DISTRICT_GEOMETRIES = [
+    ["district", "geometry"],
+    ["north", '{"type":"Polygon","coordinates":[[[0,1],[1,1],[1,2],[0,2],[0,1]]]}'],
+    ["south", '{"type":"Polygon","coordinates":[[[0,-1],[1,-1],[1,0],[0,0],[0,-1]]]}'],
+    ["central", '{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}'],
+    ["east", '{"type":"Polygon","coordinates":[[[1,0],[2,0],[2,1],[1,1],[1,0]]]}'],
+    ["west", '{"type":"Polygon","coordinates":[[[-1,0],[0,0],[0,1],[-1,1],[-1,0]]]}'],
+]
+
 HEALTH_ROWS = [
     {
         "facility_id": "HF-10",
@@ -223,6 +232,7 @@ def validate_fixture_coverage() -> None:
     require_unique(PERSONS, "person_id")
     require_unique(ENROLLMENTS, "enrollment_id")
     require_unique(ENROLLMENTS, "national_id")
+    require_unique(DISTRICT_GEOMETRIES, "district")
     facility_ids = [row["facility_id"] for row in HEALTH_ROWS]
     if len(facility_ids) != len(set(facility_ids)):
         raise ValueError("facility_id values must be unique")
@@ -241,6 +251,11 @@ def validate_fixture_coverage() -> None:
             raise ValueError(f"enrollment {row[0]} references unknown household {row[1]}")
         if row[2] not in person_ids:
             raise ValueError(f"enrollment {row[0]} references unknown person {row[2]}")
+    geometry_districts = {row[0] for row in data_rows(DISTRICT_GEOMETRIES)}
+    household_districts = {row[2] for row in data_rows(HOUSEHOLDS)}
+    if not household_districts.issubset(geometry_districts):
+        missing = sorted(household_districts - geometry_districts)
+        raise ValueError(f"district geometries missing household districts: {missing}")
 
     if len(data_rows(CIVIL_ROWS)) < 10 or len(data_rows(HOUSEHOLDS)) < 8 or len(HEALTH_ROWS) < 8:
         raise ValueError("fixture set is too small for the decentralized demo")
@@ -293,6 +308,7 @@ def write_social_xlsx() -> None:
         ("Households", HOUSEHOLDS),
         ("Persons", PERSONS),
         ("Enrollments", ENROLLMENTS),
+        ("DistrictGeometries", DISTRICT_GEOMETRIES),
     ]:
         sheet = workbook.create_sheet(title)
         for row in rows:

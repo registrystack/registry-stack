@@ -251,9 +251,12 @@ cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-row-denial.json"
 check "row denial stable error code" json_path_equals "${output_dir}/smoke-row-denial.json" code auth.scope_denied
 
 check "positive row read" curl_json GET "http://127.0.0.1:4312/datasets/social_protection_registry/household?limit=1" "${SOCIAL_ROW_READER_RAW}" "${output_dir}/smoke-positive-row-read.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
-check "positive aggregate consultation" curl_json GET "http://127.0.0.1:4312/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band" "${SOCIAL_AGGREGATE_READER_RAW}" "${output_dir}/smoke-positive-aggregate.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
+check "positive aggregate consultation" curl_json GET "http://127.0.0.1:4312/datasets/social_protection_registry/aggregates/households_by_eligibility_band" "${SOCIAL_AGGREGATE_READER_RAW}" "${output_dir}/smoke-positive-aggregate.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
+check "positive EDR collection discovery" curl_json GET "http://127.0.0.1:4312/ogc/edr/v1/collections/social_protection_households_by_district" "${SOCIAL_AGGREGATE_READER_RAW}" "${output_dir}/smoke-positive-edr-collection.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
+check "positive EDR area aggregate" curl_json GET "http://127.0.0.1:4312/ogc/edr/v1/collections/social_protection_households_by_district/area?coords=POLYGON%28%28-0.5%200.5%2C1.5%200.5%2C1.5%201.5%2C-0.5%201.5%2C-0.5%200.5%29%29&parameter-name=household_count&group_by=district&f=geojson" "${SOCIAL_AGGREGATE_READER_RAW}" "${output_dir}/smoke-positive-edr-area.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
+check "positive EDR area features" json_has_key "${output_dir}/smoke-positive-edr-area.json" features
 
-aggregate_status="$(curl_status GET http://127.0.0.1:4312/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
+aggregate_status="$(curl_status GET http://127.0.0.1:4312/datasets/social_protection_registry/aggregates/households_by_eligibility_band "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
 [[ "${aggregate_status}" == "403" ]] || fail "aggregate denial with row-reader credential expected 403, got ${aggregate_status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-aggregate-denial.json"
 check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke-aggregate-denial.json" code auth.scope_denied

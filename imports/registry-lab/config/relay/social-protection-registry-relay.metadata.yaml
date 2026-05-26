@@ -99,6 +99,19 @@ datasets:
           - name: enrollments
             target_entity: program_enrollment
             cardinality: many
+      - name: district_geometry
+        title: District Geometry
+        description: Administrative district geometries for spatial aggregate demonstrations.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: geometry
+            type: string
+            required: true
       - name: person
         title: Person
         description: Household member projection.

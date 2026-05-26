@@ -248,7 +248,7 @@ def household_benefit_decision(row_response: dict[str, Any], aggregate_response:
             "active_members": active_members,
             "deceased_member_count": deceased_members,
             "aggregate_id": aggregate_response.get("aggregate_id"),
-            "aggregate_groups_seen": len(aggregate_response.get("rows", [])),
+            "aggregate_groups_seen": len(aggregate_response.get("data", [])),
         },
         "decision": {
             "status": "approved" if recommended_amount > 0 and active_members > 0 else "manual_review",
@@ -392,7 +392,7 @@ def main() -> int:
         request(
             "GET",
             relays[1].url,
-            "/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band",
+            "/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
             env("SOCIAL_AGGREGATE_READER_RAW"),
             headers={"Data-Purpose": PURPOSE},
         ),
@@ -405,12 +405,34 @@ def main() -> int:
     aggregate_denial = request(
         "GET",
         relays[1].url,
-        "/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band",
+        "/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
         env("SOCIAL_ROW_READER_RAW"),
         headers={"Data-Purpose": PURPOSE},
     )
     save(out, step, "aggregate-denial-row-reader-only", {"status": aggregate_denial.status, "body": aggregate_denial.body})
     require_problem_code(aggregate_denial, 403, "auth.scope_denied", "row-reader aggregate denial")
+    step += 1
+
+    edr_area_path = "/ogc/edr/v1/collections/social_protection_households_by_district/area?" + urllib.parse.urlencode(
+        {
+            "coords": "POLYGON((-0.5 0.5,1.5 0.5,1.5 1.5,-0.5 1.5,-0.5 0.5))",
+            "parameter-name": "household_count",
+            "group_by": "district",
+            "f": "geojson",
+        }
+    )
+    edr_area = require(
+        request(
+            "GET",
+            relays[1].url,
+            edr_area_path,
+            env("SOCIAL_AGGREGATE_READER_RAW"),
+            headers={"Data-Purpose": PURPOSE},
+        ),
+        200,
+        "positive social EDR area aggregate",
+    )
+    save(out, step, "positive-social-edr-area", edr_area)
     step += 1
 
     decision = household_benefit_decision(row, aggregate)
@@ -570,6 +592,7 @@ def main() -> int:
                     "social protection Relay metadata discovery",
                     "row read with row-reader credential and Data-Purpose",
                     "aggregate read with aggregate-reader credential and Data-Purpose",
+                    "EDR area aggregate over configured district geometry",
                     "evidence-only row denial",
                     "row-reader aggregate denial",
                     "demo client decision artifact with no Relay write-back",
@@ -577,6 +600,7 @@ def main() -> int:
                 "artifact_labels": [
                     "positive-social-row-read",
                     "positive-social-aggregate",
+                    "positive-social-edr-area",
                     "row-denial-evidence-only",
                     "aggregate-denial-row-reader-only",
                     "household-benefit-decision",
