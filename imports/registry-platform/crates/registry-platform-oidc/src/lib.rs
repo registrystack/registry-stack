@@ -124,6 +124,7 @@ struct JwksState {
     negative: HashMap<String, Instant>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum JwksCacheLookup {
     Hit(CachedJwkKey),
     FreshMiss,
@@ -728,7 +729,7 @@ impl TokenVerifier {
                 expected: expected_issuers(accepted_issuers),
                 actual: String::new(),
             })?;
-        if !accepted_issuers.iter().any(|accepted| *accepted == issuer) {
+        if !accepted_issuers.contains(&issuer) {
             return Err(OidcError::IssuerMismatch {
                 expected: expected_issuers(accepted_issuers),
                 actual: issuer.to_string(),
