@@ -138,7 +138,9 @@ fn publish_command(args: &[String]) -> Result<(), String> {
             service_catalogues.push(serde_json::json!({
                 "id": profile.id,
                 "version": profile.version,
-                "url": "/metadata/cpsv-ap",
+                "url": "/metadata/cpsv-ap.jsonld",
+                "aliases": ["/metadata/cpsv-ap"],
+                "media_type": "application/ld+json",
             }));
             continue;
         }
@@ -256,8 +258,152 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         "application_profiles": application_profiles,
     });
     write_json(out.join("index.json"), &index)?;
+    write_well_known_discovery(&out, &index)?;
     println!("published metadata artifacts to {}", out.display());
     Ok(())
+}
+
+fn write_well_known_discovery(out: &Path, index: &serde_json::Value) -> Result<(), String> {
+    let public_root = out.parent().unwrap_or(out);
+    let well_known_dir = public_root.join(".well-known");
+    fs::create_dir_all(&well_known_dir).map_err(|error| error.to_string())?;
+    write_api_catalog(&well_known_dir, index)?;
+    write_legacy_registry_manifest_discovery(&well_known_dir, index)
+}
+
+fn write_api_catalog(well_known_dir: &Path, index: &serde_json::Value) -> Result<(), String> {
+    let mut items = Vec::new();
+    push_api_catalog_item(
+        &mut items,
+        index.get("catalog"),
+        "Registry metadata catalog",
+        "application/json",
+        None,
+    );
+    push_api_catalog_item(
+        &mut items,
+        index.get("dcat"),
+        "Base DCAT catalog",
+        "application/ld+json",
+        Some("http://www.w3.org/ns/dcat#"),
+    );
+    for entry in value_array(index, "dcat_profiles") {
+        push_api_catalog_item(
+            &mut items,
+            entry.get("url"),
+            &format!(
+                "{} DCAT profile catalog",
+                entry
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("profile")
+            ),
+            "application/ld+json",
+            Some("http://www.w3.org/ns/dcat#"),
+        );
+    }
+    for entry in value_array(index, "service_catalogues") {
+        push_api_catalog_item(
+            &mut items,
+            entry.get("url"),
+            &format!(
+                "{} service catalogue",
+                entry
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("service")
+            ),
+            entry
+                .get("media_type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("application/json"),
+            None,
+        );
+    }
+    push_api_catalog_item(
+        &mut items,
+        index.get("evidence_offerings"),
+        "Evidence offerings",
+        "application/json",
+        None,
+    );
+    push_api_catalog_item(
+        &mut items,
+        index.get("policies"),
+        "Policy metadata",
+        "application/ld+json",
+        None,
+    );
+    push_api_catalog_item(
+        &mut items,
+        index.get("shacl"),
+        "SHACL shapes",
+        "application/ld+json",
+        None,
+    );
+
+    let api_catalog = serde_json::json!({
+        "linkset": [
+            {
+                "anchor": "/.well-known/api-catalog",
+                "describedby": [
+                    {
+                        "href": "/metadata/index.json",
+                        "type": "application/json",
+                        "title": "Registry Manifest metadata index"
+                    }
+                ],
+                "item": items
+            }
+        ]
+    });
+    write_json(well_known_dir.join("api-catalog"), &api_catalog)
+}
+
+fn push_api_catalog_item(
+    items: &mut Vec<serde_json::Value>,
+    url: Option<&serde_json::Value>,
+    title: &str,
+    media_type: &str,
+    profile: Option<&str>,
+) {
+    let Some(href) = url.and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let mut item = serde_json::Map::new();
+    item.insert("href".to_string(), serde_json::json!(href));
+    item.insert("type".to_string(), serde_json::json!(media_type));
+    item.insert("title".to_string(), serde_json::json!(title));
+    if let Some(profile) = profile {
+        item.insert("profile".to_string(), serde_json::json!(profile));
+    }
+    items.push(serde_json::Value::Object(item));
+}
+
+fn value_array<'a>(value: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn write_legacy_registry_manifest_discovery(
+    well_known_dir: &Path,
+    index: &serde_json::Value,
+) -> Result<(), String> {
+    let discovery = serde_json::json!({
+        "schema_version": "registry-manifest-discovery/v1",
+        "metadata_index": "/metadata/index.json",
+        "manifest": index.get("manifest").cloned().unwrap_or(serde_json::Value::Null),
+        "catalog": index.get("catalog").cloned().unwrap_or(serde_json::Value::Null),
+        "dcat": index.get("dcat").cloned().unwrap_or(serde_json::Value::Null),
+        "dcat_profiles": index.get("dcat_profiles").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "service_catalogues": index.get("service_catalogues").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "evidence_offerings": index.get("evidence_offerings").cloned().unwrap_or(serde_json::Value::Null),
+        "application_profiles": index.get("application_profiles").cloned().unwrap_or_else(|| serde_json::json!([])),
+    });
+    write_json(well_known_dir.join("registry-manifest.json"), &discovery)
 }
 
 fn validate_profiles_command(args: &[String]) -> Result<(), String> {

@@ -66,6 +66,12 @@ Publish a static metadata directory:
 cargo run -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
 ```
 
+The generated bundle uses `/metadata/index.json` as its canonical metadata
+entry point. When the output directory is mounted as `/metadata`, the publisher
+also writes `/.well-known/api-catalog` at the public root for standards-aligned
+API and metadata discovery. The older `/.well-known/registry-manifest.json`
+document is retained for compatibility with early Registry Manifest clients.
+
 Workspace build:
 
 ```sh

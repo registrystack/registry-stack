@@ -159,6 +159,8 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
         1
     );
     assert_index_urls_exist(&out, &index);
+    assert_well_known_discovery_matches_index(&out, &index);
+    assert_api_catalog_points_at_index_and_catalogs(&out, &index);
 }
 
 #[test]
@@ -238,12 +240,25 @@ fn render_and_publish_cpsv_ap_service_catalogue() {
     let index: serde_json::Value =
         serde_json::from_slice(&fs::read(out.join("index.json")).expect("index reads"))
             .expect("index json");
-    assert_eq!(index["service_catalogues"][0]["url"], "/metadata/cpsv-ap");
+    assert_eq!(
+        index["service_catalogues"][0]["url"],
+        "/metadata/cpsv-ap.jsonld"
+    );
+    assert_eq!(
+        index["service_catalogues"][0]["aliases"][0],
+        "/metadata/cpsv-ap"
+    );
+    assert_eq!(
+        index["service_catalogues"][0]["media_type"],
+        "application/ld+json"
+    );
     assert_eq!(
         index["form_schemas"][0]["url"],
         "/metadata/forms/child-support-review-form/schema.json"
     );
     assert_index_urls_exist(&out, &index);
+    assert_well_known_discovery_matches_index(&out, &index);
+    assert_api_catalog_points_at_index_and_catalogs(&out, &index);
 }
 
 #[test]
@@ -500,6 +515,55 @@ fn assert_index_urls_exist(out: &Path, index: &serde_json::Value) {
         .expect("service catalogues")
     {
         assert_url_exists(out, entry["url"].as_str().expect("service catalogue url"));
+    }
+}
+
+fn assert_well_known_discovery_matches_index(out: &Path, index: &serde_json::Value) {
+    let discovery_path = out
+        .parent()
+        .expect("metadata out has parent")
+        .join(".well-known")
+        .join("registry-manifest.json");
+    let discovery: serde_json::Value =
+        serde_json::from_slice(&fs::read(discovery_path).expect("well-known reads"))
+            .expect("well-known json");
+    assert_eq!(
+        discovery["schema_version"],
+        "registry-manifest-discovery/v1"
+    );
+    assert_eq!(discovery["metadata_index"], "/metadata/index.json");
+    assert_eq!(discovery["service_catalogues"], index["service_catalogues"]);
+    assert_eq!(
+        discovery["application_profiles"],
+        index["application_profiles"]
+    );
+}
+
+fn assert_api_catalog_points_at_index_and_catalogs(out: &Path, index: &serde_json::Value) {
+    let api_catalog_path = out
+        .parent()
+        .expect("metadata out has parent")
+        .join(".well-known")
+        .join("api-catalog");
+    let api_catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(api_catalog_path).expect("api-catalog reads"))
+            .expect("api-catalog json");
+    let linkset = api_catalog["linkset"].as_array().expect("linkset");
+    assert_eq!(linkset[0]["anchor"], "/.well-known/api-catalog");
+    assert_eq!(linkset[0]["describedby"][0]["href"], "/metadata/index.json");
+    let item_hrefs = linkset[0]["item"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["href"].as_str().expect("item href"))
+        .collect::<Vec<_>>();
+    assert!(item_hrefs.contains(&index["catalog"].as_str().expect("catalog url")));
+    assert!(item_hrefs.contains(&index["dcat"].as_str().expect("dcat url")));
+    for entry in index["service_catalogues"]
+        .as_array()
+        .expect("service catalogues")
+    {
+        assert!(item_hrefs.contains(&entry["url"].as_str().expect("service catalogue url")));
     }
 }
 
