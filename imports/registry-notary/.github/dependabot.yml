@@ -12,3 +12,7 @@ updates:
       actions:
         patterns:
           - "*"
+  - package-ecosystem: npm
+    directory: /crates/registry-witness-openfn-sidecar/workers
+    schedule:
+      interval: weekly

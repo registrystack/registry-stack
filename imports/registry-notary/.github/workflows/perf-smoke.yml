@@ -18,7 +18,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: v0.1.2
+  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
 
 defaults:
   run:
@@ -28,8 +28,9 @@ defaults:
 # It verifies:
 #   1. The Criterion benches compile (`cargo bench --no-run`).
 #   2. Every k6 scenario and shared lib passes `node --check`.
-#   3. Perf Python scripts and the source stub parse cleanly.
-# It does NOT install k6 or execute scenarios; scheduled perf jobs do that.
+#   3. Perf Python scripts, source stub, and tests pass.
+# It does NOT install k6 or execute load scenarios; use perf/README.md for
+# the baseline capture workflow.
 
 jobs:
   perf-smoke:
@@ -90,3 +91,6 @@ jobs:
           for f in perf/scripts/*.py perf/stub/*.py; do
             python -c "import ast; ast.parse(open('$f').read())"
           done
+
+      - name: Run perf Python tests
+        run: uv run --project perf pytest

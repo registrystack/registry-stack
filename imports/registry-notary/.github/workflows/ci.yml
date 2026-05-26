@@ -10,7 +10,7 @@ permissions:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: v0.1.2
+  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
 
 defaults:
   run:
@@ -39,6 +39,26 @@ jobs:
           workspaces: registry-witness -> target
       - run: cargo install cargo-deny --version 0.19.7 --locked
       - run: ~/.cargo/bin/cargo-deny --all-features check --hide-inclusion-graph
+
+  openfn-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout registry-witness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: registry-witness
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: registry-witness/crates/registry-witness-openfn-sidecar/workers/package-lock.json
+      - name: Install worker dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-witness-openfn-sidecar/workers
+      - name: Syntax-check OpenFn worker
+        run: node --check crates/registry-witness-openfn-sidecar/workers/openfn_worker.mjs
+      - name: Smoke-test OpenFn worker
+        run: crates/registry-witness-openfn-sidecar/scripts/smoke-openfn-worker.sh
 
   rust:
     runs-on: ubuntu-latest
