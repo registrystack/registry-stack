@@ -34,7 +34,7 @@ env:
   SEMIC_REPORT_PATH: target/dcat-ap/semic-report.json
   SEMIC_BREGDCATAP_REPORT_PATH: target/dcat-ap/semic-bregdcatap-report.json
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: v0.1.2
+  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
 
 jobs:
   semic-dcat-ap:

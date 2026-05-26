@@ -15,7 +15,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: v0.1.2
+  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
 
 # Smoke-checks the perf scaffolding without running any actual load.
 # It verifies:

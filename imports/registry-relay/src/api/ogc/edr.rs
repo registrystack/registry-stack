@@ -168,6 +168,7 @@ async fn collection_detail(
     Json(collection_json(&collection)).into_response()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn area_get(
     Path(path): Path<CollectionPath>,
     Query(params): Query<AreaQuery>,
@@ -201,6 +202,7 @@ async fn area_get(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn area_post(
     Path(path): Path<CollectionPath>,
     Query(mut params): Query<AreaQuery>,

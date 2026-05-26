@@ -259,6 +259,7 @@ async fn get_dimension(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_aggregate(
     Path(path): Path<AggregateRunPath>,
     Query(format): Query<FormatQuery>,
@@ -285,6 +286,7 @@ async fn execute_aggregate(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn query_aggregate(
     Path(path): Path<AggregateRunPath>,
     headers: HeaderMap,
@@ -642,6 +644,7 @@ fn indicator_discovery_items(
     let mut items = BTreeMap::<String, IndicatorDiscovery>::new();
     for aggregate in aggregates {
         let aggregate_ref = AggregateDiscoveryRef::new(dataset_id, aggregate);
+        let queryable_via = aggregate_ref.queryable_via();
         let dimensions = aggregate
             .dimensions
             .iter()
@@ -652,8 +655,7 @@ fn indicator_discovery_items(
                 .entry(indicator.id.clone())
                 .or_insert_with(|| IndicatorDiscovery::new(indicator));
             item.valid_dimensions.extend(dimensions.iter().cloned());
-            item.queryable_via
-                .extend(aggregate_ref.queryable_via().into_iter());
+            item.queryable_via.extend(queryable_via.iter().cloned());
             item.aggregates.push(aggregate_ref.as_json());
         }
     }
@@ -670,12 +672,12 @@ fn dimension_discovery_items(
     let mut items = BTreeMap::<String, DimensionDiscovery>::new();
     for aggregate in aggregates {
         let aggregate_ref = AggregateDiscoveryRef::new(dataset_id, aggregate);
+        let queryable_via = aggregate_ref.queryable_via();
         for dimension in &aggregate.dimensions {
             let item = items
                 .entry(dimension.id.clone())
                 .or_insert_with(|| DimensionDiscovery::new(dimension));
-            item.queryable_via
-                .extend(aggregate_ref.queryable_via().into_iter());
+            item.queryable_via.extend(queryable_via.iter().cloned());
             item.aggregates.push(aggregate_ref.as_json());
         }
     }

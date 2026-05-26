@@ -193,8 +193,7 @@ impl AggregateQueryEngine {
             &indicators,
             &group_by,
             &request.filters,
-            &self.registry,
-            &self.ctx,
+            self,
         )
         .await?;
         let max_rows = request.max_rows.unwrap_or(DEFAULT_MAX_RESULT_ROWS);
@@ -274,9 +273,10 @@ impl AggregatePlan {
         indicators: &[&AggregateIndicatorConfig],
         group_by: &[&AggregateDimensionConfig],
         filters: &[AggregateFilter],
-        registry: &EntityRegistry,
-        ctx: &SessionContext,
+        engine: &AggregateQueryEngine,
     ) -> Result<Self, Error> {
+        let registry = engine.registry.as_ref();
+        let ctx = engine.ctx.as_ref();
         let mut base_aliases = BTreeSet::new();
         base_aliases.insert(entity.primary_key.table_column.clone());
         for indicator in indicators {
