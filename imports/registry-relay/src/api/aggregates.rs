@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dataset-scoped aggregate HTTP route declarations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query};
@@ -46,6 +46,16 @@ where
             "/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata",
             get(aggregate_metadata),
         )
+        .route("/datasets/{dataset_id}/indicators", get(list_indicators))
+        .route(
+            "/datasets/{dataset_id}/indicators/{item_id}",
+            get(get_indicator),
+        )
+        .route("/datasets/{dataset_id}/dimensions", get(list_dimensions))
+        .route(
+            "/datasets/{dataset_id}/dimensions/{item_id}",
+            get(get_dimension),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +67,12 @@ struct AggregatePath {
 struct AggregateRunPath {
     dataset_id: String,
     aggregate_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AggregateDiscoveryPath {
+    dataset_id: String,
+    item_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +155,108 @@ async fn aggregate_metadata(
         Err(error) => return error.into_response(),
     };
     Json(aggregate).into_response()
+}
+
+async fn list_indicators(
+    Path(path): Path<AggregatePath>,
+    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    principal: Option<Extension<Principal>>,
+    config: Option<Extension<Arc<Config>>>,
+) -> Response {
+    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+        return error.into_response();
+    }
+    let Some(Extension(query)) = query else {
+        return query_unavailable(
+            "indicator list route matched, but aggregate query state is not installed",
+        );
+    };
+    match query.list_aggregates(&path.dataset_id) {
+        Ok(aggregates) => Json(json!({
+            "data": indicator_discovery_items(&path.dataset_id, &aggregates),
+            "links": [
+                { "rel": "self", "href": format!("/datasets/{}/indicators", path.dataset_id), "type": "application/json" }
+            ]
+        }))
+        .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn get_indicator(
+    Path(path): Path<AggregateDiscoveryPath>,
+    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    principal: Option<Extension<Principal>>,
+    config: Option<Extension<Arc<Config>>>,
+) -> Response {
+    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+        return error.into_response();
+    }
+    let Some(Extension(query)) = query else {
+        return query_unavailable(
+            "indicator detail route matched, but aggregate query state is not installed",
+        );
+    };
+    match query.list_aggregates(&path.dataset_id) {
+        Ok(aggregates) => indicator_discovery_items(&path.dataset_id, &aggregates)
+            .into_iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(path.item_id.as_str()))
+            .map(Json)
+            .map(IntoResponse::into_response)
+            .unwrap_or_else(|| Error::from(SchemaError::UnknownAggregate).into_response()),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn list_dimensions(
+    Path(path): Path<AggregatePath>,
+    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    principal: Option<Extension<Principal>>,
+    config: Option<Extension<Arc<Config>>>,
+) -> Response {
+    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+        return error.into_response();
+    }
+    let Some(Extension(query)) = query else {
+        return query_unavailable(
+            "dimension list route matched, but aggregate query state is not installed",
+        );
+    };
+    match query.list_aggregates(&path.dataset_id) {
+        Ok(aggregates) => Json(json!({
+            "data": dimension_discovery_items(&path.dataset_id, &aggregates),
+            "links": [
+                { "rel": "self", "href": format!("/datasets/{}/dimensions", path.dataset_id), "type": "application/json" }
+            ]
+        }))
+        .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn get_dimension(
+    Path(path): Path<AggregateDiscoveryPath>,
+    query: Option<Extension<Arc<AggregateQueryEngine>>>,
+    principal: Option<Extension<Principal>>,
+    config: Option<Extension<Arc<Config>>>,
+) -> Response {
+    if let Err(error) = require_metadata_scope(config.as_ref(), principal, &path.dataset_id, None) {
+        return error.into_response();
+    }
+    let Some(Extension(query)) = query else {
+        return query_unavailable(
+            "dimension detail route matched, but aggregate query state is not installed",
+        );
+    };
+    match query.list_aggregates(&path.dataset_id) {
+        Ok(aggregates) => dimension_discovery_items(&path.dataset_id, &aggregates)
+            .into_iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(path.item_id.as_str()))
+            .map(Json)
+            .map(IntoResponse::into_response)
+            .unwrap_or_else(|| Error::from(FilterError::UnknownField).into_response()),
+        Err(error) => error.into_response(),
+    }
 }
 
 async fn execute_aggregate(
@@ -517,10 +635,188 @@ fn aggregate_metadata_json(
     aggregate_list_json(item)
 }
 
+fn indicator_discovery_items(
+    dataset_id: &str,
+    aggregates: &[crate::query::aggregates::AggregateListItem],
+) -> Vec<Value> {
+    let mut items = BTreeMap::<String, IndicatorDiscovery>::new();
+    for aggregate in aggregates {
+        let aggregate_ref = AggregateDiscoveryRef::new(dataset_id, aggregate);
+        let dimensions = aggregate
+            .dimensions
+            .iter()
+            .map(|dimension| dimension.id.clone())
+            .collect::<Vec<_>>();
+        for indicator in &aggregate.indicators {
+            let item = items
+                .entry(indicator.id.clone())
+                .or_insert_with(|| IndicatorDiscovery::new(indicator));
+            item.valid_dimensions.extend(dimensions.iter().cloned());
+            item.queryable_via
+                .extend(aggregate_ref.queryable_via().into_iter());
+            item.aggregates.push(aggregate_ref.as_json());
+        }
+    }
+    items
+        .into_values()
+        .map(|item| item.into_json(dataset_id))
+        .collect()
+}
+
+fn dimension_discovery_items(
+    dataset_id: &str,
+    aggregates: &[crate::query::aggregates::AggregateListItem],
+) -> Vec<Value> {
+    let mut items = BTreeMap::<String, DimensionDiscovery>::new();
+    for aggregate in aggregates {
+        let aggregate_ref = AggregateDiscoveryRef::new(dataset_id, aggregate);
+        for dimension in &aggregate.dimensions {
+            let item = items
+                .entry(dimension.id.clone())
+                .or_insert_with(|| DimensionDiscovery::new(dimension));
+            item.queryable_via
+                .extend(aggregate_ref.queryable_via().into_iter());
+            item.aggregates.push(aggregate_ref.as_json());
+        }
+    }
+    items
+        .into_values()
+        .map(|item| item.into_json(dataset_id))
+        .collect()
+}
+
+struct IndicatorDiscovery {
+    id: String,
+    label: String,
+    function: &'static str,
+    column: String,
+    unit_measure: String,
+    unit_mult: Option<i32>,
+    decimals: Option<u32>,
+    frequency: Option<String>,
+    definition_uri: Option<String>,
+    valid_dimensions: BTreeSet<String>,
+    queryable_via: BTreeSet<String>,
+    aggregates: Vec<Value>,
+}
+
+impl IndicatorDiscovery {
+    fn new(indicator: &crate::query::aggregates::AggregateIndicatorItem) -> Self {
+        Self {
+            id: indicator.id.clone(),
+            label: indicator.label.clone(),
+            function: indicator.function,
+            column: indicator.column.clone(),
+            unit_measure: indicator.unit_measure.clone(),
+            unit_mult: indicator.unit_mult,
+            decimals: indicator.decimals,
+            frequency: indicator.frequency.clone(),
+            definition_uri: indicator.definition_uri.clone(),
+            valid_dimensions: BTreeSet::new(),
+            queryable_via: BTreeSet::new(),
+            aggregates: Vec::new(),
+        }
+    }
+
+    fn into_json(self, dataset_id: &str) -> Value {
+        json!({
+            "id": self.id,
+            "label": self.label,
+            "aggregation_method": self.function,
+            "column": self.column,
+            "unit_measure": self.unit_measure,
+            "unit_mult": self.unit_mult,
+            "decimals": self.decimals,
+            "frequency": self.frequency,
+            "definition_uri": self.definition_uri,
+            "valid_dimensions": self.valid_dimensions.into_iter().collect::<Vec<_>>(),
+            "queryable_via": self.queryable_via.into_iter().collect::<Vec<_>>(),
+            "aggregates": self.aggregates,
+            "links": [
+                { "rel": "self", "href": format!("/datasets/{dataset_id}/indicators/{}", self.id), "type": "application/json" }
+            ]
+        })
+    }
+}
+
+struct DimensionDiscovery {
+    id: String,
+    label: String,
+    field: String,
+    codelist: Option<String>,
+    queryable_via: BTreeSet<String>,
+    aggregates: Vec<Value>,
+}
+
+impl DimensionDiscovery {
+    fn new(dimension: &crate::query::aggregates::AggregateDimensionItem) -> Self {
+        Self {
+            id: dimension.id.clone(),
+            label: dimension.label.clone(),
+            field: dimension.field.clone(),
+            codelist: dimension.codelist.clone(),
+            queryable_via: BTreeSet::new(),
+            aggregates: Vec::new(),
+        }
+    }
+
+    fn into_json(self, dataset_id: &str) -> Value {
+        json!({
+            "id": self.id,
+            "label": self.label,
+            "field": self.field,
+            "codelist": self.codelist,
+            "queryable_via": self.queryable_via.into_iter().collect::<Vec<_>>(),
+            "aggregates": self.aggregates,
+            "links": [
+                { "rel": "self", "href": format!("/datasets/{dataset_id}/dimensions/{}", self.id), "type": "application/json" }
+            ]
+        })
+    }
+}
+
+struct AggregateDiscoveryRef<'a> {
+    dataset_id: &'a str,
+    aggregate_id: &'a str,
+    collection_id: Option<&'a str>,
+}
+
+impl<'a> AggregateDiscoveryRef<'a> {
+    fn new(
+        dataset_id: &'a str,
+        aggregate: &'a crate::query::aggregates::AggregateListItem,
+    ) -> Self {
+        Self {
+            dataset_id,
+            aggregate_id: &aggregate.aggregate_id,
+            collection_id: aggregate.collection_id.as_deref(),
+        }
+    }
+
+    fn queryable_via(&self) -> Vec<String> {
+        let mut values = vec![format!("aggregates:{}", self.aggregate_id)];
+        if let Some(collection_id) = self.collection_id {
+            values.push(format!("edr:{collection_id}"));
+        }
+        values
+    }
+
+    fn as_json(&self) -> Value {
+        let mut value = json!({
+            "aggregate_id": self.aggregate_id,
+            "href": format!("/datasets/{}/aggregates/{}", self.dataset_id, self.aggregate_id),
+        });
+        if let Some(collection_id) = self.collection_id {
+            value["edr_collection_id"] = json!(collection_id);
+            value["edr_area_href"] = json!(format!("/ogc/edr/v1/collections/{collection_id}/area"));
+        }
+        value
+    }
+}
+
 fn csv_response(result: &AggregateResult, envelope: &Value) -> Response {
     let mut wtr = csv::Writer::from_writer(Vec::new());
-    let mut headers = result.group_by.clone();
-    headers.extend(result.indicators.clone());
+    let headers = csv_headers(result);
     if let Err(err) = wtr.write_record(&headers) {
         tracing::error!(error = %err, "aggregate.csv_header_failed");
         return Error::from(crate::error::AggregateError::ExecutionFailed).into_response();
@@ -531,7 +827,7 @@ fn csv_response(result: &AggregateResult, envelope: &Value) -> Response {
         };
         let record = headers
             .iter()
-            .map(|header| object.get(header).map(csv_value).unwrap_or_default())
+            .map(|header| csv_row_value(object, header))
             .collect::<Vec<_>>();
         if let Err(err) = wtr.write_record(record) {
             tracing::error!(error = %err, "aggregate.csv_row_failed");
@@ -553,17 +849,57 @@ fn csv_response(result: &AggregateResult, envelope: &Value) -> Response {
         if let Ok(value) = HeaderValue::from_str(&disclosure.to_string()) {
             response
                 .headers_mut()
-                .insert("x-registry-relay-disclosure-control", value);
+                .insert("x-registry-relay-disclosure-control", value.clone());
+            response
+                .headers_mut()
+                .insert("x-spdci-disclosure-control", value);
         }
     }
     if let Some(freshness) = envelope.get("freshness") {
         if let Ok(value) = HeaderValue::from_str(&freshness.to_string()) {
             response
                 .headers_mut()
-                .insert("x-registry-relay-freshness", value);
+                .insert("x-registry-relay-freshness", value.clone());
+            response.headers_mut().insert("x-spdci-freshness", value);
         }
     }
+    let link = format!(
+        "</datasets/{}/aggregates/{}/metadata>; rel=\"describedby\"; type=\"application/json\"",
+        result.dataset_id, result.aggregate_id
+    );
+    if let Ok(value) = HeaderValue::from_str(&link) {
+        response.headers_mut().insert(header::LINK, value);
+    }
     response
+}
+
+fn csv_headers(result: &AggregateResult) -> Vec<String> {
+    let mut headers = result.group_by.clone();
+    headers.extend(result.indicators.clone());
+    for indicator in &result.indicators {
+        let status_key = format!("{indicator}$status");
+        if result.data.iter().any(|row| {
+            row.get("attributes")
+                .and_then(Value::as_object)
+                .is_some_and(|attributes| attributes.contains_key(&status_key))
+        }) {
+            headers.push(status_key);
+        }
+    }
+    headers
+}
+
+fn csv_row_value(object: &serde_json::Map<String, Value>, header: &str) -> String {
+    object
+        .get(header)
+        .or_else(|| {
+            object
+                .get("attributes")
+                .and_then(Value::as_object)
+                .and_then(|attributes| attributes.get(header))
+        })
+        .map(csv_value)
+        .unwrap_or_default()
 }
 
 fn csv_value(value: &Value) -> String {

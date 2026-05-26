@@ -681,7 +681,7 @@ aggregates:
       suppression: omit
 ```
 
-Supported indicator functions include the configured V1 set used by tests and examples, such as `count`, `sum`, and `avg`. `temporal_field` is optional; when present, native aggregate `temporal.from` and `temporal.to` are translated into the declared range-capable allowed filter for that source-entity field. Keep disclosure thresholds explicit and reviewable. Spatial EDR exposure is opt-in with `spatial.mode: admin_area` on the aggregate.
+Supported indicator functions include the configured V1 set used by tests and examples, such as `count`, `sum`, and `avg`. `temporal_field` is optional; when present, native aggregate `temporal.from` and `temporal.to` are translated into the declared range-capable allowed filter for that source-entity field. Dataset indicator and dimension discovery is derived from these aggregate declarations, so keep ids stable and labels consumer-friendly. Keep disclosure thresholds explicit and reviewable. Spatial EDR exposure is opt-in with `spatial.mode: admin_area` on the aggregate.
 
 ## Provenance
 

@@ -51,6 +51,10 @@ GET /datasets/{dataset_id}/aggregates
 GET /datasets/{dataset_id}/aggregates/{aggregate_id}
 POST /datasets/{dataset_id}/aggregates/{aggregate_id}/query
 GET /datasets/{dataset_id}/aggregates/{aggregate_id}/metadata
+GET /datasets/{dataset_id}/indicators
+GET /datasets/{dataset_id}/indicators/{indicator_id}
+GET /datasets/{dataset_id}/dimensions
+GET /datasets/{dataset_id}/dimensions/{dimension_id}
 GET /ogc/v1                                 (feature: ogcapi-features)
 GET /ogc/v1/conformance                     (feature: ogcapi-features)
 GET /ogc/v1/collections                     (feature: ogcapi-features)
@@ -262,11 +266,15 @@ Aggregates are predeclared in config. Clients can list available aggregates and 
 
 ```text
 GET /datasets/social_registry/aggregates
+GET /datasets/social_registry/indicators
+GET /datasets/social_registry/dimensions
 GET /datasets/social_registry/aggregates/by_municipality
 POST /datasets/social_registry/aggregates/by_municipality/query
 ```
 
-Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
+Indicator and dimension discovery is dataset-scoped and generated from aggregate declarations. Reused indicator or dimension ids are merged into one discovery record with `queryable_via`, `valid_dimensions` for indicators, and links back to the aggregate routes.
+
+Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. CSV output is available with `?f=csv` or request `"format": "csv"` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel="describedby"` header to aggregate metadata. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
 
 ## Problem Details
 

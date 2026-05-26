@@ -816,6 +816,100 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                     "Aggregate definition not found for this dataset.",
                 );
                 tag(&mut paths, &aggregate_metadata_path, "get", &aggregate_tag);
+
+                let indicators_path = format!("/datasets/{}/indicators", dataset.dataset_id);
+                paths.insert(
+                    indicators_path.clone(),
+                    json_path_item("get", "List dataset indicators", "AggregateIndicatorList"),
+                );
+                set_op_id(
+                    &mut paths,
+                    &indicators_path,
+                    "get",
+                    &format!("list_{dataset_slug}_indicators"),
+                );
+                set_description(
+                    &mut paths,
+                    &indicators_path,
+                    "get",
+                    &format!(
+                        "Lists indicator definitions declared by aggregates in `{}`.",
+                        dataset.dataset_id,
+                    ),
+                );
+                tag(&mut paths, &indicators_path, "get", &aggregate_tag);
+
+                let indicator_path =
+                    format!("/datasets/{}/indicators/{{item_id}}", dataset.dataset_id);
+                paths.insert(
+                    indicator_path.clone(),
+                    path_item_with_params(
+                        "get",
+                        "Get dataset indicator",
+                        "AggregateIndicatorDiscovery",
+                        vec![path_parameter("item_id", "Indicator identifier")],
+                    ),
+                );
+                set_op_id(
+                    &mut paths,
+                    &indicator_path,
+                    "get",
+                    &format!("get_{dataset_slug}_indicator"),
+                );
+                add_response_404(
+                    &mut paths,
+                    &indicator_path,
+                    "get",
+                    "Indicator definition not found for this dataset.",
+                );
+                tag(&mut paths, &indicator_path, "get", &aggregate_tag);
+
+                let dimensions_path = format!("/datasets/{}/dimensions", dataset.dataset_id);
+                paths.insert(
+                    dimensions_path.clone(),
+                    json_path_item("get", "List dataset dimensions", "AggregateDimensionList"),
+                );
+                set_op_id(
+                    &mut paths,
+                    &dimensions_path,
+                    "get",
+                    &format!("list_{dataset_slug}_dimensions"),
+                );
+                set_description(
+                    &mut paths,
+                    &dimensions_path,
+                    "get",
+                    &format!(
+                        "Lists dimension definitions declared by aggregates in `{}`.",
+                        dataset.dataset_id,
+                    ),
+                );
+                tag(&mut paths, &dimensions_path, "get", &aggregate_tag);
+
+                let dimension_path =
+                    format!("/datasets/{}/dimensions/{{item_id}}", dataset.dataset_id);
+                paths.insert(
+                    dimension_path.clone(),
+                    path_item_with_params(
+                        "get",
+                        "Get dataset dimension",
+                        "AggregateDimensionDiscovery",
+                        vec![path_parameter("item_id", "Dimension identifier")],
+                    ),
+                );
+                set_op_id(
+                    &mut paths,
+                    &dimension_path,
+                    "get",
+                    &format!("get_{dataset_slug}_dimension"),
+                );
+                add_response_404(
+                    &mut paths,
+                    &dimension_path,
+                    "get",
+                    "Dimension definition not found for this dataset.",
+                );
+                tag(&mut paths, &dimension_path, "get", &aggregate_tag);
             }
         }
     }
@@ -1808,6 +1902,22 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
     schemas.insert("AggregateMetadata".to_string(), aggregate_metadata_schema());
     schemas.insert(
+        "AggregateIndicatorList".to_string(),
+        aggregate_indicator_list_schema(),
+    );
+    schemas.insert(
+        "AggregateIndicatorDiscovery".to_string(),
+        aggregate_indicator_discovery_schema(),
+    );
+    schemas.insert(
+        "AggregateDimensionList".to_string(),
+        aggregate_dimension_list_schema(),
+    );
+    schemas.insert(
+        "AggregateDimensionDiscovery".to_string(),
+        aggregate_dimension_discovery_schema(),
+    );
+    schemas.insert(
         "AggregateQueryRequest".to_string(),
         aggregate_query_request_schema(),
     );
@@ -2415,6 +2525,90 @@ fn aggregate_result_schema() -> Value {
 
 fn aggregate_metadata_schema() -> Value {
     aggregate_list_schema()["properties"]["data"]["items"].clone()
+}
+
+fn aggregate_indicator_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["data", "links"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AggregateIndicatorDiscovery" },
+            },
+            "links": link_array_schema(),
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn aggregate_indicator_discovery_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "label", "aggregation_method", "unit_measure", "valid_dimensions", "queryable_via", "aggregates", "links"],
+        "properties": {
+            "id": { "type": "string" },
+            "label": { "type": "string" },
+            "aggregation_method": { "type": "string" },
+            "column": { "type": "string" },
+            "unit_measure": { "type": "string" },
+            "unit_mult": { "type": ["number", "null"] },
+            "decimals": { "type": ["integer", "null"] },
+            "frequency": { "type": ["string", "null"] },
+            "definition_uri": { "type": ["string", "null"], "format": "uri" },
+            "valid_dimensions": { "type": "array", "items": { "type": "string" } },
+            "queryable_via": { "type": "array", "items": { "type": "string" } },
+            "aggregates": { "type": "array", "items": aggregate_discovery_ref_schema() },
+            "links": link_array_schema(),
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn aggregate_dimension_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["data", "links"],
+        "properties": {
+            "data": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AggregateDimensionDiscovery" },
+            },
+            "links": link_array_schema(),
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn aggregate_dimension_discovery_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "label", "field", "queryable_via", "aggregates", "links"],
+        "properties": {
+            "id": { "type": "string" },
+            "label": { "type": "string" },
+            "field": { "type": "string" },
+            "codelist": { "type": ["string", "null"], "format": "uri" },
+            "queryable_via": { "type": "array", "items": { "type": "string" } },
+            "aggregates": { "type": "array", "items": aggregate_discovery_ref_schema() },
+            "links": link_array_schema(),
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn aggregate_discovery_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["aggregate_id", "href"],
+        "properties": {
+            "aggregate_id": { "type": "string" },
+            "href": { "type": "string" },
+            "edr_collection_id": { "type": "string" },
+            "edr_area_href": { "type": "string" },
+        },
+        "additionalProperties": false,
+    })
 }
 
 fn aggregate_query_request_schema() -> Value {

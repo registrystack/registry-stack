@@ -342,6 +342,52 @@ async fn lists_configured_dataset_aggregates() {
 }
 
 #[tokio::test]
+async fn lists_dataset_indicator_and_dimension_discovery() {
+    let server = server_with_aggregates().await;
+
+    let indicators = server.get("/datasets/social_registry/indicators").await;
+    indicators.assert_status_ok();
+    let body: Value = indicators.json();
+    let data = body["data"].as_array().expect("indicator data");
+    assert_eq!(data.len(), 3);
+    let individual_count = data
+        .iter()
+        .find(|item| item["id"] == "individual_count")
+        .expect("individual count indicator");
+    assert_eq!(individual_count["aggregation_method"], "count");
+    assert_eq!(
+        individual_count["valid_dimensions"],
+        json!(["household_region", "municipality_code"])
+    );
+    assert!(individual_count["queryable_via"]
+        .as_array()
+        .expect("queryable_via")
+        .iter()
+        .any(|value| value == "aggregates:by_municipality"));
+
+    let indicator = server
+        .get("/datasets/social_registry/indicators/min_payment")
+        .await;
+    indicator.assert_status_ok();
+    let body: Value = indicator.json();
+    assert_eq!(body["id"], "min_payment");
+    assert_eq!(body["unit_measure"], "currency");
+
+    let dimensions = server.get("/datasets/social_registry/dimensions").await;
+    dimensions.assert_status_ok();
+    let body: Value = dimensions.json();
+    assert_eq!(body["data"].as_array().expect("dimension data").len(), 2);
+
+    let dimension = server
+        .get("/datasets/social_registry/dimensions/municipality_code")
+        .await;
+    dimension.assert_status_ok();
+    let body: Value = dimension.json();
+    assert_eq!(body["id"], "municipality_code");
+    assert_eq!(body["field"], "municipality_code");
+}
+
+#[tokio::test]
 async fn required_filters_are_enforced_for_aggregate_queries() {
     let server = server_with_aggregates().await;
 
@@ -367,6 +413,49 @@ async fn required_filters_are_enforced_for_aggregate_queries() {
             "individual_count": 2
         })]
     );
+}
+
+#[tokio::test]
+async fn csv_response_carries_metadata_headers_and_status_columns() {
+    let resp = server_with_aggregates()
+        .await
+        .get("/datasets/social_registry/aggregates/by_municipality_masked?f=csv")
+        .await;
+
+    resp.assert_status_ok();
+    assert!(resp
+        .header("content-type")
+        .to_str()
+        .expect("content-type")
+        .starts_with("text/csv"));
+    assert!(resp
+        .header("x-registry-relay-disclosure-control")
+        .to_str()
+        .expect("registry disclosure header")
+        .contains("min_cell_size"));
+    assert!(resp
+        .header("x-spdci-disclosure-control")
+        .to_str()
+        .expect("spdci disclosure header")
+        .contains("min_cell_size"));
+    assert!(resp
+        .header("x-spdci-freshness")
+        .to_str()
+        .expect("freshness header")
+        .contains("computed_at"));
+    assert!(resp
+        .header("link")
+        .to_str()
+        .expect("link header")
+        .contains("</datasets/social_registry/aggregates/by_municipality_masked/metadata>; rel=\"describedby\""));
+
+    let body = resp.text();
+    assert_eq!(
+        body.lines().next(),
+        Some("municipality_code,individual_count,individual_count$status")
+    );
+    assert!(body.contains("mun-1,2,"));
+    assert!(body.contains("mun-2,,S"));
 }
 
 #[tokio::test]
