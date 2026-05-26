@@ -38,6 +38,7 @@ fn sample_record(request_id: usize) -> AuditRecord {
         row_count: Some(1),
         null_geometry_count: None,
         invalid_geometry_count: None,
+        geometry_vertex_count: None,
         suppressed_groups: None,
         duration_ms: 3,
         error_code: None,

@@ -3,7 +3,7 @@
 `registry-relay` can return W3C Verifiable Credentials (VCs), signed as
 compact JWS, for two response families:
 
-- `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}` -> `AggregateResult`
+- `GET /datasets/{dataset_id}/aggregates/{aggregate_id}` -> `AggregateResult`
 - `GET /datasets/{dataset_id}/{entity}/{id}` -> `EntityRecord`
 
 Evidence verification uses a separate server-to-server JWT receipt media type,
@@ -196,7 +196,7 @@ Payload (top-level VCDM 2.0; no nested `vc` claim):
 `type[1]` is one of `AggregateResult` or `EntityRecord`.
 Subject URIs follow `<catalog.base_url>/datasets/<dataset>/<entity>/<id>`
 for entity claims and
-`<catalog.base_url>/datasets/<dataset>/<entity>/aggregates/<aggregate_id>`
+`<catalog.base_url>/datasets/<dataset>/aggregates/<aggregate_id>`
 for aggregates.
 
 ## PublicSchema.org Entity Credentials

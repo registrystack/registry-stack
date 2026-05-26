@@ -19,6 +19,7 @@ standards-cel-mapping = ["cel-mapping-runtime"]
 publicschema-cel = ["cel-mapping-runtime", "dep:jsonschema"]
 spdci-api-standards = ["dep:jsonschema"]
 ogcapi-features = ["dep:ogcapi-types", "dep:geojson"]
+ogcapi-edr = ["dep:geo", "dep:geo-types", "dep:geojson", "dep:wkt"]
 ogcapi-records = []
 
 # ─── runtime ─────────────────────────────────────────────────────────────────
@@ -117,7 +118,10 @@ thiserror = { version = "2" }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = { version = "0.2" }
 ogcapi-types = { version = "0.3.0", optional = true, features = ["features"] }
-geojson = { version = "0.24", optional = true }
+geojson = { version = "0.24", optional = true, features = ["geo-types"] }
+geo = { version = "0.31", optional = true }
+geo-types = { version = "0.7", optional = true }
+wkt = { version = "0.12", optional = true, features = ["geo-types"] }
 
 # ─── dev / test ──────────────────────────────────────────────────────────────
 [dev-dependencies]

@@ -516,11 +516,12 @@ Returning `geometry: null` is the Phase 1 policy because RFC 7946 permits it and
 Existing non-spatial aggregates stay on:
 
 ```text
-GET /datasets/{dataset_id}/{entity}/aggregates
-GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+GET /datasets/{dataset_id}/aggregates
+GET /datasets/{dataset_id}/aggregates/{aggregate_id}
+POST /datasets/{dataset_id}/aggregates/{aggregate_id}/query
 ```
 
-An aggregate may become an OGC collection only if it is materialized or modeled as an entity with geometry. The OGC surface should not invent geometry for non-spatial aggregate rows.
+An aggregate may become an OGC EDR `/area` collection only when configured with `spatial.mode: admin_area`. The EDR surface selects configured admin geometries by intersection and aggregates whole admin units. It does not invent geometry for non-spatial aggregate rows.
 
 Rule:
 

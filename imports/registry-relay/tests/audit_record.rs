@@ -56,6 +56,7 @@ fn sample_record() -> AuditRecord {
         row_count: None,
         null_geometry_count: None,
         invalid_geometry_count: None,
+        geometry_vertex_count: None,
         suppressed_groups: None,
         duration_ms: 7,
         error_code: None,
@@ -142,6 +143,7 @@ fn record_serialises_to_expected_field_shape() {
         "row_count",
         "null_geometry_count",
         "invalid_geometry_count",
+        "geometry_vertex_count",
         "suppressed_groups",
         "duration_ms",
         "error_code",
@@ -191,6 +193,7 @@ fn record_field_types_match_contract() {
     assert!(json["row_count"].is_null());
     assert!(json["null_geometry_count"].is_null());
     assert!(json["invalid_geometry_count"].is_null());
+    assert!(json["geometry_vertex_count"].is_null());
     assert!(json["suppressed_groups"].is_null());
     assert!(json["error_code"].is_null());
 }
@@ -590,6 +593,51 @@ async fn middleware_hashes_configured_sensitive_query_values() {
 }
 
 #[tokio::test]
+async fn middleware_records_geometry_vertex_count_without_raw_geometry() {
+    let (sink, pipeline) = in_memory_pipeline();
+    let app = Router::new()
+        .route(
+            "/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area",
+            get(|| async {
+                let mut response = StatusCode::OK.into_response();
+                response.extensions_mut().insert(AuditContextExt {
+                    dataset_id: Some("social_registry".to_string()),
+                    aggregate_id: Some("beneficiaries_by_municipality".to_string()),
+                    collection_id: Some(
+                        "social_registry_beneficiaries_by_municipality".to_string(),
+                    ),
+                    geometry_vertex_count: Some(5),
+                    row_count: Some(1),
+                    ..AuditContextExt::default()
+                });
+                response
+            }),
+        )
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area?coords=POLYGON%20((0%200,1%200,1%201,0%201,0%200))")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let parsed = captured_record(&records[0]);
+    assert_eq!(parsed["endpoint_kind"], "ogc_edr_area");
+    assert_eq!(parsed["geometry_vertex_count"], 5);
+    assert_eq!(parsed["row_count"], 1);
+    assert!(!records[0].contains("POLYGON"));
+}
+
+#[tokio::test]
 async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
     let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
@@ -805,7 +853,7 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
             get(|| async { StatusCode::OK }),
         )
         .route(
-            "/datasets/social_registry/individual/aggregates",
+            "/datasets/social_registry/aggregates",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
@@ -814,7 +862,7 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
     for uri in [
         "/datasets/social_registry/individual/schema",
         "/datasets/social_registry/individual/verify",
-        "/datasets/social_registry/individual/aggregates",
+        "/datasets/social_registry/aggregates",
     ] {
         let resp = app
             .clone()
@@ -846,7 +894,7 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
         [
             "/datasets/social_registry/individual/schema",
             "/datasets/social_registry/individual/verify",
-            "/datasets/social_registry/individual/aggregates",
+            "/datasets/social_registry/aggregates",
         ]
     );
 }

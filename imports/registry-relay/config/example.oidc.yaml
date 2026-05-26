@@ -148,6 +148,31 @@ datasets:
               nullable: true
               unit: EUR
 
+    aggregates:
+      - id: by_municipality
+        title: Individuals by municipality
+        description: Number of individuals by municipality
+        source_entity: individual
+        default_group_by:
+          - municipality_code
+        dimensions:
+          - id: municipality_code
+            label: Municipality
+            field: municipality_code
+            codelist: https://www.insee.fr/codes/cog
+        indicators:
+          - id: individual_count
+            label: Individuals
+            function: count
+            column: id
+            unit_measure: people
+        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+        disclosure_control:
+          min_group_size: 5
+          suppression: omit
+
     entities:
       - name: household
         title: Household
@@ -222,18 +247,6 @@ datasets:
             - field: municipality_code
               ops: [eq, in]
           allowed_expansions: [household]
-        aggregates:
-          - id: by_municipality
-            description: Number of individuals by municipality
-            group_by:
-              - municipality_code
-            measures:
-              - name: individual_count
-                function: count
-                column: id
-            disclosure_control:
-              min_group_size: 5
-              suppression: omit
 
 audit:
   sink: stdout

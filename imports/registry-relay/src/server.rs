@@ -209,6 +209,8 @@ fn build_app_with_provenance_metadata_and_metrics(
         .merge(api::openapi_router());
     #[cfg(feature = "ogcapi-features")]
     let protected = protected.merge(api::ogc_router());
+    #[cfg(feature = "ogcapi-edr")]
+    let protected = protected.merge(api::edr_router());
     #[cfg(feature = "ogcapi-records")]
     let protected = protected.merge(api::records_router());
     let protected = merge_spdci_routes(protected);

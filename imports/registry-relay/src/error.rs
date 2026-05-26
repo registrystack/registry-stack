@@ -216,6 +216,8 @@ pub enum AggregateError {
     MeasureUnsupported,
     #[error("disclosure violation")]
     DisclosureViolation,
+    #[error("filter required")]
+    FilterRequired { required: Vec<String> },
 }
 
 /// `admin.*` codes.
@@ -835,11 +837,17 @@ impl AggregateError {
             AggregateError::ExecutionFailed => "aggregate.execution_failed",
             AggregateError::MeasureUnsupported => "aggregate.measure_unsupported",
             AggregateError::DisclosureViolation => "aggregate.disclosure_violation",
+            AggregateError::FilterRequired { .. } => "aggregate.filter_required",
         }
     }
 
     fn http_status(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
+        match self {
+            AggregateError::FilterRequired { .. } => StatusCode::BAD_REQUEST,
+            AggregateError::ExecutionFailed
+            | AggregateError::MeasureUnsupported
+            | AggregateError::DisclosureViolation => StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 
     fn title(&self) -> &'static str {
@@ -847,20 +855,27 @@ impl AggregateError {
             AggregateError::ExecutionFailed => "Aggregate execution failed",
             AggregateError::MeasureUnsupported => "Aggregate measure unsupported",
             AggregateError::DisclosureViolation => "Disclosure violation",
+            AggregateError::FilterRequired { .. } => "Filter required",
         }
     }
 
-    fn detail(&self) -> &'static str {
+    fn detail(&self) -> String {
         match self {
-            AggregateError::ExecutionFailed => "query engine returned an execution error",
+            AggregateError::ExecutionFailed => {
+                "query engine returned an execution error".to_string()
+            }
             AggregateError::MeasureUnsupported => {
-                "configured measure references a function that is not implemented"
+                "configured measure references a function that is not implemented".to_string()
             }
             // Note: this is an internal invariant violation. The
             // string is deliberately generic; nothing about the
             // offending group reaches the client.
             AggregateError::DisclosureViolation => {
-                "disclosure-control invariant was violated before response"
+                "disclosure-control invariant was violated before response".to_string()
+            }
+            AggregateError::FilterRequired { required } => {
+                let fields = required.join(", ");
+                truncate(format!("one of: {fields}"), MAX_DETAIL_LEN)
             }
         }
     }
@@ -1290,9 +1305,8 @@ impl SpatialError {
 
     fn http_status(&self) -> StatusCode {
         match self {
-            SpatialError::GeometryInvalid | SpatialError::GeometryTooLarge => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            SpatialError::GeometryInvalid => StatusCode::INTERNAL_SERVER_ERROR,
+            SpatialError::GeometryTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             SpatialError::BboxInvalid
             | SpatialError::BboxAntimeridianUnsupported
             | SpatialError::FilterUnsupported { .. }

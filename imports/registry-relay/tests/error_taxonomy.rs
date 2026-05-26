@@ -66,6 +66,9 @@ fn all_variants() -> Vec<Error> {
         Error::Aggregate(AggregateError::ExecutionFailed),
         Error::Aggregate(AggregateError::MeasureUnsupported),
         Error::Aggregate(AggregateError::DisclosureViolation),
+        Error::Aggregate(AggregateError::FilterRequired {
+            required: vec!["municipality".to_string()],
+        }),
         // admin.*
         Error::Admin(AdminError::ReloadFailed),
         Error::Admin(AdminError::UnknownResource),
@@ -177,6 +180,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
             "aggregate.disclosure_violation",
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
+        ("aggregate.filter_required", StatusCode::BAD_REQUEST),
         ("admin.reload_failed", StatusCode::INTERNAL_SERVER_ERROR),
         ("admin.unknown_resource", StatusCode::NOT_FOUND),
         ("config.parse_error", StatusCode::INTERNAL_SERVER_ERROR),
@@ -238,10 +242,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
             "spatial.geometry_invalid",
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
-        (
-            "spatial.geometry_too_large",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ),
+        ("spatial.geometry_too_large", StatusCode::PAYLOAD_TOO_LARGE),
         // BboxInvalid and BboxAntimeridianUnsupported intentionally share
         // the stable public code while rendering different details.
         ("spatial.bbox_invalid", StatusCode::BAD_REQUEST),

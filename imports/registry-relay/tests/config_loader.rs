@@ -214,19 +214,20 @@ fn example_config_loads_and_validates() {
         .expect("household_id filter present");
     assert!(household_filter.ops.contains(&FilterOp::Eq));
 
-    assert_eq!(individual.aggregates.len(), 3);
-    let pay_agg = &individual.aggregates[1];
+    assert!(individual.aggregates.is_empty());
+    assert_eq!(dataset.aggregates.len(), 3);
+    let pay_agg = &dataset.aggregates[1];
     assert_eq!(pay_agg.id.as_ref(), "payments_by_municipality");
-    assert_eq!(pay_agg.measures.len(), 2);
+    assert_eq!(pay_agg.indicators.len(), 2);
     assert!(matches!(
-        pay_agg.measures[0].function,
+        pay_agg.indicators[0].function,
         AggregateFunction::Sum
     ));
     assert!(matches!(
-        pay_agg.measures[1].function,
+        pay_agg.indicators[1].function,
         AggregateFunction::Avg
     ));
-    assert_eq!(pay_agg.disclosure_control.min_group_size, 5);
+    assert_eq!(pay_agg.disclosure_control.effective_min_cell_size(), 5);
     assert!(matches!(
         pay_agg.disclosure_control.suppression,
         Suppression::Mask

@@ -47,8 +47,10 @@ GET /datasets/{dataset_id}/{entity}/schema
 GET /datasets/{dataset_id}/{entity}
 GET /datasets/{dataset_id}/{entity}/{id}
 GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-GET /datasets/{dataset_id}/{entity}/aggregates
-GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+GET /datasets/{dataset_id}/aggregates
+GET /datasets/{dataset_id}/aggregates/{aggregate_id}
+POST /datasets/{dataset_id}/aggregates/{aggregate_id}/query
+GET /datasets/{dataset_id}/aggregates/{aggregate_id}/metadata
 GET /ogc/v1                                 (feature: ogcapi-features)
 GET /ogc/v1/conformance                     (feature: ogcapi-features)
 GET /ogc/v1/collections                     (feature: ogcapi-features)
@@ -62,6 +64,11 @@ GET /ogc/v1/records/collections             (feature: ogcapi-records)
 GET /ogc/v1/records/collections/{collection_id}  (feature: ogcapi-records)
 GET /ogc/v1/records/collections/{collection_id}/items  (feature: ogcapi-records)
 GET /ogc/v1/records/collections/{collection_id}/items/{record_id}  (feature: ogcapi-records)
+GET /ogc/edr/v1                             (feature: ogcapi-edr)
+GET /ogc/edr/v1/conformance                 (feature: ogcapi-edr)
+GET /ogc/edr/v1/collections                 (feature: ogcapi-edr)
+GET /ogc/edr/v1/collections/{collection_id} (feature: ogcapi-edr)
+GET|POST /ogc/edr/v1/collections/{collection_id}/area  (feature: ogcapi-edr)
 POST /dci/{registry}/registry/sync/search   (feature: spdci-api-standards)
 POST /dci/{registry}/registry/sync/disabled (feature: spdci-api-standards)
 POST /dci/{registry}/registry/sync/get-disability-details  (feature: spdci-api-standards)
@@ -254,11 +261,12 @@ Metadata reads require the caller's `metadata` scope for the owning dataset. The
 Aggregates are predeclared in config. Clients can list available aggregates and execute one by id:
 
 ```text
-GET /datasets/social_registry/individual/aggregates
-GET /datasets/social_registry/individual/aggregates/by_municipality
+GET /datasets/social_registry/aggregates
+GET /datasets/social_registry/aggregates/by_municipality
+POST /datasets/social_registry/aggregates/by_municipality/query
 ```
 
-Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors.
+Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
 
 ## Problem Details
 

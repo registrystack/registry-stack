@@ -86,6 +86,26 @@ datasets:
             - name: age
               type: integer
               nullable: true
+    aggregates:
+      - id: households_by_region
+        title: Households by region
+        description: Household count by region
+        source_entity: household
+        default_group_by:
+          - region
+        dimensions:
+          - id: region
+            label: Region
+            field: region
+        indicators:
+          - id: household_count
+            label: Households
+            function: count
+            column: id
+            unit_measure: households
+        disclosure_control:
+          min_group_size: 2
+          suppression: omit
     entities:
       - name: household
         title: Household
@@ -1243,15 +1263,26 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         .any(|parameter| parameter["name"] == "cursor"));
 
     assert_eq!(
-        body["paths"]["/datasets/social_registry/household/aggregates"]["get"]["responses"]["200"]
-            ["content"]["application/json"]["schema"]["$ref"],
+        body["paths"]["/datasets/social_registry/aggregates"]["get"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["$ref"],
         "#/components/schemas/AggregateListResponse"
     );
     assert_eq!(
-        body["paths"]["/datasets/social_registry/household/aggregates/{aggregate_id}"]["get"]
-            ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        body["paths"]["/datasets/social_registry/aggregates/{aggregate_id}"]["get"]["responses"]
+            ["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/AggregateResult"
     );
+    assert_eq!(
+        body["paths"]["/datasets/social_registry/aggregates/{aggregate_id}/query"]["post"]
+            ["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AggregateQueryRequest"
+    );
+    assert_eq!(
+        body["paths"]["/datasets/social_registry/aggregates/{aggregate_id}/metadata"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AggregateMetadata"
+    );
+    assert!(body["paths"]["/datasets/social_registry/household/aggregates"].is_null());
     assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
 }
@@ -1465,14 +1496,35 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
         "/datasets/social_registry/household",
         "/datasets/social_registry/household/{id}",
         "/datasets/social_registry/household/schema",
-        "/datasets/social_registry/household/aggregates",
-        "/datasets/social_registry/household/aggregates/{aggregate_id}",
         "/datasets/social_registry/household/{id}/members",
     ] {
         assert_eq!(
             body["paths"][path]["get"]["tags"],
             serde_json::json!([entity_tag]),
             "{path} should be tagged with {entity_tag}"
+        );
+    }
+    let aggregate_tag = "social_registry / aggregates";
+    for (path, method) in [
+        ("/datasets/social_registry/aggregates", "get"),
+        ("/datasets/social_registry/aggregates/{aggregate_id}", "get"),
+        (
+            "/datasets/social_registry/aggregates/{aggregate_id}",
+            "post",
+        ),
+        (
+            "/datasets/social_registry/aggregates/{aggregate_id}/query",
+            "post",
+        ),
+        (
+            "/datasets/social_registry/aggregates/{aggregate_id}/metadata",
+            "get",
+        ),
+    ] {
+        assert_eq!(
+            body["paths"][path][method]["tags"],
+            serde_json::json!([aggregate_tag]),
+            "{path} {method} should be tagged with {aggregate_tag}"
         );
     }
 
@@ -1559,6 +1611,10 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
         .map(|t| t.as_str().expect("tag string"))
         .collect();
     assert!(
+        social_registry_tags.contains(&"social_registry / aggregates"),
+        "Social Registry group must include the aggregate tag: got {social_registry_tags:?}"
+    );
+    assert!(
         social_registry_tags.contains(&"social_registry / household"),
         "Social Registry group must include the household entity tag: got {social_registry_tags:?}"
     );
@@ -1573,6 +1629,11 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
         household_tag["x-displayName"], "Household",
         "entity tags must surface entity.title via x-displayName"
     );
+    let aggregate_tag = tags
+        .iter()
+        .find(|t| t["name"] == "social_registry / aggregates")
+        .expect("aggregate tag present");
+    assert_eq!(aggregate_tag["x-displayName"], "Aggregates");
 
     // ---- operationId on every per-entity op ----
     for (path, expected) in [
@@ -1585,12 +1646,12 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
             "get_social_registry_household_record",
         ),
         (
-            "/datasets/social_registry/household/aggregates",
-            "list_social_registry_household_aggregates",
+            "/datasets/social_registry/aggregates",
+            "list_social_registry_aggregates",
         ),
         (
-            "/datasets/social_registry/household/aggregates/{aggregate_id}",
-            "run_social_registry_household_aggregate",
+            "/datasets/social_registry/aggregates/{aggregate_id}",
+            "run_social_registry_aggregate",
         ),
         (
             "/datasets/social_registry/household/schema",
@@ -1737,7 +1798,7 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
     }
     for ungated in [
         "/datasets/social_registry/household/schema",
-        "/datasets/social_registry/household/aggregates",
+        "/datasets/social_registry/aggregates",
     ] {
         assert!(
             purpose_param(ungated).is_none(),

@@ -19,10 +19,10 @@ use registry_platform_httpsec::CorsPolicy;
 
 use super::capabilities::source_capabilities;
 use super::{
-    AggregateConfig, AllowedFilter, AuthMode, Config, DatasetConfig, EntityConfig,
-    EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, OidcConfig,
-    RefreshConfig, RelationshipKind, ResourceConfig, SourceConfig, SpatialBboxFieldsConfig,
-    SpatialGeometryConfig, CRS84,
+    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AuthMode, Config, DatasetConfig,
+    EntityConfig, EntityRelationshipConfig, EntitySpatialConfig, FieldConfig, FieldType, FilterOp,
+    OidcConfig, RefreshConfig, RelationshipKind, ResourceConfig, SourceConfig,
+    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
 /// Prefix for the special `admin` scope.
@@ -1019,6 +1019,51 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
             return Err(ConfigError::DuplicateId);
         }
 
+        let mut aggregate_ids: HashSet<&str> = HashSet::new();
+        let mut edr_collection_ids: HashSet<String> = HashSet::new();
+        for aggregate in &dataset.aggregates {
+            if !is_valid_id(aggregate.id.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    "aggregate id does not match ^[a-z][a-z0-9_]*$"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if !aggregate_ids.insert(aggregate.id.as_str()) {
+                tracing::error!(
+                    code = "config.duplicate_id",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    "duplicate aggregate id within dataset"
+                );
+                return Err(ConfigError::DuplicateId);
+            }
+            if let Some(collection_id) = aggregate_edr_collection_id(dataset, aggregate) {
+                if !is_valid_id(&collection_id) {
+                    tracing::error!(
+                        code = "config.validation_error",
+                        dataset_id = %dataset.id,
+                        aggregate_id = %aggregate.id,
+                        collection_id,
+                        "aggregate EDR collection_id is not a valid lower-snake id"
+                    );
+                    return Err(ConfigError::ValidationError);
+                }
+                if !edr_collection_ids.insert(collection_id.clone()) {
+                    tracing::error!(
+                        code = "config.duplicate_id",
+                        dataset_id = %dataset.id,
+                        aggregate_id = %aggregate.id,
+                        collection_id,
+                        "duplicate aggregate EDR collection_id"
+                    );
+                    return Err(ConfigError::DuplicateId);
+                }
+            }
+        }
+
         let mut resource_ids: HashSet<&str> = HashSet::new();
         for resource in dataset.table_configs() {
             if !is_valid_id(resource.id.as_str()) {
@@ -1040,7 +1085,7 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
                 return Err(ConfigError::DuplicateId);
             }
 
-            let mut aggregate_ids: HashSet<&str> = HashSet::new();
+            let mut resource_aggregate_ids: HashSet<&str> = HashSet::new();
             for aggregate in &resource.aggregates {
                 if !is_valid_id(aggregate.id.as_str()) {
                     tracing::error!(
@@ -1052,7 +1097,7 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
                     );
                     return Err(ConfigError::ValidationError);
                 }
-                if !aggregate_ids.insert(aggregate.id.as_str()) {
+                if !resource_aggregate_ids.insert(aggregate.id.as_str()) {
                     tracing::error!(
                         code = "config.duplicate_id",
                         dataset_id = %dataset.id,
@@ -1088,6 +1133,17 @@ fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
         }
     }
     Ok(())
+}
+
+fn aggregate_edr_collection_id(
+    dataset: &DatasetConfig,
+    aggregate: &AggregateConfig,
+) -> Option<String> {
+    match aggregate.spatial.as_ref()? {
+        AggregateSpatialConfig::AdminArea { collection_id, .. } => collection_id
+            .clone()
+            .or_else(|| Some(format!("{}_{}", dataset.id, aggregate.id))),
+    }
 }
 
 /// Enforce the mode invariant: exactly one of `api_keys` and `oidc` is
@@ -1315,6 +1371,28 @@ fn validate_scopes(config: &Config) -> Result<(), ConfigError> {
                 false,
             )?;
         }
+        for aggregate in &dataset.aggregates {
+            if let Some(access) = &aggregate.access {
+                if let Some(scope) = &access.metadata_scope {
+                    validate_entity_scope(
+                        scope,
+                        dataset_id,
+                        aggregate.id.as_str(),
+                        "aggregate.access.metadata_scope",
+                        true,
+                    )?;
+                }
+                if let Some(scope) = &access.aggregate_scope {
+                    validate_entity_scope(
+                        scope,
+                        dataset_id,
+                        aggregate.id.as_str(),
+                        "aggregate.access.aggregate_scope",
+                        true,
+                    )?;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1487,6 +1565,7 @@ fn validate_resources(config: &Config) -> Result<(), ConfigError> {
             }
         }
         validate_entities(&config.vocabularies, dataset)?;
+        validate_dataset_aggregates(dataset)?;
     }
     Ok(())
 }
@@ -1924,7 +2003,7 @@ fn validate_aggregate(
 ) -> Result<(), ConfigError> {
     let field_names: HashSet<&str> = field_names_of(resource);
 
-    if aggregate.disclosure_control.min_group_size < 1 {
+    if aggregate.disclosure_control.effective_min_cell_size() < 1 {
         tracing::error!(
             code = "config.validation_error",
             dataset_id = %dataset.id,
@@ -2111,6 +2190,362 @@ fn exposed_entity_fields(
     Ok(exposed)
 }
 
+fn validate_dataset_aggregates(dataset: &DatasetConfig) -> Result<(), ConfigError> {
+    let tables: BTreeMap<&str, &ResourceConfig> = dataset
+        .table_configs()
+        .map(|table| (table.id.as_str(), table))
+        .collect();
+    let entities: BTreeMap<&str, &EntityConfig> = dataset
+        .entities
+        .iter()
+        .map(|entity| (entity.name.as_str(), entity))
+        .collect();
+    let exposed_by_entity = dataset
+        .entities
+        .iter()
+        .map(|entity| {
+            let table = tables
+                .get(entity.table.as_str())
+                .ok_or(ConfigError::ValidationError)?;
+            exposed_entity_fields(entity, table).map(|fields| (entity.name.as_str(), fields))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+    for aggregate in &dataset.aggregates {
+        if aggregate.disclosure_control.effective_min_cell_size() < 1 {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                "aggregate disclosure_control.min_cell_size must be >= 1"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        let Some(source_entity_name) = aggregate.source_entity.as_deref() else {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                "dataset aggregate source_entity is required"
+            );
+            return Err(ConfigError::ValidationError);
+        };
+        let Some(source_entity) = entities.get(source_entity_name) else {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                source_entity = %source_entity_name,
+                "dataset aggregate references an unknown source_entity"
+            );
+            return Err(ConfigError::ValidationError);
+        };
+        let Some(source_fields) = exposed_by_entity.get(source_entity_name) else {
+            return Err(ConfigError::ValidationError);
+        };
+        validate_reserved_ids(dataset, aggregate)?;
+        let dimension_ids = aggregate
+            .dimensions
+            .iter()
+            .map(|dimension| dimension.id.as_str())
+            .collect::<HashSet<_>>();
+        let indicator_ids = aggregate
+            .indicators
+            .iter()
+            .map(|indicator| indicator.id.as_str())
+            .collect::<HashSet<_>>();
+        if dimension_ids.len() != aggregate.dimensions.len()
+            || indicator_ids.len() != aggregate.indicators.len()
+        {
+            tracing::error!(
+                code = "config.duplicate_id",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                "duplicate aggregate dimension or indicator id"
+            );
+            return Err(ConfigError::DuplicateId);
+        }
+        for dimension in &aggregate.dimensions {
+            validate_aggregate_field_ref(
+                dataset,
+                aggregate,
+                source_entity,
+                &entities,
+                &exposed_by_entity,
+                &dimension.field,
+                "dimension",
+            )?;
+        }
+        for group in &aggregate.default_group_by {
+            if !dimension_ids.contains(group.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    group_by = %group,
+                    "aggregate default_group_by references an unknown dimension"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        for indicator in &aggregate.indicators {
+            if !source_fields.contains_key(&indicator.column) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    indicator = %indicator.id,
+                    column = %indicator.column,
+                    "aggregate indicator column references a non-exposed source field"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        if let Some(temporal_field) = aggregate.temporal_field.as_deref() {
+            if !source_fields.contains_key(temporal_field) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = temporal_field,
+                    "aggregate temporal_field references a non-exposed source field"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        let filter_fields = aggregate
+            .allowed_filters
+            .iter()
+            .map(|filter| filter.field.as_str())
+            .collect::<HashSet<_>>();
+        if let Some(temporal_field) = aggregate.temporal_field.as_deref() {
+            if !filter_fields.contains(temporal_field) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = temporal_field,
+                    "aggregate temporal_field must also be declared in allowed_filters"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        for filter in &aggregate.allowed_filters {
+            if filter.ops.is_empty() {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %filter.field,
+                    "aggregate allowed_filters entry must declare at least one op"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if !source_fields.contains_key(&filter.field)
+                && !dimension_ids.contains(filter.field.as_str())
+            {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %filter.field,
+                    "aggregate allowed_filters references neither a source field nor dimension id"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        for required in &aggregate.required_filters {
+            if !filter_fields.contains(required.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %required,
+                    "aggregate required_filters must reference allowed_filters"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        validate_aggregate_spatial(dataset, aggregate, &entities, &exposed_by_entity)?;
+    }
+    Ok(())
+}
+
+fn validate_reserved_ids(
+    dataset: &DatasetConfig,
+    aggregate: &AggregateConfig,
+) -> Result<(), ConfigError> {
+    for id in aggregate
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.id.as_str())
+        .chain(
+            aggregate
+                .indicators
+                .iter()
+                .map(|indicator| indicator.id.as_str()),
+        )
+    {
+        if !is_valid_id(id) || id.ends_with("$status") || id.ends_with("$conf") {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                id,
+                "aggregate dimension or indicator id is invalid or reserved"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
+fn validate_aggregate_field_ref(
+    dataset: &DatasetConfig,
+    aggregate: &AggregateConfig,
+    source_entity: &EntityConfig,
+    entities: &BTreeMap<&str, &EntityConfig>,
+    exposed_by_entity: &BTreeMap<&str, BTreeMap<String, String>>,
+    field: &str,
+    kind: &'static str,
+) -> Result<(), ConfigError> {
+    if let Some((relationship_name, related_field)) = field.split_once('.') {
+        let Some(relationship) = source_entity
+            .relationships
+            .iter()
+            .find(|relationship| relationship.name == relationship_name)
+        else {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                field,
+                "aggregate {kind} references an unknown relationship"
+            );
+            return Err(ConfigError::ValidationError);
+        };
+        if relationship.kind != RelationshipKind::BelongsTo {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                field,
+                "aggregate {kind} relationship dimensions must be belongs_to"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        let Some(target) = entities.get(relationship.target.as_str()) else {
+            return Err(ConfigError::ValidationError);
+        };
+        let Some(target_fields) = exposed_by_entity.get(target.name.as_str()) else {
+            return Err(ConfigError::ValidationError);
+        };
+        if !target_fields.contains_key(related_field) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                field,
+                "aggregate {kind} references a non-exposed related field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        return Ok(());
+    }
+    let Some(source_fields) = exposed_by_entity.get(source_entity.name.as_str()) else {
+        return Err(ConfigError::ValidationError);
+    };
+    if source_fields.contains_key(field) {
+        Ok(())
+    } else {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            aggregate_id = %aggregate.id,
+            field,
+            "aggregate {kind} references a non-exposed source field"
+        );
+        Err(ConfigError::ValidationError)
+    }
+}
+
+fn validate_aggregate_spatial(
+    dataset: &DatasetConfig,
+    aggregate: &AggregateConfig,
+    entities: &BTreeMap<&str, &EntityConfig>,
+    exposed_by_entity: &BTreeMap<&str, BTreeMap<String, String>>,
+) -> Result<(), ConfigError> {
+    let Some(spatial) = &aggregate.spatial else {
+        return Ok(());
+    };
+    match spatial {
+        AggregateSpatialConfig::AdminArea {
+            dimension,
+            geometry_entity,
+            geometry_id_field,
+            geometry_field,
+            max_geometry_vertices,
+            ..
+        } => {
+            if *max_geometry_vertices == 0 {
+                return Err(ConfigError::ValidationError);
+            }
+            if !aggregate
+                .dimensions
+                .iter()
+                .any(|candidate| candidate.id == *dimension)
+            {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    dimension,
+                    "aggregate spatial.dimension references an unknown dimension"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            let spatial_filter_supported = aggregate
+                .allowed_filters
+                .iter()
+                .any(|filter| filter.field == *dimension && filter.ops.contains(&FilterOp::In));
+            if !spatial_filter_supported {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    dimension,
+                    "aggregate spatial.dimension must be allowed as an in filter"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            let Some(entity) = entities.get(geometry_entity.as_str()) else {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    geometry_entity,
+                    "aggregate spatial.geometry_entity is unknown"
+                );
+                return Err(ConfigError::ValidationError);
+            };
+            let Some(fields) = exposed_by_entity.get(entity.name.as_str()) else {
+                return Err(ConfigError::ValidationError);
+            };
+            if !fields.contains_key(geometry_id_field) || !fields.contains_key(geometry_field) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    geometry_entity,
+                    "aggregate spatial geometry id/geometry fields must be exposed"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_entity_primary_key(
     dataset: &DatasetConfig,
     entity: &EntityConfig,
@@ -2225,7 +2660,7 @@ fn validate_entity_aggregates(
                 return Err(ConfigError::ValidationError);
             }
         }
-        if aggregate.disclosure_control.min_group_size < 1 {
+        if aggregate.disclosure_control.effective_min_cell_size() < 1 {
             tracing::error!(
                 code = "config.validation_error",
                 dataset_id = %dataset.id,

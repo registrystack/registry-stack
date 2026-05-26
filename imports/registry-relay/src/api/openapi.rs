@@ -12,7 +12,7 @@ use serde_json::{json, Map, Value};
 
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
-use crate::config::{AuthMode, Config, EntityConfig, FilterOp};
+use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 // Reads the local `CatalogDocument`, not `registry-manifest-core`'s
@@ -35,6 +35,8 @@ const TAG_PROVENANCE: &str = "Provenance";
 const TAG_OGC: &str = "OGC API Features";
 #[cfg(feature = "ogcapi-records")]
 const TAG_OGC_RECORDS: &str = "OGC API Records";
+#[cfg(feature = "ogcapi-edr")]
+const TAG_OGC_EDR: &str = "OGC API EDR";
 #[cfg(feature = "spdci-api-standards")]
 const TAG_SPD_CI: &str = "SP DCI";
 const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
@@ -440,6 +442,8 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     insert_ogc_paths(&mut paths);
     #[cfg(feature = "ogcapi-records")]
     insert_ogc_records_paths(&mut paths);
+    #[cfg(feature = "ogcapi-edr")]
+    insert_ogc_edr_paths(&mut paths);
     if provenance_enabled(config) {
         insert_provenance_paths(&mut paths);
     }
@@ -646,79 +650,6 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             );
             tag(&mut paths, &field_schema_path, "get", &entity_tag);
 
-            // List aggregates
-            let aggregates_path = format!(
-                "/datasets/{}/{}/aggregates",
-                dataset.dataset_id, entity.name
-            );
-            paths.insert(
-                aggregates_path.clone(),
-                json_path_item("get", "List aggregates", "AggregateListResponse"),
-            );
-            set_op_id(
-                &mut paths,
-                &aggregates_path,
-                "get",
-                &format!("list_{stem}_aggregates"),
-            );
-            set_description(
-                &mut paths,
-                &aggregates_path,
-                "get",
-                &format!(
-                    "Lists the named aggregate queries defined for `{}` in `{}`. Each entry \
-                     declares its group-by columns, measures, and minimum group size used for \
-                     disclosure control.",
-                    entity.name, dataset.dataset_id,
-                ),
-            );
-            tag(&mut paths, &aggregates_path, "get", &entity_tag);
-
-            // Run aggregate
-            let aggregate_run_path = format!(
-                "/datasets/{}/{}/aggregates/{{aggregate_id}}",
-                dataset.dataset_id, entity.name
-            );
-            paths.insert(
-                aggregate_run_path.clone(),
-                path_item_with_params(
-                    "get",
-                    "Run aggregate",
-                    "AggregateResult",
-                    vec![path_parameter("aggregate_id", "Aggregate identifier")],
-                ),
-            );
-            set_op_id(
-                &mut paths,
-                &aggregate_run_path,
-                "get",
-                &format!("run_{stem}_aggregate"),
-            );
-            set_description(
-                &mut paths,
-                &aggregate_run_path,
-                "get",
-                &format!(
-                    "Runs the named aggregate against `{}`. Returns the configured group-by \
-                     and measures, with sub-threshold groups suppressed per disclosure control.",
-                    entity.name,
-                ),
-            );
-            add_response_404(
-                &mut paths,
-                &aggregate_run_path,
-                "get",
-                "Aggregate definition not found for this entity.",
-            );
-            add_signed_vc_variant(
-                &mut paths,
-                &aggregate_run_path,
-                "get",
-                config,
-                "Signed aggregate-result Verifiable Credential.",
-            );
-            tag(&mut paths, &aggregate_run_path, "get", &entity_tag);
-
             // Relationships
             for relationship in &entity.relationships {
                 let relationship_path = format!(
@@ -761,6 +692,130 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                     add_purpose_header_parameter(&mut paths, &relationship_path, "get");
                 }
                 tag(&mut paths, &relationship_path, "get", &entity_tag);
+            }
+        }
+        if let Some(dataset_config) = dataset_config(config, &dataset.dataset_id) {
+            if !dataset_config.aggregates.is_empty() {
+                let aggregate_tag = aggregate_tag_name(&dataset.dataset_id);
+                let aggregates_path = format!("/datasets/{}/aggregates", dataset.dataset_id);
+                paths.insert(
+                    aggregates_path.clone(),
+                    json_path_item("get", "List dataset aggregates", "AggregateListResponse"),
+                );
+                set_op_id(
+                    &mut paths,
+                    &aggregates_path,
+                    "get",
+                    &format!("list_{dataset_slug}_aggregates"),
+                );
+                set_description(
+                    &mut paths,
+                    &aggregates_path,
+                    "get",
+                    &format!(
+                        "Lists dataset-scoped analytical aggregates defined for `{}`.",
+                        dataset.dataset_id,
+                    ),
+                );
+                tag(&mut paths, &aggregates_path, "get", &aggregate_tag);
+
+                let aggregate_run_path = format!(
+                    "/datasets/{}/aggregates/{{aggregate_id}}",
+                    dataset.dataset_id
+                );
+                paths.insert(
+                    aggregate_run_path.clone(),
+                    aggregate_run_path_item(&dataset.dataset_id),
+                );
+                set_op_id(
+                    &mut paths,
+                    &aggregate_run_path,
+                    "get",
+                    &format!("run_{dataset_slug}_aggregate"),
+                );
+                set_op_id(
+                    &mut paths,
+                    &aggregate_run_path,
+                    "post",
+                    &format!("query_{dataset_slug}_aggregate"),
+                );
+                add_response_404(
+                    &mut paths,
+                    &aggregate_run_path,
+                    "get",
+                    "Aggregate definition not found for this dataset.",
+                );
+                add_response_404(
+                    &mut paths,
+                    &aggregate_run_path,
+                    "post",
+                    "Aggregate definition not found for this dataset.",
+                );
+                add_signed_vc_variant(
+                    &mut paths,
+                    &aggregate_run_path,
+                    "get",
+                    config,
+                    "Signed aggregate-result Verifiable Credential.",
+                );
+                if dataset_aggregates_require_purpose(dataset_config) {
+                    add_purpose_header_parameter(&mut paths, &aggregate_run_path, "get");
+                    add_purpose_header_parameter(&mut paths, &aggregate_run_path, "post");
+                }
+                tag(&mut paths, &aggregate_run_path, "get", &aggregate_tag);
+                tag(&mut paths, &aggregate_run_path, "post", &aggregate_tag);
+
+                let aggregate_query_path = format!(
+                    "/datasets/{}/aggregates/{{aggregate_id}}/query",
+                    dataset.dataset_id
+                );
+                paths.insert(
+                    aggregate_query_path.clone(),
+                    aggregate_query_path_item(&dataset.dataset_id),
+                );
+                set_op_id(
+                    &mut paths,
+                    &aggregate_query_path,
+                    "post",
+                    &format!("query_{dataset_slug}_aggregate_explicit"),
+                );
+                add_response_404(
+                    &mut paths,
+                    &aggregate_query_path,
+                    "post",
+                    "Aggregate definition not found for this dataset.",
+                );
+                if dataset_aggregates_require_purpose(dataset_config) {
+                    add_purpose_header_parameter(&mut paths, &aggregate_query_path, "post");
+                }
+                tag(&mut paths, &aggregate_query_path, "post", &aggregate_tag);
+
+                let aggregate_metadata_path = format!(
+                    "/datasets/{}/aggregates/{{aggregate_id}}/metadata",
+                    dataset.dataset_id
+                );
+                paths.insert(
+                    aggregate_metadata_path.clone(),
+                    path_item_with_params(
+                        "get",
+                        "Get aggregate metadata",
+                        "AggregateMetadata",
+                        vec![path_parameter("aggregate_id", "Aggregate identifier")],
+                    ),
+                );
+                set_op_id(
+                    &mut paths,
+                    &aggregate_metadata_path,
+                    "get",
+                    &format!("get_{dataset_slug}_aggregate_metadata"),
+                );
+                add_response_404(
+                    &mut paths,
+                    &aggregate_metadata_path,
+                    "get",
+                    "Aggregate definition not found for this dataset.",
+                );
+                tag(&mut paths, &aggregate_metadata_path, "get", &aggregate_tag);
             }
         }
     }
@@ -811,6 +866,10 @@ fn entity_tag_name(dataset_id: &str, entity_name: &str) -> String {
     format!("{dataset_id} / {entity_name}")
 }
 
+fn aggregate_tag_name(dataset_id: &str) -> String {
+    format!("{dataset_id} / aggregates")
+}
+
 /// Build the document-level `tags` array. Tag order drives the sidebar
 /// order in Scalar: `Service` and `Catalog` first, then one tag per
 /// `(dataset, entity)` pair in catalog iteration order (the catalog
@@ -844,6 +903,11 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
         "name": TAG_OGC_RECORDS,
         "description": "OGC API Records catalog discovery over visible dataset metadata.",
     }));
+    #[cfg(feature = "ogcapi-edr")]
+    tags.push(json!({
+        "name": TAG_OGC_EDR,
+        "description": "OGC API EDR area queries over configured spatial aggregates.",
+    }));
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         tags.push(json!({
@@ -852,6 +916,18 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
         }));
     }
     for dataset in &catalog.datasets {
+        if dataset_config(config, &dataset.dataset_id)
+            .is_some_and(|dataset| !dataset.aggregates.is_empty())
+        {
+            tags.push(json!({
+                "name": aggregate_tag_name(&dataset.dataset_id),
+                "x-displayName": "Aggregates",
+                "description": format!(
+                    "Dataset-scoped aggregate discovery and execution for `{}`.",
+                    dataset.dataset_id,
+                ),
+            }));
+        }
         for entity in &dataset.entities {
             let display = entity.title.as_deref().unwrap_or(&entity.name);
             let mut tag_obj = json!({
@@ -891,16 +967,25 @@ fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
     groups.push(json!({ "name": "OGC", "tags": [TAG_OGC] }));
     #[cfg(feature = "ogcapi-records")]
     groups.push(json!({ "name": "OGC Records", "tags": [TAG_OGC_RECORDS] }));
+    #[cfg(feature = "ogcapi-edr")]
+    groups.push(json!({ "name": "OGC EDR", "tags": [TAG_OGC_EDR] }));
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         groups.push(json!({ "name": "SP DCI", "tags": [TAG_SPD_CI] }));
     }
     for dataset in &catalog.datasets {
-        let entity_tags: Vec<String> = dataset
-            .entities
-            .iter()
-            .map(|entity| entity_tag_name(&dataset.dataset_id, &entity.name))
-            .collect();
+        let mut entity_tags: Vec<String> = Vec::new();
+        if dataset_config(config, &dataset.dataset_id)
+            .is_some_and(|dataset| !dataset.aggregates.is_empty())
+        {
+            entity_tags.push(aggregate_tag_name(&dataset.dataset_id));
+        }
+        entity_tags.extend(
+            dataset
+                .entities
+                .iter()
+                .map(|entity| entity_tag_name(&dataset.dataset_id, &entity.name)),
+        );
         if entity_tags.is_empty() {
             continue;
         }
@@ -1721,6 +1806,11 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     }
     schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
+    schemas.insert("AggregateMetadata".to_string(), aggregate_metadata_schema());
+    schemas.insert(
+        "AggregateQueryRequest".to_string(),
+        aggregate_query_request_schema(),
+    );
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         schemas.insert(
@@ -1736,6 +1826,8 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     insert_ogc_schemas(&mut schemas);
     #[cfg(feature = "ogcapi-records")]
     insert_ogc_records_schemas(&mut schemas);
+    #[cfg(feature = "ogcapi-edr")]
+    insert_ogc_edr_schemas(&mut schemas);
 
     for dataset in &catalog.datasets {
         for entity in &dataset.entities {
@@ -1978,7 +2070,11 @@ fn problem_details_schema() -> Value {
     })
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn insert_ogc_common_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert("OgcLink".to_string(), ogc_link_schema());
     schemas.insert("OgcLandingPage".to_string(), ogc_landing_page_schema());
@@ -2007,7 +2103,20 @@ fn insert_ogc_records_schemas(schemas: &mut Map<String, Value>) {
     schemas.insert("OgcRecord".to_string(), ogc_record_schema());
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(feature = "ogcapi-edr")]
+fn insert_ogc_edr_schemas(schemas: &mut Map<String, Value>) {
+    insert_ogc_common_schemas(schemas);
+    schemas.insert(
+        "EdrAreaFeatureCollection".to_string(),
+        generic_object_schema("GeoJSON FeatureCollection returned by an OGC EDR area query."),
+    );
+}
+
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_link_schema() -> Value {
     json!({
         "type": "object",
@@ -2022,7 +2131,11 @@ fn ogc_link_schema() -> Value {
     })
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_landing_page_schema() -> Value {
     json!({
         "type": "object",
@@ -2035,7 +2148,11 @@ fn ogc_landing_page_schema() -> Value {
     })
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_conformance_schema() -> Value {
     json!({
         "type": "object",
@@ -2046,7 +2163,11 @@ fn ogc_conformance_schema() -> Value {
     })
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_collections_schema() -> Value {
     json!({
         "type": "object",
@@ -2058,7 +2179,11 @@ fn ogc_collections_schema() -> Value {
     })
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_collection_schema() -> Value {
     json!({
         "type": "object",
@@ -2201,45 +2326,45 @@ fn evidence_offering_schema() -> Value {
 fn aggregate_list_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["data"],
+        "required": ["data", "links"],
         "properties": {
             "data": {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["aggregate_id", "description", "group_by", "measures", "min_group_size"],
+                    "required": ["dataset_id", "aggregate_id", "title", "description", "source_entity", "dimensions", "indicators"],
                     "properties": {
+                        "dataset_id": { "type": "string" },
                         "aggregate_id": { "type": "string" },
+                        "title": { "type": "string" },
                         "description": { "type": "string" },
-                        "group_by": { "type": "array", "items": { "type": "string" } },
-                        "measures": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "required": ["name", "function", "column"],
-                                "properties": {
-                                    "name": { "type": "string" },
-                                    "function": {
-                                        "type": "string",
-                                        "enum": ["count", "sum", "avg", "min", "max", "median", "count_distinct", "stddev"]
-                                    },
-                                    "column": { "type": "string" },
-                                },
-                            },
-                        },
-                        "min_group_size": { "type": "integer", "format": "int32", "minimum": 1 },
+                        "source_entity": { "type": "string" },
+                        "default_group_by": { "type": "array", "items": { "type": "string" } },
+                        "temporal_field": { "type": ["string", "null"] },
+                        "dimensions": aggregate_schema_dimension_array(),
+                        "indicators": aggregate_schema_indicator_array(),
+                        "disclosure_control": aggregate_disclosure_schema(),
+                        "links": link_array_schema(),
                     },
                 },
             },
+            "links": link_array_schema(),
         },
         "examples": [{
             "data": [{
+                "dataset_id": "social_registry",
                 "aggregate_id": "households_by_region",
+                "title": "Households by region",
                 "description": "Household count by region",
-                "group_by": ["region"],
-                "measures": [{ "name": "household_count", "function": "count", "column": "id" }],
-                "min_group_size": 2,
-            }]
+                "source_entity": "household",
+                "default_group_by": ["region"],
+                "temporal_field": null,
+                "dimensions": [{ "id": "region", "label": "Region", "field": "region" }],
+                "indicators": [{ "id": "household_count", "label": "Households", "function": "count", "column": "id", "unit_measure": "households" }],
+                "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": null, "query_budget": { "tracked": false, "scope": "none" } },
+                "links": [],
+            }],
+            "links": [],
         }],
     })
 }
@@ -2249,31 +2374,164 @@ fn aggregate_result_schema() -> Value {
         "type": "object",
         "required": [
             "dataset_id",
-            "entity",
             "aggregate_id",
-            "computed_at",
-            "min_group_size",
-            "suppressed_groups",
-            "rows"
+            "data",
+            "schema",
+            "disclosure_control",
+            "freshness",
+            "links"
         ],
         "properties": {
             "dataset_id": { "type": "string" },
-            "entity": { "type": "string" },
             "aggregate_id": { "type": "string" },
-            "computed_at": { "type": "string", "format": "date-time" },
-            "min_group_size": { "type": "integer", "format": "int32", "minimum": 1 },
-            "suppressed_groups": { "type": "integer", "format": "int64", "minimum": 0 },
-            "rows": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "schema": {
+                "type": "object",
+                "required": ["dimensions", "indicators"],
+                "properties": {
+                    "dimensions": aggregate_schema_dimension_array(),
+                    "indicators": aggregate_schema_indicator_array(),
+                },
+                "additionalProperties": false,
+            },
+            "disclosure_control": aggregate_disclosure_schema(),
+            "freshness": aggregate_freshness_schema(),
+            "links": link_array_schema(),
         },
         "examples": [{
             "dataset_id": "social_registry",
-            "entity": "household",
             "aggregate_id": "households_by_region",
-            "computed_at": "2026-05-16T08:00:00Z",
-            "min_group_size": 2,
-            "suppressed_groups": 1,
-            "rows": [{ "region": "north", "household_count": 42 }],
+            "data": [{ "region": "north", "household_count": 42 }],
+            "schema": {
+                "dimensions": [{ "id": "region", "label": "Region", "field": "region" }],
+                "indicators": [{ "id": "household_count", "label": "Households", "function": "count", "column": "id", "unit_measure": "households" }]
+            },
+            "disclosure_control": { "method": ["k-anonymity"], "min_cell_size": 2, "suppression": "omit", "suppressed_rows": 1, "query_budget": { "tracked": false, "scope": "none" } },
+            "freshness": { "computed_at": "2026-05-16T08:00:00Z", "as_of": "2026-05-16T07:55:00Z" },
+            "links": [],
         }],
+    })
+}
+
+fn aggregate_metadata_schema() -> Value {
+    aggregate_list_schema()["properties"]["data"]["items"].clone()
+}
+
+fn aggregate_query_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "indicators": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+            "group_by": { "type": "array", "items": { "type": "string" }, "maxItems": 5 },
+            "filters": { "type": "object", "additionalProperties": true, "maxProperties": 20 },
+            "temporal": {
+                "type": "object",
+                "description": "Date bounds applied to the aggregate temporal_field when configured.",
+                "properties": {
+                    "from": { "type": "string", "format": "date" },
+                    "to": { "type": "string", "format": "date" },
+                },
+                "additionalProperties": false,
+            },
+            "format": { "type": "string", "enum": ["json", "csv"] },
+        },
+        "additionalProperties": false,
+        "examples": [{
+            "indicators": ["household_count"],
+            "group_by": ["region"],
+            "filters": { "region": ["north", "south"] },
+            "format": "json",
+        }],
+    })
+}
+
+fn aggregate_schema_dimension_array() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["id", "label", "field"],
+            "properties": {
+                "id": { "type": "string" },
+                "label": { "type": "string" },
+                "field": { "type": "string" },
+                "codelist": { "type": ["string", "null"], "format": "uri" },
+            },
+            "additionalProperties": false,
+        },
+    })
+}
+
+fn aggregate_schema_indicator_array() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["id", "label", "function", "column", "unit_measure"],
+            "properties": {
+                "id": { "type": "string" },
+                "label": { "type": "string" },
+                "function": { "type": "string" },
+                "column": { "type": "string" },
+                "unit_measure": { "type": "string" },
+                "unit_mult": { "type": ["number", "null"] },
+                "decimals": { "type": ["integer", "null"] },
+                "frequency": { "type": ["string", "null"] },
+                "definition_uri": { "type": ["string", "null"], "format": "uri" },
+            },
+            "additionalProperties": false,
+        },
+    })
+}
+
+fn aggregate_disclosure_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["method", "min_cell_size", "suppression", "suppressed_rows", "query_budget"],
+        "properties": {
+            "method": { "type": "array", "items": { "type": "string" } },
+            "min_cell_size": { "type": "integer", "minimum": 1 },
+            "suppression": { "type": "string", "enum": ["omit", "mask", "null"] },
+            "suppressed_rows": { "type": ["integer", "null"], "minimum": 0 },
+            "query_budget": {
+                "type": "object",
+                "required": ["tracked", "scope"],
+                "properties": {
+                    "tracked": { "type": "boolean" },
+                    "scope": { "type": "string" },
+                },
+                "additionalProperties": true,
+            },
+        },
+        "additionalProperties": true,
+    })
+}
+
+fn aggregate_freshness_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["computed_at"],
+        "properties": {
+            "computed_at": { "type": "string", "format": "date-time" },
+            "as_of": { "type": "string", "format": "date-time" },
+        },
+        "additionalProperties": false,
+    })
+}
+
+fn link_array_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["rel", "href"],
+            "properties": {
+                "rel": { "type": "string" },
+                "href": { "type": "string" },
+                "type": { "type": "string" },
+            },
+            "additionalProperties": true,
+        },
     })
 }
 
@@ -2525,13 +2783,27 @@ fn entity_config<'a>(
     dataset_id: &str,
     entity_name: &str,
 ) -> Option<&'a EntityConfig> {
-    config
-        .datasets
-        .iter()
-        .find(|dataset| dataset.id.as_str() == dataset_id)?
+    dataset_config(config, dataset_id)?
         .entities
         .iter()
         .find(|entity| entity.name == entity_name)
+}
+
+fn dataset_config<'a>(config: &'a Config, dataset_id: &str) -> Option<&'a DatasetConfig> {
+    config
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id.as_str() == dataset_id)
+}
+
+fn dataset_aggregates_require_purpose(dataset: &DatasetConfig) -> bool {
+    dataset.aggregates.iter().any(|aggregate| {
+        aggregate
+            .source_entity
+            .as_deref()
+            .and_then(|source| dataset.entities.iter().find(|entity| entity.name == source))
+            .is_some_and(|entity| entity.api.require_purpose_header)
+    })
 }
 
 // --- path-item builders --------------------------------------------
@@ -2879,7 +3151,129 @@ fn insert_ogc_records_paths(paths: &mut Map<String, Value>) {
     );
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(feature = "ogcapi-edr")]
+fn insert_ogc_edr_paths(paths: &mut Map<String, Value>) {
+    paths.insert(
+        "/ogc/edr/v1".to_string(),
+        ogc_json_path_item(
+            "get_ogc_edr_landing_page",
+            "OGC EDR landing page",
+            "OgcLandingPage",
+        ),
+    );
+    tag(paths, "/ogc/edr/v1", "get", TAG_OGC_EDR);
+
+    paths.insert(
+        "/ogc/edr/v1/conformance".to_string(),
+        ogc_json_path_item(
+            "get_ogc_edr_conformance",
+            "OGC EDR conformance",
+            "OgcConformance",
+        ),
+    );
+    tag(paths, "/ogc/edr/v1/conformance", "get", TAG_OGC_EDR);
+
+    paths.insert(
+        "/ogc/edr/v1/collections".to_string(),
+        ogc_json_path_item(
+            "list_ogc_edr_collections",
+            "List OGC EDR collections",
+            "OgcCollections",
+        ),
+    );
+    tag(paths, "/ogc/edr/v1/collections", "get", TAG_OGC_EDR);
+
+    paths.insert(
+        "/ogc/edr/v1/collections/{collection_id}".to_string(),
+        ogc_path_item_with_params(
+            "get",
+            "Get OGC EDR collection",
+            "OgcCollection",
+            "application/json",
+            vec![path_parameter("collection_id", "EDR collection identifier")],
+        ),
+    );
+    set_op_id(
+        paths,
+        "/ogc/edr/v1/collections/{collection_id}",
+        "get",
+        "get_ogc_edr_collection",
+    );
+    tag(
+        paths,
+        "/ogc/edr/v1/collections/{collection_id}",
+        "get",
+        TAG_OGC_EDR,
+    );
+
+    let area_path = "/ogc/edr/v1/collections/{collection_id}/area";
+    paths.insert(
+        area_path.to_string(),
+        json!({
+            "get": {
+                "operationId": "query_ogc_edr_area",
+                "summary": "Query OGC EDR area",
+                "parameters": [
+                    path_parameter("collection_id", "EDR collection identifier"),
+                    query_parameter("coords", "WKT geometry in CRS84."),
+                    query_parameter("parameter-name", "Comma-separated aggregate indicator ids."),
+                    query_parameter("group_by", "Optional aggregate dimension id."),
+                    query_parameter("f", "Response format. Phase 1 accepts `geojson`.")
+                ],
+                "responses": ogc_area_responses(),
+            },
+            "post": {
+                "operationId": "post_ogc_edr_area",
+                "summary": "Query OGC EDR area with GeoJSON",
+                "parameters": [
+                    path_parameter("collection_id", "EDR collection identifier"),
+                    query_parameter("parameter-name", "Comma-separated aggregate indicator ids."),
+                    query_parameter("group_by", "Optional aggregate dimension id."),
+                    query_parameter("f", "Response format. Phase 1 accepts `geojson`.")
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/geo+json": {
+                            "schema": { "type": "object", "additionalProperties": true }
+                        },
+                        "application/json": {
+                            "schema": { "type": "object", "additionalProperties": true }
+                        }
+                    }
+                },
+                "responses": ogc_area_responses(),
+            }
+        }),
+    );
+    tag(paths, area_path, "get", TAG_OGC_EDR);
+    tag(paths, area_path, "post", TAG_OGC_EDR);
+}
+
+#[cfg(feature = "ogcapi-edr")]
+fn ogc_area_responses() -> Value {
+    json!({
+        "200": {
+            "description": "GeoJSON FeatureCollection with aggregate EDR area results.",
+            "content": {
+                "application/geo+json": {
+                    "schema": { "$ref": "#/components/schemas/EdrAreaFeatureCollection" }
+                }
+            }
+        },
+        "400": problem_response("Invalid OGC EDR area query."),
+        "401": problem_response("Missing or invalid bearer credential."),
+        "403": problem_response("Authenticated principal lacks the scope required for this operation."),
+        "404": problem_response("EDR collection not found."),
+        "default": problem_response("Problem Details error response."),
+    })
+}
+
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_json_path_item(op_id: &str, summary: &str, schema: &str) -> Value {
     let mut item =
         ogc_path_item_with_params("get", summary, schema, "application/json", Vec::new());
@@ -2889,7 +3283,11 @@ fn ogc_json_path_item(op_id: &str, summary: &str, schema: &str) -> Value {
     item
 }
 
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 fn ogc_path_item_with_params(
     method: &str,
     summary: &str,
@@ -3031,6 +3429,77 @@ fn path_item_with_params(
                 "default": problem_response("Problem Details error response."),
             }
         }
+    })
+}
+
+fn aggregate_run_path_item(dataset_id: &str) -> Value {
+    let parameters = vec![
+        path_parameter("aggregate_id", "Aggregate identifier"),
+        query_parameter("f", "Response format. Use `json` or `csv`."),
+    ];
+    json!({
+        "get": {
+            "summary": "Run aggregate defaults",
+            "description": format!(
+                "Runs a dataset-scoped aggregate in `{dataset_id}` with its configured default indicators, default group_by, and no optional filters."
+            ),
+            "parameters": parameters,
+            "responses": aggregate_result_responses(),
+        },
+        "post": {
+            "summary": "Query aggregate",
+            "description": format!(
+                "Runs a dataset-scoped aggregate in `{dataset_id}` with caller-selected indicators, group_by dimensions, and configured filters."
+            ),
+            "parameters": [path_parameter("aggregate_id", "Aggregate identifier")],
+            "requestBody": aggregate_query_request_body(),
+            "responses": aggregate_result_responses(),
+        }
+    })
+}
+
+fn aggregate_query_path_item(dataset_id: &str) -> Value {
+    json!({
+        "post": {
+            "summary": "Query aggregate",
+            "description": format!(
+                "Runs a dataset-scoped aggregate in `{dataset_id}` with caller-selected indicators, group_by dimensions, and configured filters."
+            ),
+            "parameters": [path_parameter("aggregate_id", "Aggregate identifier")],
+            "requestBody": aggregate_query_request_body(),
+            "responses": aggregate_result_responses(),
+        }
+    })
+}
+
+fn aggregate_query_request_body() -> Value {
+    json!({
+        "required": false,
+        "content": {
+            "application/json": {
+                "schema": { "$ref": "#/components/schemas/AggregateQueryRequest" }
+            }
+        }
+    })
+}
+
+fn aggregate_result_responses() -> Value {
+    json!({
+        "200": {
+            "description": "Successful aggregate response.",
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": "#/components/schemas/AggregateResult" }
+                },
+                "text/csv": {
+                    "schema": { "type": "string" }
+                }
+            }
+        },
+        "400": problem_response("Invalid aggregate query."),
+        "401": problem_response("Missing or invalid bearer credential."),
+        "403": problem_response("Authenticated principal lacks the scope required for this operation."),
+        "default": problem_response("Problem Details error response."),
     })
 }
 
@@ -3623,7 +4092,7 @@ mod tests {
 
         for path in [
             "/datasets/social_registry/individual/{id}",
-            "/datasets/social_registry/individual/aggregates/{aggregate_id}",
+            "/datasets/social_registry/aggregates/{aggregate_id}",
         ] {
             let op = &doc["paths"][path]["get"];
             assert_eq!(

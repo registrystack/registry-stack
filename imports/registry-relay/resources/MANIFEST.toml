@@ -10,7 +10,7 @@
 
 [[resource]]
 path = "jsonld/provenance/v1/context.jsonld"
-sha256 = "6d458f116653b569f3538aec485779e6f8f46d943d4770970a13a65b1011fa6a"
+sha256 = "7db4c10c16eb8e8b8c64c28151b90a9d458134bbb0415596e1b4e2dd1886d7a1"
 served_as = "context"
 
 [[resource]]
@@ -20,7 +20,7 @@ served_as = "vendored"
 
 [[resource]]
 path = "schemas/aggregate-result/v1.json"
-sha256 = "d6c173e365da7c116b2a67c7900377624e7f20d32d8e3e0bb44f43aa86d38002"
+sha256 = "e7e785a396846409abc2f8d51d51f0bf9b4c11ea69d4d3dec5e759702949f681"
 served_as = "schema"
 
 [[resource]]

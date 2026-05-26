@@ -20,7 +20,11 @@ pub mod docs;
 pub mod entity;
 pub mod health;
 pub mod metadata;
-#[cfg(any(feature = "ogcapi-features", feature = "ogcapi-records"))]
+#[cfg(any(
+    feature = "ogcapi-features",
+    feature = "ogcapi-records",
+    feature = "ogcapi-edr"
+))]
 pub mod ogc;
 pub mod openapi;
 pub(crate) mod provenance_issuance;
@@ -38,6 +42,8 @@ pub use entity::router as entity_router;
 pub use entity::CursorSigner;
 pub use health::router as health_router;
 pub use metadata::router as metadata_router;
+#[cfg(feature = "ogcapi-edr")]
+pub use ogc::edr_router;
 #[cfg(feature = "ogcapi-features")]
 pub use ogc::features_router as ogc_router;
 #[cfg(feature = "ogcapi-records")]

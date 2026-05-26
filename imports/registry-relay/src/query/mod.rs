@@ -16,7 +16,10 @@ use crate::error::{Error, FilterError, InternalError, SchemaError};
 use crate::table_provider::{table_name, table_snapshot};
 
 pub mod aggregates;
-pub use aggregates::{AggregateListItem, AggregateQueryEngine, AggregateResult, AggregateRows};
+pub use aggregates::{
+    AggregateFilter, AggregateFilterOp, AggregateListItem, AggregateQueryEngine,
+    AggregateQueryRequest, AggregateResult,
+};
 
 /// Executes public entity reads against private DataFusion tables.
 #[derive(Clone)]

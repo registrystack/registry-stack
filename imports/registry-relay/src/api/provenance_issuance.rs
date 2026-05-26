@@ -72,14 +72,9 @@ pub(crate) fn entity_subject_uri(config: &Config, dataset: &str, entity: &str, i
 /// Build the canonical subject URI for an aggregate result, used as the
 /// VC `credentialSubject.id`. The aggregate's URL is the public route
 /// the gateway exposes.
-pub(crate) fn aggregate_subject_uri(
-    config: &Config,
-    dataset: &str,
-    entity: &str,
-    aggregate_id: &str,
-) -> String {
+pub(crate) fn aggregate_subject_uri(config: &Config, dataset: &str, aggregate_id: &str) -> String {
     let base = config.catalog.base_url.trim_end_matches('/');
-    format!("{base}/datasets/{dataset}/{entity}/aggregates/{aggregate_id}")
+    format!("{base}/datasets/{dataset}/aggregates/{aggregate_id}")
 }
 
 /// Common path: hand a built `credentialSubject` to the orchestrator,
@@ -136,15 +131,14 @@ fn issue_error_to_response(err: IssueError) -> Response {
 #[derive(Debug, Clone)]
 pub(crate) struct AggregateIssuanceArgs<'a> {
     pub dataset: &'a str,
-    pub entity: &'a str,
     pub aggregate_id: &'a str,
     pub group_by: Vec<String>,
-    pub measures: Vec<String>,
+    pub indicators: Vec<String>,
     pub rows: Vec<Value>,
-    pub suppressed_groups: u64,
-    pub min_group_size: u64,
+    pub suppressed_rows: u64,
+    pub min_cell_size: u64,
     pub computed_at_rfc3339: String,
-    pub as_of_rfc3339: String,
+    pub as_of_rfc3339: Option<String>,
 }
 
 /// Issue an `AggregateResult` VC. Same opt-in contract as
@@ -162,18 +156,17 @@ pub(crate) fn maybe_issue_aggregate_result(
     let Some(config) = config else {
         return plain_response;
     };
-    let subject_uri = aggregate_subject_uri(config, args.dataset, args.entity, args.aggregate_id);
+    let subject_uri = aggregate_subject_uri(config, args.dataset, args.aggregate_id);
     let subject = aggregate_result_subject(&AggregateResultInput {
         subject_uri: subject_uri.clone(),
         dataset: args.dataset.to_string(),
-        entity: args.entity.to_string(),
         aggregate_id: args.aggregate_id.to_string(),
         aggregate_url: subject_uri.clone(),
         group_by: args.group_by,
-        measures: args.measures,
+        indicators: args.indicators,
         rows: args.rows,
-        suppressed_groups: args.suppressed_groups,
-        min_group_size: args.min_group_size,
+        suppressed_rows: args.suppressed_rows,
+        min_cell_size: args.min_cell_size,
         computed_at_rfc3339: args.computed_at_rfc3339,
         as_of_rfc3339: args.as_of_rfc3339,
     });

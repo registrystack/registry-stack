@@ -50,8 +50,8 @@
       "@id": "dg:groupBy",
       "@container": "@list"
     },
-    "measures": {
-      "@id": "dg:measures",
+    "indicators": {
+      "@id": "dg:indicators",
       "@container": "@list"
     },
     "rows": {
@@ -64,12 +64,12 @@
     "values": {
       "@id": "dg:values"
     },
-    "suppressedGroups": {
-      "@id": "dg:suppressedGroups",
+    "suppressedRows": {
+      "@id": "dg:suppressedRows",
       "@type": "http://www.w3.org/2001/XMLSchema#integer"
     },
-    "minGroupSize": {
-      "@id": "dg:minGroupSize",
+    "minCellSize": {
+      "@id": "dg:minCellSize",
       "@type": "http://www.w3.org/2001/XMLSchema#integer"
     },
     "computedAt": {

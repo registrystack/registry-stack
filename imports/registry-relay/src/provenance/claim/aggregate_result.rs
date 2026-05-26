@@ -16,16 +16,15 @@ use serde_json::{json, Map, Value};
 pub struct AggregateResultInput {
     pub subject_uri: String,
     pub dataset: String,
-    pub entity: String,
     pub aggregate_id: String,
     pub aggregate_url: String,
     pub group_by: Vec<String>,
-    pub measures: Vec<String>,
+    pub indicators: Vec<String>,
     pub rows: Vec<Value>,
-    pub suppressed_groups: u64,
-    pub min_group_size: u64,
+    pub suppressed_rows: u64,
+    pub min_cell_size: u64,
     pub computed_at_rfc3339: String,
-    pub as_of_rfc3339: String,
+    pub as_of_rfc3339: Option<String>,
 }
 
 /// Build the `credentialSubject` JSON for an `AggregateResult` VC.
@@ -34,23 +33,25 @@ pub fn aggregate_result_subject(input: &AggregateResultInput) -> Value {
     let rows: Vec<Value> = input
         .rows
         .iter()
-        .map(|row| split_row(row, &input.group_by, &input.measures))
+        .map(|row| split_row(row, &input.group_by, &input.indicators))
         .collect();
 
-    json!({
+    let mut subject = json!({
         "id": &input.subject_uri,
         "dataset": &input.dataset,
-        "entity": &input.entity,
         "aggregateId": &input.aggregate_id,
         "aggregateUrl": &input.aggregate_url,
         "groupBy": &input.group_by,
-        "measures": &input.measures,
+        "indicators": &input.indicators,
         "rows": rows,
-        "suppressedGroups": input.suppressed_groups,
-        "minGroupSize": input.min_group_size,
+        "suppressedRows": input.suppressed_rows,
+        "minCellSize": input.min_cell_size,
         "computedAt": &input.computed_at_rfc3339,
-        "asOf": &input.as_of_rfc3339,
-    })
+    });
+    if let Some(as_of) = &input.as_of_rfc3339 {
+        subject["asOf"] = json!(as_of);
+    }
+    subject
 }
 
 /// Split a plain aggregate row into `{group, values}` form. The

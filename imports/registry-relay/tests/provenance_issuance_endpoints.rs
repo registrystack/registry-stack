@@ -228,6 +228,27 @@ datasets:
             - name: payment_amount
               type: number
               nullable: true
+    aggregates:
+      - id: by_municipality
+        title: Individuals by municipality
+        description: Number of individuals by municipality
+        source_entity: individual
+        default_group_by:
+          - municipality_code
+        dimensions:
+          - id: municipality_code
+            label: Municipality
+            field: municipality_code
+        indicators:
+          - id: individual_count
+            label: Individuals
+            function: count
+            column: id
+            unit_measure: people
+        disclosure_control:
+          min_group_size: {min_group_size}
+          suppression: omit
+          report_suppressed_rows: true
     entities:
       - name: individual
         table: individuals_table
@@ -246,19 +267,6 @@ datasets:
           allowed_filters:
             - field: id
               ops: [eq, in]
-        aggregates:
-          - id: by_municipality
-            description: Number of individuals by municipality
-            group_by:
-              - municipality_code
-            measures:
-              - name: individual_count
-                function: count
-                column: id
-            disclosure_control:
-              min_group_size: {min_group_size}
-              suppression: omit
-
 audit:
   sink: stdout
   format: jsonl
@@ -460,7 +468,7 @@ async fn entity_record_returns_signed_vc_when_accept_opts_in() {
 }
 
 // ---------------------------------------------------------------------------
-// /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+// /datasets/{dataset_id}/aggregates/{aggregate_id}
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -468,12 +476,12 @@ async fn aggregate_plain_json_path_unchanged_without_accept_header() {
     let harness = build_aggregate_harness("PROVENANCE_ISSUANCE_AGGREGATE_PLAIN_JWK");
     let resp = harness
         .server
-        .get("/datasets/social_registry/individual/aggregates/by_municipality")
+        .get("/datasets/social_registry/aggregates/by_municipality")
         .await;
     resp.assert_status_ok();
     let body: Value = resp.json();
     assert_eq!(body["aggregate_id"], "by_municipality");
-    assert!(body["rows"].is_array());
+    assert!(body["data"].is_array());
 }
 
 #[tokio::test]
@@ -481,7 +489,7 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
     let harness = build_aggregate_harness("PROVENANCE_ISSUANCE_AGGREGATE_VC_JWK");
     let resp = harness
         .server
-        .get("/datasets/social_registry/individual/aggregates/by_municipality")
+        .get("/datasets/social_registry/aggregates/by_municipality")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status_ok();
@@ -500,7 +508,7 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
     let subject = &payload["credentialSubject"];
     assert_eq!(subject["aggregateId"], "by_municipality");
     assert_eq!(subject["groupBy"][0], "municipality_code");
-    assert_eq!(subject["measures"][0], "individual_count");
+    assert_eq!(subject["indicators"][0], "individual_count");
     let rows = subject["rows"].as_array().expect("rows array");
     assert!(!rows.is_empty());
     // The aggregate_result_subject builder splits each row into
@@ -514,12 +522,12 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
 
     let record = audit_record_for(
         &harness.audit_sink,
-        "/datasets/social_registry/individual/aggregates/by_municipality",
+        "/datasets/social_registry/aggregates/by_municipality",
     );
     assert_eq!(record["provenance"]["claim_type"], "AggregateResult");
     assert_eq!(
         record["provenance"]["subject"],
-        "https://gw.example/datasets/social_registry/individual/aggregates/by_municipality"
+        "https://gw.example/datasets/social_registry/aggregates/by_municipality"
     );
 }
 
@@ -574,7 +582,7 @@ async fn aggregate_vc_as_of_reflects_resource_registered_at() {
     let server = TestServer::new(router);
 
     let resp = server
-        .get("/datasets/social_registry/individual/aggregates/by_municipality")
+        .get("/datasets/social_registry/aggregates/by_municipality")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status_ok();
@@ -600,13 +608,13 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     // When disclosure control suppresses small groups, the signed
     // `AggregateResult` VC must mirror that exact
     // shape. The credentialSubject should:
-    //   * echo the configured `measures` list,
+    //   * echo the configured `indicators` list,
     //   * carry only the non-suppressed rows under `rows`, and
-    //   * surface `suppressedGroups` as a u64 count matching the
+    //   * surface `suppressedRows` as a u64 count matching the
     //     plain-JSON path.
     // With `min_group_size: 2` and three input rows (mun-1 x2,
     // mun-2 x1), the mun-2 group must drop out (default
-    // `suppression: omit`) and `suppressedGroups` must equal 1.
+    // `suppression: omit`) and `suppressedRows` must equal 1.
     let tmp = TempDir::new().expect("tempdir");
     let cfg = Arc::new(write_config_with_min_group_size(&tmp, 2));
     std::mem::forget(tmp);
@@ -637,12 +645,12 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     // Plain-JSON path: capture the disclosure-controlled shape we
     // expect the VC subject to mirror.
     let plain_resp = server
-        .get("/datasets/social_registry/individual/aggregates/by_municipality")
+        .get("/datasets/social_registry/aggregates/by_municipality")
         .await;
     plain_resp.assert_status_ok();
     let plain_body: Value = plain_resp.json();
-    assert_eq!(plain_body["suppressed_groups"], 1);
-    let plain_rows = plain_body["rows"].as_array().expect("rows array");
+    assert_eq!(plain_body["disclosure_control"]["suppressed_rows"], 1);
+    let plain_rows = plain_body["data"].as_array().expect("data array");
     assert_eq!(plain_rows.len(), 1, "mun-2 group must be omitted");
     assert_eq!(plain_rows[0]["municipality_code"], "mun-1");
     assert_eq!(plain_rows[0]["individual_count"], 2);
@@ -650,7 +658,7 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     // Signed-VC path: decode the JWS and assert credentialSubject
     // mirrors the suppression result.
     let signed_resp = server
-        .get("/datasets/social_registry/individual/aggregates/by_municipality")
+        .get("/datasets/social_registry/aggregates/by_municipality")
         .add_header("accept", "application/vc+jwt")
         .await;
     signed_resp.assert_status_ok();
@@ -663,12 +671,12 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     let subject = &payload["credentialSubject"];
 
     assert_eq!(subject["aggregateId"], "by_municipality");
-    assert_eq!(subject["minGroupSize"], 2);
+    assert_eq!(subject["minCellSize"], 2);
     assert_eq!(
-        subject["suppressedGroups"], 1,
+        subject["suppressedRows"], 1,
         "VC subject must mirror the plain-JSON suppression count",
     );
-    let measures = subject["measures"].as_array().expect("measures array");
+    let measures = subject["indicators"].as_array().expect("indicators array");
     assert_eq!(
         measures,
         &vec![Value::String("individual_count".to_string())],

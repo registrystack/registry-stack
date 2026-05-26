@@ -13,13 +13,12 @@
     "type": "JsonSchema"
   },
   "credentialSubject": {
-    "id": "https://fixture.example/datasets/social_registry/individual/aggregates/by-region",
+    "id": "https://fixture.example/datasets/social_registry/aggregates/by-region",
     "dataset": "social_registry",
-    "entity": "individual",
     "aggregateId": "by-region",
-    "aggregateUrl": "https://fixture.example/datasets/social_registry/individual/aggregates/by-region",
+    "aggregateUrl": "https://fixture.example/datasets/social_registry/aggregates/by-region",
     "groupBy": ["region"],
-    "measures": ["count", "avg_income"],
+    "indicators": ["count", "avg_income"],
     "rows": [
       {
         "group": {
@@ -40,13 +39,13 @@
         }
       }
     ],
-    "suppressedGroups": 1,
-    "minGroupSize": 5,
+    "suppressedRows": 1,
+    "minCellSize": 5,
     "computedAt": "2026-05-16T09:30:00Z",
     "asOf": "2026-05-16T09:30:00Z"
   },
   "iss": "did:web:aggregate.fixture.example",
-  "sub": "https://fixture.example/datasets/social_registry/individual/aggregates/by-region",
+  "sub": "https://fixture.example/datasets/social_registry/aggregates/by-region",
   "iat": 1778923800,
   "nbf": 1778923800,
   "exp": 1778924100,

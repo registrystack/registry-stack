@@ -519,6 +519,8 @@ pub struct DatasetConfig {
     pub tables: Vec<ResourceConfig>,
     #[serde(default)]
     pub entities: Vec<EntityConfig>,
+    #[serde(default)]
+    pub aggregates: Vec<AggregateConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1050,12 +1052,90 @@ pub enum FilterOp {
 #[serde(deny_unknown_fields)]
 pub struct AggregateConfig {
     pub id: AggregateId,
+    #[serde(default)]
+    pub title: Option<String>,
     pub description: String,
     #[serde(default)]
+    pub source_entity: Option<String>,
+    #[serde(default)]
+    pub default_group_by: Vec<String>,
+    #[serde(default)]
+    pub dimensions: Vec<AggregateDimensionConfig>,
+    #[serde(default)]
+    pub indicators: Vec<AggregateIndicatorConfig>,
+    #[serde(default)]
+    pub allowed_filters: Vec<AllowedFilter>,
+    #[serde(default)]
+    pub required_filters: Vec<String>,
+    #[serde(default)]
+    pub temporal_field: Option<String>,
+    #[serde(default)]
+    pub access: Option<AggregateAccessConfig>,
+    #[serde(default)]
+    pub spatial: Option<AggregateSpatialConfig>,
+    /// Legacy entity-local aggregate fields. These stay parseable while
+    /// the public surface moves to dataset-level aggregates.
+    #[serde(default)]
     pub joins: Vec<AggregateJoinConfig>,
+    #[serde(default)]
     pub group_by: Vec<String>,
+    #[serde(default)]
     pub measures: Vec<AggregateMeasure>,
     pub disclosure_control: DisclosureControlConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateAccessConfig {
+    #[serde(default)]
+    pub metadata_scope: Option<String>,
+    #[serde(default)]
+    pub aggregate_scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateDimensionConfig {
+    pub id: String,
+    pub label: String,
+    pub field: String,
+    #[serde(default)]
+    pub codelist: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateIndicatorConfig {
+    pub id: String,
+    pub label: String,
+    pub function: AggregateFunction,
+    pub column: String,
+    pub unit_measure: String,
+    #[serde(default)]
+    pub unit_mult: Option<i32>,
+    #[serde(default)]
+    pub decimals: Option<u32>,
+    #[serde(default)]
+    pub frequency: Option<String>,
+    #[serde(default)]
+    pub definition_uri: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AggregateSpatialConfig {
+    AdminArea {
+        #[serde(default)]
+        collection_id: Option<String>,
+        dimension: String,
+        geometry_entity: String,
+        geometry_id_field: String,
+        geometry_field: String,
+        #[serde(default)]
+        bbox_fields: Option<SpatialBboxFieldsConfig>,
+        #[serde(default = "default_max_geometry_vertices")]
+        max_geometry_vertices: u32,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1093,14 +1173,31 @@ pub enum AggregateFunction {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureControlConfig {
+    #[serde(default = "default_disclosure_methods")]
+    pub method: Vec<String>,
     #[serde(default = "default_min_group_size")]
-    pub min_group_size: u32,
+    pub min_cell_size: u32,
+    #[serde(default)]
+    pub min_group_size: Option<u32>,
     #[serde(default)]
     pub suppression: Suppression,
+    #[serde(default)]
+    pub report_suppressed_rows: bool,
 }
 
 fn default_min_group_size() -> u32 {
     5
+}
+
+fn default_disclosure_methods() -> Vec<String> {
+    vec!["k-anonymity".to_string()]
+}
+
+impl DisclosureControlConfig {
+    #[must_use]
+    pub fn effective_min_cell_size(&self) -> u32 {
+        self.min_group_size.unwrap_or(self.min_cell_size)
+    }
 }
 
 /// Disclosure suppression strategy.
@@ -1112,6 +1209,8 @@ pub enum Suppression {
     Omit,
     /// Keep the group key, null out the measures.
     Mask,
+    /// Standards-facing alias for `mask`: values are represented as JSON null.
+    Null,
 }
 
 /// Sensitivity classification. Operator-defined values cover common

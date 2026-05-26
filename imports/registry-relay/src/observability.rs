@@ -500,8 +500,11 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
         "/datasets/{dataset_id}/{entity}" => EndpointKind::Rows,
         "/datasets/{dataset_id}/{entity}/{id}" => EndpointKind::Rows,
         "/datasets/{dataset_id}/{entity}/{id}/{relationship}" => EndpointKind::Rows,
-        "/datasets/{dataset_id}/{entity}/aggregates" => EndpointKind::AggregateList,
-        "/datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}" => EndpointKind::Aggregate,
+        "/datasets/{dataset_id}/aggregates" => EndpointKind::AggregateList,
+        "/datasets/{dataset_id}/aggregates/{aggregate_id}" => EndpointKind::Aggregate,
+        "/datasets/{dataset_id}/aggregates/{aggregate_id}/query" => EndpointKind::Aggregate,
+        "/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata" => EndpointKind::AggregateList,
+        "/ogc/edr/v1/collections/{collection_id}/area" => EndpointKind::OgcEdrArea,
         "/openapi.json" => EndpointKind::Openapi,
         _ => EndpointKind::Other,
     }
@@ -518,6 +521,8 @@ fn endpoint_kind_from_path(path: &str) -> EndpointKind {
         EndpointKind::Catalog
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
+    } else if path.starts_with("/ogc/edr/v1/") {
+        classify_edr_endpoint(path)
     } else if path.starts_with("/datasets/") {
         classify_dataset_endpoint(path)
     } else {
@@ -530,13 +535,23 @@ fn classify_dataset_endpoint(path: &str) -> EndpointKind {
     match segments.as_slice() {
         ["datasets", _dataset] => EndpointKind::Dataset,
         ["datasets", _dataset, _entity, "schema"] => EndpointKind::Schema,
-        ["datasets", _dataset, _entity, "aggregates"] => EndpointKind::AggregateList,
-        ["datasets", _dataset, _entity, "aggregates", _aggregate] => EndpointKind::Aggregate,
+        ["datasets", _dataset, "aggregates"] => EndpointKind::AggregateList,
+        ["datasets", _dataset, "aggregates", _aggregate]
+        | ["datasets", _dataset, "aggregates", _aggregate, "query"] => EndpointKind::Aggregate,
+        ["datasets", _dataset, "aggregates", _aggregate, "metadata"] => EndpointKind::AggregateList,
         ["datasets", _dataset, _entity, "verify"] => EndpointKind::Verify,
         ["datasets", _dataset, _entity] => EndpointKind::Rows,
         ["datasets", _dataset, _entity, _id] => EndpointKind::Rows,
         ["datasets", _dataset, _entity, _id, _relationship] => EndpointKind::Rows,
         _ => EndpointKind::Dataset,
+    }
+}
+
+fn classify_edr_endpoint(path: &str) -> EndpointKind {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["ogc", "edr", "v1", "collections", _collection, "area"] => EndpointKind::OgcEdrArea,
+        _ => EndpointKind::Catalog,
     }
 }
 
@@ -551,6 +566,7 @@ fn endpoint_kind_label(kind: EndpointKind) -> &'static str {
         EndpointKind::Rows => "rows",
         EndpointKind::AggregateList => "aggregate_list",
         EndpointKind::Aggregate => "aggregate",
+        EndpointKind::OgcEdrArea => "ogc_edr_area",
         EndpointKind::OgcCollectionItems => "ogc_collection_items",
         EndpointKind::OgcFeature => "ogc_feature",
         EndpointKind::Admin => "admin",

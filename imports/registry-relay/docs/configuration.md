@@ -650,24 +650,38 @@ entity URI.
 
 ## Aggregates
 
-Aggregates are declared on entities:
+Aggregates are declared on datasets and name their source entity:
 
 ```yaml
 aggregates:
   - id: by_municipality
+    title: Individuals by municipality
     description: Number of individuals by municipality
-    group_by:
+    source_entity: individual
+    default_group_by:
       - municipality_code
-    measures:
-      - name: individual_count
+    dimensions:
+      - id: municipality_code
+        label: Municipality
+        field: municipality_code
+    indicators:
+      - id: individual_count
+        label: Individuals
         function: count
         column: id
+        unit_measure: people
+    allowed_filters:
+      - field: municipality_code
+        ops: [eq, in]
+      - field: enrolled_on
+        ops: [gte, lte, between]
+    temporal_field: enrolled_on
     disclosure_control:
       min_group_size: 5
       suppression: omit
 ```
 
-Supported measure functions include the configured V1 set used by tests and examples, such as `count`, `sum`, and `avg`. Keep disclosure thresholds explicit and reviewable.
+Supported indicator functions include the configured V1 set used by tests and examples, such as `count`, `sum`, and `avg`. `temporal_field` is optional; when present, native aggregate `temporal.from` and `temporal.to` are translated into the declared range-capable allowed filter for that source-entity field. Keep disclosure thresholds explicit and reviewable. Spatial EDR exposure is opt-in with `spatial.mode: admin_area` on the aggregate.
 
 ## Provenance
 

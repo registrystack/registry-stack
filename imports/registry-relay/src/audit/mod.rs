@@ -106,6 +106,7 @@ pub struct AuditContextExt {
     pub evidence_hash: Option<String>,
     pub null_geometry_count: Option<u64>,
     pub invalid_geometry_count: Option<u64>,
+    pub geometry_vertex_count: Option<u64>,
     pub row_count: Option<u64>,
     pub suppressed_groups: Option<u64>,
 }
@@ -142,6 +143,7 @@ pub enum EndpointKind {
     Rows,
     AggregateList,
     Aggregate,
+    OgcEdrArea,
     OgcCollectionItems,
     OgcFeature,
     Admin,
@@ -237,6 +239,8 @@ pub struct AuditRecord {
     pub null_geometry_count: Option<u64>,
     /// Features rejected because their geometry was malformed.
     pub invalid_geometry_count: Option<u64>,
+    /// Vertices in a submitted query geometry, never the raw geometry.
+    pub geometry_vertex_count: Option<u64>,
     /// Groups removed/masked by disclosure control.
     pub suppressed_groups: Option<u64>,
     /// Server-side handling time, milliseconds.
@@ -620,6 +624,7 @@ pub async fn audit_layer(
         row_count: context.row_count,
         null_geometry_count: context.null_geometry_count,
         invalid_geometry_count: context.invalid_geometry_count,
+        geometry_vertex_count: context.geometry_vertex_count,
         suppressed_groups: context.suppressed_groups,
         duration_ms,
         error_code,
@@ -835,6 +840,8 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         EndpointKind::Admin
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
+    } else if path.starts_with("/ogc/edr/v1/") {
+        classify_edr_endpoint(path)
     } else if path.starts_with("/ogc/v1/") {
         classify_ogc_endpoint(path)
     } else if path.starts_with("/datasets/") {
@@ -857,13 +864,23 @@ fn classify_ogc_endpoint(path: &str) -> EndpointKind {
     }
 }
 
+fn classify_edr_endpoint(path: &str) -> EndpointKind {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["ogc", "edr", "v1", "collections", _collection, "area"] => EndpointKind::OgcEdrArea,
+        _ => EndpointKind::Catalog,
+    }
+}
+
 fn classify_dataset_endpoint(path: &str) -> EndpointKind {
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     match segments.as_slice() {
         ["datasets", _dataset] => EndpointKind::Dataset,
         ["datasets", _dataset, _entity, "schema"] => EndpointKind::Schema,
-        ["datasets", _dataset, _entity, "aggregates"] => EndpointKind::AggregateList,
-        ["datasets", _dataset, _entity, "aggregates", _aggregate] => EndpointKind::Aggregate,
+        ["datasets", _dataset, "aggregates"] => EndpointKind::AggregateList,
+        ["datasets", _dataset, "aggregates", _aggregate]
+        | ["datasets", _dataset, "aggregates", _aggregate, "query"] => EndpointKind::Aggregate,
+        ["datasets", _dataset, "aggregates", _aggregate, "metadata"] => EndpointKind::AggregateList,
         ["datasets", _dataset, _entity, "verify"] => EndpointKind::Verify,
         ["datasets", _dataset, _entity] => EndpointKind::Rows,
         ["datasets", _dataset, _entity, _id] => EndpointKind::Rows,
@@ -879,14 +896,14 @@ fn infer_context_from_path(path: &str) -> AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, entity, "aggregates"] => AuditContextExt {
+        ["datasets", dataset, "aggregates"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
-            entity_name: Some((*entity).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, entity, "aggregates", aggregate] => AuditContextExt {
+        ["datasets", dataset, "aggregates", aggregate]
+        | ["datasets", dataset, "aggregates", aggregate, "query"]
+        | ["datasets", dataset, "aggregates", aggregate, "metadata"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
-            entity_name: Some((*entity).to_string()),
             aggregate_id: Some((*aggregate).to_string()),
             ..AuditContextExt::default()
         },

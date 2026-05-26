@@ -1050,7 +1050,7 @@ audit:
         "/datasets/social_registry/individual",
         "/datasets/social_registry/individual/id-1",
         "/datasets/social_registry/individual/schema",
-        "/datasets/social_registry/individual/aggregates",
+        "/datasets/social_registry/aggregates",
     ] {
         let resp = server.get(url).await;
         resp.assert_status(StatusCode::FORBIDDEN);

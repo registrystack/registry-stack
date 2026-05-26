@@ -112,6 +112,80 @@ datasets:
               nullable: true
               unit: EUR
 
+    aggregates:
+      - id: by_municipality
+        title: Individuals by municipality
+        description: Number of individuals by municipality
+        source_entity: individual
+        default_group_by:
+          - municipality_code
+        dimensions:
+          - id: municipality_code
+            label: Municipality
+            field: municipality_code
+            codelist: https://www.insee.fr/codes/cog
+        indicators:
+          - id: individual_count
+            label: Individuals
+            function: count
+            column: id
+            unit_measure: people
+        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+        disclosure_control:
+          min_group_size: 5
+          suppression: omit
+
+      - id: payments_by_municipality
+        title: Payments by municipality
+        description: Total and average payments by municipality
+        source_entity: individual
+        default_group_by:
+          - municipality_code
+        dimensions:
+          - id: municipality_code
+            label: Municipality
+            field: municipality_code
+            codelist: https://www.insee.fr/codes/cog
+        indicators:
+          - id: total_payment
+            label: Total payment
+            function: sum
+            column: payment_amount
+            unit_measure: EUR
+          - id: average_payment
+            label: Average payment
+            function: avg
+            column: payment_amount
+            unit_measure: EUR
+        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+        disclosure_control:
+          min_group_size: 5
+          suppression: mask
+
+      - id: by_household_region
+        title: Individuals by household region
+        description: Number of individuals by household region
+        source_entity: individual
+        default_group_by:
+          - household_region
+        dimensions:
+          - id: household_region
+            label: Household region
+            field: household.region
+        indicators:
+          - id: individual_count
+            label: Individuals
+            function: count
+            column: id
+            unit_measure: people
+        disclosure_control:
+          min_group_size: 5
+          suppression: omit
+
     entities:
       - name: household
         title: Household
@@ -188,47 +262,6 @@ datasets:
             - field: municipality_code
               ops: [eq, in]
           allowed_expansions: [household]
-        aggregates:
-          - id: by_municipality
-            description: Number of individuals by municipality
-            group_by:
-              - municipality_code
-            measures:
-              - name: individual_count
-                function: count
-                column: id
-            disclosure_control:
-              min_group_size: 5
-              suppression: omit
-
-          - id: payments_by_municipality
-            description: Total and average payments by municipality
-            group_by:
-              - municipality_code
-            measures:
-              - name: total_payment
-                function: sum
-                column: payment_amount
-              - name: average_payment
-                function: avg
-                column: payment_amount
-            disclosure_control:
-              min_group_size: 5
-              suppression: mask
-
-          - id: by_household_region
-            description: Number of individuals by household region
-            joins:
-              - relationship: household
-            group_by:
-              - household.region
-            measures:
-              - name: individual_count
-                function: count
-                column: id
-            disclosure_control:
-              min_group_size: 5
-              suppression: omit
 
 
 audit:

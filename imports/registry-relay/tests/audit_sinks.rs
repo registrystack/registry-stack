@@ -39,6 +39,7 @@ fn sample_record(path: &str) -> AuditRecord {
         row_count: None,
         null_geometry_count: None,
         invalid_geometry_count: None,
+        geometry_vertex_count: None,
         suppressed_groups: None,
         duration_ms: 7,
         error_code: None,
