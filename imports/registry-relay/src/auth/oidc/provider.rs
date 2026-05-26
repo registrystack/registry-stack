@@ -21,8 +21,9 @@
 //!    or `client_id`. Empty config list means any client.
 //! 6. Build the [`super::super::Principal`]: `principal_id` is `sub` if
 //!    present, else `client_id`, else `azp`. Scopes are extracted from
-//!    the configured claim (string with whitespace separators or array
-//!    of strings) and renamed through `scope_map`.
+//!    the configured claim (string with whitespace separators, array of
+//!    strings, object keys, or explicitly configured verified reserved
+//!    claims such as `client_id`) and renamed through `scope_map`.
 //!
 //! ## What this module does *not* do
 //!
@@ -42,9 +43,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_platform_oidc::{
-    OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    Audience, Claims, OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig,
+    VerifiedToken,
 };
-use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::Map;
+use serde_json::Value;
 use zeroize::Zeroizing;
 
 use crate::config::{OidcAlgorithm, OidcConfig};
@@ -201,6 +205,11 @@ impl OidcAuth {
             scopes: _,
         } = verified;
 
+        let scopes: ScopeSet = extract_scopes(&claims, &self.scope_claim)
+            .into_iter()
+            .map(|s| self.scope_map.get(&s).cloned().unwrap_or(s))
+            .collect();
+
         let principal_id = claims
             .sub
             .or(claims.client_id)
@@ -224,11 +233,6 @@ impl OidcAuth {
                 "oidc: allowlist passed",
             );
         }
-
-        let scopes: ScopeSet = extract_scopes(&claims.extra, &self.scope_claim)
-            .into_iter()
-            .map(|s| self.scope_map.get(&s).cloned().unwrap_or(s))
-            .collect();
 
         Ok(Principal {
             principal_id,
@@ -349,11 +353,28 @@ fn unverified_payload(token: &str) -> Option<Value> {
 ///   does not consume). The keys are returned as scopes; `scope_map`
 ///   then renames them into the relay's `<dataset_id>:<level>` shape.
 ///
-/// Any other JSON shape yields no scopes.
-fn extract_scopes(extra: &Map<String, Value>, claim_name: &str) -> Vec<String> {
-    let Some(value) = extra.get(claim_name) else {
-        return Vec::new();
-    };
+/// Reserved claims are accepted only when explicitly named as `scope_claim`.
+/// They are verified by the OIDC library before Relay sees them, and are useful
+/// for demo or provider setups where policy maps a principal/client/audience to
+/// local Relay scopes. Role/entitlement claims remain the production default.
+fn extract_scopes(claims: &Claims, claim_name: &str) -> Vec<String> {
+    if let Some(value) = claims.extra.get(claim_name) {
+        return extract_scope_values(value);
+    }
+    match claim_name {
+        "sub" => claims.sub.iter().cloned().collect(),
+        "client_id" => claims.client_id.iter().cloned().collect(),
+        "azp" => claims.azp.iter().cloned().collect(),
+        "aud" => match claims.aud.as_ref() {
+            Some(Audience::One(value)) => vec![value.clone()],
+            Some(Audience::Many(values)) => values.clone(),
+            None => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn extract_scope_values(value: &Value) -> Vec<String> {
     match value {
         Value::String(s) => s.split_whitespace().map(String::from).collect(),
         Value::Array(items) => items
@@ -644,6 +665,51 @@ mod tests {
         let principal = provider.verify(&token).await.expect("ok");
         assert!(principal.scopes.contains("one"));
         assert!(principal.scopes.contains("two"));
+    }
+
+    #[tokio::test]
+    async fn reserved_client_id_scope_claim_can_be_mapped() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                extra: Map::from_iter([(
+                    "client_id".to_string(),
+                    Value::String("registry-lab-api".to_string()),
+                )]),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "client_id".to_string();
+        config.scope_map.insert(
+            "registry-lab-api".to_string(),
+            "social_protection_registry:rows".to_string(),
+        );
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(principal.scopes.contains("social_protection_registry:rows"));
+    }
+
+    #[tokio::test]
+    async fn reserved_audience_scope_claim_can_be_mapped() {
+        let (sk, vk) = fresh_keypair();
+        let token = mint(
+            &sk,
+            TokenOpts {
+                aud: Some(json!(["registry-lab-api", TEST_AUDIENCE])),
+                ..Default::default()
+            },
+        );
+        let mut config = base_config();
+        config.scope_claim = "aud".to_string();
+        config.scope_map.insert(
+            "registry-lab-api".to_string(),
+            "social_protection_registry:rows".to_string(),
+        );
+        let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+        let principal = provider.verify(&token).await.expect("ok");
+        assert!(principal.scopes.contains("social_protection_registry:rows"));
     }
 
     #[tokio::test]

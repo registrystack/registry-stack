@@ -388,6 +388,61 @@ async fn metadata_routes_prefer_split_manifest_extension() {
 }
 
 #[tokio::test]
+async fn metadata_router_exposes_api_catalog_discovery() {
+    let server = TestServer::new(metadata_router());
+
+    let resp = server.get("/.well-known/api-catalog").await;
+    resp.assert_status_ok();
+    assert!(
+        resp.header("content-type")
+            .to_str()
+            .expect("content-type")
+            .starts_with("application/linkset+json"),
+        "api-catalog must use Linkset JSON"
+    );
+    assert!(
+        resp.header("link")
+            .to_str()
+            .expect("link")
+            .contains("rel=\"api-catalog\""),
+        "GET api-catalog must advertise the api-catalog link relation"
+    );
+    let body: Value = resp.json();
+    let linkset = body["linkset"].as_array().expect("linkset");
+    assert_eq!(linkset[0]["anchor"], "/.well-known/api-catalog");
+    assert_eq!(linkset[0]["describedby"][0]["href"], "/metadata");
+    let item_hrefs = linkset[0]["item"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["href"].as_str().expect("item href"))
+        .collect::<Vec<_>>();
+    assert!(item_hrefs.contains(&"/openapi.json"));
+    assert!(item_hrefs.contains(&"/metadata/catalog"));
+    assert!(item_hrefs.contains(&"/metadata/dcat"));
+    assert!(item_hrefs.contains(&"/metadata/dcat/bregdcat-ap"));
+
+    let head = server
+        .method(axum::http::Method::HEAD, "/.well-known/api-catalog")
+        .await;
+    head.assert_status_ok();
+    assert!(
+        head.header("content-type")
+            .to_str()
+            .expect("head content-type")
+            .starts_with("application/linkset+json"),
+        "HEAD api-catalog must use Linkset JSON"
+    );
+    assert!(
+        head.header("link")
+            .to_str()
+            .expect("head link")
+            .contains("rel=\"api-catalog\""),
+        "HEAD api-catalog must advertise the api-catalog link relation"
+    );
+}
+
+#[tokio::test]
 async fn metadata_dcat_profile_uses_split_manifest_policy_when_available() {
     let tmp = TempDir::new().expect("tempdir");
     write_metadata_manifest(&tmp, true);

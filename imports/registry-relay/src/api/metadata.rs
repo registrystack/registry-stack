@@ -21,6 +21,12 @@ use crate::error::{AuthError, Error, SchemaError};
 use crate::metadata::scoped_compiled_from_runtime;
 
 const JSON_LD: HeaderValue = HeaderValue::from_static("application/ld+json");
+const LINKSET_JSON: HeaderValue = HeaderValue::from_static(
+    "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+);
+const API_CATALOG_LINK: HeaderValue = HeaderValue::from_static(
+    "</.well-known/api-catalog>; rel=\"api-catalog\"; type=\"application/linkset+json\"; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+);
 const JSON_SCHEMA: HeaderValue = HeaderValue::from_static("application/schema+json");
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
 const METADATA_UNAVAILABLE_CODE: &str = "metadata.core_unavailable";
@@ -30,6 +36,10 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route(
+            "/.well-known/api-catalog",
+            get(api_catalog).head(api_catalog_head),
+        )
         .route("/metadata", get(metadata_landing))
         .route("/metadata/catalog", get(catalog))
         .route("/metadata/evidence-offerings", get(evidence_offerings))
@@ -140,6 +150,7 @@ async fn metadata_landing(
         json!({
             "links": [
                 { "rel": "self", "href": "/metadata" },
+                { "rel": "api-catalog", "href": "/.well-known/api-catalog", "type": "application/linkset+json" },
                 { "rel": "describedby", "href": "/metadata/catalog", "type": "application/json" },
                 { "rel": "alternate", "href": "/metadata/dcat", "type": "application/ld+json" },
                 { "rel": "alternate", "href": "/metadata/dcat/bregdcat-ap", "type": "application/ld+json" },
@@ -150,6 +161,81 @@ async fn metadata_landing(
         }),
         &headers,
     )
+}
+
+async fn api_catalog(headers: HeaderMap) -> Response {
+    let mut response = typed_json_response(
+        json!({
+            "linkset": [
+                {
+                    "anchor": "/.well-known/api-catalog",
+                    "describedby": [
+                        {
+                            "href": "/metadata",
+                            "type": "application/json",
+                            "title": "Registry Relay metadata landing document"
+                        }
+                    ],
+                    "item": [
+                        {
+                            "href": "/openapi.json",
+                            "type": "application/vnd.oai.openapi+json;version=3.1",
+                            "title": "Registry Relay OpenAPI description"
+                        },
+                        {
+                            "href": "/metadata/catalog",
+                            "type": "application/json",
+                            "title": "Registry metadata catalog"
+                        },
+                        {
+                            "href": "/metadata/dcat",
+                            "type": "application/ld+json",
+                            "profile": "http://www.w3.org/ns/dcat#",
+                            "title": "Base DCAT catalog"
+                        },
+                        {
+                            "href": "/metadata/dcat/bregdcat-ap",
+                            "type": "application/ld+json",
+                            "profile": "https://semiceu.github.io/BRegDCAT-AP/",
+                            "title": "BRegDCAT-AP catalog"
+                        },
+                        {
+                            "href": "/metadata/evidence-offerings",
+                            "type": "application/json",
+                            "title": "Evidence offerings"
+                        },
+                        {
+                            "href": "/metadata/policies",
+                            "type": "application/ld+json",
+                            "title": "Policy metadata"
+                        },
+                        {
+                            "href": "/metadata/shacl",
+                            "type": "application/ld+json",
+                            "title": "SHACL shapes"
+                        }
+                    ]
+                }
+            ]
+        }),
+        &headers,
+        LINKSET_JSON,
+    );
+    response
+        .headers_mut()
+        .insert(header::LINK, API_CATALOG_LINK);
+    response
+}
+
+async fn api_catalog_head() -> Response {
+    let mut response = StatusCode::OK.into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, LINKSET_JSON);
+    response
+        .headers_mut()
+        .insert(header::LINK, API_CATALOG_LINK);
+    response
 }
 
 async fn catalog(
