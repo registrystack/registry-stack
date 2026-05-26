@@ -184,6 +184,10 @@ evidence:
           - redacted
       formats:
         - application/vnd.registry-witness.claim-result+json
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: health_service_availability_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/health-service-availability
     - id: eligible-for-combined-support
       title: Eligible for combined support
       version: 2026-05
@@ -222,5 +226,9 @@ evidence:
       formats:
         - application/vnd.registry-witness.claim-result+json
         - application/dc+sd-jwt
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: combined_support_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/combined-support
       credential_profiles:
         - combined_support_sd_jwt

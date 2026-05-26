@@ -308,19 +308,22 @@ fields, and the conclusion being proved. Each run also writes artifacts under
 `briefing.md`, `case-file.json`, and `conformance-map.json` so the demo can be
 presented as a guided case file rather than a pile of API responses:
 
-1. **Service-first discovery through Atlas** publishes `/metadata/cpsv-ap`,
-   invokes the Atlas semantic discovery CLI and ServiceGraph API, selects the
-   health-linked child support service, maps grouped CCCEV evidence options to
-   evidence types and providers, validates a sample form payload against the
-   published form JSON Schema, then calls the relevant Witness endpoints from
-   discovered access-service endpoints in that service context.
-2. **Database-source cutover with live Postgres** starts a temporary
+1. **Service-first discovery through Atlas** publishes
+   `/.well-known/api-catalog` as an RFC 9727 Linkset, follows the advertised
+   CPSV-AP catalogue URL directly, uses the metadata index for the form schema,
+   invokes the Atlas semantic discovery CLI and `service-view` command, selects
+   the health-linked child support service, maps grouped CCCEV evidence options
+   to evidence types and providers, follows BRegDCAT/DCAT-style access-service
+   endpoints into Witness claim discovery, validates a sample form payload
+   against the published form JSON Schema, then evaluates the relevant Witness
+   claims in that service context.
+2. **Zitadel-issued JWT at a separate OIDC Relay node** starts a temporary
+   OIDC-protected Relay on port `4316`, mints a Zitadel machine-user token,
+   records the non-secret JWT claims, and shows both verified-but-denied and
+   verified-and-authorized Relay decisions.
+3. **Database-source cutover with live Postgres** starts a temporary
    Postgres-backed Relay on port `4315`, reads benefit cases, inserts a new
    database row, then proves the live Relay sees it without a restart.
-3. **Zitadel-issued JWT at a separate OIDC Relay node** starts a temporary
-   OIDC-protected Relay on port `4316`, mints a Zitadel machine-user token,
-   records the non-secret JWT claims, and shows whether the token authorizes or
-   reaches a scope denial after successful verification.
 4. **OpenFn sidecar lookup behind Registry Witness** calls the default
    OpenFn-backed Witness on port `4324` and records the date-of-birth claim
    result while keeping the sidecar private to the Compose network.
@@ -339,6 +342,24 @@ files are written under `static-metadata/`. Both directories keep only their
 
 See `docs/service-first-discovery.md` for the Atlas-backed service-first story
 artifact contract.
+
+Definition of done for a live story run:
+
+- `just live-stories` exits successfully from a fresh `just up`.
+- The first service-first request is
+  `GET /.well-known/api-catalog`; CPSV-AP discovery follows the service
+  catalogue URL from that Linkset response, and form validation follows the
+  metadata index URL from that response.
+- Atlas `service-view` provides the public service, requirements, grouped
+  evidence options, providers, access services, source evidence, gaps, and
+  report summary without a Lab-local Rust helper.
+- Witness calls are derived from Atlas access-service `endpoint_url` values,
+  with only local Compose hostname-to-host-port translation.
+- The generated `output/live-stories/index.html` shows API responses and the
+  value from each response that drives the next call, plus important HTTP
+  response headers for discovery steps when captured.
+- No bearer tokens, client secrets, JWKS private keys, database credentials, or
+  unrelated row data are written to the terminal or artifacts.
 
 In the service-first story, Registry Witness dispatch uses access-service
 `endpoint_url` values discovered from Atlas output. The runner records the
@@ -441,7 +462,9 @@ token should be committed.
 `config/static-metadata/metadata.yaml` into `static-metadata/metadata/`. The
 publisher serves it at paths such as:
 
+- `http://127.0.0.1:4331/.well-known/api-catalog`
 - `http://127.0.0.1:4331/metadata/index.json`
+- `http://127.0.0.1:4331/metadata/cpsv-ap.jsonld`
 - `http://127.0.0.1:4331/metadata/catalog.json`
 - `http://127.0.0.1:4331/metadata/evidence-offerings.json`
 - `http://127.0.0.1:4331/metadata/policies.jsonld`

@@ -6,13 +6,14 @@ demo_dir="$(cd "${script_dir}/.." && pwd)"
 
 manifest="${1:-"${demo_dir}/config/static-metadata/metadata.yaml"}"
 out_dir="${2:-"${demo_dir}/static-metadata/metadata"}"
+public_root="$(dirname "${out_dir}")"
 
 if [[ ! -f "${manifest}" ]]; then
   echo "static metadata manifest not found: ${manifest}" >&2
   exit 1
 fi
 
-rm -rf "${out_dir}"
+rm -rf "${out_dir}" "${public_root}/.well-known"
 mkdir -p "${out_dir}"
 
 manifest_repo="$("${script_dir}/check-service-first-deps.sh" manifest-path)"
@@ -23,30 +24,16 @@ if [[ ! -f "${out_dir}/index.json" ]]; then
   exit 1
 fi
 
-if [[ -f "${out_dir}/cpsv-ap.jsonld" ]]; then
-  cp "${out_dir}/cpsv-ap.jsonld" "${out_dir}/cpsv-ap"
-  python3 - "${out_dir}/index.json" <<'PY'
-import json
-import sys
-from pathlib import Path
+well_known="${public_root}/.well-known/registry-manifest.json"
+if [[ ! -f "${well_known}" ]]; then
+  echo "registry-manifest publish did not produce ${well_known}" >&2
+  exit 1
+fi
 
-path = Path(sys.argv[1])
-index = json.loads(path.read_text(encoding="utf-8"))
-catalogues = index.setdefault("service_catalogues", [])
-for catalogue in catalogues:
-    if catalogue.get("id") == "cpsv-ap":
-        catalogue["url"] = "/metadata/cpsv-ap"
-        break
-else:
-    catalogues.append(
-        {
-            "id": "cpsv-ap",
-            "version": "3.2.0",
-            "url": "/metadata/cpsv-ap",
-        }
-    )
-path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
+api_catalog="${public_root}/.well-known/api-catalog"
+if [[ ! -f "${api_catalog}" ]]; then
+  echo "registry-manifest publish did not produce ${api_catalog}" >&2
+  exit 1
 fi
 
 if [[ -f "${out_dir}/dcat.bregdcat-ap.jsonld" ]]; then

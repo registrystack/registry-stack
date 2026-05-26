@@ -164,5 +164,9 @@ evidence:
       formats:
         - application/vnd.registry-witness.claim-result+json
         - application/dc+sd-jwt
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: household_support_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/household-support
       credential_profiles:
         - enrollment_sd_jwt

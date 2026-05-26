@@ -260,11 +260,12 @@ services:
 
   static-metadata-publisher:
     image: python:3.12.3-slim-bookworm
-    command: ["python", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/srv/static"]
+    command: ["python", "/usr/local/bin/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]
     ports:
       - "4331:8080"
     volumes:
       - ./static-metadata:/srv/static:ro
+      - ./scripts/static-metadata-server.py:/usr/local/bin/static-metadata-server.py:ro
     restart: unless-stopped
 
   demo-client:

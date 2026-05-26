@@ -12,8 +12,10 @@ import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -29,7 +31,7 @@ PURPOSE = "https://demo.example.gov/purpose/live-service-stories"
 CORRELATION_ID = os.environ.get("DEMO_CORRELATION_ID", "registry-lab-live-stories-001")
 SERVICE_IRI = "https://demo.example.gov/services/health-linked-child-support"
 STATIC_METADATA_URL = os.environ.get("STATIC_METADATA_URL", "http://127.0.0.1:4331")
-STATIC_CPSV_PATH = "/metadata/cpsv-ap"
+API_CATALOG_PATH = "/.well-known/api-catalog"
 
 
 class StoryError(RuntimeError):
@@ -44,10 +46,12 @@ class HttpResult:
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
+    return parse_env_text(path.read_text(encoding="utf-8") if path.exists() else "")
+
+
+def parse_env_text(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -97,7 +101,72 @@ def publish_static_metadata() -> None:
     run([str(ROOT / "scripts" / "publish-static-metadata.sh")])
 
 
-def run_atlas_analyze(catalogue_path: Path) -> dict[str, Any]:
+def metadata_url(path: str) -> str:
+    return urllib.parse.urljoin(STATIC_METADATA_URL.rstrip("/") + "/", path.lstrip("/"))
+
+
+def discovery_path(value: Any, default: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return default
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        static = urllib.parse.urlparse(STATIC_METADATA_URL)
+        if (parsed.scheme, parsed.netloc) != (static.scheme, static.netloc):
+            raise StoryError(f"metadata discovery returned an external URL: {value}")
+        return parsed.path or default
+    return value if value.startswith("/") else f"/{value}"
+
+
+def metadata_index_path(discovery: dict[str, Any]) -> str:
+    return discovery_path(discovery.get("metadata_index"), "/metadata/index.json")
+
+
+def api_catalog_links(api_catalog: dict[str, Any], relation: str) -> list[dict[str, Any]]:
+    links: list[dict[str, Any]] = []
+    for linkset in api_catalog.get("linkset", []):
+        if not isinstance(linkset, dict):
+            continue
+        values = linkset.get(relation, [])
+        if isinstance(values, dict):
+            values = [values]
+        if isinstance(values, list):
+            links.extend(item for item in values if isinstance(item, dict))
+    return links
+
+
+def api_catalog_metadata_index_path(api_catalog: dict[str, Any]) -> str:
+    for link in api_catalog_links(api_catalog, "describedby"):
+        href = link.get("href")
+        if isinstance(href, str) and "index" in href:
+            return discovery_path(href, "/metadata/index.json")
+    raise StoryError("api-catalog does not describe the metadata index")
+
+
+def api_catalog_service_catalogue_path(api_catalog: dict[str, Any]) -> str:
+    for link in api_catalog_links(api_catalog, "item"):
+        href = link.get("href")
+        title = str(link.get("title") or "").lower()
+        if isinstance(href, str) and ("cpsv" in href.lower() or "cpsv" in title):
+            return discovery_path(href, "")
+    raise StoryError("api-catalog does not advertise a CPSV-AP service catalogue")
+
+
+def service_catalogue_path(index: dict[str, Any], catalogue_id: str = "cpsv-ap") -> str:
+    for catalogue in index.get("service_catalogues", []):
+        if not isinstance(catalogue, dict):
+            continue
+        if catalogue.get("id") == catalogue_id and catalogue.get("url"):
+            return discovery_path(catalogue.get("url"), "")
+    raise StoryError(f"metadata index does not publish service catalogue `{catalogue_id}`")
+
+
+def asset_view(item: Any) -> dict[str, Any]:
+    if isinstance(item, dict) and isinstance(item.get("asset"), dict):
+        return item["asset"]
+    return item if isinstance(item, dict) else {}
+
+
+def run_atlas_analyze(catalogue_path: Path, entry_url: str) -> dict[str, Any]:
     atlas = atlas_root()
     result = run(
         [
@@ -111,7 +180,7 @@ def run_atlas_analyze(catalogue_path: Path) -> dict[str, Any]:
             "--",
             "analyze",
             "--entry-url",
-            urllib.parse.urljoin(STATIC_METADATA_URL.rstrip("/") + "/", STATIC_CPSV_PATH.lstrip("/")),
+            entry_url,
             str(catalogue_path),
         ],
         cwd=atlas,
@@ -119,311 +188,24 @@ def run_atlas_analyze(catalogue_path: Path) -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
-def write_atlas_service_graph_helper(out: Path) -> Path:
+def run_atlas_service_view(report_path: Path) -> dict[str, Any]:
     atlas = atlas_root()
-    core_path = atlas / "crates" / "semantic-asset-discovery-core"
-    if not core_path.exists():
-        raise StoryError(f"Atlas semantic discovery core crate not found: {core_path}")
-    helper = out / "_atlas-service-first-query"
-    src = helper / "src"
-    src.mkdir(parents=True, exist_ok=True)
-    (helper / "Cargo.toml").write_text(
-        "\n".join(
-            [
-                "[package]",
-                'name = "registry-lab-atlas-service-first-query"',
-                'version = "0.1.0"',
-                'edition = "2021"',
-                "",
-                "[dependencies]",
-                f"semantic-asset-discovery-core = {{ path = {json.dumps(str(core_path))} }}",
-                'serde_json = "1"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (src / "main.rs").write_text(
-        r'''
-use semantic_asset_discovery_core::{
-    DiscoveryEvidence, DiscoveryReport, RelationClaim, SemanticAsset, SemanticRelation,
-    ServiceGraph,
-};
-use serde_json::{json, Value};
-use std::env;
-use std::fs;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = env::args().skip(1);
-    let report_path = args.next().ok_or("missing report path")?;
-    let service_iri = args.next().ok_or("missing service IRI")?;
-    let report: DiscoveryReport = serde_json::from_str(&fs::read_to_string(report_path)?)?;
-    let graph = ServiceGraph::from_report(&report)?;
-    let service = graph.public_service(&service_iri)?;
-
-    let requirements = service
-        .requirements()
-        .into_iter()
-        .map(|requirement| {
-            let evidence_options = requirement
-                .evidence_options()
-                .into_iter()
-                .map(|option| {
-                    let evidence_types = option
-                        .evidence_types()
-                        .into_iter()
-                        .map(|evidence_type| {
-                            json!({
-                                "asset": asset_value(&graph, evidence_type.asset),
-                                "relations": relation_values(evidence_type.relations()),
-                                "claims": claim_values(evidence_type.claims()),
-                                "source_evidence": evidence_values(evidence_type.evidence()),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let missing_evidence_types = option
-                        .missing_evidence_types()
-                        .into_iter()
-                        .map(|evidence_type| asset_value(&graph, evidence_type.asset))
-                        .collect::<Vec<_>>();
-                    json!({
-                        "asset": asset_value(&graph, option.asset),
-                        "evidence_types": evidence_types,
-                        "missing_evidence_types": missing_evidence_types,
-                        "satisfiable": option.is_satisfiable(),
-                        "relations": relation_values(option.relations()),
-                        "claims": claim_values(option.claims()),
-                        "source_evidence": evidence_values(option.evidence()),
-                    })
-                })
-                .collect::<Vec<_>>();
-            let accepted_evidence_types = requirement
-                .accepted_evidence_types()
-                .into_iter()
-                .map(|evidence_type| {
-                    json!({
-                        "asset": asset_value(&graph, evidence_type.asset),
-                        "relations": relation_values(evidence_type.relations()),
-                        "claims": claim_values(evidence_type.claims()),
-                        "source_evidence": evidence_values(evidence_type.evidence()),
-                    })
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "asset": asset_value(&graph, requirement.asset),
-                "evidence_options": evidence_options,
-                "accepted_evidence_types": accepted_evidence_types,
-                "relations": relation_values(requirement.relations()),
-                "claims": claim_values(requirement.claims()),
-                "source_evidence": evidence_values(requirement.evidence()),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let accepted_evidence_types = service
-        .accepted_evidence_types()
-        .into_iter()
-        .map(|evidence_type| {
-            json!({
-                "asset": asset_value(&graph, evidence_type.asset),
-                "relations": relation_values(evidence_type.relations()),
-                "claims": claim_values(evidence_type.claims()),
-                "source_evidence": evidence_values(evidence_type.evidence()),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let evidence_provider_map = service
-        .accepted_evidence_types()
-        .into_iter()
-        .map(|evidence_type| {
-            let offerings = evidence_type
-                .evidence_offerings()
-                .into_iter()
-                .map(|offering| {
-                    let providers = offering
-                        .providers()
-                        .into_iter()
-                        .map(|provider| {
-                            json!({
-                                "asset": asset_value(&graph, provider.asset),
-                                "relations": relation_values(provider.relations()),
-                                "claims": claim_values(provider.claims()),
-                                "source_evidence": evidence_values(provider.evidence()),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let access_services = offering
-                        .access_services()
-                        .into_iter()
-                        .map(|service| {
-                            json!({
-                                "asset": asset_value(&graph, service.asset),
-                                "relations": relation_values(service.relations()),
-                                "claims": claim_values(service.claims()),
-                                "source_evidence": evidence_values(service.evidence()),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    json!({
-                        "asset": asset_value(&graph, offering.asset),
-                        "providers": providers,
-                        "access_services": access_services,
-                        "relations": relation_values(offering.relations()),
-                        "claims": claim_values(offering.claims()),
-                        "source_evidence": evidence_values(offering.evidence()),
-                    })
-                })
-                .collect::<Vec<_>>();
-            let providers = evidence_type
-                .providers()
-                .into_iter()
-                .map(|provider| {
-                    json!({
-                        "asset": asset_value(&graph, provider.asset),
-                        "relations": relation_values(provider.relations()),
-                        "claims": claim_values(provider.claims()),
-                        "source_evidence": evidence_values(provider.evidence()),
-                    })
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "evidence_type": asset_value(&graph, evidence_type.asset),
-                "providers": providers,
-                "offerings": offerings,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let channels = service
-        .channels()
-        .into_iter()
-        .map(|channel| {
-            json!({
-                "asset": asset_value(&graph, channel.asset),
-                "relations": relation_values(channel.relations()),
-                "claims": claim_values(channel.claims()),
-                "source_evidence": evidence_values(channel.evidence()),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let forms = service
-        .forms()
-        .into_iter()
-        .map(|form| {
-            json!({
-                "asset": asset_value(&graph, form.asset),
-                "relations": relation_values(form.relations()),
-                "claims": claim_values(form.claims()),
-                "source_evidence": evidence_values(form.evidence()),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let routes = graph
-        .routes_for_service(service.id())
-        .into_iter()
-        .map(|route| {
-            json!({
-                "route_kind": format!("{:?}", route.route_kind),
-                "service": asset_value(&graph, route.service),
-                "target": asset_value(&graph, route.target),
-                "relations": relation_values(route.relations()),
-                "claims": claim_values(route.claims()),
-                "source_evidence": evidence_values(route.evidence()),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let gaps = service
-        .gaps()
-        .into_iter()
-        .map(|gap| {
-            json!({
-                "asset_id": gap.asset_id,
-                "predicate": gap.predicate,
-                "message": gap.message,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let output = json!({
-        "service": asset_value(&graph, service.asset),
-        "channels": channels,
-        "requirements": requirements,
-        "accepted_evidence_types": accepted_evidence_types,
-        "evidence_provider_map": evidence_provider_map,
-        "forms": forms,
-        "routes": routes,
-        "gaps": gaps,
-        "report": {
-            "run_id": &report.run_id,
-            "schema_version": &report.schema_version,
-            "artifact_count": report.artifacts.len(),
-            "asset_count": report.assets.len(),
-            "relation_count": report.relations.len(),
-            "relation_claim_count": report.relation_claims.len(),
-        },
-    });
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
-}
-
-fn asset_value(graph: &ServiceGraph<'_>, asset: &SemanticAsset) -> Value {
-    let endpoint = graph.endpoint_url_for_asset(&asset.id);
-    json!({
-        "id": &asset.id,
-        "kind": &asset.kind,
-        "uri": &asset.uri,
-        "title": &asset.title,
-        "description": &asset.description,
-        "artifact_id": &asset.artifact_id,
-        "endpoint_url": endpoint.as_ref().map(|item| item.url),
-        "endpoint_relation_id": endpoint.as_ref().map(|item| item.relation_id),
-        "conforms_to": &asset.conforms_to,
-    })
-}
-
-fn relation_values(relations: &[&SemanticRelation]) -> Value {
-    json!(relations)
-}
-
-fn claim_values(claims: Vec<&RelationClaim>) -> Value {
-    json!(claims)
-}
-
-fn evidence_values(evidence: Vec<&DiscoveryEvidence>) -> Vec<Value> {
-    evidence
-        .into_iter()
-        .map(|item| {
-            json!({
-                "location": item.location(),
-                "evidence": item,
-            })
-        })
-        .collect()
-}
-
-'''.lstrip(),
-        encoding="utf-8",
-    )
-    return helper / "Cargo.toml"
-
-
-def run_atlas_service_graph(out: Path, report_path: Path) -> dict[str, Any]:
-    manifest = write_atlas_service_graph_helper(out)
     result = run(
         [
             "cargo",
             "run",
             "--quiet",
-            "--manifest-path",
-            str(manifest),
+            "-p",
+            "semantic-asset-discovery-cli",
+            "--bin",
+            "semantic-asset-discovery",
             "--",
-            str(report_path),
+            "service-view",
             SERVICE_IRI,
+            "--report",
+            str(report_path),
         ],
+        cwd=atlas,
     )
     return json.loads(result.stdout)
 
@@ -463,6 +245,23 @@ def save_named_text(out: Path, name: str, payload: str) -> Path:
     return path
 
 
+def save_headers(out: Path, index: int, label: str, result: HttpResult) -> Path:
+    selected = {
+        key.lower(): value
+        for key, value in result.headers.items()
+        if key.lower() in {"content-type", "link", "etag", "cache-control", "vary"}
+    }
+    return save(
+        out,
+        index,
+        label,
+        {
+            "status": result.status,
+            "headers": selected,
+        },
+    )
+
+
 def explain(message: str = "") -> None:
     if message:
         print(f"  explain: {message}")
@@ -470,10 +269,20 @@ def explain(message: str = "") -> None:
         print()
 
 
-def show_query(method: str, base_url: str, path: str, *, purpose: bool = False, body: Any | None = None) -> None:
+def show_query(
+    method: str,
+    base_url: str,
+    path: str,
+    *,
+    authenticated: bool = False,
+    purpose: bool = False,
+    body: Any | None = None,
+) -> None:
     url = urllib.parse.urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
     print(f"  query: {method} {url}")
     print(f"    header: x-request-id={CORRELATION_ID}")
+    if authenticated:
+        print("    header: Authorization=Bearer <redacted>")
     if purpose:
         print(f"    header: Data-Purpose={PURPOSE}")
     if body is not None:
@@ -660,7 +469,7 @@ def decode_jwt(token: str) -> dict[str, Any]:
     }
 
 
-def wait_zitadel_init(out: Path) -> Path:
+def wait_zitadel_init(_out: Path) -> dict[str, str]:
     compose("up", "-d", "zitadel-init")
     deadline = time.time() + int(os.environ.get("ZITADEL_WAIT_SECONDS", "180"))
     while time.time() < deadline:
@@ -668,15 +477,16 @@ def wait_zitadel_init(out: Path) -> Path:
         if cid:
             state = run(["docker", "inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", cid]).stdout.strip()
             if state == "exited 0":
-                env_path = out / "zitadel.env"
-                subprocess.run(
-                    ["docker", "compose", "-f", str(COMPOSE_FILE), "cp", "zitadel-init:/seed/zitadel.env", str(env_path)],
-                    cwd=ROOT,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return env_path
+                with tempfile.TemporaryDirectory(prefix="registry-lab-zitadel-") as temp_dir:
+                    env_path = Path(temp_dir) / "zitadel.env"
+                    subprocess.run(
+                        ["docker", "compose", "-f", str(COMPOSE_FILE), "cp", "zitadel-init:/seed/zitadel.env", str(env_path)],
+                        cwd=ROOT,
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    return parse_env_file(env_path)
             if state.startswith("exited ") and state != "exited 0":
                 logs = compose("logs", "--no-color", "zitadel-init").stderr
                 raise StoryError(f"zitadel-init failed ({state}): {logs}")
@@ -707,8 +517,37 @@ def psql(sql: str) -> None:
     )
 
 
+def wait_for_postgres_psql() -> None:
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE_FILE),
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            "postgres",
+            "-d",
+            "registry_lab",
+            "-c",
+            "SELECT 1",
+        ],
+        cwd=ROOT,
+        text=True,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def start_relay(config_path: Path, log_path: Path, port: int, env_updates: dict[str, str]) -> subprocess.Popen[str]:
     relay_dir = Path(os.environ.get("REGISTRY_RELAY_SOURCE_DIR", ROOT / "vendor" / "registry-relay"))
+    ensure_port_available(port)
     child_env = os.environ.copy()
     child_env.update(env_updates)
     log = log_path.open("w", encoding="utf-8")
@@ -727,6 +566,13 @@ def start_relay(config_path: Path, log_path: Path, port: int, env_updates: dict[
 
     wait_for(f"Relay on {port}", check_health, timeout=180)
     return proc
+
+
+def ensure_port_available(port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        if sock.connect_ex(("127.0.0.1", port)) == 0:
+            raise StoryError(f"port {port} is already in use; choose a different story port")
 
 
 def stop_process(proc: subprocess.Popen[str]) -> None:
@@ -852,10 +698,20 @@ datasets:
     return path
 
 
-def write_oidc_story_config(out: Path, port: int, issuer: str, audience: list[str]) -> Path:
-    path = out / "oidc-social-relay.yaml"
-    cache = out / "oidc-relay-cache"
+def write_oidc_story_config(
+    out: Path,
+    port: int,
+    issuer: str,
+    audience: list[str],
+    *,
+    scenario: str,
+    scope_claim: str,
+    scope_map: dict[str, str],
+) -> Path:
+    path = out / f"oidc-social-relay-{scenario}.yaml"
+    cache = out / f"oidc-relay-cache-{scenario}"
     audience_yaml = "\n".join(f"      - {json.dumps(value)}" for value in audience)
+    scope_map_yaml = "\n".join(f"      {json.dumps(key)}: {json.dumps(value)}" for key, value in scope_map.items())
     path.write_text(
         f"""server:
   bind: 127.0.0.1:{port}
@@ -879,10 +735,9 @@ auth:
     algorithms: [RS256, ES256, EdDSA]
     jwks_cache_ttl: 10m
     leeway: 60s
-    scope_claim: "urn:zitadel:iam:org:project:roles"
+    scope_claim: {json.dumps(scope_claim)}
     scope_map:
-      "social-registry-reader": "social_protection_registry:rows"
-      "social-registry-aggregate": "social_protection_registry:aggregate"
+{scope_map_yaml}
     allowed_clients: []
     token_types: [JWT, at+jwt]
 
@@ -932,6 +787,15 @@ datasets:
             - name: eligibility_band
               type: string
               nullable: false
+            - name: household_size
+              type: string
+              nullable: true
+            - name: active_members
+              type: string
+              nullable: true
+            - name: deceased_member_count
+              type: string
+              nullable: true
     entities:
       - name: household
         title: Household
@@ -975,7 +839,7 @@ def service_graph_names(items: list[Any]) -> str:
 
 
 def summarize_service_graph(graph: dict[str, Any]) -> None:
-    service = graph.get("service", {})
+    service = asset_view(graph.get("service", {}))
     explain(f"Atlas selected public service `{service.get('title')}` from `{service.get('uri')}`.")
     explain(f"Atlas found requirements: {service_graph_names(graph.get('requirements', []))}.")
     explain(f"Atlas found accepted evidence types: {service_graph_names(graph.get('accepted_evidence_types', []))}.")
@@ -1020,27 +884,56 @@ def requirement_evidence_map(graph: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
-def selected_evidence_type_iris(graph: dict[str, Any]) -> list[str]:
-    selected: list[str] = []
+def satisfiable_evidence_options(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
     for requirement in graph.get("requirements", []):
+        requirement_asset = requirement.get("asset", {})
         options = [
             option
             for option in requirement.get("evidence_options", [])
             if option.get("satisfiable") is True
         ]
         if options:
-            option = sorted(options, key=lambda item: len(item.get("evidence_types", [])))[0]
-            selected.extend(
-                str(evidence_type.get("asset", {}).get("uri"))
-                for evidence_type in option.get("evidence_types", [])
-                if evidence_type.get("asset", {}).get("uri")
-            )
+            for option_index, option in enumerate(options, start=1):
+                evidence_types = [
+                    evidence_type.get("asset", {})
+                    for evidence_type in option.get("evidence_types", [])
+                    if evidence_type.get("asset", {}).get("uri")
+                ]
+                groups.append(
+                    {
+                        "requirement": requirement_asset,
+                        "option": option.get("asset", {}),
+                        "option_index": option_index,
+                        "strategy": "combined" if len(evidence_types) == 1 else "granular_bundle",
+                        "evidence_type_iris": [str(item.get("uri")) for item in evidence_types],
+                        "evidence_types": evidence_types,
+                    }
+                )
             continue
-        selected.extend(
-            str(evidence_type.get("asset", {}).get("uri"))
+        evidence_types = [
+            evidence_type.get("asset", {})
             for evidence_type in requirement.get("accepted_evidence_types", [])
             if evidence_type.get("asset", {}).get("uri")
-        )
+        ]
+        if evidence_types:
+            groups.append(
+                {
+                    "requirement": requirement_asset,
+                    "option": {},
+                    "option_index": 1,
+                    "strategy": "accepted_evidence_fallback",
+                    "evidence_type_iris": [str(item.get("uri")) for item in evidence_types],
+                    "evidence_types": evidence_types,
+                }
+            )
+    return groups
+
+
+def selected_evidence_type_iris(graph: dict[str, Any]) -> list[str]:
+    selected: list[str] = []
+    for group in satisfiable_evidence_options(graph):
+        selected.extend(group.get("evidence_type_iris", []))
     return list(dict.fromkeys(selected))
 
 
@@ -1060,70 +953,85 @@ def service_form_sample() -> dict[str, Any]:
     }
 
 
-def validate_sample_payload(schema: dict[str, Any], payload: Any, path: str = "$") -> list[str]:
-    errors: list[str] = []
-    expected_type = schema.get("type")
-    if expected_type == "object":
-        if not isinstance(payload, dict):
-            return [f"{path} must be an object"]
-        for name in schema.get("required", []):
-            if name not in payload:
-                errors.append(f"{path}.{name} is required")
-        properties = schema.get("properties", {})
-        for key in payload:
-            if schema.get("additionalProperties") is False and key not in properties:
-                errors.append(f"{path}.{key} is not allowed")
-        for key, child_schema in properties.items():
-            if key in payload and isinstance(child_schema, dict):
-                errors.extend(validate_sample_payload(child_schema, payload[key], f"{path}.{key}"))
-    elif expected_type == "array":
-        if not isinstance(payload, list):
-            return [f"{path} must be an array"]
-        min_items = schema.get("minItems")
-        max_items = schema.get("maxItems")
-        if isinstance(min_items, int) and len(payload) < min_items:
-            errors.append(f"{path} must contain at least {min_items} item(s)")
-        if isinstance(max_items, int) and len(payload) > max_items:
-            errors.append(f"{path} must contain at most {max_items} item(s)")
-        item_schema = schema.get("items", {})
-        if isinstance(item_schema, dict):
-            for index, item in enumerate(payload):
-                errors.extend(validate_sample_payload(item_schema, item, f"{path}[{index}]"))
-    elif expected_type == "string" and not isinstance(payload, str):
-        errors.append(f"{path} must be a string")
-    elif expected_type == "boolean" and not isinstance(payload, bool):
-        errors.append(f"{path} must be a boolean")
-    elif expected_type == "integer" and not isinstance(payload, int):
-        errors.append(f"{path} must be an integer")
-    elif expected_type == "number" and not isinstance(payload, (int, float)):
-        errors.append(f"{path} must be a number")
-    return errors
+def validate_sample_payload(schema: dict[str, Any], payload: Any) -> list[str]:
+    validator_code = """
+import json
+import sys
+from jsonschema import Draft202012Validator
+
+schema = json.load(open(sys.argv[1], encoding="utf-8"))
+payload = json.load(open(sys.argv[2], encoding="utf-8"))
+validator = Draft202012Validator(schema)
+
+def path_for(error):
+    path = "$"
+    for part in error.absolute_path:
+        if isinstance(part, int):
+            path += f"[{part}]"
+        else:
+            path += f".{part}"
+    return path
+
+errors = sorted(validator.iter_errors(payload), key=lambda error: list(error.absolute_path))
+for error in errors:
+    print(f"{path_for(error)}: {error.message}")
+sys.exit(1 if errors else 0)
+"""
+    with tempfile.TemporaryDirectory(prefix="registry-lab-schema-") as tmp:
+        schema_path = Path(tmp) / "schema.json"
+        payload_path = Path(tmp) / "payload.json"
+        schema_path.write_text(json.dumps(schema), encoding="utf-8")
+        payload_path.write_text(json.dumps(payload), encoding="utf-8")
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "--quiet",
+                "--with",
+                "jsonschema",
+                "python",
+                "-c",
+                validator_code,
+                str(schema_path),
+                str(payload_path),
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    if result.returncode == 0:
+        return []
+    if result.returncode == 1:
+        return [line for line in result.stdout.splitlines() if line.strip()]
+    raise StoryError("JSON Schema validation command failed: " + (result.stderr.strip() or result.stdout.strip()))
 
 
-def witness_call_config(values: dict[str, str]) -> dict[str, dict[str, str]]:
+def witness_call_config(values: dict[str, str]) -> dict[str, dict[str, Any]]:
     return {
         "https://demo.example.gov/evidence-types/civil-child-status": {
             "token": env("CIVIL_EVIDENCE_CLIENT_BEARER", values),
-            "claim": "person-is-alive",
             "subject": "NID-1001",
+            "disclosure": "predicate",
             "route_label": "civil child status via civil Witness",
         },
         "https://demo.example.gov/evidence-types/household-support": {
             "token": env("SOCIAL_EVIDENCE_CLIENT_BEARER", values),
-            "claim": "beneficiary-active",
             "subject": "NID-1001",
+            "disclosure": "predicate",
             "route_label": "household support via social protection Witness",
         },
         "https://demo.example.gov/evidence-types/health-service-availability": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
-            "claim": "health-service-available",
             "subject": "NID-1001",
+            "disclosure": "predicate",
             "route_label": "health service availability via shared Witness",
         },
         "https://demo.example.gov/evidence-types/combined-support": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
-            "claim": "eligible-for-combined-support",
             "subject": "NID-1001",
+            "disclosure": "predicate",
             "route_label": "combined support via shared Witness",
         },
     }
@@ -1171,6 +1079,84 @@ def discovered_witness_routes(graph: dict[str, Any], values: dict[str, str]) -> 
             if evidence_iri in routes:
                 break
     return routes
+
+
+def claim_items(claims: Any) -> list[dict[str, Any]]:
+    if not isinstance(claims, dict):
+        return []
+    data = claims.get("data")
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def claim_evidence_type_iri(claim: dict[str, Any]) -> str:
+    top_level = claim.get("evidence_type_iri")
+    if top_level:
+        return str(top_level)
+    cccev = claim.get("cccev")
+    if isinstance(cccev, dict) and cccev.get("evidence_type_iri"):
+        return str(cccev["evidence_type_iri"])
+    return ""
+
+
+def claim_matches_route(claim: dict[str, Any], route: dict[str, Any]) -> bool:
+    operations = claim.get("operations") or {}
+    if operations.get("evaluate") is False:
+        return False
+    formats = claim.get("formats") or []
+    if formats and "application/vnd.registry-witness.claim-result+json" not in formats:
+        return False
+    disclosures = claim.get("disclosures") or []
+    disclosure = route.get("disclosure", "predicate")
+    if disclosures and disclosure not in disclosures:
+        return False
+    return True
+
+
+def select_advertised_claim(evidence_iri: str, route: dict[str, Any], claims: dict[str, Any]) -> dict[str, Any]:
+    advertised_items = claim_items(claims)
+    advertised = {str(item.get("id")): item for item in advertised_items if item.get("id")}
+    for claim in advertised_items:
+        claim_id = str(claim.get("id") or "")
+        if claim_evidence_type_iri(claim) != evidence_iri or not claim_matches_route(claim, route):
+            continue
+        return {
+            "evidence_type_iri": evidence_iri,
+            "claim_id": claim_id,
+            "claim": claim,
+            "matched_by": "evidence_type_iri",
+            "selection_note": (
+                "Selected by matching the CCCEV evidence type IRI advertised by live /claims "
+                "against the evidence type selected from the service catalogue."
+            ),
+        }
+
+    advertised_evidence_iris = sorted({claim_evidence_type_iri(item) for item in advertised_items if claim_evidence_type_iri(item)})
+    if advertised_evidence_iris:
+        raise StoryError(
+            f"No advertised Witness claim matched evidence type {evidence_iri}. "
+            f"Advertised evidence type IRIs: {advertised_evidence_iris}; advertised claims: {sorted(advertised)}"
+        )
+
+    for claim_id in route.get("claim_candidates", []):
+        claim = advertised.get(claim_id)
+        if not claim or not claim_matches_route(claim, route):
+            continue
+        return {
+            "evidence_type_iri": evidence_iri,
+            "claim_id": claim_id,
+            "claim": claim,
+            "matched_by": "fallback_candidate_claim_id",
+            "selection_note": (
+                "Fallback selected by scenario claim candidate because this Witness did not "
+                "advertise evidence type IRIs. The selected claim still had to be present in live /claims."
+            ),
+        }
+    raise StoryError(
+        f"No advertised Witness claim matched evidence type {evidence_iri}. "
+        f"Candidates: {route.get('claim_candidates', [])}; advertised: {sorted(advertised)}"
+    )
 
 
 def discovered_access_service_endpoints(graph: dict[str, Any]) -> set[str]:
@@ -1233,7 +1219,7 @@ def validate_service_first_route_provenance(graph: dict[str, Any], evaluations: 
 
 def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
     print("\nStory 1. Service-first discovery through Atlas")
-    explain("Publish the service catalogue, let Atlas analyze it, then use the Atlas service graph API to choose evidence routes.")
+    explain("Publish the service catalogue, let Atlas analyze it, then use Atlas service-view output to choose evidence routes.")
     require_service_first_dependencies()
     publish_static_metadata()
     compose(
@@ -1248,34 +1234,54 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
         "shared-eligibility-witness",
     )
 
-    wait_for("static metadata index", lambda: require(request("GET", STATIC_METADATA_URL, "/metadata/index.json"), 200, "static metadata index"))
-    wait_for("static CPSV-AP catalogue", lambda: require(request("GET", STATIC_METADATA_URL, STATIC_CPSV_PATH), 200, "static CPSV-AP catalogue"))
+    wait_for("api-catalog", lambda: require(request("GET", STATIC_METADATA_URL, API_CATALOG_PATH), 200, "api-catalog"))
 
-    show_query("GET", STATIC_METADATA_URL, "/metadata/index.json")
-    index = require(request("GET", STATIC_METADATA_URL, "/metadata/index.json"), 200, "static metadata index")
-    show_status(HttpResult(200, index, {}))
-    save(out, step, "service-metadata-index", index)
+    show_query("GET", STATIC_METADATA_URL, API_CATALOG_PATH)
+    api_catalog_response = request("GET", STATIC_METADATA_URL, API_CATALOG_PATH)
+    api_catalog = require(api_catalog_response, 200, "api-catalog")
+    show_status(api_catalog_response)
+    save(out, step, "service-api-catalog", api_catalog)
+    step += 1
+    save_headers(out, step, "service-api-catalog-headers", api_catalog_response)
     step += 1
 
-    show_query("GET", STATIC_METADATA_URL, STATIC_CPSV_PATH)
-    catalogue = require(request("GET", STATIC_METADATA_URL, STATIC_CPSV_PATH), 200, "static CPSV-AP catalogue")
-    show_status(HttpResult(200, catalogue, {}))
+    catalogue_index_path = api_catalog_service_catalogue_path(api_catalog)
+    wait_for("static CPSV-AP catalogue", lambda: require(request("GET", STATIC_METADATA_URL, catalogue_index_path), 200, "static CPSV-AP catalogue"))
+
+    show_query("GET", STATIC_METADATA_URL, catalogue_index_path)
+    catalogue_response = request("GET", STATIC_METADATA_URL, catalogue_index_path)
+    catalogue = require(catalogue_response, 200, "static CPSV-AP catalogue")
+    show_status(catalogue_response)
     catalogue_path = save(out, step, "service-catalogue", catalogue)
+    step += 1
+    save_headers(out, step, "service-catalogue-headers", catalogue_response)
     step += 1
 
     explain("Invoke the Atlas semantic discovery CLI over the CPSV-AP catalogue.")
-    report = run_atlas_analyze(catalogue_path)
+    report = run_atlas_analyze(catalogue_path, metadata_url(catalogue_index_path))
     report_path = save(out, step, "service-discovery-report", report)
     step += 1
 
-    explain("Invoke the Atlas Rust ServiceGraph API over the discovery report.")
-    graph = run_atlas_service_graph(out, report_path)
+    explain("Invoke the Atlas service-view command over the discovery report.")
+    graph = run_atlas_service_view(report_path)
     summarize_service_graph(graph)
     save(out, step, "service-graph-excerpt", graph)
     step += 1
 
     req_map = requirement_evidence_map(graph)
     save(out, step, "service-requirement-evidence-map", req_map)
+    step += 1
+
+    index_path = api_catalog_metadata_index_path(api_catalog)
+    wait_for("static metadata index", lambda: require(request("GET", STATIC_METADATA_URL, index_path), 200, "static metadata index"))
+
+    show_query("GET", STATIC_METADATA_URL, index_path)
+    index_response = request("GET", STATIC_METADATA_URL, index_path)
+    index = require(index_response, 200, "static metadata index")
+    show_status(index_response)
+    save(out, step, "service-metadata-index", index)
+    step += 1
+    save_headers(out, step, "service-metadata-index-headers", index_response)
     step += 1
 
     schema_path = form_schema_url(index, "health_linked_child_support_form")
@@ -1307,6 +1313,7 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
 
     provider_map = graph.get("evidence_provider_map", [])
     witness_routes = discovered_witness_routes(graph, values)
+    claim_discovery = []
     for evidence_iri, route in witness_routes.items():
         wait_for(
             f"discovered witness route for {evidence_iri}",
@@ -1316,6 +1323,29 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                 route["route_label"],
             ),
         )
+        show_query("GET", route["base_url"], "/claims")
+        claims = require(request("GET", route["base_url"], "/claims", route["token"]), 200, f"{route['route_label']} claims")
+        selected_claim = select_advertised_claim(evidence_iri, route, claims)
+        route["claim"] = selected_claim["claim_id"]
+        route["claim_metadata"] = selected_claim["claim"]
+        claim_discovery.append(
+            {
+                "evidence_type_iri": evidence_iri,
+                "route_label": route["route_label"],
+                "base_url": route["base_url"],
+                "discovered_endpoint_url": route["discovered_endpoint_url"],
+                "advertised_claim_ids": [item.get("id") for item in claim_items(claims)],
+                "advertised_evidence_type_iris": [
+                    claim_evidence_type_iri(item) for item in claim_items(claims) if claim_evidence_type_iri(item)
+                ],
+                "selected_claim_id": selected_claim["claim_id"],
+                "selected_claim": selected_claim["claim"],
+                "matched_by": selected_claim["matched_by"],
+                "selection_note": selected_claim["selection_note"],
+            }
+        )
+    save(out, step, "service-witness-claim-discovery", claim_discovery)
+    step += 1
     save(out, step, "service-evidence-provider-map", provider_map)
     step += 1
 
@@ -1330,61 +1360,72 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
     step += 1
 
     evaluations = []
-    selected_iris = selected_evidence_type_iris(graph)
+    option_groups = satisfiable_evidence_options(graph)
+    selected_iris = list(dict.fromkeys(iri for group in option_groups for iri in group.get("evidence_type_iris", [])))
     evidence_assets_by_iri = {
         item.get("asset", {}).get("uri"): item.get("asset", {})
         for item in graph.get("accepted_evidence_types", [])
         if item.get("asset", {}).get("uri")
     }
-    for evidence_iri in selected_iris:
-        asset = evidence_assets_by_iri.get(evidence_iri, {"uri": evidence_iri})
-        route = witness_routes.get(evidence_iri)
-        if not route:
+    for group in option_groups:
+        for evidence_iri in group.get("evidence_type_iris", []):
+            asset = evidence_assets_by_iri.get(evidence_iri, {"uri": evidence_iri})
+            route = witness_routes.get(evidence_iri)
+            if not route:
+                evaluations.append(
+                    {
+                        "requirement": group.get("requirement"),
+                        "option": group.get("option"),
+                        "option_index": group.get("option_index"),
+                        "option_strategy": group.get("strategy"),
+                        "evidence_type": asset,
+                        "status": "gap",
+                        "gap": f"No lab Witness route configured for evidence type {evidence_iri}",
+                    }
+                )
+                continue
+            payload = {
+                "subject": {"id": route["subject"], "id_type": "national_id"},
+                "claims": [route["claim"]],
+                "disclosure": route.get("disclosure", "predicate"),
+                "format": "application/vnd.registry-witness.claim-result+json",
+            }
+            explain(f"Call the discovered route for {route['route_label']} as part of the {group.get('strategy')} option.")
+            explain(f"Discovered endpoint `{route['discovered_endpoint_url']}` is used through host URL `{route['base_url']}`.")
+            show_query("POST", route["base_url"], "/claims/evaluate", purpose=True, body=payload)
+            response = require(
+                request(
+                    "POST",
+                    route["base_url"],
+                    "/claims/evaluate",
+                    route["token"],
+                    payload,
+                    {"Data-Purpose": PURPOSE},
+                ),
+                200,
+                route["route_label"],
+            )
+            show_status(HttpResult(200, response, {}))
             evaluations.append(
                 {
+                    "requirement": group.get("requirement"),
+                    "option": group.get("option"),
+                    "option_index": group.get("option_index"),
+                    "option_strategy": group.get("strategy"),
                     "evidence_type": asset,
-                    "status": "gap",
-                    "gap": f"No lab Witness route configured for evidence type {evidence_iri}",
+                    "route_label": route["route_label"],
+                    "claim": route["claim"],
+                    "claim_metadata": route.get("claim_metadata"),
+                    "subject": route["subject"],
+                    "discovered_endpoint_url": route["discovered_endpoint_url"],
+                    "host_access_url": route["base_url"],
+                    "offering": route.get("offering"),
+                    "access_service": route.get("access_service"),
+                    "providers": route.get("providers", []),
+                    "status": "evaluated",
+                    "response": response,
                 }
             )
-            continue
-        payload = {
-            "subject": {"id": route["subject"], "id_type": "national_id"},
-            "claims": [route["claim"]],
-            "disclosure": "predicate",
-            "format": "application/vnd.registry-witness.claim-result+json",
-        }
-        explain(f"Call the discovered route for {route['route_label']}.")
-        explain(f"Discovered endpoint `{route['discovered_endpoint_url']}` is used through host URL `{route['base_url']}`.")
-        show_query("POST", route["base_url"], "/claims/evaluate", purpose=True, body=payload)
-        response = require(
-            request(
-                "POST",
-                route["base_url"],
-                "/claims/evaluate",
-                route["token"],
-                payload,
-                {"Data-Purpose": PURPOSE},
-            ),
-            200,
-            route["route_label"],
-        )
-        show_status(HttpResult(200, response, {}))
-        evaluations.append(
-            {
-                "evidence_type": asset,
-                "route_label": route["route_label"],
-                "claim": route["claim"],
-                "subject": route["subject"],
-                "discovered_endpoint_url": route["discovered_endpoint_url"],
-                "host_access_url": route["base_url"],
-                "offering": route.get("offering"),
-                "access_service": route.get("access_service"),
-                "providers": route.get("providers", []),
-                "status": "evaluated",
-                "response": response,
-            }
-        )
 
     save(out, step, "service-witness-evaluations", evaluations)
     step += 1
@@ -1406,11 +1447,22 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
             "service_iri": SERVICE_IRI,
             "requirements": [entry.get("requirement", {}).get("uri") for entry in req_map],
             "selected_evidence_types": selected_iris,
+            "evaluated_options": [
+                {
+                    "requirement": group.get("requirement", {}).get("uri"),
+                    "option": group.get("option", {}).get("uri"),
+                    "option_index": group.get("option_index"),
+                    "strategy": group.get("strategy"),
+                    "evidence_type_iris": group.get("evidence_type_iris", []),
+                }
+                for group in option_groups
+            ],
             "accepted_evidence_types": [
                 item.get("asset", {}).get("uri")
                 for item in graph.get("accepted_evidence_types", [])
             ],
             "provider_route_count": sum(len(entry.get("providers", [])) for entry in provider_map),
+            "evaluated_option_count": len(option_groups),
             "witness_evaluation_count": len([item for item in evaluations if item.get("status") == "evaluated"]),
             "gap_count": len(graph.get("gaps", [])) + len(evaluation_gaps),
             "form_validation": "valid",
@@ -1428,9 +1480,10 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
 
 
 def story_postgres(out: Path, values: dict[str, str], step: int) -> int:
-    print("\nStory 2. Database-source cutover with live Postgres")
+    print("\nStory 3. Database-source cutover with live Postgres")
     explain("Start a Postgres-backed Relay from a generated config, then discover its published dataset before reading rows.")
     compose("up", "-d", "postgres")
+    wait_for("Postgres SQL shell", wait_for_postgres_psql)
     psql(
         """
 DROP SCHEMA IF EXISTS demo_story CASCADE;
@@ -1459,13 +1512,28 @@ INSERT INTO demo_story.beneficiaries VALUES
     proc = start_relay(config, out / "postgres-live-relay.log", port, relay_env)
     try:
         base = f"http://127.0.0.1:{port}"
-        show_query("GET", base, "/metadata")
+        show_query("HEAD", base, "/.well-known/api-catalog", authenticated=True)
+        api_catalog_head = request("HEAD", base, "/.well-known/api-catalog", token)
+        show_status(api_catalog_head)
+        if api_catalog_head.status != 200:
+            raise StoryError(f"postgres Relay api-catalog HEAD returned HTTP {api_catalog_head.status}")
+        save_headers(out, step, "postgres-live-api-catalog-head", api_catalog_head)
+        step += 1
+        show_query("GET", base, "/.well-known/api-catalog", authenticated=True)
+        api_catalog_response = request("GET", base, "/.well-known/api-catalog", token)
+        api_catalog = require(api_catalog_response, 200, "postgres Relay api-catalog")
+        show_status(api_catalog_response)
+        save(out, step, "postgres-live-api-catalog", api_catalog)
+        step += 1
+        save_headers(out, step, "postgres-live-api-catalog-headers", api_catalog_response)
+        step += 1
+        show_query("GET", base, "/metadata", authenticated=True)
         metadata = require(request("GET", base, "/metadata", token), 200, "postgres metadata")
         show_status(HttpResult(200, metadata, {}))
         summarize_postgres_metadata(metadata)
         save(out, step, "postgres-live-metadata", metadata)
         step += 1
-        show_query("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", purpose=True)
+        show_query("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", authenticated=True, purpose=True)
         before = require(
             request("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", token, headers={"Data-Purpose": PURPOSE}),
             200,
@@ -1477,7 +1545,7 @@ INSERT INTO demo_story.beneficiaries VALUES
         step += 1
         explain("Insert one operational row directly into Postgres, without restarting Relay or changing Relay config.")
         psql("INSERT INTO demo_story.beneficiaries VALUES (3, 'NID-1004', 'CHILD_SUPPORT', 110.00, 'active', '2026-01-12T00:00:00Z');")
-        show_query("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", purpose=True)
+        show_query("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", authenticated=True, purpose=True)
         after = require(
             request("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", token, headers={"Data-Purpose": PURPOSE}),
             200,
@@ -1509,10 +1577,9 @@ INSERT INTO demo_story.beneficiaries VALUES
 
 
 def story_oidc(out: Path, values: dict[str, str], step: int) -> int:
-    print("\nStory 3. Zitadel-issued JWT at a separate OIDC Relay node")
-    explain("Use Zitadel as the issuer, show OIDC discovery, mint a token, then let Relay verify it before scope authorization.")
-    zitadel_env_path = wait_zitadel_init(out)
-    zitadel_env = parse_env_file(zitadel_env_path)
+    print("\nStory 2. Zitadel-issued JWT at a separate OIDC Relay node")
+    explain("Use Zitadel as the issuer, show OIDC discovery, mint a token, then run explicit denied and authorized Relay policies.")
+    zitadel_env = wait_zitadel_init(out)
     issuer = zitadel_env["OIDC_ISSUER"]
     show_query("GET", issuer, "/.well-known/openid-configuration")
     issuer_discovery = require(request("GET", issuer, "/.well-known/openid-configuration"), 200, "zitadel OIDC discovery")
@@ -1533,44 +1600,105 @@ def story_oidc(out: Path, values: dict[str, str], step: int) -> int:
     if not audience:
         raise StoryError("Zitadel token did not include an audience")
     port = int(os.environ.get("REGISTRY_LAB_OIDC_STORY_PORT", "4316"))
-    config = write_oidc_story_config(out, port, zitadel_env["OIDC_ISSUER"], audience)
-    proc = start_relay(config, out / "oidc-social-relay.log", port, {"REGISTRY_RELAY_AUDIT_HASH_SECRET": env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values)})
+    save(out, step, "oidc-token-claims", decoded)
+    step += 1
+
+    denied_config = write_oidc_story_config(
+        out,
+        port,
+        zitadel_env["OIDC_ISSUER"],
+        audience,
+        scenario="denied",
+        scope_claim="urn:zitadel:iam:org:project:roles",
+        scope_map={
+            "social-registry-reader": "social_protection_registry:rows",
+            "social-registry-aggregate": "social_protection_registry:aggregate",
+        },
+    )
+    denied_proc = start_relay(
+        denied_config,
+        out / "oidc-social-relay-denied.log",
+        port,
+        {"REGISTRY_RELAY_AUDIT_HASH_SECRET": env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values)},
+    )
     try:
         base = f"http://127.0.0.1:{port}"
-        save(out, step, "oidc-token-claims", decoded)
-        step += 1
         show_query("GET", base, "/health")
-        health = require(request("GET", base, "/health"), 200, "oidc relay health")
+        health = require(request("GET", base, "/health"), 200, "oidc denied relay health")
         show_status(HttpResult(200, health, {}))
-        explain("Relay is running with the discovered issuer and accepted token audience.")
+        explain("Denied scenario: Relay verifies the JWT, then looks for role claims that this machine token does not carry.")
         save(out, step, "oidc-relay-health", health)
         step += 1
         show_query("GET", base, "/datasets/social_protection_registry/household?limit=1", purpose=True)
-        row = request("GET", base, "/datasets/social_protection_registry/household?limit=1", token, headers={"Data-Purpose": PURPOSE})
-        show_status(row)
-        if row.status not in {200, 403}:
-            raise StoryError(f"OIDC row read returned HTTP {row.status}, expected 200 or 403: {row.body}")
-        if row.status == 200:
-            summarize_row_read("OIDC-protected row read", row.body)
-            explain("JWT verification and scope authorization both succeeded.")
-        else:
-            code = row.body.get("code") if isinstance(row.body, dict) else None
-            explain(f"JWT verification succeeded, then local Relay authorization denied the row scope with problem code `{code}`.")
-        save(out, step, "oidc-relay-row-attempt", {"status": row.status, "body": row.body})
+        denied_row = request("GET", base, "/datasets/social_protection_registry/household?limit=1", token, headers={"Data-Purpose": PURPOSE})
+        show_status(denied_row)
+        if denied_row.status != 403:
+            raise StoryError(f"OIDC denied scenario returned HTTP {denied_row.status}, expected 403: {denied_row.body}")
+        code = denied_row.body.get("code") if isinstance(denied_row.body, dict) else None
+        explain(f"JWT verification succeeded, then local Relay authorization denied the row scope with problem code `{code}`.")
+        save(out, step, "oidc-relay-row-attempt", {"status": denied_row.status, "body": denied_row.body})
         step += 1
-        save(
-            out,
-            step,
-            "oidc-story",
-            {
-                "story": "Zitadel-issued JWT at a separate OIDC Relay node",
-                "auth_result": "jwt_verified_and_authorized" if row.status == 200 else "jwt_verified_scope_denied",
-                "note": "A 403 is expected for Zitadel machine tokens that do not emit mapped role claims.",
-            },
-        )
-        return step + 1
     finally:
-        stop_process(proc)
+        stop_process(denied_proc)
+
+    authorized_port = int(os.environ.get("REGISTRY_LAB_OIDC_AUTHORIZED_STORY_PORT", str(port + 2)))
+    authorized_config = write_oidc_story_config(
+        out,
+        authorized_port,
+        zitadel_env["OIDC_ISSUER"],
+        audience,
+        scenario="authorized",
+        scope_claim="aud",
+        scope_map={
+            audience[0]: "social_protection_registry:rows",
+        },
+    )
+    authorized_proc = start_relay(
+        authorized_config,
+        out / "oidc-social-relay-authorized.log",
+        authorized_port,
+        {"REGISTRY_RELAY_AUDIT_HASH_SECRET": env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values)},
+    )
+    try:
+        base = f"http://127.0.0.1:{authorized_port}"
+        show_query("GET", base, "/health")
+        authorized_health = require(request("GET", base, "/health"), 200, "oidc authorized relay health")
+        show_status(HttpResult(200, authorized_health, {}))
+        explain("Authorized scenario: the demo policy maps the verified token audience claim to the Relay row scope.")
+        save(out, step, "oidc-authorized-relay-health", authorized_health)
+        step += 1
+        show_query("GET", base, "/datasets/social_protection_registry/household?limit=1", purpose=True)
+        authorized_row = request("GET", base, "/datasets/social_protection_registry/household?limit=1", token, headers={"Data-Purpose": PURPOSE})
+        show_status(authorized_row)
+        if authorized_row.status != 200:
+            raise StoryError(f"OIDC authorized scenario returned HTTP {authorized_row.status}, expected 200: {authorized_row.body}")
+        summarize_row_read("OIDC-protected authorized row read", authorized_row.body)
+        explain("JWT verification and Relay scope authorization both succeeded.")
+        save(out, step, "oidc-authorized-row-attempt", {"status": authorized_row.status, "body": authorized_row.body})
+        step += 1
+    finally:
+        stop_process(authorized_proc)
+
+    save(
+        out,
+        step,
+        "oidc-story",
+        {
+            "story": "Zitadel-issued JWT at a separate OIDC Relay node",
+            "auth_result": "jwt_verified_scope_denied_then_authorized",
+            "denied_status": denied_row.status,
+            "authorized_status": authorized_row.status,
+            "denied_policy": {
+                "scope_claim": "urn:zitadel:iam:org:project:roles",
+                "expected_result": "403 because the demo machine token has no mapped role claim",
+            },
+            "authorized_policy": {
+                "scope_claim": "aud",
+                "expected_result": "200 because the demo policy maps the verified audience to social_protection_registry:rows",
+            },
+        },
+    )
+    return step + 1
 
 
 def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
@@ -1653,6 +1781,41 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
     return step + 1
 
 
+def known_demo_shortcuts() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "fixed_service_subject",
+            "shortcut": "The service story uses a fixed public-service IRI and seeded subjects.",
+            "why_it_is_ok_for_demo": "It keeps the walkthrough repeatable and lets each returned value be linked to the next call.",
+            "production_direction": "Add catalogue search and user/context selection before calling Atlas service-view.",
+        },
+        {
+            "id": "local_host_translation",
+            "shortcut": "Compose service hostnames are translated to host ports for the browser and script.",
+            "why_it_is_ok_for_demo": "The validation artifact proves each host URL came from a discovered access-service endpoint.",
+            "production_direction": "Use routable service URLs or a gateway so no local translation layer is needed.",
+        },
+        {
+            "id": "lab_evidence_type_identifiers",
+            "shortcut": "Witness claim selection uses lab-owned evidence type IRIs in the demo catalogue and Witness configs.",
+            "why_it_is_ok_for_demo": "The selected claim is now matched through live /claims CCCEV evidence metadata, but the identifiers are still demo namespace values.",
+            "production_direction": "Use governed CCCEV/OOTS identifiers and vocabulary lifecycle rules for production evidence types.",
+        },
+        {
+            "id": "seeded_policy_data",
+            "shortcut": "Postgres, Witness, OpenFn, and OIDC stories use seeded lab records and deterministic credentials.",
+            "why_it_is_ok_for_demo": "The APIs are live, but the data is stable enough for demos and regression checks.",
+            "production_direction": "Replace fixtures with governed tenant data, managed secrets, and environment-specific policy configuration.",
+        },
+        {
+            "id": "oidc_audience_mapping",
+            "shortcut": "The authorized OIDC branch maps the verified token audience directly to a Relay row scope.",
+            "why_it_is_ok_for_demo": "It proves the difference between token verification and local authorization using the same audience Relay already validates.",
+            "production_direction": "Prefer provider-issued role, group, entitlement, or authorization-detail claims for portable policy mapping.",
+        },
+    ]
+
+
 def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
     service_story = artifact_json(out, "service-first-story", {})
     service_graph = artifact_json(out, "service-graph-excerpt", {})
@@ -1662,8 +1825,10 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
     oidc_story = artifact_json(out, "oidc-story", {})
     oidc_claims = artifact_json(out, "oidc-token-claims", {})
     oidc_row = artifact_json(out, "oidc-relay-row-attempt", {})
+    oidc_authorized_row = artifact_json(out, "oidc-authorized-row-attempt", {})
     openfn_story = artifact_json(out, "openfn-story", {})
     openfn_eval = artifact_json(out, "openfn-date-of-birth-evaluation", {})
+    shortcuts = known_demo_shortcuts()
 
     case_file = {
         "artifact_type": "registry-lab.live-service-case-file.v1",
@@ -1711,7 +1876,8 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
             "oidc": {
                 "enabled": "oidc" in enabled,
                 "auth_result": oidc_story.get("auth_result"),
-                "row_attempt_status": oidc_row.get("status"),
+                "denied_row_attempt_status": oidc_row.get("status"),
+                "authorized_row_attempt_status": oidc_authorized_row.get("status"),
                 "issuer": oidc_claims.get("claims", {}).get("iss"),
                 "audience": oidc_claims.get("audience"),
             },
@@ -1782,14 +1948,20 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
                 "data_not_returned": "sidecar endpoint to host network",
             },
         ],
+        "known_demo_shortcuts": shortcuts,
         "artifact_index": {
+            "service_api_catalog": artifact_ref(out, "service-api-catalog"),
+            "service_api_catalog_headers": artifact_ref(out, "service-api-catalog-headers"),
             "service_metadata_index": artifact_ref(out, "service-metadata-index"),
+            "service_metadata_index_headers": artifact_ref(out, "service-metadata-index-headers"),
             "service_catalogue": artifact_ref(out, "service-catalogue"),
+            "service_catalogue_headers": artifact_ref(out, "service-catalogue-headers"),
             "service_discovery_report": artifact_ref(out, "service-discovery-report"),
             "service_graph_excerpt": artifact_ref(out, "service-graph-excerpt"),
             "service_requirement_evidence_map": artifact_ref(out, "service-requirement-evidence-map"),
             "service_form_validation": artifact_ref(out, "service-form-validation"),
             "service_evidence_provider_map": artifact_ref(out, "service-evidence-provider-map"),
+            "service_witness_claim_discovery": artifact_ref(out, "service-witness-claim-discovery"),
             "service_route_status": artifact_ref(out, "service-route-status"),
             "service_witness_evaluations": artifact_ref(out, "service-witness-evaluations"),
             "service_route_provenance_validation": artifact_ref(out, "service-route-provenance-validation"),
@@ -1799,6 +1971,7 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
             "oidc_issuer_discovery": artifact_ref(out, "oidc-issuer-discovery"),
             "oidc_token_claims": artifact_ref(out, "oidc-token-claims"),
             "oidc_row_attempt": artifact_ref(out, "oidc-relay-row-attempt"),
+            "oidc_authorized_row_attempt": artifact_ref(out, "oidc-authorized-row-attempt"),
             "openfn_discovery": artifact_ref(out, "openfn-witness-discovery"),
             "openfn_claims": artifact_ref(out, "openfn-witness-claims"),
             "openfn_evaluation": artifact_ref(out, "openfn-date-of-birth-evaluation"),
@@ -1813,8 +1986,8 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         {
             "standard_or_pattern": "CPSV-AP service catalogue",
             "demonstrated_by": "Service-first discovery through Atlas",
-            "what_to_check": "The static metadata publisher exposes /metadata/cpsv-ap and Atlas discovers the public service from it.",
-            "artifacts": [artifact_ref(out, "service-catalogue"), artifact_ref(out, "service-discovery-report")],
+            "what_to_check": "The static metadata publisher exposes /.well-known/api-catalog as a Linkset document, points directly to the CPSV-AP service catalogue, captures discovery response headers when present, and Atlas discovers the public service from that catalogue.",
+            "artifacts": [artifact_ref(out, "service-api-catalog"), artifact_ref(out, "service-api-catalog-headers"), artifact_ref(out, "service-metadata-index"), artifact_ref(out, "service-metadata-index-headers"), artifact_ref(out, "service-catalogue"), artifact_ref(out, "service-catalogue-headers"), artifact_ref(out, "service-discovery-report")],
             "status": "demonstrated" if "service_first" in enabled else "skipped",
         },
         {
@@ -1827,8 +2000,8 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         {
             "standard_or_pattern": "Service-context evidence evaluation",
             "demonstrated_by": "Service-first discovery through Atlas",
-            "what_to_check": "Witness calls happen after the public service, requirement, and evidence type context is established.",
-            "artifacts": [artifact_ref(out, "service-requirement-evidence-map"), artifact_ref(out, "service-witness-evaluations")],
+            "what_to_check": "Witness calls happen after the api-catalog, CPSV-AP PublicService, CCCEV requirement/evidence option, BRegDCAT/DCAT access service, and advertised Witness claim context is established.",
+            "artifacts": [artifact_ref(out, "service-requirement-evidence-map"), artifact_ref(out, "service-witness-claim-discovery"), artifact_ref(out, "service-witness-evaluations")],
             "status": "demonstrated" if "service_first" in enabled else "skipped",
         },
         {
@@ -1876,8 +2049,8 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         {
             "standard_or_pattern": "JWT access token validation",
             "demonstrated_by": "OIDC row attempt",
-            "what_to_check": "Issuer and audience are accepted before the request reaches scope authorization.",
-            "artifacts": [artifact_ref(out, "oidc-relay-row-attempt")],
+            "what_to_check": "Issuer and audience are accepted before the request reaches scope authorization in denied and authorized scenarios.",
+            "artifacts": [artifact_ref(out, "oidc-relay-row-attempt"), artifact_ref(out, "oidc-authorized-row-attempt")],
             "status": "demonstrated" if "oidc" in enabled else "skipped",
         },
         {
@@ -1885,6 +2058,13 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
             "demonstrated_by": "OIDC scope denial when machine token has no mapped row scope",
             "what_to_check": "A verified token can still fail authorization with a stable problem code.",
             "artifacts": [artifact_ref(out, "oidc-relay-row-attempt")],
+            "status": "demonstrated" if "oidc" in enabled else "skipped",
+        },
+        {
+            "standard_or_pattern": "Relay local authorization success",
+            "demonstrated_by": "OIDC audience-mapped demo policy",
+            "what_to_check": "The same verified token can read rows when local Relay policy maps a verified claim to the required dataset scope.",
+            "artifacts": [artifact_ref(out, "oidc-authorized-row-attempt"), artifact_ref(out, "oidc-story")],
             "status": "demonstrated" if "oidc" in enabled else "skipped",
         },
         {
@@ -1925,6 +2105,10 @@ def write_briefing(out: Path, case_file: dict[str, Any], conformance: dict[str, 
         f"- {entry['standard_or_pattern']}: {entry['what_to_check']} Artifact(s): {', '.join(entry['artifacts'])}."
         for entry in conformance["entries"]
     )
+    shortcuts = "\n".join(
+        f"- {item['shortcut']} Demo reason: {item['why_it_is_ok_for_demo']} Production direction: {item['production_direction']}"
+        for item in case_file.get("known_demo_shortcuts", [])
+    )
     briefing = f"""# Registry Lab Live-Service Briefing
 
 Correlation ID: `{CORRELATION_ID}`
@@ -1933,9 +2117,9 @@ Correlation ID: `{CORRELATION_ID}`
 
 This run demonstrates four live-service patterns in one lab:
 
-1. Atlas discovers a CPSV-AP public service, requirements, accepted evidence types, and provider routes.
-2. A Registry Relay reads a live Postgres table and sees a new operational row without restart.
-3. A separate Relay verifies a real Zitadel-issued JWT, then applies Relay scope authorization.
+1. Atlas follows api-catalog to CPSV-AP PublicService metadata, then resolves CCCEV evidence options and BRegDCAT/DCAT access services before Witness claim discovery and evaluation.
+2. A separate Relay verifies a real Zitadel-issued JWT, then applies Relay scope authorization.
+3. A Registry Relay reads a live Postgres table and sees a new operational row without restart.
 4. Registry Witness evaluates an evidence claim through a private OpenFn sidecar instead of exposing the adapter directly.
 
 ## Case Result
@@ -1946,10 +2130,19 @@ This run demonstrates four live-service patterns in one lab:
 - Postgres rows before insert: `{story_results['postgres'].get('before_count')}`
 - Postgres rows after insert: `{story_results['postgres'].get('after_count')}`
 - OIDC result: `{story_results['oidc'].get('auth_result')}`
-- OIDC row attempt status: `{story_results['oidc'].get('row_attempt_status')}`
+- OIDC denied row attempt status: `{story_results['oidc'].get('denied_row_attempt_status')}`
+- OIDC authorized row attempt status: `{story_results['oidc'].get('authorized_row_attempt_status')}`
 - OpenFn claim: `{story_results['openfn'].get('claim_id')}`
 - OpenFn value: `{story_results['openfn'].get('value')}`
 - OpenFn source count: `{story_results['openfn'].get('source_count')}`
+
+## Service-First Standards Chain
+
+`api-catalog -> CPSV-AP PublicService -> CCCEV requirement/evidence option -> BRegDCAT/DCAT access service -> Witness claim discovery -> evaluation`
+
+The interactive page also shows relevant HTTP response headers for discovery
+steps when the runner captured header artifacts, including content type, Link,
+ETag, cache-control, and Vary headers.
 
 ## Topology
 
@@ -1998,7 +2191,7 @@ sequenceDiagram
   C->>Z: OAuth2 client_credentials token request
   C->>O: GET protected row with Zitadel JWT
   O->>Z: OIDC discovery and JWKS fetch
-  O-->>C: 200 or 403 after JWT verification
+  O-->>C: 403 for role policy, 200 for audience-mapped demo policy
   C->>W: Evaluate date-of-birth claim
   W->>S: Private sidecar source lookup
   S-->>W: Normalized registry data
@@ -2009,10 +2202,15 @@ sequenceDiagram
 
 - `case-file.json`: the executive case summary, actors, subject references, trust boundaries, and artifact index.
 - `conformance-map.json`: the standards and integration patterns demonstrated by each artifact.
+- `{artifact_ref(out, 'service-api-catalog-headers')}`, `{artifact_ref(out, 'service-catalogue-headers')}`, and `{artifact_ref(out, 'service-metadata-index-headers')}`: captured discovery response headers when exposed by the service.
 - `{artifact_ref(out, 'service-route-provenance-validation')}`: proof that Witness dispatch used discovered access-service endpoints.
 - `{artifact_ref(out, 'postgres-live-before-insert')}` and `{artifact_ref(out, 'postgres-live-after-insert')}`: the live database change.
-- `{artifact_ref(out, 'oidc-issuer-discovery')}`, `{artifact_ref(out, 'oidc-token-claims')}`, and `{artifact_ref(out, 'oidc-relay-row-attempt')}`: issuer discovery, token verification, then authorization.
+- `{artifact_ref(out, 'oidc-issuer-discovery')}`, `{artifact_ref(out, 'oidc-token-claims')}`, `{artifact_ref(out, 'oidc-relay-row-attempt')}`, and `{artifact_ref(out, 'oidc-authorized-row-attempt')}`: issuer discovery, token verification, denied authorization, then authorized access under an explicit demo policy.
 - `{artifact_ref(out, 'openfn-witness-discovery')}`, `{artifact_ref(out, 'openfn-witness-claims')}`, and `{artifact_ref(out, 'openfn-date-of-birth-evaluation')}`: Witness discovery, claim discovery, then OpenFn-backed evidence result.
+
+## Known Demo Shortcuts
+
+{shortcuts}
 
 ## Trust Boundary Notes
 
@@ -2074,6 +2272,18 @@ def first_eval_result(evaluation: Any) -> dict[str, Any]:
     return results[0] if results and isinstance(results[0], dict) else {}
 
 
+def header_value(headers_artifact: Any, name: str) -> str:
+    headers = headers_artifact.get("headers", {}) if isinstance(headers_artifact, dict) else {}
+    return str(headers.get(name.lower(), ""))
+
+
+def header_chip(headers_artifact: Any, name: str, suffix: str, *, tone: str = "neutral") -> str:
+    value = header_value(headers_artifact, name)
+    if not value:
+        return ""
+    return chip(name, value, tone=tone) + suffix
+
+
 def html_step(
     *,
     index: int,
@@ -2086,8 +2296,26 @@ def html_step(
     artifact: str,
     payload: Any,
     accent: str,
+    headers_artifact: Any | None = None,
 ) -> str:
-    returns_html = "\n".join(f"<li>{item}</li>" for item in returns)
+    returns_html = "\n".join(f"<li>{item}</li>" for item in returns if item)
+    headers_html = ""
+    if isinstance(headers_artifact, dict) and headers_artifact.get("headers"):
+        header_status = headers_artifact.get("status")
+        status_row = f"<li>{chip('HTTP', header_status, tone='neutral')}</li>" if header_status else ""
+        header_rows = "\n".join(
+            f"<li>{chip(str(key), str(value), tone='neutral')}</li>"
+            for key, value in headers_artifact.get("headers", {}).items()
+        )
+        headers_html = f"""
+        <div class="headers-box">
+          <h4>Relevant Response Headers</h4>
+          <ul class="result-list">
+            {status_row}
+            {header_rows}
+          </ul>
+        </div>
+"""
     return f"""
       <article class="step-card" id="step-{index}" data-accent="{html_escape(accent)}">
         <div class="step-head">
@@ -2097,7 +2325,7 @@ def html_step(
             <p>{html_escape(hypothesis)}</p>
           </div>
         </div>
-        <div class="request-line">{request_label}</div>
+        <div class="request-line">{html_escape(request_label)}</div>
         <div class="step-grid">
           <section>
             <h4>Returned API Result</h4>
@@ -2112,6 +2340,7 @@ def html_step(
             <p>{proof}</p>
           </section>
         </div>
+        {headers_html}
         <details>
           <summary>Show returned JSON from {html_escape(artifact)}</summary>
           <pre><code>{json_block(payload)}</code></pre>
@@ -2121,17 +2350,27 @@ def html_step(
 
 
 def write_interactive_story_html(out: Path, case_file: dict[str, Any], conformance: dict[str, Any]) -> None:
+    service_api_catalog = artifact_json(out, "service-api-catalog", {})
+    service_api_catalog_headers = artifact_json(out, "service-api-catalog-headers", {})
+    service_metadata_index = artifact_json(out, "service-metadata-index", {})
+    service_metadata_index_headers = artifact_json(out, "service-metadata-index-headers", {})
     service_catalogue = artifact_json(out, "service-catalogue", {})
+    service_catalogue_headers = artifact_json(out, "service-catalogue-headers", {})
     service_graph = artifact_json(out, "service-graph-excerpt", {})
     service_provider_map = artifact_json(out, "service-evidence-provider-map", [])
+    service_claim_discovery = artifact_json(out, "service-witness-claim-discovery", [])
     service_evaluations = artifact_json(out, "service-witness-evaluations", [])
     service_route_validation = artifact_json(out, "service-route-provenance-validation", {})
     postgres_metadata = artifact_json(out, "postgres-live-metadata", {})
+    postgres_api_catalog = artifact_json(out, "postgres-live-api-catalog", {})
+    postgres_api_catalog_head = artifact_json(out, "postgres-live-api-catalog-head", {})
+    postgres_api_catalog_headers = artifact_json(out, "postgres-live-api-catalog-headers", {})
     postgres_before = artifact_json(out, "postgres-live-before-insert", {})
     postgres_after = artifact_json(out, "postgres-live-after-insert", {})
     oidc_discovery = artifact_json(out, "oidc-issuer-discovery", {})
     oidc_claims = artifact_json(out, "oidc-token-claims", {})
     oidc_attempt = artifact_json(out, "oidc-relay-row-attempt", {})
+    oidc_authorized_attempt = artifact_json(out, "oidc-authorized-row-attempt", {})
     openfn_discovery = artifact_json(out, "openfn-witness-discovery", {})
     openfn_claims = artifact_json(out, "openfn-witness-claims", {})
     openfn_evaluation = artifact_json(out, "openfn-date-of-birth-evaluation", {})
@@ -2149,7 +2388,8 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     openfn_result = first_eval_result(openfn_evaluation)
     openfn_provenance = openfn_result.get("provenance", {}) if isinstance(openfn_result, dict) else {}
     row_problem = oidc_attempt.get("body", {}).get("code") if isinstance(oidc_attempt.get("body"), dict) else None
-    service = service_graph.get("service", {}) if isinstance(service_graph, dict) else {}
+    authorized_row_count = data_count(oidc_authorized_attempt.get("body", {}) if isinstance(oidc_authorized_attempt, dict) else {})
+    service = asset_view(service_graph.get("service", {})) if isinstance(service_graph, dict) else {}
     service_requirements = len(service_graph.get("requirements", [])) if isinstance(service_graph, dict) else 0
     service_evidence_types = len(service_graph.get("accepted_evidence_types", [])) if isinstance(service_graph, dict) else 0
     service_provider_count = sum(len(entry.get("providers", [])) for entry in service_provider_map if isinstance(entry, dict))
@@ -2158,6 +2398,17 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     checked_routes = service_route_validation.get("checked_routes", []) if isinstance(service_route_validation, dict) else []
     first_checked_route = checked_routes[0] if checked_routes and isinstance(checked_routes[0], dict) else {}
     first_service_eval = next((item for item in service_evaluations if isinstance(item, dict) and item.get("status") == "evaluated"), {})
+    first_claim_selection = service_claim_discovery[0] if service_claim_discovery and isinstance(service_claim_discovery[0], dict) else {}
+    api_catalog_index_path = api_catalog_metadata_index_path(service_api_catalog) if isinstance(service_api_catalog, dict) and service_api_catalog.get("linkset") else ""
+    api_catalog_catalogue_path = api_catalog_service_catalogue_path(service_api_catalog) if isinstance(service_api_catalog, dict) and service_api_catalog.get("linkset") else ""
+    first_requirement = service_graph.get("requirements", [{}])[0] if isinstance(service_graph, dict) and service_graph.get("requirements") else {}
+    first_requirement_asset = asset_view(first_requirement.get("asset", {})) if isinstance(first_requirement, dict) else {}
+    first_option = first_requirement.get("evidence_options", [{}])[0] if isinstance(first_requirement, dict) and first_requirement.get("evidence_options") else {}
+    first_option_asset = asset_view(first_option.get("asset", {})) if isinstance(first_option, dict) else {}
+    first_option_evidence = first_option.get("evidence_types", [{}])[0] if isinstance(first_option, dict) and first_option.get("evidence_types") else {}
+    first_option_evidence_asset = asset_view(first_option_evidence.get("asset", {})) if isinstance(first_option_evidence, dict) else {}
+    first_access_service = asset_view(first_service_eval.get("access_service", {})) if isinstance(first_service_eval, dict) else {}
+    first_access_service_label = first_access_service.get("title") or first_checked_route.get("discovered_endpoint_url")
 
     step_cards: list[tuple[int, str, str]] = []
 
@@ -2166,15 +2417,42 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
 
     add_step(
         1,
-        "Service catalogue",
+        "Well-known",
         html_step(
             index=1,
-            title="Start from the public service catalogue",
-            hypothesis="The client begins with CPSV-AP service metadata, not a registry row endpoint.",
-            request_label="GET http://127.0.0.1:4331/metadata/cpsv-ap",
+            title="Bootstrap API catalogue discovery",
+            hypothesis="The client starts at the standards-facing api-catalog and uses returned links for the next calls.",
+            request_label="GET http://127.0.0.1:4331/.well-known/api-catalog",
+            returns=[
+                chip("format", "Linkset JSON", tone="blue")
+                + " identifies the API catalogue document.",
+                header_chip(service_api_catalog_headers, "content-type", " is returned by the HTTP response.", tone="blue"),
+                header_chip(service_api_catalog_headers, "link", " advertises the api-catalog relation."),
+                chip("metadata_index", api_catalog_index_path, tone="blue", value_id="value-index")
+                + " points to the metadata index.",
+                chip("cpsv-ap", api_catalog_catalogue_path, tone="blue", value_id="value-cpsv")
+                + " points directly to the service catalogue.",
+            ],
+            used_next="The returned CPSV-AP service catalogue URL becomes the next GET request. The metadata index is used later for the form schema.",
+            proof="The first request is a standards-facing API catalogue, not a Lab-specific discovery document or a hard-coded CPSV file path.",
+            artifact=artifact_ref(out, "service-api-catalog"),
+            payload=service_api_catalog,
+            accent="blue",
+            headers_artifact=service_api_catalog_headers,
+        ),
+    )
+    add_step(
+        2,
+        "Service catalogue",
+        html_step(
+            index=2,
+            title="Fetch the public service catalogue",
+            hypothesis="The api-catalog link leads to CPSV-AP PublicService metadata, not a registry row endpoint.",
+            request_label=f"GET http://127.0.0.1:4331{api_catalog_catalogue_path or '/metadata/cpsv-ap.jsonld'}",
             returns=[
                 chip("graph nodes", service_catalogue_nodes, tone="blue")
                 + " are published by the static metadata service.",
+                header_chip(service_catalogue_headers, "content-type", " identifies the JSON-LD catalogue payload.", tone="blue"),
                 chip("service", service.get("title"), tone="blue", value_id="value-service")
                 + " is the selected public service.",
             ],
@@ -2183,21 +2461,28 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             artifact=artifact_ref(out, "service-catalogue"),
             payload=service_catalogue,
             accent="blue",
+            headers_artifact=service_catalogue_headers,
         ),
     )
     add_step(
-        2,
+        3,
         "Atlas graph",
         html_step(
-            index=2,
+            index=3,
             title="Resolve requirements and evidence with Atlas",
-            hypothesis="Atlas should derive requirements, evidence types, providers, and access services from the catalogue.",
-            request_label="semantic-asset-discovery analyze -> Atlas ServiceGraph",
+            hypothesis="Atlas should derive CCCEV requirements, evidence options, providers, and access services from the PublicService.",
+            request_label="semantic-asset-discovery analyze -> semantic-asset-discovery service-view",
             returns=[
                 chip("requirements", service_requirements, tone="green")
                 + " are linked with CCCEV evidence semantics.",
+                chip("first requirement", first_requirement_asset.get("title"), tone="green")
+                + " is held by the PublicService.",
+                chip("first option", first_option_asset.get("title"), tone="green")
+                + " is a satisfiable CCCEV evidence option.",
                 chip("evidence types", service_evidence_types, tone="green")
                 + " are accepted by the public service.",
+                chip("example evidence", first_option_evidence_asset.get("title"), tone="neutral")
+                + " is specified by that option.",
                 chip("providers", service_provider_count, tone="neutral")
                 + " are associated with the accepted evidence.",
             ],
@@ -2209,17 +2494,40 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        3,
+        4,
+        "Metadata index",
+        html_step(
+            index=4,
+            title="Read the manifest index for form metadata",
+            hypothesis="The index should provide the wider artifact inventory, including the form schema used for validation.",
+            request_label=f"GET http://127.0.0.1:4331{api_catalog_index_path or '/metadata/index.json'}",
+            returns=[
+                chip("form schemas", len(service_metadata_index.get("form_schemas", [])) if isinstance(service_metadata_index, dict) else 0, tone="blue")
+                + " are declared in the index.",
+                header_chip(service_metadata_index_headers, "content-type", " identifies the index payload."),
+                chip("service catalogues", len(service_metadata_index.get("service_catalogues", [])) if isinstance(service_metadata_index, dict) else 0, tone="neutral")
+                + " remain available for catalogue inventory.",
+            ],
+            used_next="The form schema URL from the index is fetched and used to validate the sample payload.",
+            proof="The index is used for inventory and validation metadata, while CPSV-AP discovery came directly from the api-catalog Linkset.",
+            artifact=artifact_ref(out, "service-metadata-index"),
+            payload=service_metadata_index,
+            accent="blue",
+            headers_artifact=service_metadata_index_headers,
+        ),
+    )
+    add_step(
+        5,
         "Access services",
         html_step(
-            index=3,
+            index=5,
             title="Choose Witness endpoints from access services",
-            hypothesis="Witness dispatch should come from discovered access-service endpoints, with only local Compose hostname translation for the demo.",
+            hypothesis="Witness dispatch should come from BRegDCAT/DCAT-style access-service endpoints, with only local Compose hostname translation for the demo.",
             request_label="Atlas evidence provider map -> access_service.endpoint_url",
             returns=[
                 chip("checked routes", service_route_validation.get("checked_route_count"), tone="green")
                 + " passed route provenance validation.",
-                chip("discovered", first_checked_route.get("discovered_endpoint_url"), tone="blue")
+                chip("access service", first_access_service_label, tone="blue")
                 + " came from Atlas access-service discovery.",
                 chip("host URL", first_checked_route.get("host_access_url"), tone="neutral")
                 + " is the local demo translation used for HTTP.",
@@ -2235,33 +2543,67 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        4,
+        6,
         "Witness evaluation",
         html_step(
-            index=4,
-            title="Evaluate evidence through the discovered route",
-            hypothesis="The service context should lead to Witness evaluation after evidence type and access service selection.",
-            request_label="POST {host_access_url}/claims/evaluate",
+            index=6,
+            title="Discover claims and evaluate evidence",
+            hypothesis="The service context should lead to Witness claim discovery before evaluation.",
+            request_label="GET {host_access_url}/claims -> POST {host_access_url}/claims/evaluate",
             returns=[
+                chip("selected claim", first_claim_selection.get("selected_claim_id"), tone="green")
+                + " is selected only after it appears in /claims.",
+                chip("matched by", first_claim_selection.get("matched_by"), tone="green")
+                + " links the service evidence type to Witness claim metadata.",
                 chip("evaluations", service_eval_count, tone="green")
-                + " were called through discovered access-service endpoints.",
-                chip("claim", first_service_eval.get("claim"), tone="green")
-                + " is the requested Witness claim.",
+                + " cover every satisfiable option, including granular and combined routes.",
                 chip("subject", first_service_eval.get("subject"), tone="neutral")
                 + " is the service-review subject.",
             ],
             used_next="The evaluation count and validation result become the service-first assurance result.",
-            proof="The demo dispatches to Witness only after the public service graph has selected the evidence route.",
+            proof="The standards chain is complete: api-catalog -> CPSV-AP PublicService -> CCCEV option -> BRegDCAT/DCAT access service -> Witness claim discovery -> evaluation.",
             artifact=artifact_ref(out, "service-witness-evaluations"),
-            payload=service_evaluations,
+            payload={
+                "claim_discovery": service_claim_discovery,
+                "evaluations": service_evaluations,
+            },
             accent="green",
         ),
     )
     add_step(
-        5,
+        7,
+        "Relay api-catalog",
+        html_step(
+            index=7,
+            title="Discover a live Relay API catalogue",
+            hypothesis="A runtime Relay should expose the same standards-facing api-catalog pattern as the static metadata publisher.",
+            request_label="HEAD/GET http://127.0.0.1:4315/.well-known/api-catalog with redacted bearer authentication",
+            returns=[
+                chip("HEAD status", postgres_api_catalog_head.get("status"), tone="blue")
+                + " proves discovery metadata is available without downloading the body.",
+                chip("content-type", header_value(postgres_api_catalog_headers, "content-type"), tone="blue")
+                + " identifies the RFC 9727 Linkset response.",
+                chip("link", header_value(postgres_api_catalog_headers, "link"), tone="neutral")
+                + " advertises the api-catalog relation.",
+                chip("items", len((postgres_api_catalog.get("linkset") or [{}])[0].get("item", [])) if isinstance(postgres_api_catalog, dict) else 0, tone="green")
+                + " describe live Relay metadata routes.",
+            ],
+            used_next="The authenticated live api-catalog points clients to Relay metadata, OpenAPI, and catalogue resources before any dataset row is read.",
+            proof="The Relay can use the same standards-facing mechanism as the static service catalogue while still enforcing API-key policy for restricted live metadata.",
+            artifact=artifact_ref(out, "postgres-live-api-catalog"),
+            payload={
+                "head": postgres_api_catalog_head,
+                "get": postgres_api_catalog,
+            },
+            accent="blue",
+            headers_artifact=postgres_api_catalog_headers,
+        ),
+    )
+    add_step(
+        8,
         "Postgres metadata",
         html_step(
-            index=5,
+            index=8,
             title="Discover the live Postgres Relay shape",
             hypothesis="Before reading data, the client discovers what dataset and entity the Relay publishes.",
             request_label="GET http://127.0.0.1:4315/metadata",
@@ -2284,10 +2626,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        6,
+        9,
         "Row baseline",
         html_step(
-            index=6,
+            index=9,
             title="Read the discovered live entity",
             hypothesis="The discovered dataset/entity path should return the live table projection.",
             request_label=f"GET http://127.0.0.1:4315/datasets/{dataset_id}/{entity_name}?limit=10",
@@ -2305,10 +2647,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        7,
+        10,
         "Live source proof",
         html_step(
-            index=7,
+            index=10,
             title="Prove the source is live",
             hypothesis="If Relay reads a live Postgres projection, a new source row appears without restarting Relay.",
             request_label=f"GET http://127.0.0.1:4315/datasets/{dataset_id}/{entity_name}?limit=10",
@@ -2326,10 +2668,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        8,
+        11,
         "OIDC discovery",
         html_step(
-            index=8,
+            index=11,
             title="Discover the OIDC issuer",
             hypothesis="Relay should validate tokens from issuer metadata and JWKS, not a copied signing key.",
             request_label="GET http://localhost:4380/.well-known/openid-configuration",
@@ -2347,10 +2689,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        9,
+        12,
         "Token claims",
         html_step(
-            index=9,
+            index=12,
             title="Mint and inspect a non-secret token view",
             hypothesis="The access token should carry issuer and audience claims that Relay can verify.",
             request_label="POST http://localhost:4380/oauth/v2/token",
@@ -2370,11 +2712,11 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        10,
-        "Relay authorization",
+        13,
+        "Denied authorization",
         html_step(
-            index=10,
-            title="Use the token against Relay authorization",
+            index=13,
+            title="Verify token but deny missing scope",
             hypothesis="A valid JWT still needs local Relay scopes before data is released.",
             request_label="GET http://127.0.0.1:4316/datasets/social_protection_registry/household?limit=1",
             returns=[
@@ -2391,10 +2733,33 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        11,
+        14,
+        "Authorized access",
+        html_step(
+            index=14,
+            title="Verify token and authorize row read",
+            hypothesis="The same issuer and token can read data when local Relay policy maps an emitted claim to the row scope.",
+            request_label="GET http://127.0.0.1:4318/datasets/social_protection_registry/household?limit=1",
+            returns=[
+                chip("status", oidc_authorized_attempt.get("status"), tone="green")
+                + " is returned by the authorized Relay endpoint.",
+                chip("rows", authorized_row_count, tone="green")
+                + " proves scoped row access was granted.",
+                chip("scope claim", "aud", tone="neutral")
+                + " is the verified token claim mapped by the demo policy.",
+            ],
+            used_next="The denied and authorized statuses together prove the split between OIDC verification and Relay authorization.",
+            proof="Authorization changes because Relay policy changes, not because the token or issuer changes.",
+            artifact=artifact_ref(out, "oidc-authorized-row-attempt"),
+            payload=oidc_authorized_attempt,
+            accent="green",
+        ),
+    )
+    add_step(
+        15,
         "Witness discovery",
         html_step(
-            index=11,
+            index=15,
             title="Discover the OpenFn-backed Witness",
             hypothesis="The client should discover Witness capabilities before choosing a claim.",
             request_label="GET http://127.0.0.1:4324/.well-known/evidence-service",
@@ -2412,10 +2777,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        12,
+        16,
         "Claim discovery",
         html_step(
-            index=12,
+            index=16,
             title="Discover the claim to request",
             hypothesis="The client should request only claims the Witness advertises.",
             request_label="GET http://127.0.0.1:4324/claims",
@@ -2433,10 +2798,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         ),
     )
     add_step(
-        13,
+        17,
         "Claim evaluation",
         html_step(
-            index=13,
+            index=17,
             title="Evaluate the discovered claim",
             hypothesis="Witness should use the private OpenFn sidecar to resolve the advertised claim value.",
             request_label="POST http://127.0.0.1:4324/claims/evaluate",
@@ -2463,6 +2828,14 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     standards_html = "\n".join(
         f"<li><strong>{html_escape(entry.get('standard_or_pattern'))}</strong>: {html_escape(entry.get('what_to_check'))}</li>"
         for entry in conformance.get("entries", [])
+    )
+    shortcuts_html = "\n".join(
+        "<li>"
+        f"<strong>{html_escape(item.get('shortcut'))}</strong> "
+        f"Demo reason: {html_escape(item.get('why_it_is_ok_for_demo'))} "
+        f"Production direction: {html_escape(item.get('production_direction'))}"
+        "</li>"
+        for item in case_file.get("known_demo_shortcuts", [])
     )
     case_summary = case_file.get("case_summary", "")
     html_doc = f"""<!doctype html>
@@ -2604,6 +2977,17 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: .84rem;
     }}
+    .headers-box {{
+      margin-top: 16px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }}
+    .headers-box h4 {{ margin: 0 0 8px; color: var(--muted); }}
+    .headers-box .chip {{
+      border-radius: 6px;
+    }}
     .chip-blue {{ border-color: #8bb8ff; background: #eef5ff; }}
     .chip-green {{ border-color: #88cbb8; background: #edf8f4; }}
     .chip-amber {{ border-color: #e2b66c; background: #fff7e8; }}
@@ -2622,7 +3006,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
     .chain {{
       display: grid;
-      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
       gap: 8px;
       margin-top: 14px;
     }}
@@ -2656,19 +3040,24 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     <main>
       <section class="summary">
         <h2>How To Read This</h2>
-        <p>Each card shows a live API result, the value extracted from that result, and how that value is used by the next request. Open the JSON panels to inspect the full returned payloads.</p>
-        <div class="chain" aria-label="Evidence chain">
-          <span>Discover</span>
-          <span>Extract value</span>
-          <span>Use next</span>
-          <span>Call API</span>
-          <span>Prove boundary</span>
+        <p>Each card shows a live API result, important response headers when captured, the value extracted from that result, and how that value is used by the next request. Open the JSON panels to inspect the full returned payloads.</p>
+        <div class="chain" aria-label="Service-first standards chain">
+          <span>api-catalog</span>
+          <span>CPSV-AP PublicService</span>
+          <span>CCCEV option</span>
+          <span>BRegDCAT/DCAT access service</span>
+          <span>Witness claim discovery</span>
+          <span>Evaluation</span>
         </div>
       </section>
       {steps_html}
       <section class="summary">
         <h2>Standards And Patterns Demonstrated</h2>
         <ul class="standards">{standards_html}</ul>
+      </section>
+      <section class="summary">
+        <h2>Known Demo Shortcuts</h2>
+        <ul class="standards">{shortcuts_html}</ul>
       </section>
     </main>
   </div>
@@ -2702,6 +3091,35 @@ def write_explainability_artifacts(out: Path, enabled: list[str]) -> None:
     write_interactive_story_html(out, case_file, conformance)
 
 
+def assert_no_secret_artifacts(out: Path, values: dict[str, str]) -> None:
+    markers = [
+        "OIDC_SA_CLIENT_SECRET",
+        "BEGIN PRIVATE KEY",
+        "postgres://postgres:postgres",
+        "Authorization=Basic ",
+        "Authorization: Bearer ",
+    ]
+    secret_suffixes = ("_RAW", "_TOKEN", "_BEARER", "_SECRET", "_JWK")
+    secret_values = [
+        value
+        for key, value in values.items()
+        if key.endswith(secret_suffixes) and len(value) >= 8
+    ]
+    for path in out.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for marker in markers:
+            if marker in text:
+                raise StoryError(f"live story artifact leaked sensitive marker `{marker}` in {path}")
+        for secret in secret_values:
+            if secret in text:
+                raise StoryError(f"live story artifact leaked a configured secret in {path}")
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -2711,20 +3129,12 @@ def main() -> int:
     parser.add_argument("--skip-oidc", action="store_true")
     parser.add_argument("--skip-openfn", action="store_true")
     args = parser.parse_args()
+    run_service_first = not args.skip_service_first
+    run_oidc = not args.skip_oidc
+    want_postgres = not args.skip_postgres
+    run_openfn = not args.skip_openfn
 
     values = parse_env_file(ROOT / ".env")
-    if not args.skip_service_first:
-        env("CIVIL_EVIDENCE_CLIENT_BEARER", values)
-        env("SOCIAL_EVIDENCE_CLIENT_BEARER", values)
-        env("SHARED_EVIDENCE_CLIENT_BEARER", values)
-    if not args.skip_postgres:
-        env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values)
-    if not args.skip_oidc:
-        env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values)
-    if not args.skip_openfn:
-        env("OPENFN_SIDECAR_TOKEN_RAW", values)
-        env("OPENFN_MOCK_REGISTRY_TOKEN_RAW", values)
-        env("CIVIL_EVIDENCE_CLIENT_BEARER", values)
 
     out = output_dir()
     print("Registry Lab live-service stories")
@@ -2733,19 +3143,20 @@ def main() -> int:
 
     step = 1
     enabled: list[str] = []
-    if not args.skip_service_first:
+    if run_service_first:
         enabled.append("service_first")
         step = story_service_first(out, values, step)
-    if not args.skip_postgres:
-        enabled.append("postgres")
-        step = story_postgres(out, values, step)
-    if not args.skip_oidc:
+    if run_oidc:
         enabled.append("oidc")
         step = story_oidc(out, values, step)
-    if not args.skip_openfn:
+    if want_postgres:
+        enabled.append("postgres")
+        step = story_postgres(out, values, step)
+    if run_openfn:
         enabled.append("openfn")
         step = story_openfn(out, values, step)
     write_explainability_artifacts(out, enabled)
+    assert_no_secret_artifacts(out, values)
 
     save(
         out,
@@ -2755,8 +3166,8 @@ def main() -> int:
             "correlation_id": CORRELATION_ID,
             "stories": [
                 "Service-first discovery through Atlas",
-                "Database-source cutover with live Postgres",
                 "Zitadel-issued JWT at a separate OIDC Relay node",
+                "Database-source cutover with live Postgres",
                 "OpenFn sidecar lookup behind Registry Witness",
             ],
             "artifacts_dir": str(out),

@@ -181,5 +181,9 @@ evidence:
         - application/vnd.registry-witness.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: civil_child_status_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/civil-child-status
       credential_profiles:
         - civil_status_sd_jwt

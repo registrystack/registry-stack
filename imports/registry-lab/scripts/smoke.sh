@@ -67,6 +67,12 @@ curl_status() {
   curl "${args[@]}"
 }
 
+assert_head_contains() {
+  local url="$1"
+  local expected="$2"
+  curl -fsSI -H "x-request-id: ${correlation_id}" "${url}" | tr -d '\r' | grep -F "${expected}" >/dev/null
+}
+
 wait_http() {
   local name="$1"
   local url="$2"
@@ -137,7 +143,7 @@ atlas_service_view() {
   (
     cd "${atlas_root}"
     cargo run --quiet -p semantic-asset-discovery-cli --bin semantic-asset-discovery -- analyze \
-      --entry-url http://127.0.0.1:4331/metadata/cpsv-ap \
+      --entry-url http://127.0.0.1:4331/metadata/cpsv-ap.jsonld \
       "${output_dir}/smoke-static-cpsv-ap.jsonld" > "${output_dir}/smoke-atlas-service-report.json"
     cargo run --quiet -p semantic-asset-discovery-cli --bin semantic-asset-discovery -- service-view \
       https://demo.example.gov/services/health-linked-child-support \
@@ -184,7 +190,7 @@ wait_http "health relay health" http://127.0.0.1:4313/health "${HEALTH_METADATA_
 wait_http "civil evidence discovery" http://127.0.0.1:4321/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}"
 wait_http "social evidence discovery" http://127.0.0.1:4322/.well-known/evidence-service "${SOCIAL_EVIDENCE_CLIENT_BEARER}"
 wait_http "shared evidence discovery" http://127.0.0.1:4323/.well-known/evidence-service "${SHARED_EVIDENCE_CLIENT_BEARER}"
-wait_http "static metadata publisher" http://127.0.0.1:4331/metadata/index.json ""
+wait_http "static metadata publisher" http://127.0.0.1:4331/.well-known/api-catalog ""
 
 check "civil relay health" curl_json GET http://127.0.0.1:4311/health "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-health.json"
 check "social relay health" curl_json GET http://127.0.0.1:4312/health "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-health.json"
@@ -212,19 +218,26 @@ check "shared Evidence Server OpenAPI" curl_json GET http://127.0.0.1:4323/opena
 check "civil relay evidence offerings" curl_json GET http://127.0.0.1:4311/metadata/evidence-offerings "${CIVIL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-civil-offerings.json"
 check "social relay evidence offerings" curl_json GET http://127.0.0.1:4312/metadata/evidence-offerings "${SOCIAL_METADATA_CLIENT_RAW}" "${output_dir}/smoke-social-offerings.json"
 check "health relay evidence offerings" curl_json GET http://127.0.0.1:4313/metadata/evidence-offerings "${HEALTH_METADATA_CLIENT_RAW}" "${output_dir}/smoke-health-offerings.json"
+check "static api-catalog media type" assert_head_contains http://127.0.0.1:4331/.well-known/api-catalog "Content-type: application/linkset+json"
+check "static api-catalog link header" assert_head_contains http://127.0.0.1:4331/.well-known/api-catalog 'Link: </.well-known/api-catalog>; rel="api-catalog"'
+check "static JSON-LD media type" assert_head_contains http://127.0.0.1:4331/metadata/cpsv-ap.jsonld "Content-type: application/ld+json"
+check "static metadata bootstrap" curl_json GET http://127.0.0.1:4331/.well-known/api-catalog "" "${output_dir}/smoke-static-api-catalog.json"
+check "static legacy metadata bootstrap" curl_json GET http://127.0.0.1:4331/.well-known/registry-manifest.json "" "${output_dir}/smoke-static-well-known.json"
 check "static metadata index" curl_json GET http://127.0.0.1:4331/metadata/index.json "" "${output_dir}/smoke-static-metadata-index.json"
 check "static evidence offerings" curl_json GET http://127.0.0.1:4331/metadata/evidence-offerings.json "" "${output_dir}/smoke-static-offerings.json"
 check "static policy metadata" curl_json GET http://127.0.0.1:4331/metadata/policies.jsonld "" "${output_dir}/smoke-static-policies.json"
 check "static BRegDCAT profile route" curl_json GET http://127.0.0.1:4331/metadata/dcat/bregdcat-ap "" "${output_dir}/smoke-static-bregdcat-ap.jsonld"
-check "static CPSV-AP service catalogue" curl_json GET http://127.0.0.1:4331/metadata/cpsv-ap "" "${output_dir}/smoke-static-cpsv-ap.jsonld"
+check "static CPSV-AP service catalogue" curl_json GET http://127.0.0.1:4331/metadata/cpsv-ap.jsonld "" "${output_dir}/smoke-static-cpsv-ap.jsonld"
 check "static service form schema" curl_json GET http://127.0.0.1:4331/metadata/forms/health_linked_child_support_form/schema.json "" "${output_dir}/smoke-service-form-schema.json"
-check "static index links CPSV-AP route" python - "${output_dir}/smoke-static-cpsv-ap.jsonld" "${output_dir}/smoke-static-metadata-index.json" <<'PY'
+check "static bootstrap links CPSV-AP route" python - "${output_dir}/smoke-static-cpsv-ap.jsonld" "${output_dir}/smoke-static-metadata-index.json" "${output_dir}/smoke-static-api-catalog.json" "${output_dir}/smoke-static-well-known.json" <<'PY'
 import json
 import sys
 
-cpsv_path, index_path = sys.argv[1], sys.argv[2]
+cpsv_path, index_path, api_catalog_path, discovery_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 cpsv = json.load(open(cpsv_path, encoding="utf-8"))
 index = json.load(open(index_path, encoding="utf-8"))
+api_catalog = json.load(open(api_catalog_path, encoding="utf-8"))
+discovery = json.load(open(discovery_path, encoding="utf-8"))
 service_iri = "https://demo.example.gov/services/health-linked-child-support"
 
 graph = cpsv.get("@graph", [])
@@ -236,9 +249,27 @@ if not any(
 ):
     raise SystemExit("CPSV-AP catalogue does not include the health-linked child support public service")
 
-catalogues = index.get("service_catalogues", [])
-if not any(item.get("id") == "cpsv-ap" and item.get("url") == "/metadata/cpsv-ap" for item in catalogues):
-    raise SystemExit("metadata index does not link /metadata/cpsv-ap")
+linksets = api_catalog.get("linkset", [])
+if not linksets:
+    raise SystemExit("api-catalog does not contain a Linkset")
+describedby = linksets[0].get("describedby", [])
+items = linksets[0].get("item", [])
+if not any(item.get("href") == "/metadata/index.json" for item in describedby):
+    raise SystemExit("api-catalog does not describe the metadata index")
+if not any(item.get("href") == "/metadata/cpsv-ap.jsonld" for item in items):
+    raise SystemExit("api-catalog does not advertise the CPSV-AP JSON-LD service catalogue")
+
+catalogues = discovery.get("service_catalogues", [])
+cpsv_entry = next((item for item in catalogues if item.get("id") == "cpsv-ap"), None)
+if not cpsv_entry:
+    raise SystemExit("well-known discovery does not advertise CPSV-AP")
+if cpsv_entry.get("url") != "/metadata/cpsv-ap.jsonld":
+    raise SystemExit("well-known discovery does not link /metadata/cpsv-ap.jsonld")
+if "/metadata/cpsv-ap" not in cpsv_entry.get("aliases", []):
+    raise SystemExit("well-known discovery does not retain /metadata/cpsv-ap alias")
+index_catalogues = index.get("service_catalogues", [])
+if not any(item.get("id") == "cpsv-ap" and item.get("url") == cpsv_entry.get("url") for item in index_catalogues):
+    raise SystemExit("metadata index does not match well-known CPSV-AP URL")
 form_schemas = index.get("form_schemas", [])
 if not any(item.get("form") == "health_linked_child_support_form" for item in form_schemas):
     raise SystemExit("metadata index does not link the service form JSON Schema")
