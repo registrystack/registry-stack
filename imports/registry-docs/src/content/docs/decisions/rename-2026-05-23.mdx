@@ -1,6 +1,6 @@
 ---
 title: Rename decision 2026-05-23
-description: Record of the decision to rename five registry projects to the registry family naming convention and the current state of each rename.
+description: Record of the decision to rename five registry projects to the registry stack naming convention and the current state of each rename.
 status: current
 owner: registry-legend
 source_repos:
@@ -15,11 +15,11 @@ locale: en
 standards_referenced: []
 ---
 
-This is a maintenance record. If you're an integrator using the current project names (Registry Relay, Registry Witness, and the rest of the family), you can ignore the legacy column.
+This is a maintenance record. If you're an integrator using the current project names (Registry Relay, Registry Witness, and the rest of the stack), you can ignore the legacy column.
 
 Five registry projects were renamed on 2026-05-23 from a mix of snake_case, kebab-case,
 and three competing root metaphors (registry, evidence, dataspace) to a single Docker-style
-`registry-` family.
+`registry-` naming convention.
 This record documents the decision, the mapping, and the per-repo rename state as of the review date.
 
 ## Decision
@@ -36,7 +36,7 @@ The rename is a clean break: no aliases, no fallback strings, no legacy v1 ident
 | `registry-metadata` | `registry-manifest` | Portable manifest contracts, validation, and renderers |
 | `evidence-server` | `registry-witness` | Standalone claim evaluation, credential issuance, and attestation |
 | `dataspace-atlas` | `registry-atlas` | Standards-first workbench for inspecting registry discovery artifacts |
-| `decentralized-evidence-demo` | `registry-lab` | Compose-based runnable demo of the registry family |
+| `decentralized-evidence-demo` | `registry-lab` | Compose-based runnable demo of the registry stack |
 
 Human-readable brand strings flip in lock-step: "[Registry Relay](../../projects/registry-relay/)" stays; the other four adopt
 new display names as listed (rename plan, "Final state").
@@ -162,7 +162,7 @@ some scripts and fixtures may still reference the old `decentralized-evidence-de
 
 ## Consequences
 
-Registry Legend v0 prose uses the current names in the "Decision" table for all five projects.
+v0 prose in this site uses the current names in the "Decision" table for all five projects.
 Legacy names appear only in this decision record, in `rename_status` fields in `projects.yaml`,
 and in historical pages where they explain the pre-rename shape.
 

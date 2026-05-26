@@ -1,6 +1,6 @@
 ---
 title: Contracts
-description: Machine-readable surfaces owned by the registry family, with status and source-of-truth links.
+description: Machine-readable surfaces owned by the registry stack, with status and source-of-truth links.
 wide: true
 status: current
 owner: registry-legend
@@ -45,12 +45,14 @@ The table is generated from `src/data/contracts.yaml`.
 - **Owner** names the repo whose source artifact defines the contract.
 - **Status** describes the maturity of the contract artifact:
   - `current-source` means the artifact is actively maintained and production-ready.
+  - `hand-authored-abstract-contract` means the artifact is hand-authored from the owning repo's source docs and route table, using templated paths and capability tags rather than enumerated runtime instances.
   - `pinned-generated-snapshot` means the artifact was generated from the owning repo and pinned here for stable publication.
   - `pinned-demo-snapshot` means the artifact is pinned from a demo run, not a release export; treat it as a preview.
 - **Source of truth** links to the module, file, or CLI that produces the artifact.
 - **Consumer note** records the current limitation or regeneration path.
 
 **What the status values mean for you:**
+`hand-authored-abstract-contract` artifacts document the full HTTP surface but leave runtime-shaped fields (such as `{dataset_id}` and `{entity}`) as path parameters. For instance-specific shapes, fetch the auth-gated runtime OpenAPI route on a configured gateway.
 `pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's source and will not change without an explicit re-pin.
 `pinned-demo-snapshot` artifacts are preview quality: generated from a demo run and may not cover all configurations. Use them to explore the API shape, but regenerate from a running instance before building a production client.
 
@@ -58,7 +60,7 @@ The table is generated from `src/data/contracts.yaml`.
 
 {/* Contributor rules:
 
-- Do not duplicate generated API reference text in Registry Legend prose.
+- Do not duplicate generated API reference text in prose pages here.
 - Preserve route paths, media types, env vars, schema names, crate names, and Docker image names verbatim.
 - Pin OpenAPI artifacts before publishing Redoc pages.
 - Treat demo outputs as verification evidence, not as contract sources.
@@ -68,8 +70,8 @@ The table is generated from `src/data/contracts.yaml`.
 
 ## Known gaps
 
-- The [Registry Relay](../../projects/registry-relay/) OpenAPI artifact is a pinned civil demo snapshot (`pinned-demo-snapshot`).
-  Registry Relay exposes OpenAPI through an auth-gated runtime route (`GET /openapi.json`).
-  A release-grade export path or published artifact does not yet exist.
-  {/* TODO[evidence]: no standalone Relay OpenAPI export command found at commit 85d32f0. Confirm whether a `cargo run -- openapi` subcommand is planned. */}
+- The [Registry Relay](../../projects/registry-relay/) OpenAPI artifact is a hand-authored abstract contract (`hand-authored-abstract-contract`).
+  It documents the full surface using templated paths and capability tags, with feature-gate notes in each tag description.
+  Registry Relay also exposes a per-instance OpenAPI dump through the auth-gated `GET /openapi.json`, which callers can fetch from a configured gateway to discover the concrete `{dataset_id}` and `{entity}` shape for that deployment.
+  A release-grade automated export of the abstract contract from the owning repo does not yet exist; the artifact is kept in sync by hand.
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.

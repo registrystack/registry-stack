@@ -9,8 +9,8 @@ export default defineConfig({
   trailingSlash: 'always',
   integrations: [
     starlight({
-      title: 'Registry Legend',
-      description: 'Documentation website for the registry project family.',
+      title: 'Registry stack docs',
+      description: 'Documentation website for the registry stack.',
       defaultLocale: 'root',
       locales: {
         root: {
@@ -41,8 +41,7 @@ export default defineConfig({
         {
           label: 'Start',
           items: [
-            { label: 'Introduction', slug: 'start' },
-            { label: 'Three stories', slug: 'start/what-we-built' },
+            { label: 'Three capabilities', slug: 'start/what-we-built' },
             { label: 'Quickstart', slug: 'start/quickstart' },
             { label: 'Your first call', slug: 'start/your-first-call' },
           ],

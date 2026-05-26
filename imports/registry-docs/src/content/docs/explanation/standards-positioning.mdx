@@ -1,6 +1,6 @@
 ---
 title: Standards positioning
-description: Which standards the registry family touches, what it does with each one, and why no new standard is being invented.
+description: Which standards the registry stack touches, what it does with each one, and why no new standard is being invented.
 status: current
 owner: registry-legend
 source_repos:
@@ -30,7 +30,7 @@ standards_referenced:
   - w3c-did
 ---
 
-The registry family is not a new standard: it wraps practical implementation surfaces around existing ones and ties each claim to an owning project and verifiable evidence.
+The registry stack is not a new standard: it wraps practical implementation surfaces around existing ones and ties each claim to an owning project and verifiable evidence.
 
 ## Per-standard stance
 
@@ -44,7 +44,7 @@ Registry Relay exposes OGC Records routes behind a feature flag. Registry Manife
 A feature flag for GeoJSON support exists in Registry Relay. The claim is `aligns_with` because route evidence has not been pinned to a reviewed fixture.
 
 **OpenAPI** (`emits`):
-Registry Relay generates an OpenAPI document at `/openapi.json`. Registry Witness generates and exposes its OpenAPI document at `/openapi.json`. Registry Legend publishes pinned artifacts through Redoc rather than hand-writing endpoint reference pages.
+Registry Relay generates an OpenAPI document at `/openapi.json`. Registry Witness generates and exposes its OpenAPI document at `/openapi.json`. These docs publish pinned artifacts through Redoc rather than hand-writing endpoint reference pages.
 
 **SHACL and JSON Schema** (`emits`):
 Registry Relay exposes SHACL node shapes at `/metadata/shacl` and entity JSON Schemas at `/datasets/{dataset_id}/{entity}/schema`. Registry Manifest renders the same files into its static publication bundle. External SHACL validation via pySHACL or the SEMIC validator is available but not wired into CI.

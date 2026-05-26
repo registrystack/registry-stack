@@ -119,7 +119,7 @@
     - label: Registry Witness README
       url: https://github.com/jeremi/registry-witness/blob/main/README.md
   last_checked: 2026-05-23
-  notes: Relay and Witness generate OpenAPI. Registry Legend should publish pinned artifacts through Redoc.
+  notes: Relay and Witness generate OpenAPI. These docs publish pinned artifacts through Redoc.
 - id: shacl
   name: SHACL
   standards_body: W3C

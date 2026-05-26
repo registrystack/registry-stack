@@ -1,5 +1,5 @@
-family_name: registry family
-site_name: Registry Legend
+stack_name: registry stack
+site_name: Registry stack docs
 last_reviewed: 2026-05-23
 projects:
   - registry-platform

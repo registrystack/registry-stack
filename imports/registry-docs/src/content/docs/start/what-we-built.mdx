@@ -1,6 +1,6 @@
 ---
-title: Three stories
-description: The three stories the registry family delivers and the projects that implement each one.
+title: Commitments and capabilities
+description: Three commitments the registry stack makes (interoperability, safeguards, reviewability) and the three capabilities (Publish, Consult, Prove) that deliver them.
 status: current
 owner: registry-legend
 source_repos:
@@ -10,7 +10,7 @@ source_repos:
   - registry-atlas
   - registry-platform
   - registry-lab
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-05-26"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -24,19 +24,50 @@ standards_referenced:
   - oid4vci
 ---
 
-The registry family is organized around three stories: Publish, which turns a YAML manifest into
-every standards artifact downstream systems need; Consult, which gives authorized callers
-read-only, entity-shaped access to registry data over HTTP; and Prove, which evaluates eligibility
-claims and issues verifiable credentials without exposing the records that back them.
-Each story maps to one or more projects described on this page.
+The registry stack is built for federated public administration. Each authority keeps custody
+of its own registry data; the stack provides the API surface for lawful exchange between
+authorities. It does not absorb data into a central system.
 
-## Publish
+To make federation viable, the stack commits to three things.
 
-The Publish story answers the question: how does a registry declare what it contains, what
+## Three commitments
+
+### Interoperability
+
+Each registry publishes its catalog, schemas, services, and policies in standards-shaped form
+(Data Catalog Vocabulary (DCAT), BRegDCAT-AP, Core Public Service Vocabulary Application
+Profile (CPSV-AP), Core Criterion and Core Evidence Vocabulary (CCCEV), Shapes Constraint
+Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), OpenAPI, SD-JWT VC).
+Downstream systems integrate against stable contracts, not per-deployment ones.
+
+### Safeguards
+
+Authorized access only, with authentication by API key or OpenID Connect (OIDC). Scope-checked routes.
+Per-claim disclosure control. No write paths. Audit envelopes for every request that touches
+person-level data.
+
+### Reviewability
+
+Every commitment is backed by an artifact a reviewer can inspect: the published catalog, the
+SHACL shapes, the policy documents, the audit envelope schema, the credential profile
+configuration. Registry Atlas reads what a deployment actually emits, not what it claims to
+emit.
+
+## Three capabilities
+
+The stack delivers these commitments through three capabilities: Publish, which turns a YAML
+manifest into every standards artifact downstream systems need; Consult, which gives authorized
+callers read-only, entity-shaped access to registry data over HTTP; and Prove, which evaluates
+eligibility claims and issues verifiable credentials without exposing the records that back
+them. Each capability maps to one or more projects.
+
+### Publish
+
+Publish answers the question: how does a registry declare what it contains, what
 standards it follows, and what evidence it can provide, in a form every interested system can
 read without talking to a running service?
 
-### Registry Manifest
+#### Registry Manifest
 
 [Registry Manifest](/projects/registry-manifest/) is a Rust library and CLI.
 You write a single YAML metadata manifest describing a registry.
@@ -57,7 +88,7 @@ The output bundle can be served from any static host.
 Because the bundle is generated from a single manifest, the published surface stays consistent
 across all formats when the manifest changes.
 
-### Registry Atlas
+#### Registry Atlas
 
 [Registry Atlas](/projects/registry-atlas/) is a browser single-page application with a small
 fetch proxy.
@@ -72,12 +103,12 @@ Together, Manifest and Atlas close the Publish loop: Manifest generates the arti
 verifies that a running registry actually emits what it claims to emit, before you write
 integration code.
 
-## Consult
+### Consult
 
-The Consult story answers the question: how do authorized systems query registry data over HTTP
+Consult answers the question: how do authorized systems query registry data over HTTP
 without gaining database access or write paths?
 
-### Registry Relay
+#### Registry Relay
 
 [Registry Relay](/projects/registry-relay/) is a config-driven Rust HTTP service.
 You bind it to CSV, XLSX, Parquet, or PostgreSQL sources and configure entity shapes such as
@@ -95,12 +126,12 @@ requirements, and evidence-offering metadata without a separate static publicati
 Relay is a restricted consultation gateway.
 It has no write paths in v1 and it is not an open-data portal.
 
-## Prove
+### Prove
 
-The Prove story answers the question: how does a calling system learn whether a person qualifies
+Prove answers the question: how does a calling system learn whether a person qualifies
 for a program, without exposing the records that determine that answer?
 
-### Registry Witness
+#### Registry Witness
 
 [Registry Witness](/projects/registry-witness/) is a standalone Rust HTTP service.
 You configure named eligibility claims, each with extraction rules or CEL expressions, disclosure
@@ -145,8 +176,8 @@ Product-specific route behavior and policy decisions stay in the consuming servi
 
 ## Demo
 
-[Registry Lab](/projects/registry-lab/) is a Docker Compose demo that wires the Consult and
-Prove stories together on a laptop.
+[Registry Lab](/projects/registry-lab/) is a Docker Compose demo that wires Consult and
+Prove together on a laptop.
 It runs three Relay instances (civil registry on port `4311`, social protection on `4312`,
 health on `4313`), four Witness instances (civil on `4321`, social protection on `4322`,
 shared eligibility on `4323`, and an OpenFn-fed civil Witness on `4324`), an internal

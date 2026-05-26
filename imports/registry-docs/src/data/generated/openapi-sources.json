@@ -3,9 +3,9 @@
     "id": "registry-relay",
     "name": "Registry Relay API",
     "owner": "registry-relay",
-    "source": "Auth-gated `GET /openapi.json` from a configured Relay runtime.",
+    "source": "Hand-authored abstract contract in `registry-relay/openapi/registry-relay.openapi.json`, cross-checked against `registry-relay/docs/api.md` and the runtime route table.",
     "artifact": "openapi/registry-relay.openapi.json",
-    "status": "pinned generated civil demo snapshot from the local Registry Relay runtime",
+    "status": "hand-authored abstract contract (templated paths and capability tags, not a per-deployment dump). Use the auth-gated `GET /openapi.json` on a running gateway for the instance-specific shape of `{dataset_id}` and `{entity}`.",
     "redoc_path": "/registry-legend/api/registry-relay.html"
   },
   {

@@ -1,12 +1,12 @@
 ---
 title: Registry Witness overview
-description: Explains what Registry Witness is, how it evaluates eligibility claims, controls disclosure, issues SD-JWT VC credentials over a direct API and over OID4VCI, and how it relates to the rest of the registry family.
+description: Explains what Registry Witness is, how it evaluates eligibility claims, controls disclosure, issues SD-JWT VC credentials over a direct API and over OID4VCI, and how it relates to the rest of the registry stack.
 status: draft
 owner: registry-witness
 source_repos:
   - registry-witness
   - registry-platform
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-05-26"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -19,11 +19,13 @@ standards_referenced:
   - oid4vci
 ---
 
-Registry Witness is the credential issuance product of the registry family. It evaluates configured
+Registry Witness is the credential issuance product of the registry stack. It evaluates configured
 eligibility claims against your registry data and issues SD-JWT VC credentials with selective
 disclosure. It also issues wallet-compatible credentials over OpenID for Verifiable Credential
 Issuance (OID4VCI). The verification receipt Registry Witness produces is an evidence artifact, not
 an eligibility decision: the issuing program decides what an entitlement is.
+
+**Stack commitments:** safeguards, reviewability.
 
 ## Claim model
 

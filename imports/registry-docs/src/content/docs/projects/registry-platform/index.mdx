@@ -7,7 +7,7 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-witness
-last_reviewed: "2026-05-24"
+last_reviewed: "2026-05-26"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -20,6 +20,8 @@ It is not a runtime service and does not expose an HTTP API by itself.
 Relay, Witness, and future registry services consume its crates for security, operational, and test primitives.
 
 The workspace exists so fixes in authentication, audit chaining, outbound HTTP policy, OIDC verification, crypto, HTTP security, and SD-JWT VC handling land once and are reused everywhere.
+
+**Stack commitments:** safeguards (shared primitives).
 
 ## What it owns
 

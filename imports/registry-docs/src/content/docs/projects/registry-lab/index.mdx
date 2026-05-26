@@ -1,11 +1,11 @@
 ---
 title: Registry Lab overview
-description: Registry Lab is the Docker Compose demo for the registry family, wiring Relay, Witness, live-source, OpenFn, static metadata, and narrated demo services into a single topology you can run on a laptop.
+description: Registry Lab is the Docker Compose demo for the registry stack, wiring Relay, Witness, live-source, OpenFn, static metadata, and narrated demo services into a single topology you can run on a laptop.
 status: current
 owner: registry-lab
 source_repos:
   - registry-lab
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-05-26"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -15,7 +15,7 @@ standards_referenced:
 
 Use this when you want to see the registry stack actually run end-to-end on your laptop in one command.
 
-Registry Lab is a Docker Compose demo for the registry family.
+Registry Lab is a Docker Compose demo for the registry stack.
 It wires three Registry Relay instances, four Registry Witness instances,
 live Postgres and Zitadel services, a private OpenFn sidecar path, a static
 metadata publisher, and narrated demo clients into a single topology you can
@@ -25,6 +25,8 @@ The goal is to let a developer, reviewer, or integrator observe every layer of t
 interacting end-to-end on local data before writing any integration code.
 Use Lab when you want to see the full stack interact locally; for production deployment guidance,
 look at each project's own docs.
+
+**Stack commitments:** interoperability, safeguards, reviewability (all three, with the distributed-custody premise visible in the federated topology).
 
 ## Quickstart
 

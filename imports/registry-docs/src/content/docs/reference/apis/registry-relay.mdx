@@ -22,18 +22,18 @@ standards_referenced:
 
 [Open Registry Relay API reference](/registry-legend/api/registry-relay.html)
 
-The Redoc page above is generated from a pinned OpenAPI artifact.
+The Redoc page above is built from a hand-authored abstract OpenAPI contract that uses templated paths (`/datasets/{dataset_id}/{entity}/...`) and capability tags rather than enumerating one deployment's datasets and entities.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, and what the specification does not cover.
 
-Evidence source: [Registry Relay](../../../projects/registry-relay/) `main` commit `5a2a8f2`, generated after the `v0.1.1` release and reviewed 2026-05-24.
+Evidence source: [Registry Relay](../../../projects/registry-relay/) `main` commit `5a2a8f2`, reviewed 2026-05-26. The abstract contract is cross-checked against `registry-relay/docs/api.md` and the runtime route table.
 
 ## API surface
 
 Registry Relay is a Rust async HTTP service that turns sensitive government
 tabular files and database tables into protected, read-only, domain-oriented consultation APIs.
 The route inventory on this page follows the released source.
-The Redoc artifact is a pinned civil demo snapshot generated from the current Relay runtime and includes catalog, metadata, dataset, policy, and evidence-offering response examples for the configured demo catalog.
+The Redoc artifact documents the full surface as an abstract contract. Standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and provenance routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT) are included with notes in each tag description that name the Cargo feature mounting them at runtime. For the instance-specific shape of `{dataset_id}`, `{entity}`, and configured aggregates, evidence offerings, and SP DCI registries in a given deployment, fetch the auth-gated `GET /openapi.json` from that gateway.
 
 The API groups into six domains:
 
@@ -71,8 +71,9 @@ The API groups into six domains:
 
 ### Standards adapter routes (feature-gated)
 
-- `GET /ogc/v1/records`, `/ogc/v1/records/collections`, and `/ogc/v1/records/collections/datasets/items` are available when the `ogcapi-records` feature is enabled.
-- `/sp-dci/*` routes are available when the `spdci-api-standards` feature is enabled.
+- `GET /ogc/v1`, `/ogc/v1/conformance`, `/ogc/v1/collections`, and `/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items` are available when the `ogcapi-features` feature is enabled.
+- `GET /ogc/v1/records`, `/ogc/v1/records/collections`, and `/ogc/v1/records/collections/{collection_id}/items` are available when the `ogcapi-records` feature is enabled.
+- `GET /dci/{registry}/registry/sync/search`, `/dci/{registry}/registry/sync/get-disability-details`, and related SP DCI sync-search endpoints are available when the `spdci-api-standards` feature is enabled.
 
 ### Health routes
 
@@ -116,24 +117,29 @@ Evidence verification enforces `<dataset_id>:evidence_verification` scope.
 
 ## What the OpenAPI specification does not cover
 
-The pinned OpenAPI artifact documents the HTTP contract at the time of the demo snapshot.
-The following surfaces exist in the source but are not fully captured by the specification or require
-additional context:
+The abstract OpenAPI contract documents the HTTP surface using templated paths and capability tags.
+The following surfaces require additional context beyond what the specification carries:
 
 **Evidence offering verification flow.** `POST /evidence-offerings/{offering_id}/verifications`
 accepts claim JSON and returns a verification receipt. This is a Relay-native check, not an
 authority credential or eligibility decision. The verification response can be a JSON receipt or a
 `VC-JWT` compact serialization when the client sends `Accept: application/vc+jwt` and provenance is
 enabled.
-{/* The VC-JWT Accept variant is documented in the relay README:301–311 and lives in `src/provenance/` (per .research/registry-relay.md, "issues: Compact JWS-wrapped VCs for responses when provenance enabled and client sends `Accept: application/vc+jwt`"). It is NOT present in the pinned civil-demo OpenAPI artifact; that is an artifact-snapshot lag, not a missing feature. The "Artifact snapshot" caveat below applies. */}
 
 **Admin routes.** `POST /admin/reload`, `POST /admin/datasets/{dataset_id}/tables/{table_id}/reload`,
 and `GET /metrics` are mounted on a separate admin listener (`server.admin_bind`). The admin listener is optional: it is not enabled unless `admin_bind` is configured. Example value: `127.0.0.1:8081`. Admin routes require `admin` scope and do not appear in the public OpenAPI document.
 
-**Artifact snapshot.** The current artifact is a pinned civil demo snapshot, not a release-grade
-export. Some optional routes and configurations are not reflected, including OIDC auth, SP DCI adapter,
-OGC API Records, DID, schema, and context routes unless the runtime is configured with those features.
-Regenerate from `GET /openapi.json` on a running Relay instance configured with the relevant features.
+**Per-deployment shape.** Concrete `{dataset_id}` values, `{entity}` names, aggregate ids, evidence
+offering ids, and SP DCI registry ids are runtime configuration, not contract data. To learn what
+a specific gateway exposes, fetch the auth-gated `GET /openapi.json` from that instance, or read
+its `/metadata/catalog` and dataset descriptors. The abstract contract intentionally leaves these
+as path parameters.
+
+**Feature-gated surfaces.** OGC API Features, OGC API Records, OGC API EDR, SP DCI, and the
+provenance routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT serialization) are only
+mounted when the gateway is built and configured with the matching Cargo feature
+(`ogcapi-features`, `ogcapi-records`, `ogcapi-edr`, `spdci-api-standards`, or with provenance
+enabled). Tag descriptions in the spec name the gating feature for each surface.
 
 **No write operations.** Registry Relay is a read-only service. Write operations (provisioning,
 inserts, updates) are explicitly out of scope.

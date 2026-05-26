@@ -39,7 +39,7 @@
   --sl-color-hairline: var(--registry-rule);
   --sl-color-hairline-light: var(--registry-rule);
   --sl-color-hairline-shade: var(--registry-rule);
-  --sl-nav-height: 104px;
+  --sl-nav-height: 60px;
   --sl-nav-pad-x: 40px;
   --sl-nav-pad-y: 0px;
   --sl-nav-gap: 24px;
@@ -83,7 +83,7 @@ body {
 
 .page > .header {
   align-items: stretch;
-  border-bottom: 0;
+  border-bottom: 1px solid var(--registry-rule);
   padding: 0 40px;
 }
 
@@ -111,8 +111,8 @@ body {
 
 .registry-header {
   display: grid;
-  grid-template-rows: 60px 44px;
-  block-size: 104px;
+  grid-template-rows: 60px;
+  block-size: 60px;
 }
 
 .registry-masthead {
@@ -120,7 +120,6 @@ body {
   grid-template-columns: minmax(220px, 1fr) minmax(280px, 526px) minmax(220px, 1fr);
   align-items: center;
   gap: 24px;
-  border-bottom: 1px solid var(--registry-rule);
 }
 
 .registry-wordmark {
@@ -356,13 +355,18 @@ pre,
   position: static !important;
   inline-size: 100% !important;
   inset-inline-end: auto !important;
+  block-size: 100% !important;
+  overflow: visible !important;
 }
 
 .registry-page-sidebar {
-  position: static;
+  position: sticky;
+  top: var(--sl-nav-height);
   inline-size: 220px;
-  margin-inline-start: auto;
-  margin-inline-end: 40px;
+  max-block-size: calc(100vh - var(--sl-nav-height));
+  margin-block-start: 50px;
+  margin-inline-start: 32px;
+  margin-inline-end: auto;
   overflow-y: auto;
   border-inline-start: 0;
   padding: 32px 0;
@@ -413,8 +417,6 @@ pre,
 
 .registry-page-meta {
   margin-top: 32px;
-  border-top: 1px solid var(--registry-rule);
-  padding-top: 20px;
 }
 
 .registry-page-meta a {
@@ -576,6 +578,7 @@ mobile-starlight-toc summary {
 @media (min-width: 72rem) {
   main {
     max-width: calc(720px + 112px);
+    margin-inline: auto;
   }
 }
 
@@ -586,6 +589,29 @@ mobile-starlight-toc summary {
 
   :root[data-has-sidebar][data-has-toc] .main-pane {
     --sl-content-margin-inline: 0 auto;
+    width: 100% !important;
+  }
+}
+
+@media (min-width: 86rem) {
+  /* Center the content + TOC group on wide viewports so the page doesn't
+     leave a 500px+ gap between text and the table of contents. Override
+     Starlight's default "fill all the space" formula for both panes. */
+  .main-frame > .lg\:sl-flex {
+    justify-content: center;
+  }
+
+  :root[data-has-sidebar][data-has-toc] .main-pane {
+    width: calc(720px + 112px) !important;
+    flex: 0 0 auto;
+  }
+
+  .right-sidebar-container {
+    width: calc(220px + 64px) !important;
+    flex: 0 0 auto;
+  }
+
+  .right-sidebar {
     width: 100% !important;
   }
 }
@@ -613,7 +639,7 @@ mobile-starlight-toc summary {
   :root,
   :root[data-theme='light'],
   :root[data-theme='dark'] {
-    --sl-nav-height: 116px;
+    --sl-nav-height: 64px;
     --sl-nav-pad-x: 16px;
     --sl-content-pad-x: 20px;
   }
@@ -623,8 +649,8 @@ mobile-starlight-toc summary {
   }
 
   .registry-header {
-    grid-template-rows: 64px 52px;
-    block-size: 116px;
+    grid-template-rows: 64px;
+    block-size: 64px;
   }
 
   .registry-masthead {
@@ -642,9 +668,11 @@ mobile-starlight-toc summary {
     font-size: 19px;
   }
 
+  /* Hidden on mobile: the link overlaps the fixed hamburger menu button,
+     and the same GitHub URL is reachable from the preview banner and the
+     per-page "Edit on GitHub" link. */
   .registry-utility {
-    gap: 12px;
-    font-size: 13px;
+    display: none;
   }
 
   .legend-list a {

@@ -1,6 +1,6 @@
 ---
 title: Boundaries and map
-description: The six registry family projects, their responsibilities, flow across them, and what each project does not own.
+description: The six registry stack projects, their responsibilities, flow across them, and what each project does not own.
 wide: true
 status: current
 owner: registry-legend
@@ -26,13 +26,13 @@ standards_referenced:
 
 import ProjectMap from '../../../components/ProjectMap.astro';
 
-The registry family has six repositories with distinct responsibilities.
+The registry stack has six repositories with distinct responsibilities.
 Use this page to decide which repository owns a question before opening implementation docs,
 and to understand how the six repositories connect at runtime.
 
 <figure>
   <img src="/registry-legend/images/registry-family-map.svg"
-       alt="Six registry family projects and how they connect. Registry Platform provides shared
+       alt="Six registry stack projects and how they connect. Registry Platform provides shared
             primitives. Registry Manifest compiles portable metadata. Registry Relay binds metadata
             to runtime sources and exposes protected APIs. Registry Witness evaluates claims and
             issues credentials. Registry Atlas inspects published artifacts in a browser.
@@ -44,7 +44,7 @@ and to understand how the six repositories connect at runtime.
 {/* Generated from src/data/projects.yaml by the ProjectMap component.
     Update projects.yaml to change any row; do not hand-edit the table above. */}
 
-## Flow across the family
+## Flow across the stack
 
 [Registry Platform](../../projects/registry-platform/) provides shared Rust primitives that Relay and
 Witness compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy,
@@ -72,7 +72,8 @@ a static metadata publisher, and narrated clients.
 | How is a claim evaluated and turned into an attestation or credential? | [Registry Witness](../../projects/registry-witness/) |
 | How are discovery artifacts inspected or matched against capability needs? | [Registry Atlas](../../projects/registry-atlas/) |
 | How do the services run together in a local demo? | [Registry Lab](../../projects/registry-lab/) |
-| How are these responsibilities explained across repos? | Registry Legend |
+
+Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
 
 {/* Generated from src/data/projects.yaml does_not_own lists, reinforced below with evidence packet citations. */}
 
@@ -150,9 +151,9 @@ Registry Lab is a compose-based local demo. It does not own:
 ## Documentation rule
 
 Put detailed setup, configuration, and command references in the owning repo. Put cross-project
-orientation, standards evidence, and contract indexes in Registry Legend.
+orientation, standards evidence, and contract indexes in these docs.
 
-When a page needs both, Registry Legend summarizes the decision and links to the owning source.
+When a page needs both, these docs summarize the decision and link to the owning source.
 
 ---
 

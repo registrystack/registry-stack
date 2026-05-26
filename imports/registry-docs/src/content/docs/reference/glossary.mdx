@@ -1,6 +1,6 @@
 ---
 title: Glossary
-description: Shared product names and domain terms for the registry family documentation.
+description: Shared product names and domain terms for the registry stack documentation.
 status: current
 owner: registry-legend
 source_repos:
@@ -10,7 +10,7 @@ source_repos:
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-05-26"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -42,7 +42,7 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Witness process that evaluates configured evidence rules against data from one or more source services and returns a structured claim result.</dd>
 
   <dt>claim level</dt>
-  <dd>Registry Legend's evidence discipline for standards use: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`. Defined fully in the <a href="../standards/">standards register</a>.</dd>
+  <dd>The evidence discipline these docs use for standards claims: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`. Defined fully in the <a href="../standards/">standards register</a>.</dd>
 
   <dt>DCAT</dt>
   <dd>Data Catalog Vocabulary. W3C recommendation. Registry Relay and Registry Manifest emit DCAT-shaped JSON-LD catalogs. Spell out on first use per page: "Data Catalog Vocabulary (DCAT)".</dd>
@@ -51,13 +51,16 @@ Product names are always in English, including on future translated pages.
   <dd>Core Public Service Vocabulary Application Profile. Registry Manifest emits CPSV-AP service catalogue JSON-LD. Registry Atlas uses it as the public-service entry point for service-first discovery.</dd>
 
   <dt>DPI</dt>
-  <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. Registry family components fit the registry-consultation slice of a DPI stack. See <a href="../../explanation/dpi-safeguards-alignment/">DPI safeguards alignment</a>.</dd>
+  <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. These projects cover the registry-consultation slice of a DPI deployment. See <a href="../../explanation/dpi-safeguards-alignment/">DPI safeguards alignment</a>.</dd>
 
   <dt>DID</dt>
   <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when provenance is enabled. Registry Witness parses `did:jwk` values for credential subjects.</dd>
 
   <dt>disclosure profile</dt>
   <dd>Registry Witness control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
+
+  <dt>distributed custody</dt>
+  <dd>The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody.</dd>
 
   <dt>entity route</dt>
   <dd>A Relay API route shaped around a domain resource such as `household` or `individual`, not around storage table identifiers.</dd>
@@ -70,6 +73,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>historical docs</dt>
   <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance. Historical pages are visibly marked and linked only from the historical docs index.</dd>
+
+  <dt>interoperability</dt>
+  <dd>Commitment that every registry in the stack publishes its catalog, schemas, services, and policies in standards-shaped form (DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, SD-JWT VC), so downstream systems integrate against stable contracts rather than per-deployment ones.</dd>
 
   <dt>JSON-LD</dt>
   <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and provenance contexts.</dd>
@@ -86,7 +92,7 @@ Product names are always in English, including on future translated pages.
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
 
-  <dt>registry family</dt>
+  <dt>registry stack</dt>
   <dd>The six related projects: <a href="../../projects/registry-platform/">Registry Platform</a>, <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-witness/">Registry Witness</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
 
   <dt>Registry Atlas</dt>
@@ -94,9 +100,6 @@ Product names are always in English, including on future translated pages.
 
   <dt>Registry Lab</dt>
   <dd>Compose-based runnable local demo that starts three Registry Relay instances, four Registry Witness instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated clients. Repo slug: `registry-lab`.</dd>
-
-  <dt>Registry Legend</dt>
-  <dd>This documentation site and its source repo. Registry Legend explains the registry family map, contracts, standards claims, and first-run path. The site name is always in title case.</dd>
 
   <dt>Registry Manifest</dt>
   <dd>Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
@@ -113,8 +116,14 @@ Product names are always in English, including on future translated pages.
   <dt>`registry-manifest/v1`</dt>
   <dd>Schema version string for portable metadata manifests.</dd>
 
+  <dt>reviewability</dt>
+  <dd>Commitment that every promise the stack makes is backed by an artifact a third party can inspect without trusting the operator's word. Examples include the published DCAT catalog, the SHACL shapes, the ODRL policy documents, the audit envelope schema, the JWKS public key endpoint, and the credential profile configuration. Registry Atlas implements the inspection workflow.</dd>
+
   <dt>runtime binding</dt>
   <dd>Relay configuration that connects logical manifest concepts to actual files, database tables, scopes, and backend credentials. Lives in Relay config, not in the manifest.</dd>
+
+  <dt>safeguards</dt>
+  <dd>Commitment that every exchange the stack mediates is authorized, scoped, and audited. Concretely: authentication by API key or OIDC; scope-checked routes; per-claim disclosure control (value, predicate, or redacted); no write paths in v0; audit envelopes for every request that touches person-level data.</dd>
 
   <dt>SD-JWT VC</dt>
   <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Witness issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>

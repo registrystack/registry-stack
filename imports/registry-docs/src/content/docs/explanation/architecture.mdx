@@ -1,6 +1,6 @@
 ---
 title: Architecture overview
-description: How the registry family uses a two-layer design of portable metadata and runtime services to publish, consult, and prove registry facts.
+description: How the registry stack uses a two-layer design of portable metadata and runtime services to publish, consult, and prove registry facts.
 status: current
 owner: registry-legend
 source_repos:
@@ -27,7 +27,7 @@ standards_referenced:
   - w3c-did
 ---
 
-The registry family is organized around two layers: a portable metadata layer and a runtime services layer.
+The registry stack is organized around two layers: a portable metadata layer and a runtime services layer.
 The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
 exposes, without touching production sources.
 The runtime services layer (Registry Relay, Registry Witness) binds those artifacts to real data, enforces

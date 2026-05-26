@@ -1,6 +1,6 @@
 ---
 title: DPI safeguards alignment
-description: How the registry family relates to the Universal DPI Safeguards Framework at the technical implementation layer.
+description: How the registry stack relates to the Universal DPI Safeguards Framework at the technical implementation layer.
 status: current
 owner: registry-legend
 source_repos:
@@ -8,7 +8,7 @@ source_repos:
   - registry-manifest
   - registry-witness
   - registry-atlas
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-05-26"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -21,17 +21,17 @@ standards_referenced:
   - SD-JWT VC
 ---
 
-If you are a DPI implementer or reviewer trying to place the registry family inside a safeguards program,
-this page compares the family to the Universal DPI Safeguards Framework at the technical implementation
-layer. It shows where the family helps and where it does not.
+If you are a DPI implementer or reviewer trying to place the registry stack inside a safeguards program,
+this page compares the stack to the Universal DPI Safeguards Framework at the technical implementation
+layer. It shows where it helps and where it does not.
 
-The registry family is not a complete safeguards program.
+The registry stack is not a complete safeguards program.
 The broader safeguards outcome depends on the institution that governs, deploys, audits, and operates
 the DPI system. Alignment with this page is not certification.
 
 ## Good fit and poor fit
 
-The registry family fits best when a team needs to expose sensitive registry facts to authorized systems
+The registry stack fits best when a team needs to expose sensitive registry facts to authorized systems
 without making raw registry data broadly available.
 
 Good fit:
@@ -59,7 +59,7 @@ safeguards initiative and framework.
 
 ## Technical alignment
 
-The registry family is most relevant where safeguards depend on:
+The registry stack is most relevant where safeguards depend on:
 
 - **Controlled access**: authorized systems only, with API key or OIDC.
 - **Data minimization**: configured fields, declared filters, selective disclosure on credentials.
@@ -99,13 +99,27 @@ This alignment is strongest at the implementation-evidence layer. It helps revie
 registry system exposes, which project owns each surface, and which controls are available before
 deployment decisions are made.
 
+## Stack commitments and framework pillars
+
+The registry stack's three commitments map to the framework's five pillars:
+
+| Stack commitment | DPI Safeguards pillar |
+| --- | --- |
+| Interoperability | Open assets and interoperability |
+| Safeguards | Privacy by design; Data security by design |
+| Reviewability | Transparency and accountability; Evidence-based improvement |
+
+Distributed custody is the architectural premise of the stack rather than a pillar of its own.
+It supports every framework pillar by ensuring no single authority can compromise data flowing
+from another.
+
 ## Governance boundary
 
 The Universal DPI Safeguards Framework covers more than software controls. A DPI program still needs
 lawful basis, public governance, procurement discipline, data protection operations, accessibility,
 remedies, oversight, security audits, and community participation.
 
-The registry family does not obtain consent, approve data-sharing agreements, run grievance channels,
+The registry stack does not obtain consent, approve data-sharing agreements, run grievance channels,
 certify production sources, or make final eligibility decisions. It also does not replace a data
 protection impact assessment, independent security review, or public consultation process.
 

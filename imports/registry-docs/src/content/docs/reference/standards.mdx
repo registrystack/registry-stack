@@ -1,6 +1,6 @@
 ---
 title: Standards register
-description: Standards referenced by the registry family, with explicit claim levels and supporting evidence.
+description: Standards referenced by the registry stack, with explicit claim levels and supporting evidence.
 wide: true
 status: current
 owner: registry-legend
@@ -35,7 +35,7 @@ standards_referenced:
 
 import StandardsTable from '../../../components/StandardsTable.astro';
 
-This register lists every standard the registry family touches, the projects that touch it, and the claim level that names how strong the relationship is. The registry family does not introduce a new standard; each project emits, maps to, or aligns with existing ones, and says so explicitly.
+This register lists every standard the registry stack touches, the projects that touch it, and the claim level that names how strong the relationship is. The registry stack does not introduce a new standard; each project emits, maps to, or aligns with existing ones, and says so explicitly.
 
 The table is generated from `src/data/standards.yaml`.
 
@@ -67,7 +67,7 @@ What these levels mean for integrators:
 
 - **Standard** links to the official standards body page.
 - **Status** is one of `used`, `referenced`, `evaluated`, `planned`, or `historical`.
-- **Used by** lists the registry family projects that reference this standard.
+- **Used by** lists the registry stack projects that reference this standard.
 - **Claim level** uses the six levels defined above.
 - **Surface** names the specific output or endpoint that the claim applies to.
 - **Profile and notes** identifies the version or profile in use and any boundary conditions.

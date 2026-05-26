@@ -10,12 +10,12 @@
 - id: registry-relay.openapi
   name: Registry Relay OpenAPI
   owner: registry-relay
-  status: pinned-demo-snapshot
-  surface: Protected Registry Data API, metadata API, evidence offering verification, health, readiness, and optional standards adapters.
+  status: hand-authored-abstract-contract
+  surface: Protected Registry Data API, metadata API, evidence offering verification, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and provenance routes.
   source_of_truth:
-    label: Registry Relay OpenAPI generator
-    url: https://github.com/jeremi/registry-relay/blob/main/src/api/openapi.rs
-  consumer_note: Registry Legend publishes a pinned demo snapshot until Relay has a release-grade export artifact.
+    label: Registry Relay abstract OpenAPI contract
+    url: https://github.com/jeremi/registry-relay/blob/main/openapi/registry-relay.openapi.json
+  consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch the auth-gated `GET /openapi.json` from a configured gateway.
 - id: registry-witness.openapi
   name: Registry Witness OpenAPI
   owner: registry-witness

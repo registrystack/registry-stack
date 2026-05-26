@@ -1,8 +1,8 @@
 import type { APIRoute } from 'astro';
 
-export const GET: APIRoute = () => new Response(`# Registry Legend
+export const GET: APIRoute = () => new Response(`# Registry stack docs
 
-Registry Legend is the canonical documentation website for the registry project family.
+Documentation for the registry stack: six projects that publish registry metadata, serve protected registry data, and issue evidence credentials.
 
 Core pages:
 - /registry-legend/start/
