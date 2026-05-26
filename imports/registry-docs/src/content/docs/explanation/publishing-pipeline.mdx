@@ -103,13 +103,16 @@ is visible immediately.
 At request time, a caller authenticated with a `<dataset_id>:metadata` scope can fetch:
 
 ```http
-GET /metadata/cpsv-ap
+GET /metadata/dcat/bregdcat-ap
 Authorization: Bearer <token>
 ```
 
-Relay calls the CPSV-AP renderer on the validated manifest and returns the result.
+Relay calls the BRegDCAT-AP renderer on the validated manifest and returns the result, which
+includes the CPSV public service nodes the manifest declares.
 If the caller's scope covers only one dataset and the manifest has three, the response
-contains only the services and datasets visible under that scope.
+contains only the datasets visible under that scope.
+For the full route inventory (DCAT, SHACL, ODRL, per-dataset, per-entity, OGC Records,
+evidence offerings), see the [Relay reference](../../projects/registry-relay/reference/#metadata-route-inventory).
 
 Beyond scoped filtering, Relay adds:
 

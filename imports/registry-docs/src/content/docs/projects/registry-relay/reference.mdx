@@ -24,7 +24,7 @@ standards_referenced:
 Use this page to look up config keys, source binding options, API routes, auth fields,
 audit record fields, environment variables, and startup error codes for Registry Relay release tag `v0.1.1`.
 This reference is hand-maintained against the upstream source; check linked upstream files
-for the latest detail. Relay owns the config schema and route behavior, while shared auth, audit, OIDC, HTTP security, outbound HTTP, crypto, and SD-JWT primitives live in Registry Platform.
+for the latest detail. For the shared primitives this reference refers to (auth, audit, OIDC, HTTP security, outbound HTTP, crypto, SD-JWT), see the [Registry Platform reference](../../registry-platform/reference/).
 
 Jump to: [Environment variables](#environment-variables) | [Auth failure codes](#oidc-granular-failure-codes) | [Startup error codes](#split-metadata-startup-error-codes)
 
@@ -32,7 +32,7 @@ Jump to: [Environment variables](#environment-variables) | [Auth failure codes](
 
 The config file is a single YAML document.
 Unknown fields are rejected for most blocks.
-Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md) (root shape; all keys below are documented there unless otherwise noted).
+Source: [docs/configuration.md](https://github.com/jeremi/registry-relay/blob/85d32f062388a7711d66aae94e8a15e588d3aa3a/docs/configuration.md) (root shape; every key in the following table is documented there unless otherwise noted).
 
 | Key | Type | Required | Purpose |
 | --- | --- | --- | --- |

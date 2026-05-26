@@ -58,9 +58,9 @@ The configuration that makes each stage concrete is the `ClaimDefinition` in
 Each `ClaimDefinition` names its `source_bindings`, declares its `rule`, sets its `disclosure`
 policy, and lists the `formats` it may emit.
 
-## Three paths to a credential
+## Three ways to consume an evaluation
 
-There is one claim model and three transports a caller can use to land a credential.
+There is one claim model and three transports a caller can use to land a credential or a receipt.
 
 1. Direct API. The caller calls `POST /claims/evaluate` to evaluate the claim, then
    `POST /credentials/issue` to materialize an SD-JWT VC from the stored evaluation. The caller

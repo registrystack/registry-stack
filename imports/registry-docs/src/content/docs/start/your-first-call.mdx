@@ -29,7 +29,7 @@ built.
 Clone the repository with its submodules and start the demo topology.
 
 ```sh
-git clone --recurse-submodules git@github.com:jeremi/registry-lab.git
+git clone --recurse-submodules https://github.com/jeremi/registry-lab.git
 cd registry-lab
 just generate
 just build
@@ -141,9 +141,12 @@ Expected response shape:
       "claim_id": "person-is-alive",
       "satisfied": true,
       "disclosure": "predicate",
+      "format": "application/vnd.registry-witness.claim-result+json",
+      "evaluation_id": "01HX...",
+      "issued_at": "2026-05-26T12:00:00Z",
       "provenance": {
         "source_count": 1,
-        "evaluated_at": "..."
+        "computed_by": "demo.registry-witness"
       }
     }
   ]
@@ -153,6 +156,7 @@ Expected response shape:
 `"satisfied": true` means the CEL rule evaluated to `true` for this subject.
 The `predicate` disclosure mode means the response contains only whether the claim was satisfied,
 not the underlying field value.
+Note the `evaluation_id`; step 4 references it.
 
 To confirm that a missing subject returns a stable status, replace `NID-1001` with `NID-9999`.
 The response will be `200`, `404`, or `422` depending on Witness configuration; all three are
@@ -160,30 +164,53 @@ considered stable outcomes for an unknown subject.
 
 ## Step 4: issue a verifiable credential (optional)
 
-To receive an SD-JWT Verifiable Credential (SD-JWT VC) instead of a plain claim result, set the
-`Accept` header to `application/dc+sd-jwt` and the `format` field to match:
+SD-JWT VC issuance is a separate call from claim evaluation. You first evaluate the claim with
+the `application/dc+sd-jwt` format (which stores the evaluation in that format), then call
+`POST /credentials/issue` with the returned `evaluation_id` to materialize the credential.
+
+First, evaluate the claim in the SD-JWT format. Replace the `format` field, keep the same
+endpoint:
 
 ```sh
-curl -fsS \
+EVALUATION_ID=$(curl -fsS \
   -X POST \
   -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
   -H "Content-Type: application/json" \
-  -H "Accept: application/dc+sd-jwt" \
   -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
-  -H "x-request-id: tutorial-003" \
+  -H "x-request-id: tutorial-003a" \
   "http://127.0.0.1:4321/claims/evaluate" \
   --data '{
     "subject": {"id": "NID-1001", "id_type": "national_id"},
     "claims": ["person-is-alive"],
     "disclosure": "predicate",
     "format": "application/dc+sd-jwt"
-  }'
+  }' | jq -r '.results[0].evaluation_id')
+echo "Stored evaluation: ${EVALUATION_ID}"
+```
+
+Then issue the credential from that stored evaluation:
+
+```sh
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
+  -H "x-request-id: tutorial-003b" \
+  "http://127.0.0.1:4321/credentials/issue" \
+  --data "{\"evaluation_id\":\"${EVALUATION_ID}\"}"
 ```
 
 The response body is a compact SD-JWT VC string.
 The credential is issued by `did:web:civil-evidence.demo.example` using the key from
 `REGISTRY_WITNESS_ISSUER_JWK` generated during `just generate`.
 The issuer DID and key are demo values; do not use them outside the local lab.
+
+If you want a wallet to drive issuance instead, the lab also runs an OID4VCI flow against a
+host-side Witness on port `4325` via `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
+`just citizen-oid4vci-token`, and `just citizen-oid4vci-report`. See
+[Evidence issuance, end to end](/explanation/evidence-issuance/) for the three ways a caller
+can consume an evaluation.
 
 For a cross-authority claim that draws from all three Relay instances, use the shared eligibility
 Witness on port `4323` with claim `eligible-for-combined-support`.

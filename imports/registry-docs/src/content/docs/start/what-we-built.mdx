@@ -21,6 +21,7 @@ standards_referenced:
   - json-schema
   - sd-jwt-vc
   - odrl
+  - oid4vci
 ---
 
 The registry family is organized around three stories: Publish, which turns a YAML manifest into
@@ -97,7 +98,7 @@ It has no write paths in v1 and it is not an open-data portal.
 ## Prove
 
 The Prove story answers the question: how does a calling system learn whether a person qualifies
-for a program, without receiving the records that determine that answer?
+for a program, without exposing the records that determine that answer?
 
 ### Registry Witness
 
@@ -148,8 +149,11 @@ Product-specific route behavior and policy decisions stay in the consuming servi
 Prove stories together on a laptop.
 It runs three Relay instances (civil registry on port `4311`, social protection on `4312`,
 health on `4313`), four Witness instances (civil on `4321`, social protection on `4322`,
-shared eligibility on `4323`, OpenFn sidecar on `4324`), live Postgres and Zitadel services,
-a private OpenFn sidecar path, and a static metadata publisher on port `4331`.
+shared eligibility on `4323`, and an OpenFn-fed civil Witness on `4324`), an internal
+`openfn-civil-sidecar` service that feeds the `4324` Witness, live Postgres and Zitadel,
+and a static metadata publisher on port `4331`.
+A separate host-side Witness on port `4325` (started outside compose by `just
+citizen-oid4vci-*`) hosts the OID4VCI wallet flow.
 
 Registry Atlas is run separately and is not part of the Compose topology at v0.1.
 
