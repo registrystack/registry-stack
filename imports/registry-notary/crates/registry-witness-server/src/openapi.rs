@@ -1519,6 +1519,8 @@ fn farmer_under_4ha_claim_example() -> Value {
         "title": "Farmer under four hectares",
         "version": "2026-05",
         "subject_type": "person",
+        "evidence_type": "smallholder_farmer_evidence",
+        "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
         "operations": {
             "evaluate": true,
             "batch_evaluate": true
@@ -1534,7 +1536,9 @@ fn farmer_under_4ha_claim_example() -> Value {
             "downgrade": "deny"
         },
         "cccev": {
-            "requirement_type": "InformationRequirement"
+            "requirement_type": "InformationRequirement",
+            "evidence_type": "smallholder_farmer_evidence",
+            "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer"
         },
         "oots": null
     })

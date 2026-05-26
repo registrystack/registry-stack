@@ -185,6 +185,8 @@ evidence:
         - smallholder_sd_jwt
       cccev:
         requirement_type: InformationRequirement
+        evidence_type: smallholder_farmer_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/smallholder-farmer
       oots:
         enabled: false
         requirement: https://demo.example.gov/requirements/smallholder-under-4ha

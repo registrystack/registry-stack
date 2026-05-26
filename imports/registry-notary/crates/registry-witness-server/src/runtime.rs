@@ -1680,7 +1680,7 @@ pub fn claim_summary(claim: &ClaimDefinition) -> Value {
         .filter(|o| o.enabled)
         .map(|o| serde_json::to_value(o).unwrap_or(Value::Null))
         .unwrap_or(Value::Null);
-    json!({
+    let mut summary = json!({
         "id": claim.id,
         "title": claim.title,
         "version": claim.version,
@@ -1697,7 +1697,16 @@ pub fn claim_summary(claim: &ClaimDefinition) -> Value {
         },
         "cccev": claim.cccev,
         "oots": oots,
-    })
+    });
+    if let Some(cccev) = &claim.cccev {
+        if let Some(evidence_type) = &cccev.evidence_type {
+            summary["evidence_type"] = json!(evidence_type);
+        }
+        if let Some(evidence_type_iri) = &cccev.evidence_type_iri {
+            summary["evidence_type_iri"] = json!(evidence_type_iri);
+        }
+    }
+    summary
 }
 
 pub fn formats(config: &EvidenceConfig) -> Vec<EvidenceFormat> {
@@ -2715,6 +2724,30 @@ mod tests {
             claim_id: BoundedClaimId::new(claim_id).expect("claim id is bounded"),
             subject_binding_hash: Hashed::from_hash("sha256:test"),
         }
+    }
+
+    #[test]
+    fn claim_summary_advertises_cccev_evidence_type_metadata() {
+        let mut claim = test_claim("civil-child-status", Vec::new(), false);
+        claim.cccev = Some(registry_witness_core::CccevConfig {
+            requirement_type: Some("InformationRequirement".to_string()),
+            evidence_type: Some("civil_child_status_evidence".to_string()),
+            evidence_type_iri: Some(
+                "https://demo.example.gov/evidence-types/civil-child-status".to_string(),
+            ),
+        });
+
+        let summary = claim_summary(&claim);
+
+        assert_eq!(summary["evidence_type"], "civil_child_status_evidence");
+        assert_eq!(
+            summary["evidence_type_iri"],
+            "https://demo.example.gov/evidence-types/civil-child-status"
+        );
+        assert_eq!(
+            summary["cccev"]["evidence_type_iri"],
+            "https://demo.example.gov/evidence-types/civil-child-status"
+        );
     }
 
     #[test]

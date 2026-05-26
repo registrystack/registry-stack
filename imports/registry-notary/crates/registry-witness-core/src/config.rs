@@ -2271,6 +2271,10 @@ pub struct CredentialDisclosureConfig {
 pub struct CccevConfig {
     #[serde(default)]
     pub requirement_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_type_iri: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
