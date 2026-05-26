@@ -5,7 +5,9 @@ crate_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 repo_dir="$(CDPATH= cd -- "$crate_dir/../.." && pwd)"
 smoke_dir="$repo_dir/target/openfn-worker-smoke"
 worker="$smoke_dir/openfn_worker.mjs"
-job="$crate_dir/examples/jobs/common-person-lookup.js"
+prepare_job="$crate_dir/examples/jobs/common-prepare-lookup.js"
+filter_job="$crate_dir/examples/jobs/common-filter-records.js"
+return_job="$crate_dir/examples/jobs/common-return-rda.js"
 
 rm -rf "$smoke_dir"
 mkdir -p "$smoke_dir"
@@ -30,12 +32,39 @@ node --experimental-vm-modules "$worker" \
   --require-adaptor "@openfn/language-common@3.2.3" |
   grep "@openfn/language-common@3.2.3:3.2.3=" >/dev/null
 
-request="$(jq -nc --arg job "$job" '{
+request="$(jq -nc \
+  --arg prepare_job "$prepare_job" \
+  --arg filter_job "$filter_job" \
+  --arg return_job "$return_job" '{
   source_id: "smoke",
   dataset: "civil_registry",
   entity: "civil_person",
-  job: $job,
-  adaptor: "@openfn/language-common@3.2.3",
+  workflow: {
+    start: "prepare_lookup",
+    steps: [
+      {
+        id: "prepare_lookup",
+        job: $prepare_job,
+        adaptor: "@openfn/language-common@3.2.3",
+        next: {
+          filter_records: true
+        }
+      },
+      {
+        id: "filter_records",
+        job: $filter_job,
+        adaptor: "@openfn/language-common@3.2.3",
+        next: {
+          return_rda: true
+        }
+      },
+      {
+        id: "return_rda",
+        job: $return_job,
+        adaptor: "@openfn/language-common@3.2.3"
+      }
+    ]
+  },
   lookup: {field: "national_id", value: "person-123"},
   fields: ["national_id", "birth_date"],
   limit: 2,
@@ -73,5 +102,13 @@ rate_limit_output="$(
 )"
 printf '%s\n' "$rate_limit_output" |
   jq -e '.error.code == "target_rate_limit" and .error.retry_after_seconds == 5' >/dev/null
+
+cycle_request="$(printf '%s\n' "$request" | jq -c '.workflow.steps[2].next = {prepare_lookup: true}')"
+cycle_output="$(
+  printf '%s\n' "$cycle_request" |
+    node --experimental-vm-modules "$worker"
+)"
+printf '%s\n' "$cycle_output" |
+  jq -e '.error.code == "openfn_execution"' >/dev/null
 
 printf 'OpenFn worker smoke passed\n'

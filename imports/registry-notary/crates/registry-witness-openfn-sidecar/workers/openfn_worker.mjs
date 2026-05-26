@@ -48,7 +48,7 @@ async function withStdoutRedirect(callback) {
 }
 
 async function executeLookup(request) {
-  const compiled = await compiledJob(request.job, request.adaptor);
+  const workflow = await compiledWorkflow(request);
 
   const state = {
     data: {
@@ -64,29 +64,22 @@ async function executeLookup(request) {
   const result = await run(
     {
       workflow: {
-        steps: [
-          {
-            id: 'lookup',
-            expression: compiled.code,
-            adaptors: [`${compiled.adaptor.name}=${compiled.adaptor.path}`],
-          },
-        ],
+        steps: workflow.steps,
       },
       options: {
-        start: 'lookup',
+        start: workflow.start,
       },
     },
     state,
     {
       linker: {
-        modules: {
-          [compiled.adaptor.name]: { path: compiled.adaptor.path },
-        },
-        cacheKey: compiled.cacheKey,
+        modules: workflow.modules,
+        cacheKey: workflow.cacheKey,
       },
-      statePropsToRemove: ['configuration'],
+      statePropsToRemove: [],
     },
   );
+  delete result?.configuration;
 
   const targetError = extractTargetError(result);
   if (targetError) {
@@ -97,6 +90,60 @@ async function executeLookup(request) {
     return { error: { code: 'invalid_job_result' } };
   }
   return { data: records };
+}
+
+async function compiledWorkflow(request) {
+  if (Array.isArray(request.workflow?.steps)) {
+    const steps = [];
+    const modules = {};
+    const cacheKeys = [];
+
+    for (const requestedStep of request.workflow.steps) {
+      const compiled = await compiledJob(requestedStep.job, requestedStep.adaptor);
+      modules[compiled.adaptor.name] = { path: compiled.adaptor.path };
+      cacheKeys.push(compiled.cacheKey);
+
+      const step = {
+        id: requestedStep.id,
+        expression: compiled.code,
+        adaptors: [`${compiled.adaptor.name}=${compiled.adaptor.path}`],
+      };
+      if (requestedStep.next) {
+        step.next = normalizeNext(requestedStep.next);
+      }
+      steps.push(step);
+    }
+
+    return {
+      steps,
+      start: request.workflow.start ?? steps[0]?.id,
+      modules,
+      cacheKey: `workflow-${cacheKeys.join('-')}`,
+    };
+  }
+
+  const compiled = await compiledJob(request.job, request.adaptor);
+  return {
+    steps: [
+      {
+        id: 'lookup',
+        expression: compiled.code,
+        adaptors: [`${compiled.adaptor.name}=${compiled.adaptor.path}`],
+      },
+    ],
+    start: 'lookup',
+    modules: {
+      [compiled.adaptor.name]: { path: compiled.adaptor.path },
+    },
+    cacheKey: compiled.cacheKey,
+  };
+}
+
+function normalizeNext(next) {
+  if (typeof next === 'string') {
+    return { [next]: true };
+  }
+  return next;
 }
 
 async function compiledJob(job, adaptorSpecifier) {

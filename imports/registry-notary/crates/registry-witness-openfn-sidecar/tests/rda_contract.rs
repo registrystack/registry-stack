@@ -653,6 +653,165 @@ async fn configured_smoke_lookup_runs_before_readiness() {
 }
 
 #[tokio::test]
+async fn workflow_source_config_sends_multi_step_execution_plan() {
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let attempt_log = tmp.path().join("worker-attempts.jsonl");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let job = fixtures.join("jobs/opencrvs-person-lookup.js");
+    let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log).replace(
+        &format!(
+            "    job: {}\n    adaptor: \"@openfn/language-http@7.2.0\"\n",
+            yaml_path(&job)
+        ),
+        &format!(
+            r#"    workflow:
+      start: prepare_lookup
+      steps:
+        - id: prepare_lookup
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            return_rda: true
+        - id: return_rda
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+"#,
+            job = yaml_path(&job)
+        ),
+    );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let app = sidecar_router(config)
+        .await
+        .expect("sidecar router builds from workflow manifest");
+    let server = TestServer::builder().http_transport().build(app);
+
+    assert_rda_data(
+        &authorized_lookup(&server, "person-123").await,
+        json!([{ "national_id": "person-123", "birth_date": "1990-01-01" }]),
+    );
+
+    let attempts = fs::read_to_string(&attempt_log).expect("attempt log is written");
+    let lookup_request = attempts
+        .lines()
+        .find(|line| line.contains("person-123"))
+        .expect("lookup request is logged");
+    let request: Value = serde_json::from_str(lookup_request).expect("request is JSON");
+    assert!(request.get("job").is_none());
+    assert!(request.get("adaptor").is_none());
+    assert_eq!(request["workflow"]["start"], json!("prepare_lookup"));
+    assert_eq!(
+        request["workflow"]["steps"][0]["next"],
+        json!({ "return_rda": true })
+    );
+    assert_eq!(
+        request["workflow"]["steps"]
+            .as_array()
+            .expect("workflow steps array")
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn startup_rejects_workflow_cycle_before_readiness() {
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let attempt_log = tmp.path().join("worker-attempts.jsonl");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let job = fixtures.join("jobs/opencrvs-person-lookup.js");
+    let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log).replace(
+        &format!(
+            "    job: {}\n    adaptor: \"@openfn/language-http@7.2.0\"\n",
+            yaml_path(&job)
+        ),
+        &format!(
+            r#"    workflow:
+      start: prepare_lookup
+      steps:
+        - id: prepare_lookup
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            return_rda: true
+        - id: return_rda
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            prepare_lookup: true
+"#,
+            job = yaml_path(&job)
+        ),
+    );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject a workflow cycle before readiness"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("workflow contains a cycle"));
+    assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_rejects_workflow_merge_before_readiness() {
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let attempt_log = tmp.path().join("worker-attempts.jsonl");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let job = fixtures.join("jobs/opencrvs-person-lookup.js");
+    let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log).replace(
+        &format!(
+            "    job: {}\n    adaptor: \"@openfn/language-http@7.2.0\"\n",
+            yaml_path(&job)
+        ),
+        &format!(
+            r#"    workflow:
+      start: choose_path
+      steps:
+        - id: choose_path
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            path_a: true
+            path_b: true
+        - id: path_a
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            return_rda: true
+        - id: path_b
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            return_rda: true
+        - id: return_rda
+          job: {job}
+          adaptor: "@openfn/language-http@7.2.0"
+"#,
+            job = yaml_path(&job)
+        ),
+    );
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject a workflow merge before readiness"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("multiple input steps"));
+    assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
 async fn startup_rejects_missing_smoke_lookup_before_readiness() {
     std::env::set_var(
         CREDENTIAL_ENV,

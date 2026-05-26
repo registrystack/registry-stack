@@ -7,14 +7,14 @@ use axum::{
     Json, Router,
 };
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ffi::OsString,
     fmt,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path as FsPath, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -95,13 +95,67 @@ pub struct WorkerProcessConfig {
 pub struct SourceConfig {
     pub dataset: String,
     pub entity: String,
-    pub job: PathBuf,
-    pub adaptor: String,
+    #[serde(default)]
+    pub job: Option<PathBuf>,
+    #[serde(default)]
+    pub adaptor: Option<String>,
+    #[serde(default)]
+    pub workflow: Option<SourceWorkflowConfig>,
     pub credential_env: String,
     #[serde(default)]
     pub allowed_base_urls: Vec<String>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceWorkflowConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    pub steps: Vec<SourceWorkflowStepConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceWorkflowStepConfig {
+    pub id: String,
+    pub job: PathBuf,
+    pub adaptor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<SourceWorkflowNextConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum SourceWorkflowNextConfig {
+    Step(String),
+    Edges(BTreeMap<String, SourceWorkflowEdgeConfig>),
+}
+
+impl SourceWorkflowNextConfig {
+    fn target_ids(&self) -> Vec<&str> {
+        match self {
+            Self::Step(step) => vec![step.as_str()],
+            Self::Edges(edges) => edges.keys().map(String::as_str).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum SourceWorkflowEdgeConfig {
+    Enabled(bool),
+    Condition(String),
+    Edge(SourceWorkflowEdgeObjectConfig),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceWorkflowEdgeObjectConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -290,22 +344,7 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
         ));
     }
     for (source_id, source) in &config.sources {
-        if !source.job.is_file() {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} job {} is missing",
-                source.job.display()
-            )));
-        }
-        if source.adaptor.trim().is_empty() {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} adaptor must be pinned"
-            )));
-        }
-        adaptor_pin_version(&source.adaptor).ok_or_else(|| {
-            SidecarError::Config(format!(
-                "source {source_id} adaptor must include a version pin"
-            ))
-        })?;
+        validate_source_execution(source_id, source)?;
         if source
             .allowed_base_urls
             .iter()
@@ -327,6 +366,162 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
             )));
         }
     }
+    Ok(())
+}
+
+fn validate_source_execution(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
+    match (&source.job, &source.adaptor, &source.workflow) {
+        (Some(job), Some(adaptor), None) => {
+            validate_source_job(source_id, "job", job)?;
+            validate_source_adaptor(source_id, "adaptor", adaptor)?;
+        }
+        (None, None, Some(workflow)) => validate_source_workflow(source_id, workflow)?,
+        _ => {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} must configure either job/adaptor or workflow.steps"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_source_workflow(
+    source_id: &str,
+    workflow: &SourceWorkflowConfig,
+) -> Result<(), SidecarError> {
+    if workflow.steps.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} workflow.steps must not be empty"
+        )));
+    }
+
+    let mut step_ids = BTreeSet::new();
+    for step in &workflow.steps {
+        if step.id.trim().is_empty() {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} workflow step id must be non-empty"
+            )));
+        }
+        if !step_ids.insert(step.id.as_str()) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} workflow step {} is duplicated",
+                step.id
+            )));
+        }
+        validate_source_job(
+            source_id,
+            &format!("workflow step {} job", step.id),
+            &step.job,
+        )?;
+        validate_source_adaptor(
+            source_id,
+            &format!("workflow step {} adaptor", step.id),
+            &step.adaptor,
+        )?;
+    }
+
+    if let Some(start) = &workflow.start {
+        if !step_ids.contains(start.as_str()) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} workflow start step {start} is not defined"
+            )));
+        }
+    }
+    let mut incoming_counts = BTreeMap::<&str, usize>::new();
+    let mut next_by_step = BTreeMap::<&str, Vec<&str>>::new();
+    for step in &workflow.steps {
+        let Some(next) = &step.next else {
+            continue;
+        };
+        let targets = next.target_ids();
+        for target in &targets {
+            if !step_ids.contains(*target) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} workflow step {} next step {target} is not defined",
+                    step.id
+                )));
+            }
+            let count = incoming_counts.entry(*target).or_default();
+            *count += 1;
+        }
+        next_by_step.insert(step.id.as_str(), targets);
+    }
+    if let Some((step_id, _count)) = incoming_counts.iter().find(|(_step_id, count)| **count > 1) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} workflow step {step_id} has multiple input steps, which is not supported by the pinned OpenFn runtime"
+        )));
+    }
+    let mut visited = BTreeSet::new();
+    for start_step in &workflow.steps {
+        if visited.contains(start_step.id.as_str()) {
+            continue;
+        }
+        let mut path = BTreeSet::new();
+        let current = start_step.id.as_str();
+        if !path.insert(current) {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} workflow contains a cycle at step {current}"
+            )));
+        }
+        if let Some(next_steps) = next_by_step.get(current) {
+            for next in next_steps {
+                detect_workflow_cycle(source_id, &next_by_step, next, &mut path, &visited)?;
+            }
+        }
+        visited.extend(path);
+    }
+
+    Ok(())
+}
+
+fn detect_workflow_cycle<'a>(
+    source_id: &str,
+    next_by_step: &BTreeMap<&'a str, Vec<&'a str>>,
+    current: &'a str,
+    path: &mut BTreeSet<&'a str>,
+    visited: &BTreeSet<&'a str>,
+) -> Result<(), SidecarError> {
+    if visited.contains(current) {
+        return Ok(());
+    }
+    if !path.insert(current) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} workflow contains a cycle at step {current}"
+        )));
+    }
+    if let Some(next_steps) = next_by_step.get(current) {
+        for next in next_steps {
+            detect_workflow_cycle(source_id, next_by_step, next, path, visited)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_source_job(source_id: &str, label: &str, job: &FsPath) -> Result<(), SidecarError> {
+    if !job.is_file() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} {} is missing",
+            job.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_source_adaptor(
+    source_id: &str,
+    label: &str,
+    adaptor: &str,
+) -> Result<(), SidecarError> {
+    if adaptor.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must be pinned"
+        )));
+    }
+    adaptor_pin_version(adaptor).ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} {label} must include a version pin"
+        ))
+    })?;
     Ok(())
 }
 
@@ -404,34 +599,66 @@ async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarErro
         }
     }
     for source in config.sources.values() {
-        let pinned_version = adaptor_pin_version(&source.adaptor).ok_or_else(|| {
-            SidecarError::StartupCheck(format!(
-                "OpenFn adaptor {} is missing a version pin",
-                source.adaptor
-            ))
-        })?;
-        let expected_prefix = format!("{}:", source.adaptor);
-        let Some(reported_suffix) = reported
-            .iter()
-            .find_map(|reported| reported.strip_prefix(&expected_prefix))
-        else {
-            return Err(SidecarError::StartupCheck(format!(
-                "OpenFn version check did not report required adaptor {}",
-                source.adaptor
-            )));
-        };
-        let installed_version = reported_suffix
-            .split_once('=')
-            .map_or(reported_suffix, |(version, _)| version);
-        if installed_version != pinned_version {
-            return Err(SidecarError::StartupCheck(format!(
-                "OpenFn adaptor {} resolved to version {}, expected {}",
-                source.adaptor, installed_version, pinned_version
-            )));
+        for adaptor in source_adaptors(source) {
+            let pinned_version = adaptor_pin_version(adaptor).ok_or_else(|| {
+                SidecarError::StartupCheck(format!(
+                    "OpenFn adaptor {adaptor} is missing a version pin"
+                ))
+            })?;
+            let expected_prefix = format!("{adaptor}:");
+            let Some(reported_suffix) = reported
+                .iter()
+                .find_map(|reported| reported.strip_prefix(&expected_prefix))
+            else {
+                return Err(SidecarError::StartupCheck(format!(
+                    "OpenFn version check did not report required adaptor {adaptor}"
+                )));
+            };
+            let installed_version = reported_suffix
+                .split_once('=')
+                .map_or(reported_suffix, |(version, _)| version);
+            if installed_version != pinned_version {
+                return Err(SidecarError::StartupCheck(format!(
+                    "OpenFn adaptor {adaptor} resolved to version {installed_version}, expected {pinned_version}"
+                )));
+            }
         }
     }
 
     Ok(())
+}
+
+fn source_adaptors(source: &SourceConfig) -> Vec<&str> {
+    if let Some(workflow) = &source.workflow {
+        workflow
+            .steps
+            .iter()
+            .map(|step| step.adaptor.as_str())
+            .collect()
+    } else {
+        source.adaptor.as_deref().into_iter().collect()
+    }
+}
+
+fn add_source_execution(request: &mut Value, source: &SourceConfig) {
+    let Some(object) = request.as_object_mut() else {
+        return;
+    };
+    if let Some(workflow) = &source.workflow {
+        object.insert("workflow".to_string(), json!(workflow));
+    } else {
+        object.insert(
+            "job".to_string(),
+            json!(source.job.as_ref().expect("source job is validated")),
+        );
+        object.insert(
+            "adaptor".to_string(),
+            json!(source
+                .adaptor
+                .as_ref()
+                .expect("source adaptor is validated")),
+        );
+    }
 }
 
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {
@@ -489,12 +716,10 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
         let Some(smoke) = &source.smoke_lookup else {
             continue;
         };
-        let request = json!({
+        let mut request = json!({
             "source_id": source_id,
             "dataset": source.dataset,
             "entity": source.entity,
-            "job": source.job,
-            "adaptor": source.adaptor,
             "lookup": {
                 "field": smoke.field,
                 "value": smoke.value,
@@ -505,6 +730,7 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
             "correlation_id": "startup-smoke",
             "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
         });
+        add_source_execution(&mut request, source);
         let response =
             state
                 .pool
@@ -667,12 +893,10 @@ async fn lookup(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
 
-    let request = json!({
+    let mut request = json!({
         "source_id": source_id,
         "dataset": dataset,
         "entity": entity,
-        "job": source.job,
-        "adaptor": source.adaptor,
         "lookup": {
             "field": query.lookup_field,
             "value": query.lookup_value,
@@ -683,6 +907,7 @@ async fn lookup(
         "correlation_id": correlation_id.clone(),
         "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
     });
+    add_source_execution(&mut request, source);
 
     let worker_execution = match state.pool.execute_json_with_metadata(request).await {
         Ok(execution) => execution,

@@ -85,15 +85,35 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
-    job: jobs/opencrvs-person-lookup.js
-    adaptor: "@openfn/language-http@7.2.0"
+    workflow:
+      start: prepare_request
+      steps:
+        - id: prepare_request
+          job: jobs/prepare-person-request.js
+          adaptor: "@openfn/language-common@3.2.3"
+          next:
+            fetch_person: true
+        - id: fetch_person
+          job: jobs/fetch-person.js
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            normalize_response: true
+        - id: normalize_response
+          job: jobs/normalize-person-response.js
+          adaptor: "@openfn/language-common@3.2.3"
     credential_env: OPENCRVS_READER_CREDENTIAL_JSON
 ```
 
 At startup, the sidecar verifies the installed OpenFn compiler/build tool,
-runtime, and adaptor versions against the manifest. Readiness fails on any
-mismatch, missing job, missing credential, missing smoke lookup, or failed smoke
-lookup. Runtime execution must not fetch packages from the network.
+runtime, and adaptor versions against the manifest. A source may still use the
+single `job`/`adaptor` shape, but multi-step examples should use
+`workflow.steps` so the worker runs an actual OpenFn execution plan. The `next`
+field is the OpenFn runtime edge map, including boolean and conditional edges.
+The pinned runtime does not support merge nodes, and the sidecar response
+contract still requires a single final state that normalizes to one RDA `data`
+array. Readiness fails on any mismatch, missing job, missing credential, missing
+smoke lookup, or failed smoke lookup. Runtime execution must not fetch packages
+from the network.
 
 ## Requirements
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Sample OpenFn workflow for the sidecar's synchronous Registry Data API facade.
+// Legacy single-step OpenFn job for the sidecar's synchronous RDA facade.
 //
 // This job uses @openfn/language-common so it can run without a live target
 // registry. Production jobs should replace the fixture lookup with adaptor calls

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Sample OpenFn workflow using @openfn/language-http against a registry-like API.
+// Legacy single-step OpenFn job using @openfn/language-http against a registry-like API.
 //
 // Expected sidecar input:
 //   state.data.lookup.value: person id to fetch

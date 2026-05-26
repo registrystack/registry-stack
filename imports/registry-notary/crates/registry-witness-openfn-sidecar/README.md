@@ -61,13 +61,29 @@ worker:
     - "/opt/openfn/openfn_worker.mjs"
     - "--version"
     - "--require-adaptor"
+    - "@openfn/language-common@3.2.3"
+    - "--require-adaptor"
     - "@openfn/language-http@7.2.0"
 sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
-    job: /opt/openfn/jobs/opencrvs-person-lookup.js
-    adaptor: "@openfn/language-http@7.2.0"
+    workflow:
+      start: prepare_request
+      steps:
+        - id: prepare_request
+          job: /opt/openfn/jobs/prepare-person-request.js
+          adaptor: "@openfn/language-common@3.2.3"
+          next:
+            fetch_person: true
+        - id: fetch_person
+          job: /opt/openfn/jobs/fetch-person.js
+          adaptor: "@openfn/language-http@7.2.0"
+          next:
+            normalize_response: true
+        - id: normalize_response
+          job: /opt/openfn/jobs/normalize-person-response.js
+          adaptor: "@openfn/language-common@3.2.3"
     credential_env: OPENCRVS_READER_CREDENTIAL_JSON
     allowed_base_urls:
       - https://example.test
@@ -96,16 +112,24 @@ version exactly matches the configured pin.
 The production worker script is [workers/openfn_worker.mjs](workers/openfn_worker.mjs).
 Install its pinned dependencies from [workers/package.json](workers/package.json)
 inside the sidecar image and preinstall each configured adaptor in the same
-Node package root. A runnable local manifest is available at
-[examples/openfn-sidecar.yaml](examples/openfn-sidecar.yaml), backed by the
-sample job at [examples/jobs/common-person-lookup.js](examples/jobs/common-person-lookup.js).
-There is also an HTTP-adaptor sample job at
-[examples/jobs/http-person-lookup.js](examples/jobs/http-person-lookup.js)
+Node package root. A source may use the original single `job`/`adaptor` shape,
+or a `workflow.steps` plan for a multi-step OpenFn runtime workflow. Workflow
+steps use the OpenFn runtime `next` edge map, including boolean and conditional
+edges. The pinned runtime does not support merge nodes, and the sidecar still
+requires a single final state that normalizes to one RDA `data` array. A runnable
+local manifest is available at
+[examples/openfn-sidecar.yaml](examples/openfn-sidecar.yaml), backed by a
+three-step fixture workflow in [examples/jobs](examples/jobs). There is also a
+three-step HTTP adaptor sample workflow using
+[examples/jobs/http-prepare-person-request.js](examples/jobs/http-prepare-person-request.js),
+[examples/jobs/http-fetch-person.js](examples/jobs/http-fetch-person.js), and
+[examples/jobs/http-normalize-person-response.js](examples/jobs/http-normalize-person-response.js),
 which can be run against the local mock registry in
 [examples/mock-registry-server.mjs](examples/mock-registry-server.mjs).
-The worker compiles the configured OpenFn job, injects `state.configuration`
-from the Rust sidecar request, runs the job with `@openfn/runtime`, and returns
-only an RDA-shaped `{ "data": [...] }` envelope to the Rust HTTP boundary.
+The worker compiles the configured OpenFn job or workflow steps, injects
+`state.configuration` from the Rust sidecar request, runs the plan with
+`@openfn/runtime`, and returns only an RDA-shaped `{ "data": [...] }` envelope
+to the Rust HTTP boundary.
 
 ## Worker Protocol
 
