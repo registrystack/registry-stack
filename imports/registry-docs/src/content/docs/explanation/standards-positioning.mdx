@@ -1,14 +1,14 @@
 ---
 title: Standards positioning
 description: Which standards the registry family touches, what it does with each one, and why no new standard is being invented.
-status: draft
+status: current
 owner: registry-legend
 source_repos:
   - registry-manifest
   - registry-relay
   - registry-witness
   - registry-atlas
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -78,27 +78,7 @@ Registry Relay exposes an SP DCI sync adapter behind a feature flag. Registry Wi
 
 ## Claim levels
 
-Six levels describe how a project relates to a standard. When the code or artifacts do not support a strong claim, the data uses a weaker level.
-
-<dl class="claim-levels-dl">
-  <dt>`implements`</dt>
-  <dd>Implements a normative requirement or API shape from the standard. Example: <a href="../../projects/registry-relay/">Registry Relay</a> publishes a `/.well-known/did.json` DID document and <a href="../../projects/registry-witness/">Registry Witness</a> parses `did:jwk` credential subjects. Both satisfy normative DID Core requirements (`w3c-did`).</dd>
-
-  <dt>`emits`</dt>
-  <dd>Produces artifacts shaped like the standard, such as JSON-LD, SHACL, OpenAPI, or catalog records. Example: <a href="../../projects/registry-manifest/">Registry Manifest</a> renders a BRegDCAT-AP JSON-LD bundle including CPSV public service nodes, ADMS status, and dcatap namespace terms (`bregdcat-ap`).</dd>
-
-  <dt>`maps_to`</dt>
-  <dd>Maps local concepts or fields to standard terms. Example: Registry Relay and Registry Witness map request and response shapes to SP DCI search and sync paths (`sp-dci`).</dd>
-
-  <dt>`aligns_with`</dt>
-  <dd>Follows the standard's model or intent without a formal conformance claim. Example: Registry Relay and Registry Witness use VC-oriented provenance fixtures and issue SD-JWT credentials, but no reviewed W3C VC Data Model profile or validation suite has been pinned (`verifiable-credentials`).</dd>
-
-  <dt>`inspired_by`</dt>
-  <dd>The standard shaped design decisions without a compatibility claim. Example: Relay and Witness carry provenance internals but neither emits PROV-O vocabulary terms directly (`prov-o`).</dd>
-
-  <dt>`compares_against`</dt>
-  <dd>The standard is discussed to explain boundaries or alternatives. Example: The GovStack Digital Registries Building Block describes a single mandatory CRUD platform. Registry Relay explores a protected consultation gateway with optional capability families instead (`govstack-digital-registries`).</dd>
-</dl>
+For the full claim-level taxonomy, see [standards register](../../reference/standards/).
 
 {/* Contributor rules (do not render to readers):
 

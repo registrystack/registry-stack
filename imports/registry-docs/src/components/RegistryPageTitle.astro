@@ -5,24 +5,25 @@ const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
 
 const sectionLabels = new Map([
   ['start', 'Start'],
-  ['map', 'Project map'],
-  ['tutorials', 'Tutorials'],
-  ['explanation', 'Explanation'],
+  ['projects', 'Projects'],
+  ['map', 'Context'],
+  ['tutorials', 'Demo'],
+  ['explanation', 'Context'],
   ['reference', 'Reference'],
-  ['decisions', 'Decisions'],
+  ['decisions', 'Context'],
 ]);
 
 const sectionHref = new Map([
   ['start', 'start/'],
-  ['map', 'map/'],
-  ['reference', 'reference/'],
+  ['map', 'map/boundaries-and-map/'],
 ]);
 
 const currentLabels = new Map([
   ['/start/', 'Introduction'],
-  ['/start/what-is-the-registry-family/', 'What is the registry family'],
+  ['/start/what-we-built/', 'Three stories'],
   ['/start/quickstart/', 'Quickstart'],
-  ['/map/', 'Overview'],
+  ['/start/your-first-call/', 'Your first call'],
+  ['/map/boundaries-and-map/', 'Boundaries and map'],
   ['/reference/apis/', 'API reference'],
 ]);
 

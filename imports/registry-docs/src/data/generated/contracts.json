@@ -36,6 +36,18 @@
     "consumer_note": "Generate with `cargo run -p registry-witness-bin -- openapi`."
   },
   {
+    "id": "registry-witness.oid4vci",
+    "name": "Registry Witness OID4VCI surface",
+    "owner": "registry-witness",
+    "status": "current-source",
+    "surface": "OID4VCI credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), credential request (`POST /oid4vci/credential`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.",
+    "source_of_truth": {
+      "label": "Registry Witness OID4VCI routes",
+      "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs"
+    },
+    "consumer_note": "Wallet-compatible Draft 13 flow. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted at this version."
+  },
+  {
     "id": "registry-manifest.metadata-yaml",
     "name": "Metadata Manifest",
     "owner": "registry-manifest",

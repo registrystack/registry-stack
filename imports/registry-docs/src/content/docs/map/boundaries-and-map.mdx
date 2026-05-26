@@ -1,6 +1,7 @@
 ---
-title: Ownership boundaries
-description: Which project owns which responsibility, and which questions belong to which repo.
+title: Boundaries and map
+description: The six registry family projects, their responsibilities, flow across them, and what each project does not own.
+wide: true
 status: current
 owner: registry-legend
 source_repos:
@@ -10,15 +11,58 @@ source_repos:
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
-doc_type: explanation
+last_reviewed: "2026-05-25"
+doc_type: reference
 locale: en
-standards_referenced: []
+standards_referenced:
+  - openapi
+  - dcat
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - sd-jwt-vc
 ---
 
-If you're not sure which project answers a particular question, look here. The "owns / does not own" detail for every project lives on this page; other pages link in rather than repeat it.
+import ProjectMap from '../../../components/ProjectMap.astro';
 
-## Quick reference
+The registry family has six repositories with distinct responsibilities.
+Use this page to decide which repository owns a question before opening implementation docs,
+and to understand how the six repositories connect at runtime.
+
+<figure>
+  <img src="/registry-legend/images/registry-family-map.svg"
+       alt="Six registry family projects and how they connect. Registry Platform provides shared
+            primitives. Registry Manifest compiles portable metadata. Registry Relay binds metadata
+            to runtime sources and exposes protected APIs. Registry Witness evaluates claims and
+            issues credentials. Registry Atlas inspects published artifacts in a browser.
+            Registry Lab runs the runtime services together as a compose topology." />
+</figure>
+
+<ProjectMap />
+
+{/* Generated from src/data/projects.yaml by the ProjectMap component.
+    Update projects.yaml to change any row; do not hand-edit the table above. */}
+
+## Flow across the family
+
+[Registry Platform](../../projects/registry-platform/) provides shared Rust primitives that Relay and
+Witness compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy,
+and testing.
+[Registry Manifest](../../projects/registry-manifest/) defines portable metadata and compiles it into
+standards-facing service, registry, schema, form, policy, and evidence artifacts.
+[Registry Relay](../../projects/registry-relay/) binds logical datasets and entities to protected runtime
+sources and exposes them as authorized read-only APIs.
+[Registry Witness](../../projects/registry-witness/) evaluates configured claims against registry sources
+and issues SD-JWT VC credentials.
+[Registry Atlas](../../projects/registry-atlas/) inspects published discovery artifacts, parses service
+catalogues and registry metadata, and navigates service-first requirements, evidence options, providers,
+forms, and access routes.
+[Registry Lab](../../projects/registry-lab/) runs the smallest local ecosystem demo, composing three Relay
+authorities, four Witness services, live Postgres and Zitadel services, a private OpenFn sidecar path,
+a static metadata publisher, and narrated clients.
+
+## Ownership quick reference
 
 | Question | Owning project |
 | --- | --- |
@@ -42,7 +86,8 @@ Registry Platform is a shared crate workspace. It does not run a service or deci
 - Registry Witness claim definitions, evaluation rules, disclosure decisions, service routes, or claim-to-credential mapping.
 - Operator responsibilities such as tenant isolation, audit retention, secret provisioning, deployment configuration, and incident response.
 
-Use Registry Platform when a primitive needs to behave identically across services. Use the consuming repo when the question is about a product route, config file, or user-facing workflow.
+Use Registry Platform when a primitive needs to behave identically across services. Use the consuming
+repo when the question is about a product route, config file, or user-facing workflow.
 
 ## Registry Manifest
 
@@ -66,7 +111,8 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives owned by Registry Platform. Registry Relay owns how those primitives are configured and enforced on Relay routes.
 - Storage table IDs or arbitrary SQL in public APIs. Public route paths use dataset and entity identifiers; internal table names and query shapes are configuration internals. {/* Evidence: projects.yaml, registry-relay does_not_own; registry-relay evidence packet configuration surface. */}
 
-Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized systems only. {/* Evidence: registry-relay README line 10. */}
+Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized
+systems only. {/* Evidence: registry-relay README line 10. */}
 
 ## Registry Witness
 
@@ -77,7 +123,9 @@ Registry Witness evaluates claims and issues SD-JWT VC credentials. It does not 
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives owned by Registry Platform. Registry Witness owns the claim service behavior that composes those primitives.
 - Browser inspection workflows owned by Registry Atlas. Inspecting published discovery artifacts, parsing DCAT catalogs, and running capability queries are Atlas responsibilities.
 
-Registry Witness credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present in the issued credential. {/* Evidence: registry-witness evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT". */}
+Registry Witness credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
+Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present
+in the issued credential. {/* Evidence: registry-witness evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT". */}
 
 ## Registry Atlas
 
@@ -87,7 +135,9 @@ Registry Atlas is a browser workbench for inspecting published discovery artifac
 - Natural-language inference in v0.1 capability discovery. The v0.1 capability matcher is strict: no fuzzy matching, synonym expansion, or AI inference. Every match requires exact label, IRI, or field name correspondence after documented canonicalization. Natural-language query assist is explicitly deferred. {/* Evidence: registry-atlas SYSTEM_CAPABILITY_DISCOVERY_SPEC.md lines 84-88, commit e4092a1. */}
 - Persistent token storage in browser or proxy logs. Bearer tokens are session-only and are never written to browser storage or server logs. {/* Evidence: registry-atlas README lines 31-32. */}
 
-Atlas-derived hypotheses such as `candidate_route` and gap flags are not standards predicates and must not be published back into metadata catalogs as if they were source-verified claims. {/* Evidence: registry-atlas STANDARDS_ASSUMPTIONS.md lines 21-36. */}
+Atlas-derived hypotheses such as `candidate_route` and gap flags are not standards predicates and must
+not be published back into metadata catalogs as if they were source-verified claims.
+{/* Evidence: registry-atlas STANDARDS_ASSUMPTIONS.md lines 21-36. */}
 
 ## Registry Lab
 
@@ -99,7 +149,8 @@ Registry Lab is a compose-based local demo. It does not own:
 
 ## Documentation rule
 
-Put detailed setup, configuration, and command references in the owning repo. Put cross-project orientation, standards evidence, and contract indexes in Registry Legend.
+Put detailed setup, configuration, and command references in the owning repo. Put cross-project
+orientation, standards evidence, and contract indexes in Registry Legend.
 
 When a page needs both, Registry Legend summarizes the decision and links to the owning source.
 
@@ -107,18 +158,5 @@ When a page needs both, Registry Legend summarizes the decision and links to the
 
 **Next:** [Architecture overview](../../explanation/architecture/): how the six projects connect at runtime.
 
-{/* Editor note:
-    - Rewrote 2026-05-23.
-    - Changed doc_type from reference to explanation: the page now contains contextual prose and
-      boundary rationale, not a generated contract table. A reference page would be appropriate
-      only if the content were generated from a data file.
-    - Per-project sections grounded in projects.yaml does_not_own lists, reinforced with evidence
-      packet citations (moved into MDX comments so they survive in source for contributors but
-      don't render to readers).
-    - source_repos updated: replaced `registry_relay` and `decentralized-evidence-demo`
-      with `registry-relay` and `registry-lab`.
-    - Kept the quick-reference table from the original page (7 rows, hand-written, within limits).
-    - Reframed lead 2026-05-23: addresses readers ("you're not sure which project...") rather
-      than internal docs/issues/implementation framing. This page is now the single canonical
-      home for ownership detail since "owns / does not own" framing has been stripped from the
-      gateway pages. */}
+Looking for the legacy-to-current name mapping or per-repo rename state? See the
+[2026-05-23 rename decision](../../decisions/rename-2026-05-23/).

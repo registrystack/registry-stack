@@ -484,6 +484,43 @@
     "notes": "Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. Witness ships an HTTP source connector that maps SP-DCI search and sync responses into claim evaluation inputs."
   },
   {
+    "id": "oid4vci",
+    "name": "OpenID for Verifiable Credential Issuance",
+    "standards_body": "OpenID Foundation",
+    "official_url": "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html",
+    "version_or_profile": "OID4VCI Draft 13 compatible",
+    "status": "used",
+    "claim_level": "emits",
+    "used_by": [
+      "registry-witness",
+      "registry-platform",
+      "registry-lab"
+    ],
+    "surfaces": [
+      "credential offer endpoint",
+      "nonce endpoint",
+      "credential issuance endpoint",
+      "issuer metadata at `/.well-known/openid-credential-issuer`",
+      "wallet-facing citizen self-attestation flow"
+    ],
+    "evidence_docs": [
+      {
+        "label": "Registry Witness OID4VCI routes",
+        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs"
+      },
+      {
+        "label": "Registry Platform OID4VCI crate",
+        "url": "https://github.com/jeremi/registry-platform/tree/main/crates/registry-platform-oid4vci"
+      },
+      {
+        "label": "Registry Lab citizen OID4VCI smoke script",
+        "url": "https://github.com/jeremi/registry-lab/blob/main/scripts/smoke-citizen-oid4vci.sh"
+      }
+    ],
+    "last_checked": "2026-05-25",
+    "notes": "Registry Witness exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. Registry Lab exercises the full flow through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted; the surfaces emit the protocol shape and have been validated against the lab smoke script."
+  },
+  {
     "id": "w3c-did",
     "name": "W3C Decentralized Identifiers (DID Core)",
     "standards_body": "W3C",

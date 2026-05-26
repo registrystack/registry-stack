@@ -1,6 +1,6 @@
 ---
 title: Architecture overview
-description: How Registry Platform, Registry Manifest, Registry Relay, Registry Witness, Registry Atlas, and Registry Lab fit together.
+description: How the registry family uses a two-layer design of portable metadata and runtime services to publish, consult, and prove registry facts.
 status: current
 owner: registry-legend
 source_repos:
@@ -10,7 +10,7 @@ source_repos:
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -27,36 +27,55 @@ standards_referenced:
   - w3c-did
 ---
 
-The six projects connect through shared Rust primitives, portable metadata, runtime HTTP APIs, and published discovery artifacts. Each owns a bounded responsibility. Runtime services can share Registry Platform crates without depending on each other's application internals.
+The registry family is organized around two layers: a portable metadata layer and a runtime services layer.
+The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
+exposes, without touching production sources.
+The runtime services layer (Registry Relay, Registry Witness) binds those artifacts to real data, enforces
+access control, evaluates claims, and issues credentials.
+Registry Platform provides shared Rust primitives consumed by both runtime services.
+Registry Atlas inspects the published artifacts.
+Registry Lab runs all services together in a local demo.
+
+This split matters because it separates the obligation to describe (what a registry declares it can expose
+and under what policy) from the obligation to enforce (what a running service will actually return to an
+authorized caller). A reviewer can audit the portable metadata bundle before any runtime service is
+deployed. An integrator can validate schemas and claim shapes offline. A governance team can publish
+updated policy documents without touching deployment config.
 
 {/* SVG diagram. Essential labels are restated in the HTML list that follows. */}
 <figure>
   <img src="/registry-legend/images/registry-architecture-flow.svg"
-       alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles metadata artifacts. Registry Relay binds those artifacts to protected runtime sources. Registry Witness evaluates claims against HTTP sources and issues credentials. Registry Atlas inspects published discovery outputs. Registry Lab wires runtime services into a local compose topology." />
+       alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
+            metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
+            Registry Witness evaluates claims against HTTP sources and issues credentials.
+            Registry Atlas inspects published discovery outputs.
+            Registry Lab wires runtime services into a local compose topology." />
 </figure>
-
-The six projects:
-
-- **[Registry Platform](../../projects/registry-platform/)**: shared security, HTTP, crypto, SD-JWT, audit, and testing primitives.
-- **[Registry Manifest](../../projects/registry-manifest/)**: portable metadata compiler and renderer.
-- **[Registry Relay](../../projects/registry-relay/)**: protected, read-only consultation gateway.
-- **[Registry Witness](../../projects/registry-witness/)**: claim evaluation, attestation, and credential issuance.
-- **[Registry Atlas](../../projects/registry-atlas/)**: inspection workbench for published discovery artifacts.
-- **[Registry Lab](../../projects/registry-lab/)**: compose-based runnable demo of the full topology.
 
 ## Data and contract flow
 
 1. Registry Platform provides reusable security and operational primitives consumed by runtime services.
-2. A metadata manifest (`registry-manifest/v1` schema) describes datasets, entities, fields, policies, and evidence offerings.
-3. Registry Manifest compiles and validates the manifest, then renders a static discovery bundle (catalog, DCAT, SHACL, JSON Schemas, OGC Records items, policies, evidence-offering metadata, and an `index.json`).
-4. Registry Relay starts with runtime config that binds the manifest's logical datasets and entities to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering endpoints through configured auth.
-5. Registry Witness evaluates claims against configured HTTP sources (Registry Data API or SP DCI connectors). It renders results as `application/vnd.registry-witness.claim-result+json`, CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VCs (`application/dc+sd-jwt`).
-6. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them by artifact kind, and runs strict capability queries over the indexed metadata terms.
+2. A metadata manifest (`registry-manifest/v1` schema) describes datasets, entities, fields, policies,
+   and evidence offerings.
+3. Registry Manifest compiles and validates the manifest, then renders a static discovery bundle
+   (catalog, DCAT, SHACL, JSON Schemas, OGC Records items, policies, evidence-offering metadata,
+   and an `index.json`).
+4. Registry Relay starts with runtime config that binds the manifest's logical datasets and entities
+   to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering
+   endpoints through configured auth.
+5. Registry Witness evaluates claims against configured HTTP sources (Registry Data API or SP DCI
+   connectors). It renders results as `application/vnd.registry-witness.claim-result+json`,
+   CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VCs (`application/dc+sd-jwt`).
+6. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them
+   by artifact kind, and runs strict capability queries over the indexed metadata terms.
 
-For what each project does and does not own, see [ownership boundaries](../../map/ownership-boundaries/).
+For what each project does and does not own, see [ownership boundaries and map](/map/boundaries-and-map/).
 
 ## Next
 
-- [Standards positioning](../standards-positioning/) explains claim levels and the per-standard stance.
-- [Ownership boundaries](../../map/ownership-boundaries/) is the canonical home for "which project owns this question".
-- [Registry Lab first-run tutorial](../../tutorials/first-run-with-registry-lab/) shows how to run the full topology locally.
+- [Publishing pipeline](/explanation/publishing-pipeline/) explains the metadata compilation and
+  artifact rendering path.
+- [Consultation flow](/explanation/consultation-flow/) explains how Registry Relay serves authorized
+  callers and scopes metadata by caller visibility.
+- [Evidence issuance](/explanation/evidence-issuance/) explains claim evaluation, disclosure policy,
+  and credential issuance in Registry Witness.

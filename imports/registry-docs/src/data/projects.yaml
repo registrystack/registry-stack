@@ -5,6 +5,7 @@
   role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Witness, and related registry services, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
   owns:
     - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.
+    - OID4VCI credential offer, nonce, credential request, and issuer metadata primitives via the `registry-platform-oid4vci` crate.
     - Cross-service crate APIs that must behave consistently in Relay, Witness, and future registry services.
     - Shared Rust hygiene templates and supported integration-test fixtures.
   does_not_own:
@@ -71,6 +72,7 @@
     - Disclosure policy and redacted audit event semantics.
     - Registry Witness API routes.
     - Credential issuance workflow and claim-to-credential mapping.
+    - OID4VCI Draft 13 credential offer flow (credential-offer, nonce, credential endpoints) and the `/.well-known/openid-credential-issuer` metadata endpoint.
     - HTTP source connectors for Registry Data API and SP DCI-style sources.
   does_not_own:
     - Registry Relay source code or runtime internals.
@@ -113,6 +115,7 @@
   owns:
     - End-to-end local topology for Relay, Witness, live Postgres, live Zitadel, the private OpenFn sidecar path, the static metadata publisher, and demo-client fixtures (Atlas is run separately and is not in the compose topology at v0.1).
     - Demo scripts, smoke checks, generated local credentials, live-service checks, service-first discovery checks, and narrated client flows.
+    - Citizen self-attestation walkthrough that exercises the Witness OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.
     - Acceptance rehearsal after rename waves land.
   does_not_own:
     - Production deployment guidance.

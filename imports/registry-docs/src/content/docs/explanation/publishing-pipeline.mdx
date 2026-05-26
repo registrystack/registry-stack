@@ -1,0 +1,156 @@
+---
+title: Publishing pipeline
+description: How a single metadata YAML becomes portable static artifacts through
+  Registry Manifest, and how Registry Relay extends that with caller-scoped runtime
+  publication.
+status: current
+owner: registry-manifest
+source_repos:
+  - registry-manifest
+  - registry-relay
+last_reviewed: "2026-05-25"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - ogc-api-records
+  - odrl
+  - json-ld
+---
+
+A registry's published surface lives in two places: a static bundle of standards-facing
+artifacts that any downstream system can fetch from a file host, and a runtime metadata
+endpoint that knows who is asking and responds accordingly.
+Registry Manifest owns the first path.
+Registry Relay owns the second.
+The two paths share the same manifest input, but they serve different deployment needs.
+
+## The two-layer split: portable vs runtime
+
+**Portable metadata** (Registry Manifest only) travels wherever files can travel.
+A civil registration authority can validate and publish a DCAT Data Catalog Vocabulary
+(DCAT) catalog, a BRegDCAT-AP Business Registers Extended DCAT Application Profile
+(BRegDCAT-AP) profile, SHACL node shapes, JSON Schema, and an ODRL Open Digital Rights
+Language (ODRL) policy bundle from a single `metadata.yaml` with no running service, no
+credentials, and no network.
+The output is a directory of static files that can be served from an object store, a CDN,
+or a government open-data portal.
+
+**Runtime metadata** (Registry Manifest renderers inside Registry Relay) is served at
+`/metadata/*` by a running Relay instance.
+The same renderers produce the same artifact formats, but Relay filters the view by the
+authenticated caller's `metadata` scope, so a caller with
+`social_registry:metadata` sees only the datasets and entities their key permits.
+That filtering is the runtime-only capability; it cannot be replicated statically.
+
+Both paths share the same manifest format and the same renderer code from
+[`registry-manifest-core`](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core).
+The static path invokes those renderers through the CLI.
+The runtime path invokes them at request time, inside Relay.
+
+## What Manifest emits from one YAML
+
+You write one `metadata.yaml` and run `registry-manifest-cli publish`.
+The CLI calls every renderer in the table on the
+[Registry Manifest overview](../../projects/registry-manifest/) page and writes each output
+to a named file in the target directory, plus an `index.json` discovery entry point
+(schema version `registry-manifest-index/v1`).
+
+A working example lives at
+`registry-manifest/profiles/example-civil-registration/fixtures/metadata.yaml`.
+The file's catalog section looks like this:
+
+```yaml
+schema_version: registry-manifest/v1
+catalog:
+  id: example-civil-registration
+  base_url: https://civil-registration.example.gov
+  title:
+    en: Civil Registration Metadata
+  publisher:
+    name: Civil Registration Authority
+    iri: https://civil-registration.example.gov/authority
+    authority_type: eli:PublicAuthority
+  conforms_to:
+    - https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/
+  standards:
+    dcat: "3.0"
+    shacl: "1.1"
+    json_schema: "2020-12"
+```
+
+From that catalog block plus the dataset and entity blocks below it, Registry Manifest
+derives a DCAT catalog document, a BRegDCAT-AP profile, SHACL node shapes per entity, a
+JSON Schema per entity, CPSV-AP service catalogue entries for declared public services, a
+Core Criterion and Core Evidence Vocabulary (CCCEV) requirements bundle, and ODRL policy
+documents per dataset.
+No renderer makes network calls or reads additional files.
+
+## What Relay adds at runtime
+
+When Registry Relay starts, it loads `metadata.yaml` and validates it against the runtime
+`config.yaml`, which binds the manifest's logical datasets and entities to actual source
+files or database tables.
+The startup check produces stable error codes (`metadata.manifest.validation_failed`,
+`runtime.binding.dataset_missing`) and exits non-zero on any mismatch, so misconfiguration
+is visible immediately.
+
+At request time, a caller authenticated with a `<dataset_id>:metadata` scope can fetch:
+
+```http
+GET /metadata/cpsv-ap
+Authorization: Bearer <token>
+```
+
+Relay calls the CPSV-AP renderer on the validated manifest and returns the result.
+If the caller's scope covers only one dataset and the manifest has three, the response
+contains only the services and datasets visible under that scope.
+
+Beyond scoped filtering, Relay adds:
+
+- **Per-caller views under `/metadata/*`.** Every metadata format from the renderer table
+  is available as an authenticated route. The same caller that can read rows with a `rows`
+  scope can separately hold a `metadata` scope to fetch catalog artifacts.
+- **Audit records for every metadata request.** The same JSONL audit trail that covers row
+  reads covers metadata reads. The caller's `principal_id`, the scopes checked, and the
+  `request_id` all appear in the record.
+- **Scope-aware filtering.** A key or token that carries `social_registry:metadata` but not
+  `vital_events:metadata` receives a catalog that lists only the social registry dataset,
+  even if the manifest declares both.
+
+## When to use Manifest alone vs Manifest with Relay
+
+Use Registry Manifest alone when:
+
+- You need static files for an open-data portal or a standards body's discovery index.
+- You want to validate a manifest in CI before any deployment.
+- Your deployment environment cannot run a persistent service.
+- You want interoperability artifacts (DCAT, CPSV-AP, SHACL) without a query API.
+
+Add Registry Relay when:
+
+- Callers need HTTP row access, aggregates, or evidence verification in addition to
+  metadata.
+- You need per-caller scoping so different systems see different dataset views.
+- You need tamper-evident audit records tied to individual principals and requests.
+- You need metadata publication that responds to caller identity, not static file hosting.
+
+The two are not alternatives for the metadata use case; they are additive.
+A deployment running Relay will typically also have a static publication pipeline for the
+same manifest, so the metadata is available even when Relay is down for maintenance.
+
+## Where the line falls
+
+The boundary between what the manifest owns and what the runtime config owns is enforced
+at startup.
+A manifest must not contain source paths, table names, database scopes, or backend
+credentials.
+Those belong in `config.yaml`.
+The [boundaries and map page](../../map/boundaries-and-map/) describes the full scope of
+each project's responsibilities, including where Registry Platform's shared primitives
+fit in.

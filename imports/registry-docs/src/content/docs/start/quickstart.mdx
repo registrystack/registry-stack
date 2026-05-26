@@ -1,51 +1,73 @@
 ---
 title: Quickstart
-description: The fastest route through the registry family docs for integrators, reviewers, and contributors.
+description: Audience routing for the registry family docs, organized by goal.
 status: current
 owner: registry-legend
 source_repos:
-  - registry-platform
-  - registry-relay
   - registry-manifest
+  - registry-relay
   - registry-witness
   - registry-atlas
   - registry-lab
-last_reviewed: "2026-05-23"
+  - registry-platform
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Pick the path that matches what you're trying to do.
+Stay in Registry Legend for cross-project questions: which project owns what, how the family
+fits together, what each standard claim means, what contracts are published.
+Jump to the owning repository when you need implementation specifics, runtime configuration,
+or service-internal contribution workflow.
 
-## If you want to query a registry over HTTP
+Pick the path that matches your goal.
 
-Start with [Registry Relay](../../projects/registry-relay/). Relay is the protected consultation gateway: it turns CSV, XLSX, Parquet, and PostgreSQL sources into authorized read-only APIs over entity routes like `household` or `individual`. Read its docs first, then check the [contracts index](../../reference/contracts/) for the specific API shapes you'll integrate against.
+## I want to integrate with a registry
 
-## If you're changing shared security or operational primitives
+Start with [Three stories](../what-we-built/) for the mental model of the three product stories.
+Then read [Registry Relay](/projects/registry-relay/) to understand the entity-shaped API routes,
+auth scopes, and the `Data-Purpose` header requirement.
+Check the [contracts index](/reference/contracts/) for the OpenAPI documents and generated schema
+artifacts you will integrate against.
+If you need to call a Witness endpoint to verify eligibility or receive a credential, read
+[Registry Witness](/projects/registry-witness/) next.
+Run [your first call](../your-first-call/) to get a working request before writing integration
+code.
 
-Start with [Registry Platform](../../projects/registry-platform/). Platform owns the reusable Rust crates for auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures used by Relay and Witness.
+## I'm evaluating standards conformance
 
-## If you want to see the family running
+Start with the [standards register](/reference/standards/) to see which standards each project
+claims to emit, implement, or align with, and at what claim level.
+Then use [Registry Atlas](/projects/registry-atlas/) to inspect a live or demo registry's
+published artifacts in a browser: Atlas indexes the DCAT, CPSV-AP, CCCEV, SHACL, JSON Schema,
+OpenAPI, and OGC Records artifacts and shows gaps.
+For the per-standard explanation of how each artifact is generated, read
+[Publishing pipeline](/explanation/publishing-pipeline/).
+For the claim evaluation and credential issuance story, read
+[Evidence issuance](/explanation/evidence-issuance/).
 
-Open the [Registry Lab tutorial](../../tutorials/first-run-with-registry-lab/). It is the smallest runnable demo: three Relay instances, four Witness instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and demo clients wired together in one Docker Compose topology.
+## I'm contributing to a project repo
 
-## If you're integrating against the family
+Read [Three stories](../what-we-built/) for the boundary definitions: which project owns which
+question.
+Then go to the owning project page ([Registry Manifest](/projects/registry-manifest/),
+[Registry Relay](/projects/registry-relay/),
+[Registry Witness](/projects/registry-witness/),
+[Registry Atlas](/projects/registry-atlas/),
+[Registry Platform](/projects/registry-platform/), or
+[Registry Lab](/projects/registry-lab/)) and follow the link to the source repository.
+Registry Legend owns cross-project explanation.
+Substantive code work, issues, and pull requests happen in the owning repos.
 
-1. Read [what is the registry family](../what-is-the-registry-family/) for the one-page mental model.
-2. Use the [project map](../../map/) to find the project that owns your specific question.
-3. Check the [contracts index](../../reference/contracts/) for the APIs, schemas, and generated artifacts you'll talk to.
+## I'm operating a deployment
 
-## If you're reviewing what a registry publishes
-
-1. Read the [standards register](../../reference/standards/) to see which standards each project claims to emit, implement, or align with, and at what claim level.
-2. Use [Registry Atlas](../../projects/registry-atlas/) to inspect a live registry's published artifacts in the browser.
-3. Check [standards positioning](../../explanation/standards-positioning/) for the per-standard stance.
-
-## If you're contributing
-
-You're in the right place to orient. After that, the project pages link to each owning repo where issues, PRs, and contribution guidelines live. Registry Legend itself owns cross-project explanation; substantive code work happens in the owning repos.
-
-## When to keep reading vs. jump to a repo
-
-Stay in Registry Legend for cross-project questions: which project owns what, how the family fits together, what each standard claim means, what contracts are published. Jump to the owning repository when you need implementation specifics, runtime configuration, or service-internal contribution workflow.
+Read [Registry Relay](/projects/registry-relay/) for source binding, auth configuration, scope
+policy, and the `/metadata/*` publication surface.
+Read [Registry Witness](/projects/registry-witness/) for claim configuration, disclosure policy,
+and the OID4VCI issuance flow.
+For a local end-to-end reference topology, read [Registry Lab](/projects/registry-lab/): it
+wires three Relays, four Witnesses, Postgres, Zitadel, an OpenFn sidecar, and a static
+metadata publisher into a single Docker Compose file with narrated smoke tests.
+Registry Lab is not production deployment guidance, but the topology and configuration files are
+a readable reference for how the services connect.

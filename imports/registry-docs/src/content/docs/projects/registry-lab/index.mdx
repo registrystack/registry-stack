@@ -1,7 +1,7 @@
 ---
 title: Registry Lab overview
 description: Registry Lab is the Docker Compose demo for the registry family, wiring Relay, Witness, live-source, OpenFn, static metadata, and narrated demo services into a single topology you can run on a laptop.
-status: draft
+status: current
 owner: registry-lab
 source_repos:
   - registry-lab
@@ -43,30 +43,10 @@ with `--recurse-submodules`.
 
 ## Compose topology
 
-The compose file
-([`compose.yaml`](https://github.com/jeremi/registry-lab/blob/main/compose.yaml))
-defines the core demo services, live support services, and private OpenFn services.
-Three are Relay instances; four are Witness instances; two are live backing
-services; two are the private OpenFn sidecar and mock registry; one is the
-static metadata publisher; one is the narrated demo client (started on demand
-only, via `--profile client`).
-
-All Relay and Witness images are built locally from the `registry-relay:demo` and `registry-witness:demo`
-images using the `vendor/registry-platform`, `vendor/registry-relay`, and `vendor/registry-witness`
-submodule sources.
-Postgres and Zitadel use public container images.
-The static metadata publisher and demo client both use the public `python:3.12.3-slim-bookworm` image.
-
-Host-to-container port assignments are fixed in `compose.yaml`.
-Inside the compose network, services reach each other via DNS names (for example,
-`http://civil-registry-relay:8080`).
-Witness containers do not mount source data files directly.
-Registry Witness reads registry facts over HTTP from the Relay services.
-
-The Lab Relay images include the SP DCI and CEL-mapping feature flags so demo claims work out of the box.
-The OpenFn sidecar and mock registry are attached only to the private
-`openfn-internal` network; callers reach the OpenFn scenario through
-`openfn-civil-witness` on host port 4324.
+The topology runs three Relay instances, four Witness instances, live Postgres and Zitadel services,
+a private OpenFn sidecar, a static metadata publisher, and a narrated demo client.
+For service names, host ports, image sources, and network layout, see the
+[Registry Lab reference](./reference/).
 
 ## Fixtures and generated credentials
 
@@ -147,21 +127,13 @@ overridable via the `DEMO_CORRELATION_ID` environment variable.
 [`scripts/demo-flow.py`](https://github.com/jeremi/registry-lab/blob/main/scripts/demo-flow.py)
 runs three end-to-end scenarios in sequence.
 
-**Scenario 1: Birth registration to child support.**
-Registry Witness (civil) verifies civil facts and issues a demo-grade credential
-with predicate disclosure. The raw civil registry rows are not exposed to the caller.
+**Scenario 1: Birth registration to child support.** Civil claim evaluation with predicate disclosure.
 
-**Scenario 2: Household benefit review from registry data.**
-The client performs a protected Relay row read on the social protection Relay,
-then an aggregate consultation (household eligibility band aggregates).
-It writes a household-benefit-decision artifact locally without writing back to Relay.
-Scope binding is demonstrated: the row-reader credential cannot call the aggregate endpoint,
-and the aggregate-reader credential cannot call the row endpoint.
+**Scenario 2: Household benefit review.** Protected row read and aggregate consultation with scope binding.
 
-**Scenario 3: Cross-authority conditional support.**
-Static metadata discovery leads the client to `shared-eligibility-witness`.
-The witness claim depends on civil, social protection, and health authorities.
-The result carries `source_count >= 2`.
+**Scenario 3: Cross-authority conditional support.** Multi-authority claim with `source_count >= 2`.
+
+For the full narrated walkthrough, see [demo flow](./demo-flow/).
 
 All client requests are sent with the same correlation ID and saved as JSON artifacts
 to the `output/` directory (default `DEMO_OUTPUT_DIR`).

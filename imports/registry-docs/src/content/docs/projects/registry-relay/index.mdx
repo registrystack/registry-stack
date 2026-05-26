@@ -1,12 +1,14 @@
 ---
 title: Registry Relay overview
-description: What Registry Relay is, how it models data access, and how it handles auth and audit.
-status: draft
+description: Registry Relay is a config-driven HTTP gateway that serves
+  entity-shaped, caller-scoped reads over sensitive registry sources without
+  exposing raw SQL or table identifiers.
+status: current
 owner: registry-relay
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-05-24"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -21,15 +23,22 @@ standards_referenced:
   - w3c-did
 ---
 
-Registry Relay gives authorized systems a stable HTTP API for reading registry data
-(records, aggregates, metadata) without database access or raw SQL.
+Registry Relay turns sensitive government tabular files and selected database tables into
+protected, read-only, domain-oriented APIs.
+It sits between a caller (a social protection program system, a statistics office, an
+identity verification service) and the raw source data, enforcing auth, scoping what each
+caller can see, shaping records into declared entities, and writing a tamper-evident audit
+trail for every request.
+This is not an open-data portal and not a spreadsheet wrapper.
 
 The upstream source is [`registry-relay`](https://github.com/jeremi/registry-relay).
-Shared auth, audit, OIDC, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives come from [`registry-platform`](https://github.com/jeremi/registry-platform).
+Shared auth, audit, OpenID Connect (OIDC), HTTP security, outbound HTTP, crypto, and
+SD-JWT helper primitives come from
+[`registry-platform`](https://github.com/jeremi/registry-platform).
 
 ## The two-layer model
 
-Registry Relay is built around two layers that map private storage to public APIs.
+Registry Relay maps private storage to public APIs through two layers.
 
 **Storage tables** read CSV, XLSX, Parquet, or PostgreSQL sources at startup or on refresh.
 Table identifiers are private; they never appear in public URLs or responses.
@@ -60,30 +69,22 @@ Stream ingestion (Kafka, pub/sub, event streaming) is not supported in v0.
 
 ## Auth model
 
-Registry Relay runs in exactly one auth mode at a time, configured at startup. Relay owns the auth config shape, principal mapping, scopes, and route enforcement. Registry Platform owns reusable credential parsing, API-key fingerprinting, and OIDC token verification primitives.
-
-**API key mode** (`auth.mode: api_key`): the client sends a high-entropy bearer token
-in `Authorization: Bearer` or `X-Api-Key`.
-Registry Relay hashes the presented raw key with SHA-256 and compares it to
-fingerprints loaded from environment variables at startup.
-Raw keys are never stored in YAML.
-
-**OIDC resource-server mode** (`auth.mode: oidc`): OpenID Connect / OAuth 2.0 (OIDC) mode.
-The client sends a bearer JWT.
-Registry Relay validates standard claims (`iss`, `aud`, `exp`, optional `nbf`) against
-a configured external IdP's JWKS, refreshing the JWKS on unknown `kid`.
-Registry Relay is a resource server only: it never mints, refreshes, or stores tokens.
-
-### Scopes
+Registry Relay runs in exactly one auth mode at a time, configured at startup.
+Two modes are supported: API key (`auth.mode: api_key`) and OIDC resource-server
+(`auth.mode: oidc`).
+Full configuration details, scope assignment, and key provisioning are in
+[Authorize callers](./authorize-callers/).
 
 Scopes are independent and granular.
-The scope suffixes are `metadata`, `rows`, `aggregate`, `evidence_verification`, and `admin`.
+The scope suffixes are `metadata`, `rows`, `aggregate`, `evidence_verification`, and
+`admin`.
 A key or token must carry `<dataset_id>:<suffix>` for the operation it needs.
-A metadata-only key cannot read rows; a rows key cannot run aggregates.
+A metadata-only caller cannot read rows; a rows caller cannot run aggregates.
 
 ## Audit logging
 
-Every authenticated request produces one JSONL audit record.
+Every authenticated request produces one JSONL audit record written to a configured sink
+(stdout, file with in-process rotation, or syslog).
 Audit records are separate from operational logs (which go to stderr).
 
 Key fields in each record include:
@@ -100,18 +101,18 @@ Key fields in each record include:
 - `verification_id`, `verification_decision`, `claim_hash`, `evidence_hash`:
   populated on evidence-verification requests.
 
-Supported audit sinks are `stdout`, `file` (with in-process rotation), and `syslog`.
-Registry Platform audit envelopes wrap records with `prev_hash` and `record_hash` fields for tamper evidence.
+Registry Platform audit envelopes wrap records with `prev_hash` and `record_hash` fields
+for tamper evidence.
 
-Audit records never contain raw API keys, raw query values for sensitive fields,
-or row-level data.
-Identifier fields marked `sensitive: true` in entity config are deterministically
-hashed in audit rather than logged verbatim.
+Audit records never contain raw API keys, raw query values for sensitive fields, or
+row-level data.
+Identifier fields marked `sensitive: true` in entity config are deterministically hashed
+in audit rather than logged verbatim.
 
 ## Metadata publication
 
-Registry Relay publishes metadata at runtime through `/metadata/*` routes,
-using the same renderers provided by
+Registry Relay publishes metadata at runtime through `/metadata/*` routes, using the same
+renderers provided by
 [`registry-manifest-core`](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core).
 These routes expose caller-scoped views filtered by the authenticated principal's
 `metadata` scopes.
@@ -119,27 +120,31 @@ These routes expose caller-scoped views filtered by the authenticated principal'
 The `/metadata/*` routes are the canonical standards-facing metadata surface.
 They do not grant row, aggregate, evidence-verification, or admin access.
 
-Metadata can also be published statically, without running Registry Relay, using
-the `registry-manifest-cli publish` command.
-The static bundle includes `catalog.json`, `dcat.jsonld` (Data Catalog Vocabulary JSON-LD),
-`shacl.jsonld` (Shapes Constraint Language node shapes), entity JSON Schemas,
-and an `index.json` discovery entry point.
+Metadata can also be published statically, without running Registry Relay, using the
+`registry-manifest-cli publish` command.
+The static bundle includes `catalog.json`, `dcat.jsonld` (DCAT JSON-LD),
+`shacl.jsonld` (SHACL node shapes), entity JSON Schemas, and an `index.json` discovery
+entry point.
 
-### Portable metadata and the runtime split
+The [publishing pipeline explanation](../../explanation/publishing-pipeline/) covers the
+portable-vs-runtime split and when to use each path.
 
-You keep two files: a portable metadata manifest and a runtime config.
+### The portable manifest and runtime config split
+
+You keep two files: a portable metadata manifest (`metadata.yaml`) and a runtime
+config (`config.yaml`).
 Registry Relay validates that they match at startup.
 
-The `metadata.yaml` manifest describes datasets, entities, fields, policies, and
-evidence offerings in standards-facing terms.
+The `metadata.yaml` manifest describes datasets, entities, fields, policies, and evidence
+offerings in standards-facing terms.
 It must not contain source paths, table names, scopes, or Relay runtime backend URLs.
 
 The runtime `config.yaml` binds those logical concepts to actual files, database tables,
 scopes, filters, aggregates, and refresh settings.
 
-Startup failures produce stable error codes such as `runtime.binding.dataset_missing`
-and `metadata.manifest.validation_failed`; the process exits non-zero so misconfiguration
-is immediately visible.
+Startup failures produce stable error codes such as `runtime.binding.dataset_missing` and
+`metadata.manifest.validation_failed`; the process exits non-zero so misconfiguration is
+immediately visible.
 
 ## Optional capability families
 
@@ -159,38 +164,29 @@ Use Registry Relay for read-only, entity-shaped consultation APIs over structure
 For claim evaluation and credential issuance, see
 [Registry Witness](https://github.com/jeremi/registry-witness).
 
-## Typical first-run workflow
-
-1. Clone the [`registry-relay`](https://github.com/jeremi/registry-relay) repo and build with `just setup && just build`.
-2. Copy the bundled XLSX fixture into place: `cp fixtures/example_social_registry.xlsx data/social_registry.xlsx`.
-3. Generate API-key fingerprints for each principal in `config/example.yaml` and export them as environment variables.
-4. Start the server with `just run`.
-5. Hit the readiness probe (`curl http://127.0.0.1:8080/ready`) and then a sample endpoint.
-
-The [Run Registry Relay locally](./run-locally/) guide walks through every step in detail.
-
-## Status and v0 caveats
+## v0 caveats
 
 Registry Relay's current release tag is `v0.1.1`.
 The Cargo package version remains `0.1.0` at that tag.
 The following capabilities are not yet supported:
 
 - **Live keyring reload.** Key and JWKS reloads require a process restart.
-- **Config reload without restart.** Dataset data can be reloaded via the admin
-  listener, but the config file itself is not re-read at runtime.
-- **PostgreSQL live mode for query sources.** Live materialization is supported only
-  for structured `table` sources, not for `query` sources.
+- **Config reload without restart.** Dataset data can be reloaded via the admin listener,
+  but the config file itself is not re-read at runtime.
+- **PostgreSQL live mode for query sources.** Live materialization is supported only for
+  structured `table` sources, not for `query` sources.
 - **Stream ingestion.** Kafka, pub/sub, and event-streaming backends are not supported.
 - **Remote signing backend (KMS).** The only supported production signing path is local
   software Ed25519. The `kms` signer kind is reserved and rejected by v1 config validation.
 
 The rename from the legacy underscore form `registry_relay` to the hyphenated
 `registry-relay` is complete in the current release line.
-No legacy underscore references appear in the API, config surface, binary name,
-or Cargo.toml.
+No legacy underscore references appear in the API, config surface, binary name, or
+`Cargo.toml`.
 
 ## Next
 
 - [Run Registry Relay locally](./run-locally/)
 - [Authorize callers](./authorize-callers/)
 - [Registry Relay reference](./reference/)
+- [Consultation flow explanation](../../explanation/consultation-flow/)

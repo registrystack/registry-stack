@@ -1,0 +1,138 @@
+---
+title: Evidence issuance, end to end
+description: Explains how Registry Witness turns a subject identifier and a configured claim into an SD-JWT VC credential, including the three paths to a credential and how the pipeline connects to Relay.
+status: current
+owner: registry-witness
+source_repos:
+  - registry-witness
+  - registry-platform
+last_reviewed: "2026-05-25"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - cccev
+  - w3c-did
+  - json-ld
+  - openapi
+  - oid4vci
+---
+
+This page describes how Registry Witness turns a subject identifier and a configured claim into a
+verifiable credential. It is an explanation, not a how-to: there are no commands here.
+For commands, see [Run Registry Witness locally](../../projects/registry-witness/run-locally/) and
+[Configure a claim](../../projects/registry-witness/configure-a-claim/).
+
+## Why issue credentials at all
+
+Programs and services need to know whether a person qualifies for something. The classic way to
+answer that question is to demand records: birth certificates, land titles, tax statements. The
+records carry far more information than the answer requires, the records live in registries the
+program does not own, and the records cross trust boundaries every time a copy moves. A
+credential lets a registry answer one question (does this subject satisfy this rule) without
+shipping the records that justify the answer. Registry Witness is the component that produces
+those credentials.
+
+## The claim model in one diagram
+
+A single claim evaluation moves through five stages.
+
+```text
+subject identifier
+       |
+       v
+  source connector  (registry_data_api or dci, configured per binding)
+       |
+       v
+  rule evaluation   (extract | exists | cel | plugin)
+       |
+       v
+  disclosure mode   (value | predicate | redacted)
+       |
+       v
+  response format   (claim-result JSON | CCCEV JSON-LD | SD-JWT VC)
+```
+
+The configuration that makes each stage concrete is the `ClaimDefinition` in
+[demo/config/registry-witness.yaml](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml).
+Each `ClaimDefinition` names its `source_bindings`, declares its `rule`, sets its `disclosure`
+policy, and lists the `formats` it may emit.
+
+## Three paths to a credential
+
+There is one claim model and three transports a caller can use to land a credential.
+
+1. Direct API. The caller calls `POST /claims/evaluate` to evaluate the claim, then
+   `POST /credentials/issue` to materialize an SD-JWT VC from the stored evaluation. The caller
+   is a backend (a program registry, a benefits portal) that holds a Registry Witness API key or
+   an OIDC token. The credential ends up wherever the calling backend chooses to send it.
+2. OID4VCI offer flow. The caller is a wallet, not a backend. Registry Witness publishes
+   `/.well-known/openid-credential-issuer` so the wallet learns the credential endpoint, the
+   nonce endpoint, and the supported credential configurations. The wallet (or a portal acting on
+   the wallet's behalf) fetches a `CredentialOffer` from `GET /oid4vci/credential-offer`, the
+   user authenticates at the configured authorization server, the wallet calls
+   `POST /oid4vci/nonce` to get a `c_nonce`, signs a proof-of-possession JWT with its `did:jwk`
+   key, and posts the bearer access token plus the proof to `POST /oid4vci/credential`. The
+   choreography is implemented in the Witness server's API module at
+   [`crates/registry-witness-server/src/api.rs`](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs).
+3. Verifiable receipt only. The caller does not need a credential at all. It calls
+   `POST /claims/evaluate`, accepts the disclosure mode the claim allows (often `predicate` or
+   `redacted`), and stores the audit-stamped result. Every evaluation, credential or not, is
+   recorded in the JSONL audit log alongside `verification_id` and `claim_hash` for redacted
+   results.
+
+The [Registry Lab](../../projects/registry-lab/) citizen self-attestation scenario uses path 2: a
+host-side Witness on port `4325` runs against the lab's civil registry, eSignet provides the
+access token, and a wallet completes the OID4VCI flow.
+
+## Selective disclosure properties
+
+Selective disclosure is the property that distinguishes an SD-JWT VC from a plain JWT. Three
+mechanics make it work.
+
+- Per-field disclosures. Registry Witness wraps each claim field in its own SD-JWT disclosure
+  blob. The signed credential body carries the SHA-256 digest of every disclosure, not the
+  disclosure value. The holder chooses which disclosures to present to which verifier; the
+  unselected fields stay hidden.
+- SHA-256 digests. The digest list is what the credential's signature covers. A verifier checks
+  the signature, recomputes the digest of every presented disclosure, and confirms each digest
+  appears in the signed list. There is no way for a holder to mint a disclosure that was not in
+  the original credential.
+- Holder binding via `did:jwk`. The credential's `cnf` claim names the holder's public key as a
+  `did:jwk`. To present the credential, the holder must produce a fresh signed proof from that
+  key, audience-bound to the verifier. A stolen credential without the matching private key is
+  not presentable.
+
+## Where this fits with Relay
+
+Registry Witness is an independently deployable HTTP service. A program does not need to run
+Registry Relay to use Registry Witness. The link between the two is metadata, not code.
+
+Registry Relay surfaces evidence-offering metadata under `/metadata/evidence-offerings/{id}`.
+The metadata document points at a Registry Witness instance, names the claim ids the offering
+covers, and describes the supported disclosure modes and formats. A consumer that finds an
+offering on Relay learns where to call Witness; nothing in the Relay code path issues
+credentials. For the publishing side of that story, see
+[Publishing pipeline](../publishing-pipeline/).
+
+## Boundaries
+
+A few things Registry Witness is not.
+
+- Not an eligibility decision. The verification receipt is an evidence artifact. The issuing
+  program, not Registry Witness, converts a verified claim into an entitlement, a payment, or a
+  benefit.
+- Not a wallet. Registry Witness issues credentials. The wallet that stores, presents, and
+  unlocks them is a separate component, owned by the holder.
+- Not a credential authority. The DID, the verification key, the credential profile config, and
+  the relationship to the relying party belong to the deployment, not to Registry Witness as a
+  product. Registry Witness ships an engine and a wire shape; the trust comes from the
+  deployment.
+
+## Next
+
+- [Registry Witness overview](../../projects/registry-witness/)
+- [Publishing pipeline](../publishing-pipeline/)
+- [Consultation flow](../consultation-flow/)
+- [Standards register](../../reference/standards/)
+- [Glossary](../../reference/glossary/)

@@ -1,43 +1,25 @@
 ---
-title: The registry family
-description: Documentation for six projects that help you publish, consult, verify, and operate protected registry data.
+title: Registry Legend
+description: "Documentation for the registry family, covering three stories: Publish, Consult, and Prove."
 status: current
 owner: registry-legend
-source_repos:
-  - registry-relay
-  - registry-platform
-  - registry-manifest
-  - registry-witness
-  - registry-atlas
-  - registry-lab
-last_reviewed: "2026-05-23"
+source_repos: []
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-import LegendList from '../../components/LegendList.astro';
-
-This site documents the registry family: six projects, each with a clear job, that together let you publish, consult, verify, and operate protected registry data. If you're new to the family, start with [what is the registry family](./start/what-is-the-registry-family/).
+The registry family lets you do three things: describe a registry's published surface in every
+standards format that downstream systems expect (Publish), query protected registry data over
+authorized HTTP routes without gaining database access (Consult), and evaluate eligibility
+claims and receive a verifiable credential without exposing the records that back the claim
+(Prove).
 
 ## Where to start
 
-Pick the entry point that matches what you want to do:
-
-- **Want to see it run?** Start with the [Registry Lab tutorial](./tutorials/first-run-with-registry-lab/). One `docker compose up`, end-to-end demo.
-- **Want to query a registry over HTTP?** Start with [Registry Relay](./projects/registry-relay/). It's the protected consultation gateway.
-- **Need to evaluate eligibility claims and issue credentials?** Start with [Registry Witness](./projects/registry-witness/).
-- **Maintaining shared security or operational behavior?** Start with [Registry Platform](./projects/registry-platform/).
-- **Reviewing what a registry publishes?** Start with [Registry Atlas](./projects/registry-atlas/) for browser inspection, or the [standards register](./reference/standards/) for the per-standard stance.
-- **Modeling registry metadata before any runtime exists?** Start with [Registry Manifest](./projects/registry-manifest/).
-
-## The six projects
-
-<LegendList />
-
-## Reference and decisions
-
-- [Project map](./map/): which project owns which question.
-- [Architecture overview](./explanation/architecture/): how the pieces fit together.
-- [Standards register](./reference/standards/): every standard the family touches, with its claim level.
-- [Contracts index](./reference/contracts/): machine contracts by project.
+- [Three stories](./start/what-we-built/): one page that maps each story to the projects that
+  deliver it, with definitions.
+- [Quickstart](./start/quickstart/): audience routing, pick the path that matches your goal.
+- [Your first call](./start/your-first-call/): a reproducible tutorial using the Registry Lab
+  demo, from `git clone` to a live credential in four steps.

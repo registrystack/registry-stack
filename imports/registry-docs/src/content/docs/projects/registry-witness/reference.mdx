@@ -6,7 +6,7 @@ owner: registry-witness
 source_repos:
   - registry-witness
   - registry-platform
-last_reviewed: "2026-05-24"
+last_reviewed: "2026-05-25"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -16,6 +16,7 @@ standards_referenced:
   - openapi
   - sp-dci
   - w3c-did
+  - oid4vci
 ---
 
 Use this page to look up the Registry Witness config schema, HTTP routes, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`.
@@ -40,6 +41,10 @@ Use this page to look up the Registry Witness config schema, HTTP routes, disclo
 | `POST` | `/claims/batch-evaluate` | Evaluate one or more claims for multiple subjects inline. Accepts `Idempotency-Key` header. |
 | `POST` | `/evidence/render` | Render a stored evaluation in a requested format and disclosure level. |
 | `POST` | `/credentials/issue` | Issue an SD-JWT VC credential from a stored evaluation. |
+| `GET` | `/.well-known/openid-credential-issuer` | Return the OID4VCI Credential Issuer Metadata document. |
+| `GET` | `/oid4vci/credential-offer` | Return a `CredentialOffer` for one or more configured credential configurations. |
+| `POST` | `/oid4vci/nonce` | Mint a fresh `c_nonce` for the holder proof of possession JWT. |
+| `POST` | `/oid4vci/credential` | Issue an SD-JWT VC credential bound to the holder's `did:jwk`. |
 
 HTTP status codes used across routes:
 
@@ -96,6 +101,25 @@ Fields of `ClaimDefinition`.
 | `credential_profiles` | No | array | `[]` | Credential profile IDs that may issue from this claim. |
 | `cccev.requirement_type` | No | string | None | CCCEV requirement type annotation for JSON-LD rendering. |
 | `oots.enabled` | No | bool | None | Once-Only Technical System config. Serves as metadata annotations only; not yet enforced. |
+
+### ClaimDefinition fields, narrative form
+
+The same fields described in prose. Use this form when reading the YAML config side by side with the [evaluation engine](../#evaluation-engine) section of the overview.
+
+- `id`: stable string identifier used in API requests.
+- `title`: human-readable label.
+- `version`: a date-based API version string (for example, `2026-05`).
+- `subject_type`: the kind of entity being evaluated (for example, `person`).
+- `value`: the type and optional unit of the claim's raw value (for example, `type: number, unit: hectare`).
+- `inputs`: named parameters the caller must supply (for example, a `subject_id` string).
+- `depends_on`: ordered list of claim IDs whose results must be available before this claim evaluates. The config validator rejects dependency cycles at startup.
+- `source_bindings`: a map of binding names to source binding entries, each specifying which connector and connection to use, the dataset and entity name, a lookup strategy, and the fields to extract.
+- `rule`: the evaluation rule. See [Rule types](#rule-types).
+- `disclosure`: the per-claim disclosure policy. See [Disclosure policy modes](#disclosure-policy-modes).
+- `formats`: the output media types this claim can produce.
+- `credential_profiles`: which credential profiles may issue a credential from this claim.
+- `cccev`: optional Core Criterion and Core Evidence Vocabulary (CCCEV) annotation (for example, `requirement_type: InformationRequirement`).
+- `oots`: optional Once-Only Technical System (OOTS) annotation. Fields include `enabled`, `requirement` (an IRI), `reference_framework`, `evidence_type_classification`, `evidence_type_list`, `languages`, and `authentication_level_of_assurance`. When `oots.enabled` is true, the claim summary API publishes the block and the CCCEV renderer uses `oots.requirement` as the `cccev:supportsRequirement` IRI. There is no dedicated OOTS transport or external OOTS endpoint at this version; the fields serve as metadata annotations only; not yet enforced.
 
 ## Rule types
 
@@ -192,6 +216,49 @@ Fields of `CredentialProfileConfig`.
 | `holder_binding.allowed_did_methods` | No | `[]` | Permitted DID methods for holder binding. |
 | `allowed_claims` | No | `[]` | Claim IDs that this profile may issue. |
 | `disclosure.allowed` | No | None | Disclosure modes permitted in issued credentials. |
+
+## OID4VCI routes
+
+Registry Witness emits OpenID for Verifiable Credential Issuance (OID4VCI) Draft 13 compatible routes when `oid4vci.enabled` is `true` in config. The wider [OID4VCI](../../../reference/standards/) spec alignment is `aligns_with`; the four routes below `emit` the wire shapes the spec defines.
+
+### `GET /.well-known/openid-credential-issuer`
+
+Returns the Credential Issuer Metadata document.
+
+- Auth: public.
+- Response media type: `application/json`.
+- Response body fields: `credential_issuer`, `credential_endpoint`, `nonce_endpoint` (optional), `authorization_servers` (optional), `credential_configurations_supported` (map of configuration id to metadata, including `format`, `scope`, `cryptographic_binding_methods_supported`, `credential_signing_alg_values_supported`, `proof_types_supported`, `display`, `vct`).
+
+### `GET /oid4vci/credential-offer`
+
+Returns a `CredentialOffer` for one or all configured credential configurations.
+
+- Auth: public.
+- Query parameter: `credential_configuration_id` (optional). If omitted, the offer lists every configuration the server knows about.
+- Response media type: `application/json`.
+- Response body fields: `credential_issuer`, `credential_configuration_ids`, `grants` (currently the `authorization_code` grant with an `issuer_state` nonce).
+
+### `POST /oid4vci/nonce`
+
+Mints a fresh `c_nonce` used by the holder when signing the proof-of-possession JWT.
+
+- Auth: public. Only enabled when `oid4vci.nonce.enabled` is `true`.
+- Request media type: `application/json` (body may be empty).
+- Request body fields: `credential_configuration_id` (optional).
+- Response media type: `application/json`.
+- Response body fields: `c_nonce`, `c_nonce_expires_in` (seconds).
+
+### `POST /oid4vci/credential`
+
+Issues an SD-JWT VC credential bound to the holder's `did:jwk`.
+
+- Auth: bearer access token sourced from the configured authorization server (for example, eSignet). Self-attestation principals only.
+- Request media type: `application/json`.
+- Request body fields: `format` (must be `dc+sd-jwt`), `credential_configuration_id` or `credential_identifier`, `proof.proof_type` (must be `jwt`), `proof.jwt` (signed with the holder's `did:jwk`; `aud` equals the configured `credential_issuer`; `nonce` is the value from `POST /oid4vci/nonce`).
+- Response media type: `application/json`.
+- Response body fields: `credential` (the SD-JWT VC as a single compact-serialization string), `c_nonce` (next nonce, optional), `c_nonce_expires_in` (optional).
+
+Proof JWT validation comes from Registry Platform OID4VCI helpers; the credential signing key is the same Ed25519 OKP JWK loaded by the credential profile that backs the configuration. Holder binding requires `did:jwk`; other DID methods are rejected at config validation.
 
 ## Audit event shape
 

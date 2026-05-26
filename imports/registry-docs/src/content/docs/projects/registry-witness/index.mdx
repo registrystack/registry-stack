@@ -1,12 +1,12 @@
 ---
 title: Registry Witness overview
-description: Explains what Registry Witness is, how it evaluates eligibility claims, controls disclosure, issues SD-JWT VC credentials, and how it relates to the rest of the registry family.
+description: Explains what Registry Witness is, how it evaluates eligibility claims, controls disclosure, issues SD-JWT VC credentials over a direct API and over OID4VCI, and how it relates to the rest of the registry family.
 status: draft
 owner: registry-witness
 source_repos:
   - registry-witness
   - registry-platform
-last_reviewed: "2026-05-24"
+last_reviewed: "2026-05-25"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -16,52 +16,43 @@ standards_referenced:
   - openapi
   - w3c-did
   - sp-dci
+  - oid4vci
 ---
 
-Prove a person qualifies for a program (eligibility, age, residency) without sharing the records that prove it. Registry Witness evaluates claims against your registry data and issues SD-JWT VC credentials with selective disclosure.
+Registry Witness is the credential issuance product of the registry family. It evaluates configured
+eligibility claims against your registry data and issues SD-JWT VC credentials with selective
+disclosure. It also issues wallet-compatible credentials over OpenID for Verifiable Credential
+Issuance (OID4VCI). The verification receipt Registry Witness produces is an evidence artifact, not
+an eligibility decision: the issuing program decides what an entitlement is.
 
-Registry Witness is a standalone HTTP service. It is independently deployable and does not import or link Registry Relay application code. A Relay instance may publish metadata that points to a Witness instance, but the two services remain decoupled at the product boundary. Both services now share Registry Platform primitives for security and operational behavior. For questions about which service owns which concern, see [Ownership boundaries](../../map/ownership-boundaries/).
+## Claim model
 
-The core promise is narrow: given a subject identifier, Registry Witness tells a caller whether that subject satisfies a configured rule, at whatever level of detail the disclosure policy permits. The verification receipt Registry Witness produces is not an eligibility decision. The issuing program, not Registry Witness, is responsible for converting a verified claim into an entitlement.
-
-## Claim configuration model
-
-Claims are declared in YAML under the `evidence.claims` array. Each entry is a `ClaimDefinition` struct.
-
-Each claim definition carries:
-
-- `id`: stable string identifier used in API requests.
-- `title`: human-readable label.
-- `version`: a date-based API version string (for example, `2026-05`).
-- `subject_type`: the kind of entity being evaluated (for example, `person`).
-- `value`: the type and optional unit of the claim's raw value (for example, `type: number, unit: hectare`).
-- `inputs`: named parameters the caller must supply (for example, a `subject_id` string).
-- `depends_on`: ordered list of claim IDs whose results must be available before this claim evaluates. The config validator rejects dependency cycles at startup.
-- `source_bindings`: a map of binding names to source binding entries, each specifying which connector and connection to use, the dataset and entity name, a lookup strategy, and the fields to extract.
-- `rule`: the evaluation rule. See [Evaluation engine](#evaluation-engine).
-- `disclosure`: the per-claim disclosure policy. See [Disclosure policy modes](#disclosure-policy-modes).
-- `formats`: the output media types this claim can produce.
-- `credential_profiles`: which credential profiles may issue a credential from this claim.
-- `cccev`: optional Core Criterion and Core Evidence Vocabulary (CCCEV) annotation (for example, `requirement_type: InformationRequirement`).
-- `oots`: optional Once-Only Technical System (OOTS) annotation. Fields include `enabled`, `requirement` (an IRI), `reference_framework`, `evidence_type_classification`, `evidence_type_list`, `languages`, and `authentication_level_of_assurance`. When `oots.enabled` is true, the claim summary API publishes the block and the CCCEV renderer uses `oots.requirement` as the `cccev:supportsRequirement` IRI. There is no dedicated OOTS transport or external OOTS endpoint at this version; the fields serve as metadata annotations only; not yet enforced.
-
-The demo config at
+Claims are declared in YAML under `evidence.claims`. Each claim has a stable `id`, a `subject_type`,
+a typed `value`, named `inputs`, optional `depends_on` ordering, one or more `source_bindings` that
+name the connector and connection to read data from, an evaluation `rule` (one of `extract`,
+`exists`, `cel`, `plugin`), a `disclosure` policy, and the output `formats` and
+`credential_profiles` the claim may produce.
+For the field-by-field schema, see [the claim config reference](./reference/#claim-config-schema).
+The demo at
 [demo/config/registry-witness.yaml](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml)
-shows three claims: `date-of-birth` (Extract rule), `farmed-land-size` (Extract rule), and
+ships three claims: `date-of-birth` (Extract rule), `farmed-land-size` (Extract rule), and
 `farmer-under-4ha` (CEL rule that depends on `farmed-land-size`).
-
-For the full field-by-field schema, see [Registry Witness reference](./reference/).
 
 ## Evaluation engine
 
 Registry Witness supports four rule types:
 
-- `extract`: reads a named field from a named source binding. The simplest rule type: no logic, one field.
+- `extract`: reads a named field from a named source binding. The simplest rule type: no logic,
+  one field.
 - `exists`: returns true if a record was found at the source, false otherwise.
-- `cel`: evaluates a Common Expression Language (CEL) expression with named bindings. Bindings can reference other claim results via `bindings.claims`, letting a CEL claim compose from upstream Extract results without re-fetching source data.
-- `plugin`: declares an external plugin name. Not yet implemented; the evaluator returns `OperationUnsupported` (HTTP 501) for any claim that uses it.
+- `cel`: evaluates a Common Expression Language (CEL) expression with named bindings. Bindings can
+  reference other claim results via `bindings.claims`, letting a CEL claim compose from upstream
+  Extract results without re-fetching source data.
+- `plugin`: declares an external plugin name. Not yet implemented; the evaluator returns
+  `OperationUnsupported` (HTTP 501) for any claim that uses it.
 
-Claims that declare `depends_on` are evaluated in dependency order. The validator enforces that `depends_on` relationships form a directed acyclic graph (DAG).
+Claims that declare `depends_on` are evaluated in dependency order. The validator enforces that
+`depends_on` relationships form a directed acyclic graph (DAG).
 
 ## Disclosure policy modes
 
@@ -87,27 +78,55 @@ downgrade: deny`, which is fail-closed.
 
 Registry Witness issues credentials in
 [SD-JWT VC](https://datatracker.ietf.org/doc/draft-ietf-oauth-selective-disclosure-jwt/) format
-via `/credentials/issue`.
-Reusable SD-JWT signing and holder-proof checks come from Registry Platform; Witness owns the profile config, claim selection, disclosure decision, and API workflow.
+via `POST /credentials/issue`.
+Reusable SD-JWT signing and holder-proof checks come from Registry Platform; Registry Witness owns
+the profile config, claim selection, disclosure decision, and API workflow.
 
 Key properties:
 
-- **Algorithm**: EdDSA (Ed25519).
-- **Token type header**: `dc+sd-jwt`.
-- **Media type**: `application/dc+sd-jwt`.
-- **Key source**: the issuing key is an OKP Ed25519 JWK loaded from an environment variable
-  named by `credential_profiles.<id>.issuer_key_env` in the YAML config
-  (for example, `REGISTRY_WITNESS_ISSUER_JWK`).
-- **Disclosures**: each claim field is wrapped in an individual SD-JWT disclosure
-  with a SHA-256 digest, allowing the holder to present only selected fields.
-- **Holder binding**: the credential profile can require a `did:jwk` holder proof.
-  Proof of possession is only supported with `did:jwk`; other DID methods
-  in `allowed_did_methods` cause a startup validation error.
+- Algorithm: EdDSA (Ed25519).
+- Token type header: `dc+sd-jwt`.
+- Media type: `application/dc+sd-jwt`.
+- Key source: the issuing key is an OKP Ed25519 JWK loaded from an environment variable named by
+  `credential_profiles.<id>.issuer_key_env` in the YAML config (for example,
+  `REGISTRY_WITNESS_ISSUER_JWK`).
+- Disclosures: each claim field is wrapped in an individual SD-JWT disclosure with a SHA-256
+  digest, allowing the holder to present only selected fields.
+- Holder binding: the credential profile can require a `did:jwk` holder proof. Proof of possession
+  is only supported with `did:jwk`; other DID methods in `allowed_did_methods` cause a startup
+  validation error.
 
-The public verification key is exported at `/.well-known/evidence/jwks.json`.
-Credential profiles are declared under `evidence.credential_profiles` in the YAML config
-and each specifies a `format`, `issuer` DID, `vct` (Verifiable Credential Type URI),
-`validity_seconds`, `holder_binding`, `allowed_claims`, and `disclosure`.
+The public verification key is exported at `/.well-known/evidence/jwks.json`. Credential profiles
+are declared under `evidence.credential_profiles` and each specifies a `format`, `issuer` DID,
+`vct` (Verifiable Credential Type URI), `validity_seconds`, `holder_binding`, `allowed_claims`,
+and `disclosure`.
+
+## OID4VCI wallet flow
+
+Registry Witness emits OpenID for Verifiable Credential Issuance (OID4VCI) Draft 13 compatible
+routes. The Registry Lab citizen self-attestation scenario uses this surface to drive a wallet
+through eSignet authentication and into a Witness-issued SD-JWT VC. The four routes are:
+
+- `GET /.well-known/openid-credential-issuer`: returns the Credential Issuer Metadata document
+  (issuer URL, credential endpoint, nonce endpoint, authorization servers, supported credential
+  configurations). Media type: `application/json`.
+- `GET /oid4vci/credential-offer`: returns a `CredentialOffer` for one credential configuration
+  (when `credential_configuration_id` is set in the query) or for every configuration the server
+  knows about (when no query is set). Media type: `application/json`.
+- `POST /oid4vci/nonce`: returns a fresh `c_nonce` the holder uses when signing the proof of
+  possession JWT. Media type: `application/json`.
+- `POST /oid4vci/credential`: returns the SD-JWT VC. The caller presents a bearer access token
+  from the configured authorization server and a proof JWT signed with the holder's `did:jwk` key
+  carrying the `c_nonce`. Media type: `application/json`.
+
+Holder binding uses `did:jwk` (Decentralized Identifier method `jwk`): the wallet derives a
+public key, encodes it as `did:jwk:<base64url-jwk>`, signs the proof JWT with the matching
+private key, and Registry Witness embeds the holder's `did:jwk` into the `cnf` claim of the
+issued credential. The route is exercised from the lab by
+`just citizen-oid4vci-login`, `just citizen-oid4vci-code`, `just citizen-oid4vci-token`,
+`just citizen-oid4vci-probe`, and `just citizen-oid4vci-report`; the host-side Witness instance
+runs on port `4325`. For the full request and response shapes, see
+[OID4VCI routes in the Witness reference](./reference/#oid4vci-routes).
 
 ## CCCEV JSON-LD rendering
 
@@ -130,51 +149,71 @@ The CCCEV output aligns with the vocabulary but does not claim full profile conf
 
 Registry Witness fetches source data over HTTP using one of two connector kinds:
 
-- `registry_data_api`: posts to `{base_url}/{dataset}/{entity}` with query parameters
-  shaped for the Registry Data API.
-  The connector authenticates with a per-connection bearer token.
-- `dci`: uses the Social Protection Digital Convergence Initiative (SP DCI) sync search
-  protocol. The request body follows the DCI `registry/sync/search` shape;
-  the response is parsed via a configurable JSON path to extract records.
-  Defaults: search path `/registry/sync/search`, records path
-  `/message/search_response/0/data/reg_records`, max results `2`.
+- `registry_data_api`: posts to `{base_url}/{dataset}/{entity}` with query parameters shaped for
+  the Registry Data API. The connector authenticates with a per-connection bearer token.
+- `dci`: uses the Social Protection Digital Convergence Initiative (SP DCI) sync search protocol.
+  The request body follows the DCI `registry/sync/search` shape; the response is parsed via a
+  configurable JSON path to extract records. Defaults: search path `/registry/sync/search`,
+  records path `/message/search_response/0/data/reg_records`, max results `2`.
 
-Both connectors use an HTTP client with a 10-second timeout and strict outbound URL policy by default.
-Private-network HTTP source registries are allowed only when a source connection sets
-`allow_insecure_private_network: true`; the opt-in still blocks cloud metadata endpoints.
-Source connection credentials are bearer tokens loaded from environment variables named
-by the `token_env` field on each `source_connections` entry.
-No source credentials appear in the YAML config file itself.
+Both connectors use an HTTP client with a 10-second timeout and a strict outbound URL policy by
+default. Private-network HTTP source registries are allowed only when a source connection sets
+`allow_insecure_private_network: true`; the opt-in still blocks cloud metadata endpoints. Source
+connection credentials are bearer tokens loaded from environment variables named by the
+`token_env` field on each `source_connections` entry. No source credentials appear in the YAML
+config file itself.
 
 ## Audit and redaction
 
-Every request that touches claim evaluation is authenticated and audited.
-Audit events are serialized as platform audit envelopes in JSON Lines (JSONL).
-Fields: `event_id`, `occurred_at`, `principal_id`, `decision`, `method`, `path`, `status`,
-`verification_id`, `claim_hash`, `row_count`, `error_code`.
-`verification_id` and `claim_hash` are optional and may be omitted for redacted results.
+Every request that touches claim evaluation is authenticated and audited. Audit events are
+serialized as platform audit envelopes in JSON Lines (JSONL). Fields: `event_id`, `occurred_at`,
+`principal_id`, `decision`, `method`, `path`, `status`, `verification_id`, `claim_hash`,
+`row_count`, `error_code`. `verification_id` and `claim_hash` are optional and may be omitted
+for redacted results.
 
-The audit sink is configurable as `stdout` (default) or `file`/`jsonl`.
-When `sink: file` or `sink: jsonl`, `audit.path` must be set.
-`audit.hash_secret_env` is required so redacted audit identifiers use a deployment-specific secret.
-The demo config writes to `demo/var/registry-witness-audit.jsonl`.
+The audit sink is configurable as `stdout` (default) or `file`/`jsonl`. When `sink: file` or
+`sink: jsonl`, `audit.path` must be set. `audit.hash_secret_env` is required so redacted audit
+identifiers use a deployment-specific secret. The demo config writes to
+`demo/var/registry-witness-audit.jsonl`.
+
+## What Registry Witness is not
+
+Registry Witness is a standalone HTTP service. It is independently deployable and does not import
+or link Registry Relay application code. A Relay instance may publish metadata that points to a
+Witness instance, but the two services remain decoupled at the product boundary. Both services
+share Registry Platform primitives for security and operational behavior. For questions about
+which service owns which concern, see [Boundaries and map](../../map/boundaries-and-map/).
+
+Three boundaries to keep in mind:
+
+- Not an eligibility decision. The verification receipt is an evidence artifact. The issuing
+  program, not Registry Witness, converts a verified claim into an entitlement.
+- Not a wallet. Registry Witness issues credentials over OID4VCI; the wallet that holds and
+  presents the credential is a separate component.
+- Not a credential authority. The DID, the verification key, and the credential profile config
+  belong to the deployment, not to Registry Witness as a product.
 
 ## Status and v0 caveats
 
-Registry Witness is at version 0.2.1. It was renamed from `evidence-server`; the rename is documented in `docs/rename-2026-05-23/`.
+Registry Witness is at version 0.2.1. It was renamed from `evidence-server`; the rename is
+documented in `docs/rename-2026-05-23/`.
 
 Known limitations at this version:
 
 - The `Plugin` rule type is declared in config but not yet implemented.
-- Proof of possession for holder binding only supports `did:jwk`.
-  Other DID methods in `allowed_did_methods` cause a startup validation error.
-- Inbound auth supports either static API-key/bearer-token mode or OIDC mode.
-  Both modes use shared Registry Platform primitives, but Witness still owns its config shape and scope enforcement.
-- The W3C Verifiable Credentials Data Model envelope is not used.
-  Issued credentials are SD-JWT format directly, without a VC Data Model wrapper.
+- Proof of possession for holder binding only supports `did:jwk`. Other DID methods in
+  `allowed_did_methods` cause a startup validation error.
+- Inbound auth supports either static API-key/bearer-token mode or OIDC mode. Both modes use
+  shared Registry Platform primitives, but Registry Witness still owns its config shape and scope
+  enforcement.
+- The W3C Verifiable Credentials Data Model envelope is not used. Issued credentials are SD-JWT
+  format directly, without a VC Data Model wrapper.
+- OID4VCI route shapes are Draft 13 compatible. No conformance test fixture is pinned at this
+  version, so the broader spec claim level is `aligns_with`.
 
 ## Next
 
 - [Run Registry Witness locally](./run-locally/)
 - [Configure a claim](./configure-a-claim/)
 - [Registry Witness reference](./reference/)
+- [Evidence issuance, end to end](../../explanation/evidence-issuance/)

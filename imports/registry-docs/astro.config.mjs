@@ -41,23 +41,16 @@ export default defineConfig({
         {
           label: 'Start',
           items: [
-            { label: 'What is the registry family', slug: 'start/what-is-the-registry-family' },
+            { label: 'Introduction', slug: 'start' },
+            { label: 'Three stories', slug: 'start/what-we-built' },
             { label: 'Quickstart', slug: 'start/quickstart' },
+            { label: 'Your first call', slug: 'start/your-first-call' },
           ],
         },
         {
-          label: 'Projects',
+          label: 'Publish',
           items: [
-            { label: 'Project map', slug: 'map' },
-            { label: 'Ownership & boundaries', slug: 'map/ownership-boundaries' },
-            { label: 'All projects', slug: 'projects' },
-            {
-              label: 'Registry Platform',
-              items: [
-                { label: 'Overview', slug: 'projects/registry-platform' },
-                { label: 'Reference', slug: 'projects/registry-platform/reference' },
-              ],
-            },
+            { label: 'Publishing pipeline', slug: 'explanation/publishing-pipeline' },
             {
               label: 'Registry Manifest',
               items: [
@@ -65,24 +58,6 @@ export default defineConfig({
                 { label: 'Validate and render', slug: 'projects/registry-manifest/validate-and-render' },
                 { label: 'Profile fixtures', slug: 'projects/registry-manifest/profile-fixtures' },
                 { label: 'Reference', slug: 'projects/registry-manifest/reference' },
-              ],
-            },
-            {
-              label: 'Registry Relay',
-              items: [
-                { label: 'Overview', slug: 'projects/registry-relay' },
-                { label: 'Run locally', slug: 'projects/registry-relay/run-locally' },
-                { label: 'Authorize callers', slug: 'projects/registry-relay/authorize-callers' },
-                { label: 'Reference', slug: 'projects/registry-relay/reference' },
-              ],
-            },
-            {
-              label: 'Registry Witness',
-              items: [
-                { label: 'Overview', slug: 'projects/registry-witness' },
-                { label: 'Run locally', slug: 'projects/registry-witness/run-locally' },
-                { label: 'Configure a claim', slug: 'projects/registry-witness/configure-a-claim' },
-                { label: 'Reference', slug: 'projects/registry-witness/reference' },
               ],
             },
             {
@@ -94,6 +69,53 @@ export default defineConfig({
                 { label: 'Reference', slug: 'projects/registry-atlas/reference' },
               ],
             },
+          ],
+        },
+        {
+          label: 'Consult',
+          items: [
+            { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
+            {
+              label: 'Registry Relay',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-relay' },
+                { label: 'Run locally', slug: 'projects/registry-relay/run-locally' },
+                { label: 'Authorize callers', slug: 'projects/registry-relay/authorize-callers' },
+                { label: 'Reference', slug: 'projects/registry-relay/reference' },
+              ],
+            },
+          ],
+        },
+        {
+          label: 'Prove',
+          items: [
+            { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
+            {
+              label: 'Registry Witness',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-witness' },
+                { label: 'Run locally', slug: 'projects/registry-witness/run-locally' },
+                { label: 'Configure a claim', slug: 'projects/registry-witness/configure-a-claim' },
+                { label: 'Reference', slug: 'projects/registry-witness/reference' },
+              ],
+            },
+          ],
+        },
+        {
+          label: 'Infrastructure',
+          items: [
+            {
+              label: 'Registry Platform',
+              items: [
+                { label: 'Overview', slug: 'projects/registry-platform' },
+                { label: 'Reference', slug: 'projects/registry-platform/reference' },
+              ],
+            },
+          ],
+        },
+        {
+          label: 'Demo',
+          items: [
             {
               label: 'Registry Lab',
               items: [
@@ -102,29 +124,34 @@ export default defineConfig({
                 { label: 'Reference', slug: 'projects/registry-lab/reference' },
               ],
             },
-          ],
-        },
-        {
-          label: 'Explanation',
-          items: [
-            { label: 'Architecture', slug: 'explanation/architecture' },
-            { label: 'Standards positioning', slug: 'explanation/standards-positioning' },
-            { label: 'DPI safeguards alignment', slug: 'explanation/dpi-safeguards-alignment' },
+            { label: 'First run with Registry Lab', slug: 'tutorials/first-run-with-registry-lab' },
           ],
         },
         {
           label: 'Reference',
           items: [
-            { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'Standards register', slug: 'reference/standards' },
-            { label: 'API reference', slug: 'reference/apis' },
+            { label: 'Contracts', slug: 'reference/contracts' },
+            {
+              label: 'API reference',
+              items: [
+                { label: 'Overview', slug: 'reference/apis' },
+                { label: 'Registry Relay', slug: 'reference/apis/registry-relay' },
+                { label: 'Registry Witness', slug: 'reference/apis/registry-witness' },
+              ],
+            },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
         {
-          label: 'Tutorials',
+          label: 'Context & decisions',
           items: [
-            { label: 'First run with Registry Lab', slug: 'tutorials/first-run-with-registry-lab' },
+            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
+            { label: 'Architecture', slug: 'explanation/architecture' },
+            { label: 'Standards positioning', slug: 'explanation/standards-positioning' },
+            { label: 'DPI safeguards alignment', slug: 'explanation/dpi-safeguards-alignment' },
+            { label: 'Rename: evidence-server → Witness', slug: 'decisions/rename-2026-05-23' },
+            { label: 'Historical docs index', slug: 'decisions/historical-docs-index' },
           ],
         },
       ],

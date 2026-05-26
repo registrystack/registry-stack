@@ -10,7 +10,7 @@ source_repos:
   - registry-manifest
   - registry-witness
   - registry-atlas
-last_reviewed: "2026-05-23"
+last_reviewed: "2026-05-25"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -30,32 +30,35 @@ standards_referenced:
   - govstack-digital-registries
   - sp-dci
   - w3c-did
+  - oid4vci
 ---
 
 import StandardsTable from '../../../components/StandardsTable.astro';
 
-Use this register to understand what standards each project in the registry family references and at what level of conformance.
+This register lists every standard the registry family touches, the projects that touch it, and the claim level that names how strong the relationship is. The registry family does not introduce a new standard; each project emits, maps to, or aligns with existing ones, and says so explicitly.
+
 The table is generated from `src/data/standards.yaml`.
 
-The registry family does not claim to be a new standard.
-Each project implements specific surfaces around existing standards and declares that use with an explicit claim level.
+## Register
+
+<StandardsTable />
 
 ## Claim levels
 
-Six levels are used, in descending strength:
+Six levels in descending strength:
 
-- `implements` means the project implements a normative requirement or API shape from the standard.
-- `emits` means the project produces artifacts shaped like the standard, such as JSON-LD, SHACL, OpenAPI, or catalog records.
-- `maps_to` means local concepts or fields are mapped to the standard.
-- `aligns_with` means the project follows the model or intent without claiming formal conformance.
-- `inspired_by` means the standard influenced design without any compatibility claim.
-- `compares_against` means the standard is discussed to explain boundaries or alternatives.
+- `implements`: the project implements a normative requirement or API shape from the standard.
+- `emits`: the project produces artifacts shaped like the standard (JSON-LD, SHACL, OpenAPI, catalog records).
+- `maps_to`: local concepts or fields are mapped to the standard.
+- `aligns_with`: the project follows the model or intent without claiming formal conformance.
+- `inspired_by`: the standard influenced design without any compatibility claim.
+- `compares_against`: the standard is discussed to explain boundaries or alternatives.
 
-**What these levels mean for integrators:**
+What these levels mean for integrators:
 
-- If a standard is marked `emits`, you can parse that project's output as conformant to that standard. Fixtures and generated artifacts back the claim.
-- If it's marked `aligns_with`, the project uses the vocabulary and intent of the standard but does not guarantee strict conformance. Don't write a validator against the spec without checking the surface notes.
-- `implements` means a normative requirement is met; you can rely on the API shape it describes.
+- `emits`: you can parse that project's output as the standard expects. Fixtures or generated artifacts back the claim.
+- `aligns_with`: the project uses the vocabulary and intent of the standard but does not guarantee strict conformance. Do not write a validator against the spec without reading the surface notes.
+- `implements`: a normative requirement is met; you can rely on the API shape.
 - `inspired_by` or `compares_against`: design context only, no interoperability claim.
 
 {/* A claim is only as strong as its evidence. When evidence is a README sentence, the claim is at most aligns_with. When evidence is a test, fixture, or generated artifact, the claim can reach emits or implements. A standard appears in the register only when it has all five required fields: standard, status, used_by, claim_level, and evidence. */}
@@ -69,10 +72,6 @@ Six levels are used, in descending strength:
 - **Surface** names the specific output or endpoint that the claim applies to.
 - **Profile and notes** identifies the version or profile in use and any boundary conditions.
 - **Evidence** links to the source code, fixture, or document that supports the claim.
-
-## Register
-
-<StandardsTable />
 
 ## Gaps
 
