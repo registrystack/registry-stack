@@ -226,6 +226,7 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | `audience`        | One or more accepted `aud` values. Tokens whose `aud` does not intersect this list are rejected.                                                              |
 | `jwks_url`        | Explicit JWKS endpoint. Exactly one of `jwks_url` and `discovery_url` must be set; the validator rejects configs that supply both or neither.                 |
 | `discovery_url`   | OIDC discovery document (`.well-known/openid-configuration`). The JWKS URL is resolved from `jwks_uri` at startup.                                            |
+| `allow_dev_insecure_fetch_urls` | Development-only opt-in for loopback HTTP issuer, discovery, and JWKS URLs. Defaults to `false`; non-loopback private and metadata IPs remain denied by the platform fetch policy. |
 | `algorithms`      | Signature algorithms accepted by the verifier. RS256, ES256, EdDSA. HS\* and `none` are intentionally absent.                                                 |
 | `jwks_cache_ttl`  | Steady-state JWKS cache TTL. The cache also refreshes on unknown `kid` (rate-limited), so this is the rotation pickup latency, not the upper bound.           |
 | `leeway`          | Clock skew tolerance on `exp` and `nbf`. Bounded at 5 minutes by validation.                                                                                  |
@@ -236,7 +237,7 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 
 ### Discovery vs explicit JWKS
 
-`discovery_url` triggers a single discovery fetch at startup to resolve `jwks_uri`; a failure here aborts the binary so an operator sees the IdP wiring problem instead of a process that runs but silently rejects every token. The JWKS document itself is fetched lazily on first verify, so a transient JWKS outage at boot does not block startup.
+`discovery_url` triggers a single discovery fetch at startup to resolve `jwks_uri`; a failure here aborts the binary so an operator sees the IdP wiring problem instead of a process that runs but silently rejects every token. The JWKS document itself is fetched lazily on first verify, so a transient JWKS outage at boot does not block startup. Production defaults require HTTPS; local loopback HTTP requires `allow_dev_insecure_fetch_urls: true`.
 
 ### Resource-server semantics
 

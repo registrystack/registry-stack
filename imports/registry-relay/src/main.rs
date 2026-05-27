@@ -136,8 +136,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(initial_snapshot);
 
     ingest.run_initial_ingest(readiness_tx.clone()).await;
-    let (mut refresh_tasks, refresh_shutdown) =
-        Arc::clone(&ingest).spawn_refresh_tasks_with_config(&config, readiness_tx.clone());
+    let (mut refresh_tasks, refresh_shutdown) = Arc::clone(&ingest)
+        .spawn_refresh_tasks_with_config(&config, readiness_tx.clone(), Arc::clone(&audit_sink));
 
     let dataset_count = config.datasets.len();
     // Operational startup log: a per-mode size hint. For `api_key` this
@@ -350,26 +350,43 @@ async fn build_auth(config: &Config) -> Result<AuthProviderRef, Error> {
 /// lazily by the cache on first verify, so a transient JWKS outage at
 /// boot does not block startup.
 async fn build_oidc_auth(oidc: &OidcConfig) -> Result<AuthProviderRef, Error> {
+    if oidc.allow_dev_insecure_fetch_urls {
+        tracing::warn!(
+            code = "oidc.dev_insecure_fetch_urls_enabled",
+            "OIDC loopback HTTP issuer, discovery, and JWKS URLs are enabled for local development"
+        );
+    }
+
     let fetcher = match (oidc.jwks_url.as_deref(), oidc.discovery_url.as_deref()) {
-        (Some(jwks_url), None) => ReqwestJwksFetcher::from_jwks_url(jwks_url).map_err(|err| {
-            tracing::error!(
-                code = "config.validation_error",
-                error = %err,
-                "failed to build OIDC JWKS HTTP client"
-            );
-            Error::from(ConfigError::ValidationError)
-        })?,
+        (Some(jwks_url), None) => {
+            let result = if oidc.allow_dev_insecure_fetch_urls {
+                ReqwestJwksFetcher::from_jwks_url_for_dev(jwks_url)
+            } else {
+                ReqwestJwksFetcher::from_jwks_url(jwks_url)
+            };
+            result.map_err(|err| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    error = %err,
+                    "failed to build OIDC JWKS HTTP client"
+                );
+                Error::from(ConfigError::ValidationError)
+            })?
+        }
         (None, Some(discovery_url)) => {
-            ReqwestJwksFetcher::from_discovery_url(discovery_url, &oidc.issuer)
-                .await
-                .map_err(|err| {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        error = %err,
-                        "failed to resolve OIDC discovery document"
-                    );
-                    Error::from(ConfigError::ValidationError)
-                })?
+            let result = if oidc.allow_dev_insecure_fetch_urls {
+                ReqwestJwksFetcher::from_discovery_url_for_dev(discovery_url, &oidc.issuer).await
+            } else {
+                ReqwestJwksFetcher::from_discovery_url(discovery_url, &oidc.issuer).await
+            };
+            result.map_err(|err| {
+                tracing::error!(
+                    code = "config.validation_error",
+                    error = %err,
+                    "failed to resolve OIDC discovery document"
+                );
+                Error::from(ConfigError::ValidationError)
+            })?
         }
         _ => {
             tracing::error!(

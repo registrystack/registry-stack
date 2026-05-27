@@ -44,6 +44,7 @@ pub fn run(config: &Config) -> Result<(), Error> {
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
     validate_catalog_uris(config).map_err(Error::from)?;
+    validate_ogc_feature_flags(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     if let Some(provenance) = &config.provenance {
         validate_provenance(provenance).map_err(Error::from)?;
@@ -774,6 +775,64 @@ fn validate_publicschema_feature(config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_ogc_feature_flags(_config: &Config) -> Result<(), ConfigError> {
+    #[cfg(any(
+        not(feature = "ogcapi-features"),
+        not(feature = "ogcapi-edr"),
+        not(feature = "ogcapi-records")
+    ))]
+    {
+        let config = _config;
+        for dataset in &config.datasets {
+            #[cfg(not(feature = "ogcapi-records"))]
+            for uri in &dataset.conforms_to {
+                if is_ogc_records_conformance_uri(uri) {
+                    tracing::error!(
+                        code = "ogcapi.records.config.feature_disabled",
+                        dataset_id = %dataset.id,
+                        uri = %uri,
+                        "dataset declares OGC API Records conformance but binary was built without the ogcapi-records feature",
+                    );
+                    return Err(ConfigError::OgcApiRecordsFeatureDisabled);
+                }
+            }
+
+            #[cfg(not(feature = "ogcapi-edr"))]
+            for aggregate in &dataset.aggregates {
+                if aggregate.spatial.is_some() {
+                    tracing::error!(
+                        code = "ogcapi.edr.config.feature_disabled",
+                        dataset_id = %dataset.id,
+                        aggregate_id = %aggregate.id,
+                        "aggregate declares OGC EDR spatial config but binary was built without the ogcapi-edr feature",
+                    );
+                    return Err(ConfigError::OgcApiEdrFeatureDisabled);
+                }
+            }
+
+            #[cfg(not(feature = "ogcapi-features"))]
+            for entity in &dataset.entities {
+                if entity.spatial.is_some() {
+                    tracing::error!(
+                        code = "ogcapi.features.config.feature_disabled",
+                        dataset_id = %dataset.id,
+                        entity = %entity.name,
+                        "entity declares OGC API Features spatial config but binary was built without the ogcapi-features feature",
+                    );
+                    return Err(ConfigError::OgcApiFeaturesFeatureDisabled);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "ogcapi-records"))]
+fn is_ogc_records_conformance_uri(uri: &str) -> bool {
+    uri.starts_with("http://www.opengis.net/spec/ogcapi-records-1/")
+        || uri.starts_with("https://www.opengis.net/spec/ogcapi-records-1/")
+}
+
 /// Cross-field validation for provenance configuration.
 ///
 /// When `enabled = false` the block still validates its shape so
@@ -1190,11 +1249,11 @@ const OIDC_MAX_JWKS_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OIDC_MAX_LEEWAY: Duration = Duration::from_secs(5 * 60);
 
 fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
-    if !is_https_or_localhost(&oidc.issuer) {
+    if !is_allowed_oidc_url(&oidc.issuer, oidc.allow_dev_insecure_fetch_urls) {
         tracing::error!(
             code = "config.validation_error",
             field = "auth.oidc.issuer",
-            "issuer must be an absolute https:// URL (or http:// localhost / 127.0.0.1 for dev)"
+            "issuer must be an absolute https:// URL unless allow_dev_insecure_fetch_urls is true for loopback dev"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -1224,11 +1283,11 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
             return Err(ConfigError::ValidationError);
         }
         (Some(url), None) | (None, Some(url)) => {
-            if !is_https_or_localhost(url) {
+            if !is_allowed_oidc_url(url, oidc.allow_dev_insecure_fetch_urls) {
                 tracing::error!(
                     code = "config.validation_error",
                     field = "auth.oidc.jwks_url|discovery_url",
-                    "JWKS or discovery URL must be https:// (or http:// localhost for dev)"
+                    "JWKS or discovery URL must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
                 );
                 return Err(ConfigError::ValidationError);
             }
@@ -1312,9 +1371,12 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn is_https_or_localhost(url: &str) -> bool {
+fn is_allowed_oidc_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
     if let Some(rest) = url.strip_prefix("https://") {
         return !rest.is_empty();
+    }
+    if !allow_dev_insecure_fetch_urls {
+        return false;
     }
     if let Some(rest) = url.strip_prefix("http://") {
         let host = rest.split(['/', ':']).next().unwrap_or("");

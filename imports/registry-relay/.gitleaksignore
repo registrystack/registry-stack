@@ -1,0 +1,7 @@
+3dd336f496af452a1feaf082183fba07697fd024:tests/fixtures/vc/aggregate-result-v1/credential.jwt:jwt:1
+a69a1196bea5106d9ef60800ba73ac44c3bc4a4d:demo/decentralized/scripts/demo-flow.py:private-key:29
+27034a79e95f86530dea015713f5ed5e096ad4b3:demo/scripts/evidence_server_demo.py:private-key:58
+2bfe752eaa1bd9723f3bff48a5d5a68c18775a45:tests/fixtures/vc/aggregate-result-v1/credential.jwt:jwt:1
+2bfe752eaa1bd9723f3bff48a5d5a68c18775a45:tests/fixtures/vc/entity-record-v1/credential.jwt:jwt:1
+823e8ac1b6a427274b95646a95403bf3d8d777c2:tests/fixtures/vc/verify-result-v1/credential.jwt:jwt:1
+630623ec8971577f04494c5ca8864c807d7ad6ed:tests/fixtures/vc/verify-result-v1/credential.jwt:jwt:1

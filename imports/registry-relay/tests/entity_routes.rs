@@ -1111,7 +1111,7 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
 
     let list = server.get("/metadata/evidence-offerings").await;
     list.assert_status(StatusCode::OK);
-    assert_eq!(list.header("cache-control"), "private");
+    assert_eq!(list.header("cache-control"), "private, no-store");
     assert_eq!(list.header("vary"), "Authorization");
     let body: Value = list.json();
     let offerings = body["evidence_offerings"].as_array().expect("offerings");
@@ -1158,7 +1158,7 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
         .get("/metadata/evidence-offerings/individual_name_evidence")
         .await;
     detail.assert_status(StatusCode::OK);
-    assert_eq!(detail.header("cache-control"), "private");
+    assert_eq!(detail.header("cache-control"), "private, no-store");
     assert_eq!(detail.header("vary"), "Authorization");
     let body: Value = detail.json();
     assert_eq!(body["id"], "individual_name_evidence");

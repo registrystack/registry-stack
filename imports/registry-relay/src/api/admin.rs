@@ -67,8 +67,9 @@ async fn reload_table(
     match result {
         Ok(()) => Json(json!({
             "status": "ok",
-            "dataset_id": path.dataset_id.as_str(),
-            "table_id": path.table_id.as_str(),
+            "counts": {
+                "reloaded": 1,
+            },
         }))
         .into_response(),
         Err(IngestError::SourceNotFound) => {
@@ -109,16 +110,6 @@ async fn reload_all(
                 succeeded: report.succeeded,
                 failed: report.failed,
             },
-            resources: report
-                .resources
-                .into_iter()
-                .map(|resource| ReloadAllResource {
-                    dataset_id: resource.dataset_id.as_str().to_string(),
-                    resource_id: resource.resource_id.as_str().to_string(),
-                    status: resource.status,
-                    error_code: resource.error_code,
-                })
-                .collect(),
         }),
     )
         .into_response();
@@ -150,7 +141,6 @@ fn require_admin_scope(principal: Option<Extension<Principal>>) -> Result<(), Er
 struct ReloadAllResponse {
     status: &'static str,
     counts: ReloadAllCounts,
-    resources: Vec<ReloadAllResource>,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,15 +148,6 @@ struct ReloadAllCounts {
     total: usize,
     succeeded: usize,
     failed: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct ReloadAllResource {
-    dataset_id: String,
-    resource_id: String,
-    status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_code: Option<&'static str>,
 }
 
 fn reload_unavailable(detail: &'static str) -> Response {

@@ -11,9 +11,11 @@ use registry_relay::audit::{AuditPipeline, InMemorySink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::ScopeSet;
 use registry_relay::config::{self, Config};
+use registry_relay::entity::EntityRegistry;
 use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot};
-use registry_relay::server::build_admin_app;
+use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
+use registry_relay::server::{build_admin_app, build_app_with_entity_query};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -25,6 +27,8 @@ const NON_ADMIN_KEY: &str = "non-admin-test-token-0123456789";
 struct AdminFixture {
     _tmp: TempDir,
     server: TestServer,
+    public_server: TestServer,
+    source_path: std::path::PathBuf,
 }
 
 fn fixture(name: &str) -> String {
@@ -51,7 +55,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 fn write_config(tmp: &TempDir) -> std::path::PathBuf {
     let cache_dir = tmp.path().join("cache");
-    let source_path = fixture("social_registry.csv");
+    let source_path = tmp.path().join("social_registry.csv");
+    std::fs::copy(fixture("social_registry.csv"), &source_path).expect("copy source fixture");
     let yaml = format!(
         r#"
 server:
@@ -160,6 +165,31 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+    entities:
+      - name: beneficiary
+        table: beneficiaries_csv
+        fields:
+          - name: id
+            from: beneficiary_id
+          - name: household_size
+            from: household_size
+          - name: municipality_code
+            from: municipality_code
+          - name: program
+            from: program
+          - name: amount_eur
+            from: amount_eur
+          - name: joined_date
+            from: joined_date
+          - name: last_updated
+            from: last_updated
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
 
 audit:
   sink: stdout
@@ -167,6 +197,7 @@ audit:
   hash_secret_env: REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET
 "#,
         cache_dir = cache_dir.to_string_lossy(),
+        source_path = source_path.to_string_lossy(),
     );
     let path = tmp.path().join("admin-reload.yaml");
     std::fs::write(&path, yaml).expect("write config");
@@ -177,7 +208,7 @@ fn build_auth() -> Arc<ApiKeyAuth> {
     let entries = vec![
         ApiKeyEntry::new(
             "admin".to_string(),
-            ScopeSet::from_iter(["admin"]),
+            ScopeSet::from_iter(["admin", "social_registry:metadata", "social_registry:rows"]),
             make_fingerprint(ADMIN_KEY),
         )
         .expect("admin fingerprint parses"),
@@ -208,25 +239,44 @@ fn build_fixture() -> AdminFixture {
             &config,
             Arc::new(FormatRegistry::with_v1_defaults()),
             Arc::from(config.server.cache_dir.as_path()),
-            df_ctx,
+            Arc::clone(&df_ctx),
         )
         .expect("ingest registry builds"),
     );
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ingest.snapshot());
     let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
-    let app = build_admin_app(
-        config,
-        build_auth(),
-        sink,
-        readiness_rx,
-        readiness_tx,
-        ingest,
+    let auth = build_auth();
+    let entity_registry = Arc::new(EntityRegistry::from_config(&config).expect("registry builds"));
+    let entity_query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&df_ctx),
+        Arc::clone(&entity_registry),
+    ));
+    let aggregate_query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&df_ctx),
+        Arc::clone(&entity_registry),
+        Arc::clone(&config),
+    ));
+    let public_app = build_app_with_entity_query(
+        Arc::clone(&config),
+        auth.clone(),
+        Arc::clone(&sink),
+        readiness_rx.clone(),
+        entity_registry,
+        entity_query,
+        aggregate_query,
     )
-    .expect("admin app builds");
+    .expect("public app builds");
+    let app = build_admin_app(config, auth, sink, readiness_rx, readiness_tx, ingest)
+        .expect("admin app builds");
 
     AdminFixture {
         _tmp: tmp,
         server: TestServer::new(app),
+        public_server: TestServer::new(public_app),
+        source_path: config_path
+            .parent()
+            .expect("config path has parent")
+            .join("social_registry.csv"),
     }
 }
 
@@ -291,8 +341,12 @@ async fn table_reload_with_admin_key_reaches_registry_reload_path() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["dataset_id"], "social_registry");
-    assert_eq!(body["table_id"], "beneficiaries_csv");
+    assert_eq!(body["counts"]["reloaded"], 1);
+    assert!(body.get("dataset_id").is_none());
+    assert!(body.get("table_id").is_none());
+    let dump = body.to_string();
+    assert!(!dump.contains("social_registry"));
+    assert!(!dump.contains("beneficiaries_csv"));
 }
 
 #[tokio::test]
@@ -365,20 +419,11 @@ async fn reload_all_with_admin_key_reloads_every_configured_resource() {
     assert_eq!(body["counts"]["succeeded"], 2);
     assert_eq!(body["counts"]["failed"], 0);
 
-    let resources = body["resources"].as_array().expect("resources array");
-    assert_eq!(resources.len(), 2);
-    assert!(resources.iter().any(|resource| {
-        resource["dataset_id"] == "social_registry"
-            && resource["resource_id"] == "beneficiaries_csv"
-            && resource["status"] == "ok"
-            && resource.get("error_code").is_none()
-    }));
-    assert!(resources.iter().any(|resource| {
-        resource["dataset_id"] == "social_registry"
-            && resource["resource_id"] == "beneficiaries_copy_csv"
-            && resource["status"] == "ok"
-            && resource.get("error_code").is_none()
-    }));
+    assert!(body.get("resources").is_none());
+    let dump = body.to_string();
+    assert!(!dump.contains("social_registry"));
+    assert!(!dump.contains("beneficiaries_csv"));
+    assert!(!dump.contains("beneficiaries_copy_csv"));
 }
 
 #[tokio::test]
@@ -397,8 +442,67 @@ async fn reload_all_publishes_ready_snapshot() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_eq!(body["status"], "ok");
-    assert_eq!(
-        body["resources"].as_array().expect("resources array").len(),
-        2
-    );
+    assert_eq!(body["counts"]["ready"], 2);
+    assert!(body.get("resources").is_none());
+}
+
+#[tokio::test]
+async fn table_reload_invalidates_public_entity_collection_etag_after_source_change() {
+    let fixture = build_fixture();
+
+    fixture
+        .server
+        .post("/admin/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await
+        .assert_status(StatusCode::OK);
+
+    let before = fixture
+        .public_server
+        .get("/datasets/social_registry/beneficiary?limit=1000")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    before.assert_status(StatusCode::OK);
+    let before_etag = before.header("etag").to_str().expect("etag").to_string();
+    let before_body: Value = before.json();
+    assert_eq!(program_for_beneficiary(&before_body, 1654), "food_subsidy");
+
+    let updated_csv = "\
+beneficiary_id,household_size,municipality_code,program,amount_eur,joined_date,last_updated
+1654,2,AA001,emergency_cash,760.07,2020-07-03,2019-02-24
+";
+    std::fs::write(&fixture.source_path, updated_csv).expect("rewrite source fixture");
+
+    fixture
+        .server
+        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await
+        .assert_status(StatusCode::OK);
+
+    let stale_revalidation = fixture
+        .public_server
+        .get("/datasets/social_registry/beneficiary?limit=1000")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .add_header("if-none-match", &before_etag)
+        .await;
+    stale_revalidation.assert_status(StatusCode::OK);
+    let after_etag = stale_revalidation
+        .header("etag")
+        .to_str()
+        .expect("etag")
+        .to_string();
+    assert_ne!(after_etag, before_etag);
+    let after_body: Value = stale_revalidation.json();
+    assert_eq!(program_for_beneficiary(&after_body, 1654), "emergency_cash");
+}
+
+fn program_for_beneficiary(body: &Value, id: i64) -> &str {
+    body["data"]
+        .as_array()
+        .expect("collection data is an array")
+        .iter()
+        .find(|row| row["id"] == id)
+        .and_then(|row| row["program"].as_str())
+        .expect("beneficiary row present")
 }

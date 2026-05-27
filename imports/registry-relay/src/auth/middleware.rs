@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Axum middleware that runs an [`AuthProvider`] in front of a router.
+//! Axum middleware that runs an [`super::AuthProvider`] in front of a router.
 //!
-//! On success the layer inserts [`Principal`] into request extensions
+//! On success the layer inserts [`super::Principal`] into request extensions
 //! so handlers can extract it via `axum::Extension<Principal>` and so
 //! the audit middleware can project it into audit records. On failure
 //! it short-circuits with the RFC 9457 Problem

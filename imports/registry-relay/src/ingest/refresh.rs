@@ -10,6 +10,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
+use crate::audit::{AuditPipeline, OperationalAuditEvent};
+
 use super::IngestPlan;
 
 /// Refresh schedule policy parsed from `ResourceConfig.refresh`.
@@ -31,6 +33,7 @@ pub async fn run_refresh_loop(
     policy: RefreshPolicy,
     shutdown: CancellationToken,
     publish_readiness: Arc<dyn Fn() + Send + Sync>,
+    audit_sink: Option<Arc<AuditPipeline>>,
 ) {
     match policy {
         RefreshPolicy::Manual => {
@@ -38,10 +41,10 @@ pub async fn run_refresh_loop(
             shutdown.cancelled().await;
         }
         RefreshPolicy::Interval { interval } => {
-            run_interval_loop(plan, interval, shutdown, publish_readiness).await;
+            run_interval_loop(plan, interval, shutdown, publish_readiness, audit_sink).await;
         }
         RefreshPolicy::Mtime { interval } => {
-            run_mtime_loop(plan, interval, shutdown, publish_readiness).await;
+            run_mtime_loop(plan, interval, shutdown, publish_readiness, audit_sink).await;
         }
     }
 }
@@ -51,6 +54,7 @@ async fn run_interval_loop(
     interval: Duration,
     shutdown: CancellationToken,
     publish_readiness: Arc<dyn Fn() + Send + Sync>,
+    audit_sink: Option<Arc<AuditPipeline>>,
 ) {
     let mut backoff = BackoffState::new();
     loop {
@@ -77,6 +81,12 @@ async fn run_interval_loop(
                     resource_id = %plan.resource_id(),
                     error = %e,
                 );
+                write_refresh_audit_event(
+                    audit_sink.as_ref(),
+                    "ingest.refresh_failed",
+                    Arc::clone(&plan),
+                )
+                .await;
                 backoff.record_failure();
                 publish_readiness();
             }
@@ -89,6 +99,7 @@ async fn run_mtime_loop(
     interval: Duration,
     shutdown: CancellationToken,
     publish_readiness: Arc<dyn Fn() + Send + Sync>,
+    audit_sink: Option<Arc<AuditPipeline>>,
 ) {
     let mut backoff = BackoffState::new();
     let mut last_change_token: Option<String> = None;
@@ -111,6 +122,12 @@ async fn run_mtime_loop(
                     resource_id = %plan.resource_id(),
                     error = %e,
                 );
+                write_refresh_audit_event(
+                    audit_sink.as_ref(),
+                    "ingest.refresh_metadata_failed",
+                    Arc::clone(&plan),
+                )
+                .await;
                 backoff.record_failure();
                 publish_readiness();
                 continue;
@@ -154,10 +171,31 @@ async fn run_mtime_loop(
                     resource_id = %plan.resource_id(),
                     error = %e,
                 );
+                write_refresh_audit_event(
+                    audit_sink.as_ref(),
+                    "ingest.refresh_failed",
+                    Arc::clone(&plan),
+                )
+                .await;
                 backoff.record_failure();
                 publish_readiness();
             }
         }
+    }
+}
+
+async fn write_refresh_audit_event(
+    audit_sink: Option<&Arc<AuditPipeline>>,
+    event: &'static str,
+    plan: Arc<IngestPlan>,
+) {
+    let Some(audit_sink) = audit_sink else {
+        return;
+    };
+    let audit_event = OperationalAuditEvent::new(event, event)
+        .for_dataset(plan.dataset_id().as_str().to_string());
+    if let Err(err) = audit_sink.write_operational_event(audit_event).await {
+        tracing::error!(error = %err, event, "audit.refresh_event_write_failed");
     }
 }
 

@@ -1246,7 +1246,8 @@ mod full_stack {
         // layer can record which dataset and entity served the row.
         assert_eq!(record["dataset_id"], "disability_registry");
         assert_eq!(record["entity_name"], "disabled_person");
-        assert_eq!(record["table_id"], "disabled_people_table");
+        assert!(record["table_id"].is_null());
+        assert_table_id_hash_without_plaintext(&record);
         assert_eq!(record["row_count"], 1);
         assert!(
             record["error_code"].is_null(),
@@ -1308,10 +1309,24 @@ mod full_stack {
             record["entity_name"], "disabled_person",
             "audit context (entity_name) must be attached on the error response path"
         );
-        assert_eq!(
-            record["table_id"], "disabled_people_table",
-            "audit context (table_id) must be attached on the error response path"
+        assert!(
+            record["table_id_hash"].as_str().is_some_and(is_audit_hash),
+            "audit context (table_id_hash) must be attached on the error response path"
         );
+        assert_table_id_hash_without_plaintext(&record);
+    }
+
+    fn assert_table_id_hash_without_plaintext(record: &Value) {
+        assert!(record["table_id"].is_null());
+        assert!(record["table_id_hash"].as_str().is_some_and(is_audit_hash));
+        assert!(
+            !record.to_string().contains("disabled_people_table"),
+            "audit record must not leak plaintext table id"
+        );
+    }
+
+    fn is_audit_hash(value: &str) -> bool {
+        value.starts_with("sha256:") || value.starts_with("hmac-sha256:")
     }
 
     /// Cross-route coverage: the DR detail endpoint goes through the

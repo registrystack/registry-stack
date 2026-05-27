@@ -125,7 +125,7 @@ fn record_serialises_to_expected_field_shape() {
         "endpoint_kind",
         "dataset_id",
         "entity_name",
-        "table_id",
+        "table_id_hash",
         "relationship",
         "aggregate_id",
         "underlying_kind",
@@ -179,7 +179,7 @@ fn record_field_types_match_contract() {
     // Optional fields serialise as JSON null when absent.
     assert!(json["dataset_id"].is_null());
     assert!(json["entity_name"].is_null());
-    assert!(json["table_id"].is_null());
+    assert!(json["table_id_hash"].is_null());
     assert!(json["relationship"].is_null());
     assert!(json["aggregate_id"].is_null());
     assert!(json["underlying_kind"].is_null());
@@ -196,6 +196,23 @@ fn record_field_types_match_contract() {
     assert!(json["geometry_vertex_count"].is_null());
     assert!(json["suppressed_groups"].is_null());
     assert!(json["error_code"].is_null());
+}
+
+#[test]
+fn record_serialization_hashes_plaintext_table_id() {
+    let record = AuditRecord {
+        table_id: Some("individuals_table".to_string()),
+        ..sample_record()
+    };
+
+    let json = serde_json::to_value(&record).expect("serialize");
+    assert!(json["table_id"].is_null());
+    assert_ne!(json["table_id_hash"], "individuals_table");
+    assert!(json["table_id_hash"]
+        .as_str()
+        .expect("table id hash")
+        .starts_with("sha256:"));
+    assert!(!json.to_string().contains("individuals_table"));
 }
 
 #[test]
@@ -582,13 +599,18 @@ async fn middleware_hashes_configured_sensitive_query_values() {
     let parsed = captured_record(&records[0]);
     assert_eq!(parsed["dataset_id"], "social_registry");
     assert_eq!(parsed["entity_name"], "individual");
-    assert_eq!(parsed["table_id"], "individuals_table");
+    assert!(parsed["table_id"].is_null());
+    assert_eq!(
+        parsed["table_id_hash"],
+        sensitive_value_hash("table_id:social_registry:individual", "individuals_table")
+    );
     assert_eq!(parsed["query_params"]["id"]["op"], "eq");
     assert!(parsed["query_params"]["id"]["value_hash"]
         .as_str()
         .expect("value hash")
         .starts_with("sha256:"));
     assert_eq!(parsed["query_params"]["limit"]["op"], "eq");
+    assert!(!records[0].contains("individuals_table"));
     assert!(!records[0].contains("IND-001234"));
 }
 
@@ -1010,6 +1032,57 @@ async fn middleware_captures_error_code_from_auth_short_circuit() {
     assert_eq!(records.len(), 1);
     let parsed = captured_record(&records[0]);
     assert_eq!(parsed["error_code"], "auth.missing_credential");
+    assert_eq!(parsed["principal_id"], Value::Null);
+}
+
+#[tokio::test]
+async fn middleware_records_jwks_unavailable_auth_failure() {
+    use registry_relay::auth::middleware::auth_layer;
+    use registry_relay::auth::AuthProvider;
+    use registry_relay::error::AuthError;
+
+    struct JwksUnavailableAuth;
+
+    impl AuthProvider for JwksUnavailableAuth {
+        fn authenticate<'a>(
+            &'a self,
+            _headers: &'a axum::http::HeaderMap,
+            _remote_addr: IpAddr,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<registry_relay::auth::Principal, AuthError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Err(AuthError::JwksUnavailable) })
+        }
+    }
+
+    let (sink, pipeline) = in_memory_pipeline();
+    let protected = auth_layer(
+        Router::new().route("/probe", get(|| async { StatusCode::OK })),
+        Arc::new(JwksUnavailableAuth),
+    );
+    let app = Router::new()
+        .merge(protected)
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/probe")
+        .header("authorization", "Bearer token")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let parsed = captured_record(&records[0]);
+    assert_eq!(parsed["error_code"], "auth.jwks_unavailable");
+    assert_eq!(parsed["status_code"], 503);
     assert_eq!(parsed["principal_id"], Value::Null);
 }
 

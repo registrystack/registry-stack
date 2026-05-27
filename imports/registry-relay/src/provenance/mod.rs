@@ -10,7 +10,7 @@
 //! * [`claim`]: per-claim-type `credentialSubject` builders.
 //! * [`did_web`]: gateway-mode DID Document builder.
 //! * [`resources`]: in-tree bytes for schemas and JSON-LD contexts.
-//! * [`negotiate`]: `Accept` content negotiation.
+//! * [`negotiate::negotiate`]: `Accept` content negotiation.
 //!
 //! [`ProvenanceState`] is the runtime handle held by the HTTP layer:
 //! one instance per process, constructed from a parsed

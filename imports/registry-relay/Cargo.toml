@@ -7,6 +7,9 @@ license = "Apache-2.0"
 description = "Registry Relay: config-driven, read-only APIs over sensitive registry and tabular files."
 publish = false
 
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"]
+
 [workspace]
 members = [
     ".",
@@ -67,7 +70,6 @@ tokio-util = { version = "0.7" }
 # ─── serialization / config ──────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
-ryu = { version = "1" }
 # Optional Crosswalk CEL mapping support. Disabled by default so the core VC
 # path does not pull in the mapping dependency graph.
 crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-core", optional = true }
@@ -115,8 +117,6 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"]
 thiserror = { version = "2" }
 
 # ─── openapi ─────────────────────────────────────────────────────────────────
-utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-axum = { version = "0.2" }
 ogcapi-types = { version = "0.3.0", optional = true, features = ["features"] }
 geojson = { version = "0.24", optional = true, features = ["geo-types"] }
 geo = { version = "0.31", optional = true }

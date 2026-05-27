@@ -36,8 +36,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
 
 /// HTTP JWKS fetcher. One instance per OIDC provider.
+#[derive(Debug)]
 pub struct ReqwestJwksFetcher {
     jwks_url: String,
+    fetch_url_policy: FetchUrlPolicy,
 }
 
 impl ReqwestJwksFetcher {
@@ -45,9 +47,26 @@ impl ReqwestJwksFetcher {
     ///
     /// Returns an error if the URL is not fetchable under the OIDC URL policy.
     pub fn from_jwks_url(jwks_url: impl Into<String>) -> Result<Self, JwksFetchError> {
+        Self::from_jwks_url_with_policy(jwks_url, FetchUrlPolicy::strict())
+    }
+
+    /// Build a development fetcher that allows loopback HTTP JWKS endpoints.
+    ///
+    /// Non-loopback private ranges and cloud metadata endpoints remain denied.
+    pub fn from_jwks_url_for_dev(jwks_url: impl Into<String>) -> Result<Self, JwksFetchError> {
+        Self::from_jwks_url_with_policy(jwks_url, FetchUrlPolicy::dev())
+    }
+
+    fn from_jwks_url_with_policy(
+        jwks_url: impl Into<String>,
+        fetch_url_policy: FetchUrlPolicy,
+    ) -> Result<Self, JwksFetchError> {
         let jwks_url = jwks_url.into();
-        validate_fetch_url(&jwks_url, "jwks")?;
-        Ok(Self { jwks_url })
+        validate_fetch_url_with_policy(&jwks_url, "jwks", &fetch_url_policy)?;
+        Ok(Self {
+            jwks_url,
+            fetch_url_policy,
+        })
     }
 
     /// Resolve a JWKS URL from an OIDC discovery document, then build a
@@ -62,8 +81,37 @@ impl ReqwestJwksFetcher {
         discovery_url: impl AsRef<str>,
         expected_issuer: &str,
     ) -> Result<Self, JwksFetchError> {
+        Self::from_discovery_url_with_policy(
+            discovery_url,
+            expected_issuer,
+            FetchUrlPolicy::strict(),
+        )
+        .await
+    }
+
+    /// Resolve a JWKS URL from a discovery document using the development URL
+    /// policy that permits loopback HTTP.
+    ///
+    /// Non-loopback private ranges and cloud metadata endpoints remain denied.
+    pub async fn from_discovery_url_for_dev(
+        discovery_url: impl AsRef<str>,
+        expected_issuer: &str,
+    ) -> Result<Self, JwksFetchError> {
+        Self::from_discovery_url_with_policy(discovery_url, expected_issuer, FetchUrlPolicy::dev())
+            .await
+    }
+
+    async fn from_discovery_url_with_policy(
+        discovery_url: impl AsRef<str>,
+        expected_issuer: &str,
+        fetch_url_policy: FetchUrlPolicy,
+    ) -> Result<Self, JwksFetchError> {
         let discovery_url = discovery_url.as_ref();
-        let validated_url = validate_fetch_url_for_immediate_fetch(discovery_url, "discovery")?;
+        let validated_url = validate_fetch_url_for_immediate_fetch_with_policy(
+            discovery_url,
+            "discovery",
+            &fetch_url_policy,
+        )?;
         let response = validated_url
             .immediate_get()
             .map_err(|err| JwksFetchError::Transport(format!("discovery: {err}")))?
@@ -80,8 +128,15 @@ impl ReqwestJwksFetcher {
         let body = read_bounded(response, MAX_RESPONSE_BYTES as u64)
             .await
             .map_err(|err| JwksFetchError::Transport(format!("discovery: {err}")))?;
-        let jwks_uri = validate_discovery_document_bytes(&Bytes::from(body), expected_issuer)?;
-        Ok(Self { jwks_url: jwks_uri })
+        let jwks_uri = validate_discovery_document_bytes_with_policy(
+            &Bytes::from(body),
+            expected_issuer,
+            &fetch_url_policy,
+        )?;
+        Ok(Self {
+            jwks_url: jwks_uri,
+            fetch_url_policy,
+        })
     }
 
     /// JWKS URL the fetcher will request. Useful for startup logs.
@@ -98,7 +153,7 @@ impl ReqwestJwksFetcher {
         PlatformJwksFetcher::new_with_fetch_url_policy(
             self.jwks_url.clone(),
             platform_jwks_config(cache_ttl, refresh_cooldown),
-            FetchUrlPolicy::dev(),
+            self.fetch_url_policy.clone(),
         )
     }
 }
@@ -113,32 +168,42 @@ impl JwksFetcher for ReqwestJwksFetcher {
     }
 }
 
+#[cfg(test)]
 fn fetch_url_policy() -> FetchUrlPolicy {
-    FetchUrlPolicy::dev()
+    FetchUrlPolicy::strict()
 }
 
 fn parse_fetch_url(url: &str, context: &str) -> Result<Url, JwksFetchError> {
     Url::parse(url).map_err(|_| {
-        JwksFetchError::Transport(format!(
-            "{context}: URL must be absolute https:// (or http:// localhost for dev)"
-        ))
+        JwksFetchError::Transport(format!("{context}: URL must be an absolute fetch URL"))
     })
 }
 
+#[cfg(test)]
 fn validate_fetch_url(url: &str, context: &str) -> Result<(), JwksFetchError> {
+    let policy = fetch_url_policy();
+    validate_fetch_url_with_policy(url, context, &policy)
+}
+
+fn validate_fetch_url_with_policy(
+    url: &str,
+    context: &str,
+    fetch_url_policy: &FetchUrlPolicy,
+) -> Result<(), JwksFetchError> {
     let parsed = parse_fetch_url(url, context)?;
-    fetch_url_policy()
+    fetch_url_policy
         .validate_for_immediate_fetch(&parsed)
         .map(|_| ())
         .map_err(|err| JwksFetchError::Transport(format!("{context}: {err}")))
 }
 
-fn validate_fetch_url_for_immediate_fetch(
+fn validate_fetch_url_for_immediate_fetch_with_policy(
     url: &str,
     context: &str,
+    fetch_url_policy: &FetchUrlPolicy,
 ) -> Result<ValidatedFetchUrl, JwksFetchError> {
     let parsed = parse_fetch_url(url, context)?;
-    fetch_url_policy()
+    fetch_url_policy
         .validate_for_immediate_fetch(&parsed)
         .map_err(|err| JwksFetchError::Transport(format!("{context}: {err}")))
 }
@@ -202,9 +267,19 @@ fn parse_response_bytes<T: serde::de::DeserializeOwned>(
 /// Checks the body size, deserialises the document, and compares
 /// `document.issuer` against `expected_issuer` (RFC 8414 §3).
 /// Returns the `jwks_uri` on success.
+#[cfg(test)]
 fn validate_discovery_document_bytes(
     bytes: &Bytes,
     expected_issuer: &str,
+) -> Result<String, JwksFetchError> {
+    let policy = fetch_url_policy();
+    validate_discovery_document_bytes_with_policy(bytes, expected_issuer, &policy)
+}
+
+fn validate_discovery_document_bytes_with_policy(
+    bytes: &Bytes,
+    expected_issuer: &str,
+    fetch_url_policy: &FetchUrlPolicy,
 ) -> Result<String, JwksFetchError> {
     let document: DiscoveryDocument = parse_response_bytes(bytes, MAX_RESPONSE_BYTES)?;
     if document.issuer != expected_issuer {
@@ -213,7 +288,7 @@ fn validate_discovery_document_bytes(
             actual: document.issuer,
         });
     }
-    validate_fetch_url(&document.jwks_uri, "discovery jwks_uri")?;
+    validate_fetch_url_with_policy(&document.jwks_uri, "discovery jwks_uri", fetch_url_policy)?;
     Ok(document.jwks_uri)
 }
 
@@ -261,10 +336,10 @@ mod tests {
 
     #[test]
     fn discovery_issuer_match_returns_jwks_uri() {
-        let body = discovery_bytes("http://localhost:8080", "http://localhost:8080/jwks");
-        let jwks_uri = validate_discovery_document_bytes(&body, "http://localhost:8080")
+        let body = discovery_bytes("https://93.184.216.34", "https://93.184.216.34/jwks");
+        let jwks_uri = validate_discovery_document_bytes(&body, "https://93.184.216.34")
             .expect("matching issuer accepted");
-        assert_eq!(jwks_uri, "http://localhost:8080/jwks");
+        assert_eq!(jwks_uri, "https://93.184.216.34/jwks");
     }
 
     #[test]
@@ -280,18 +355,61 @@ mod tests {
     }
 
     #[test]
+    fn discovery_rejects_localhost_http_jwks_uri_by_default() {
+        let body = discovery_bytes(
+            "http://localhost:8080/realms/relay",
+            "http://localhost:8080/realms/relay/protocol/openid-connect/certs",
+        );
+        let err = validate_discovery_document_bytes(&body, "http://localhost:8080/realms/relay")
+            .expect_err("localhost http jwks_uri rejected by default");
+        assert!(
+            matches!(err, JwksFetchError::Transport(ref message)
+                if message.contains("discovery jwks_uri")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn discovery_allows_localhost_http_jwks_uri_for_dev() {
         let body = discovery_bytes(
             "http://localhost:8080/realms/relay",
             "http://localhost:8080/realms/relay/protocol/openid-connect/certs",
         );
-        let jwks_uri =
-            validate_discovery_document_bytes(&body, "http://localhost:8080/realms/relay")
-                .expect("localhost dev jwks_uri accepted");
+        let jwks_uri = validate_discovery_document_bytes_with_policy(
+            &body,
+            "http://localhost:8080/realms/relay",
+            &FetchUrlPolicy::dev(),
+        )
+        .expect("localhost dev jwks_uri accepted");
         assert_eq!(
             jwks_uri,
             "http://localhost:8080/realms/relay/protocol/openid-connect/certs"
         );
+    }
+
+    #[test]
+    fn explicit_jwks_url_accepts_https_by_default() {
+        let fetcher = ReqwestJwksFetcher::from_jwks_url("https://93.184.216.34/jwks")
+            .expect("https jwks url accepted");
+        assert_eq!(fetcher.jwks_url(), "https://93.184.216.34/jwks");
+    }
+
+    #[test]
+    fn explicit_jwks_url_rejects_localhost_http_by_default() {
+        let err = ReqwestJwksFetcher::from_jwks_url("http://localhost:8080/jwks")
+            .expect_err("localhost http jwks url rejected by default");
+        assert!(
+            matches!(err, JwksFetchError::Transport(ref message)
+                if message.contains("jwks")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn explicit_jwks_url_allows_localhost_http_for_dev() {
+        let fetcher = ReqwestJwksFetcher::from_jwks_url_for_dev("http://localhost:8080/jwks")
+            .expect("localhost http jwks url accepted for dev");
+        assert_eq!(fetcher.jwks_url(), "http://localhost:8080/jwks");
     }
 
     #[test]
@@ -362,7 +480,7 @@ mod tests {
         });
 
         let fetcher: std::sync::Arc<dyn JwksFetcher> = std::sync::Arc::new(
-            ReqwestJwksFetcher::from_jwks_url(format!("http://{addr}/redirect")).unwrap(),
+            ReqwestJwksFetcher::from_jwks_url_for_dev(format!("http://{addr}/redirect")).unwrap(),
         );
         let cache = crate::auth::oidc::jwks::JwksCache::new(fetcher, Duration::from_secs(60));
         let err = match cache.get("any-kid").await {
@@ -416,7 +534,7 @@ mod tests {
             axum::serve(listener, app).await.expect("test server");
         });
 
-        let err = match ReqwestJwksFetcher::from_discovery_url(
+        let err = match ReqwestJwksFetcher::from_discovery_url_for_dev(
             format!("http://{addr}/.well-known/openid-configuration"),
             "http://localhost/issuer",
         )
@@ -435,6 +553,22 @@ mod tests {
     // --- F1: SSRF host allowlist ---
 
     #[test]
+    fn fetch_url_policy_rejects_loopback_http_by_default() {
+        for url in [
+            "http://localhost:8080/jwks",
+            "http://LocalHost:8080/jwks",
+            "http://127.0.0.1:8080/jwks",
+            "http://127.0.0.2:8080/jwks",
+            "http://[::1]:8080/jwks",
+        ] {
+            assert!(
+                validate_fetch_url(url, "jwks").is_err(),
+                "expected default policy to reject URL: {url}"
+            );
+        }
+    }
+
+    #[test]
     fn fetch_url_policy_allows_loopback_http_for_dev() {
         for url in [
             "http://localhost:8080/jwks",
@@ -444,7 +578,7 @@ mod tests {
             "http://[::1]:8080/jwks",
         ] {
             assert!(
-                validate_fetch_url(url, "jwks").is_ok(),
+                validate_fetch_url_with_policy(url, "jwks", &FetchUrlPolicy::dev()).is_ok(),
                 "expected dev URL accepted: {url}"
             );
         }
@@ -466,6 +600,68 @@ mod tests {
                 "unexpected error for {url}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn dev_jwks_constructor_still_rejects_private_and_metadata_targets() {
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://10.0.0.5/jwks",
+            "https://[fd00::1]/jwks",
+        ] {
+            let err = ReqwestJwksFetcher::from_jwks_url_for_dev(url)
+                .expect_err(&format!("dev policy must reject {url}"));
+            assert!(
+                matches!(err, JwksFetchError::Transport(_)),
+                "unexpected error for {url}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_dev_policy_is_used_for_platform_fetcher() {
+        let jwks = Bytes::from_static(br#"{"keys":[]}"#);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        let issuer = format!("http://{addr}");
+        let discovery_jwks_uri = format!("{issuer}/jwks");
+        let discovery_body = discovery_bytes(&issuer, &discovery_jwks_uri);
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get(move || {
+                    let body = discovery_body.clone();
+                    async move { body }
+                }),
+            )
+            .route(
+                "/jwks",
+                get(move || {
+                    let jwks = jwks.clone();
+                    async move { jwks }
+                }),
+            );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+
+        let fetcher = ReqwestJwksFetcher::from_discovery_url_for_dev(
+            format!("{issuer}/.well-known/openid-configuration"),
+            &issuer,
+        )
+        .await
+        .expect("dev discovery fetch accepted");
+        let platform_fetcher = fetcher.platform_fetcher(Duration::from_secs(60), Duration::ZERO);
+        let err = platform_fetcher
+            .key_for_kid("missing")
+            .await
+            .expect_err("empty jwks has no matching kid");
+        assert!(
+            matches!(err, registry_platform_oidc::OidcError::UnknownKid),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

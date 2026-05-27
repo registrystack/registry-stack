@@ -97,7 +97,7 @@ pub struct SourceDescriptor {
 
 /// Manually-typed future to match the project's existing
 /// non-`async_trait` convention ([`crate::auth::AuthProvider`],
-/// [`crate::audit::AuditSink`]).
+/// [`registry_platform_audit::AuditSink`]).
 pub type SourceFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, SourceError>> + Send + 'a>>;
 
 /// Errors raised by a [`Source`] impl. Mapped to `ingest.*` taxonomy

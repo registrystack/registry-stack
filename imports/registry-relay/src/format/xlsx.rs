@@ -168,6 +168,15 @@ fn decode_xlsx(bytes: Vec<u8>, hints: FormatHints) -> Result<DecodedStream, Form
             (start_row, start_col, end_row, end_col)
         };
 
+    reject_formula_cells_in_window(
+        &mut wb,
+        &sheet_name,
+        window_row_start,
+        window_col_start,
+        window_row_end,
+        window_col_end,
+    )?;
+
     // The header row within the window (0-indexed within the full range).
     // header_row_1indexed is relative to the workbook sheet row numbers (1-indexed).
     // When data_range is given, header is expected to be inside the range.
@@ -557,6 +566,40 @@ fn build_utf8_col(col_data: &[&Data]) -> ArrayRef {
         }
     }
     Arc::new(builder.finish())
+}
+
+fn reject_formula_cells_in_window(
+    wb: &mut calamine::Xlsx<Cursor<Vec<u8>>>,
+    sheet_name: &str,
+    window_row_start: u32,
+    window_col_start: u32,
+    window_row_end: u32,
+    window_col_end: u32,
+) -> Result<(), FormatError> {
+    let mut reader = wb
+        .worksheet_cells_reader(sheet_name)
+        .map_err(|e| FormatError::Parse(format!("failed to inspect XLSX formulas: {e}")))?;
+
+    while let Some(cell) = reader
+        .next_formula()
+        .map_err(|e| FormatError::Parse(format!("failed to inspect XLSX formulas: {e}")))?
+    {
+        if cell.get_value().is_empty() {
+            continue;
+        }
+        let (row, col) = cell.get_position();
+        if row >= window_row_start
+            && row <= window_row_end
+            && col >= window_col_start
+            && col <= window_col_end
+        {
+            return Err(FormatError::Parse(
+                "xlsx worksheet contains formula cell within configured range".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 // ── Range parsing ─────────────────────────────────────────────────────────────

@@ -61,7 +61,6 @@ fn core_demo_configs_load_and_validate() {
 
     let single_dataset_configs = [
         "benefits_casework.yaml",
-        "clinic_capacity.yaml",
         "public_works_projects.yaml",
         "education_registry.yaml",
         "subject_registry.yaml",
@@ -80,49 +79,75 @@ fn core_demo_configs_load_and_validate() {
             matches!(config.audit.sink, AuditSinkConfig::Stdout {}),
             "{name}: single-dataset configs should keep audit on stdout"
         );
-        if name == "clinic_capacity.yaml" {
-            assert_clinic_facility_spatial_demo(&config);
-        }
+        assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
+    }
+
+    #[cfg(feature = "ogcapi-features")]
+    {
+        let name = "clinic_capacity.yaml";
+        let path = demo_config(name);
+        let config =
+            config::load(&path).unwrap_or_else(|err| panic!("{name} failed to load: {err}"));
+        assert_eq!(
+            config.datasets.len(),
+            1,
+            "{name}: expected exactly one dataset"
+        );
+        assert!(
+            matches!(config.audit.sink, AuditSinkConfig::Stdout {}),
+            "{name}: single-dataset configs should keep audit on stdout"
+        );
+        assert_clinic_facility_spatial_demo(&config);
         assert_split_metadata_matches_runtime(name, &path, config.datasets.len());
     }
 
     let combined_path = demo_config("all_demos.yaml");
-    let combined = config::load(&combined_path).expect("all_demos.yaml failed to load");
-    assert_eq!(
-        combined.datasets.len(),
-        5,
-        "all_demos.yaml should aggregate all five datasets"
-    );
-    let dataset_ids: Vec<&str> = combined.datasets.iter().map(|d| d.id.as_ref()).collect();
-    for expected in [
-        "benefits_casework",
-        "clinic_capacity",
-        "public_works_projects",
-        "education_registry",
-        "subject_registry",
-    ] {
-        assert!(
-            dataset_ids.contains(&expected),
-            "all_demos.yaml missing dataset: {expected}"
+    #[cfg(feature = "ogcapi-features")]
+    {
+        let combined = config::load(&combined_path).expect("all_demos.yaml failed to load");
+        assert_eq!(
+            combined.datasets.len(),
+            5,
+            "all_demos.yaml should aggregate all five datasets"
+        );
+        let dataset_ids: Vec<&str> = combined.datasets.iter().map(|d| d.id.as_ref()).collect();
+        for expected in [
+            "benefits_casework",
+            "clinic_capacity",
+            "public_works_projects",
+            "education_registry",
+            "subject_registry",
+        ] {
+            assert!(
+                dataset_ids.contains(&expected),
+                "all_demos.yaml missing dataset: {expected}"
+            );
+        }
+
+        match &combined.audit.sink {
+            AuditSinkConfig::File { path, .. } => {
+                assert_eq!(
+                    path.to_string_lossy(),
+                    "demo/var/audit.jsonl",
+                    "all_demos.yaml should route audit to demo/var/audit.jsonl"
+                );
+            }
+            other => panic!("all_demos.yaml expected file audit sink, got {other:?}"),
+        }
+        assert_clinic_facility_spatial_demo(&combined);
+        assert_split_metadata_matches_runtime(
+            "all_demos.yaml",
+            &combined_path,
+            combined.datasets.len(),
         );
     }
 
-    match &combined.audit.sink {
-        AuditSinkConfig::File { path, .. } => {
-            assert_eq!(
-                path.to_string_lossy(),
-                "demo/var/audit.jsonl",
-                "all_demos.yaml should route audit to demo/var/audit.jsonl"
-            );
-        }
-        other => panic!("all_demos.yaml expected file audit sink, got {other:?}"),
+    #[cfg(not(feature = "ogcapi-features"))]
+    {
+        let err =
+            config::load(&combined_path).expect_err("all_demos.yaml requires ogcapi-features");
+        assert_eq!(err.code(), "ogcapi.features.config.feature_disabled");
     }
-    assert_clinic_facility_spatial_demo(&combined);
-    assert_split_metadata_matches_runtime(
-        "all_demos.yaml",
-        &combined_path,
-        combined.datasets.len(),
-    );
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -162,6 +187,7 @@ fn assert_split_metadata_matches_runtime(name: &str, path: &Path, dataset_count:
     }
 }
 
+#[cfg(feature = "ogcapi-features")]
 fn assert_clinic_facility_spatial_demo(config: &config::Config) {
     let clinic = config
         .datasets

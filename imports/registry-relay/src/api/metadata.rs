@@ -373,7 +373,7 @@ async fn entity_schema(
     ) else {
         return Error::from(SchemaError::UnknownResource).into_response();
     };
-    typed_json_response(document, &headers, JSON_SCHEMA)
+    private_typed_json_response(document, &headers, JSON_SCHEMA)
 }
 
 async fn entity_shacl(
@@ -634,28 +634,33 @@ fn json_response<T>(value: T, headers: &HeaderMap) -> Response
 where
     T: Serialize,
 {
-    typed_json_response(value, headers, HeaderValue::from_static("application/json"))
+    private_typed_json_response(value, headers, HeaderValue::from_static("application/json"))
 }
 
 fn private_metadata_response<T>(value: T, headers: &HeaderMap) -> Response
 where
     T: Serialize,
 {
-    let mut response = json_response(value, headers);
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private"));
-    response
-        .headers_mut()
-        .insert(header::VARY, HeaderValue::from_static("Authorization"));
-    response
+    json_response(value, headers)
 }
 
 fn json_ld_response<T>(value: T, headers: &HeaderMap) -> Response
 where
     T: Serialize,
 {
-    typed_json_response(value, headers, JSON_LD)
+    private_typed_json_response(value, headers, JSON_LD)
+}
+
+fn private_typed_json_response<T>(
+    value: T,
+    headers: &HeaderMap,
+    content_type: HeaderValue,
+) -> Response
+where
+    T: Serialize,
+{
+    let response = typed_json_response(value, headers, content_type);
+    with_private_metadata_headers(response)
 }
 
 fn typed_json_response<T>(value: T, headers: &HeaderMap, content_type: HeaderValue) -> Response
@@ -693,7 +698,18 @@ fn with_etag(mut response: Response, etag: &str) -> Response {
 }
 
 fn not_modified_response(etag: &str) -> Response {
-    with_etag(StatusCode::NOT_MODIFIED.into_response(), etag)
+    with_private_metadata_headers(with_etag(StatusCode::NOT_MODIFIED.into_response(), etag))
+}
+
+fn with_private_metadata_headers(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("Authorization"));
+    response
 }
 
 fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {

@@ -682,7 +682,7 @@ impl IngestRegistry {
         self: Arc<Self>,
         readiness_tx: watch::Sender<ReadinessSnapshot>,
     ) -> (JoinSet<()>, CancellationToken) {
-        self.spawn_refresh_tasks_with_policy(|_, _| RefreshPolicy::Manual, readiness_tx)
+        self.spawn_refresh_tasks_with_policy(|_, _| RefreshPolicy::Manual, readiness_tx, None)
     }
 
     /// Spawn refresh tasks using the provided config for policy lookup.
@@ -690,6 +690,7 @@ impl IngestRegistry {
         self: Arc<Self>,
         config: &Config,
         readiness_tx: watch::Sender<ReadinessSnapshot>,
+        audit_sink: Arc<crate::audit::AuditPipeline>,
     ) -> (JoinSet<()>, CancellationToken) {
         let ds_configs: BTreeMap<&DatasetId, &crate::config::DatasetConfig> =
             config.datasets.iter().map(|d| (&d.id, d)).collect();
@@ -706,6 +707,7 @@ impl IngestRegistry {
                     .unwrap_or(RefreshPolicy::Manual)
             },
             readiness_tx,
+            Some(audit_sink),
         )
     }
 
@@ -713,6 +715,7 @@ impl IngestRegistry {
         self: Arc<Self>,
         policy_for_resource: impl Fn(&DatasetId, &ResourceId) -> RefreshPolicy,
         readiness_tx: watch::Sender<ReadinessSnapshot>,
+        audit_sink: Option<Arc<crate::audit::AuditPipeline>>,
     ) -> (JoinSet<()>, CancellationToken) {
         let mut set: JoinSet<()> = JoinSet::new();
         let shutdown = CancellationToken::new();
@@ -723,6 +726,7 @@ impl IngestRegistry {
             let registry = Arc::clone(&self);
             let shutdown_clone = shutdown.clone();
             let policy = policy_for_resource(ds_id, rs_id);
+            let audit_sink = audit_sink.clone();
 
             set.spawn(async move {
                 let publish_registry = Arc::clone(&registry);
@@ -731,7 +735,7 @@ impl IngestRegistry {
                     let snapshot = publish_registry.snapshot();
                     let _ = publish_tx.send(snapshot);
                 });
-                run_refresh_loop(plan.clone(), policy, shutdown_clone, publish).await;
+                run_refresh_loop(plan.clone(), policy, shutdown_clone, publish, audit_sink).await;
                 // After the loop ends (shutdown), send a final snapshot.
                 let snapshot = registry.snapshot();
                 let _ = tx.send(snapshot);
@@ -1133,6 +1137,7 @@ mod tests {
             },
             shutdown.clone(),
             publish,
+            None,
         ));
 
         timeout(Duration::from_secs(1), notified.notified())
@@ -1142,5 +1147,51 @@ mod tests {
         task.await.expect("refresh loop task joins");
 
         assert!(publish_count.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_loop_writes_audit_event_after_runtime_failure() {
+        let plan = Arc::new(test_plan(Arc::new(FailingFormat)));
+        let notified = Arc::new(Notify::new());
+        let shutdown = CancellationToken::new();
+        let audit_sink = crate::audit::InMemorySink::new();
+        let audit_pipeline = crate::audit::AuditPipeline::from_sink(audit_sink.clone());
+        let publish = {
+            let notified = Arc::clone(&notified);
+            Arc::new(move || {
+                notified.notify_one();
+            })
+        };
+
+        let task = tokio::spawn(run_refresh_loop(
+            Arc::clone(&plan),
+            RefreshPolicy::Interval {
+                interval: Duration::from_millis(1),
+            },
+            shutdown.clone(),
+            publish,
+            Some(audit_pipeline),
+        ));
+
+        timeout(Duration::from_secs(1), notified.notified())
+            .await
+            .expect("refresh loop published readiness");
+        shutdown.cancel();
+        task.await.expect("refresh loop task joins");
+
+        let records = audit_sink.snapshot();
+        assert!(
+            records.iter().any(|line| {
+                let envelope: serde_json::Value =
+                    serde_json::from_str(line.trim_end()).expect("audit envelope JSON");
+                let record = &envelope["record"];
+                record["path"] == "/__events/ingest.refresh_failed"
+                    && record["method"] == "BACKGROUND"
+                    && record["error_code"] == "ingest.refresh_failed"
+                    && record["dataset_id"] == "dataset"
+                    && record["table_id_hash"].is_null()
+            }),
+            "missing refresh failure audit event: {records:?}"
+        );
     }
 }

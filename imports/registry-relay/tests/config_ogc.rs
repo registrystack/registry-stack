@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! OGC spatial config validation tests.
 
-use registry_relay::config::{SpatialGeometryConfig, CRS84};
+#[cfg(feature = "ogcapi-features")]
+use registry_relay::config::SpatialGeometryConfig;
+use registry_relay::config::CRS84;
+#[cfg(feature = "ogcapi-features")]
 use registry_relay::entity::EntityRegistry;
 use tempfile::TempDir;
 
@@ -144,6 +147,7 @@ fn load_config(
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn point_spatial_config_loads_and_compiles_into_entity_model() {
     let config = load_config(&civic_dataset(
         "civic_registry",
@@ -169,6 +173,7 @@ fn point_spatial_config_loads_and_compiles_into_entity_model() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn collection_id_defaults_to_entity_name_and_may_repeat_across_datasets() {
     let spatial = format!(
         r#"        spatial:
@@ -200,6 +205,7 @@ fn collection_id_defaults_to_entity_name_and_may_repeat_across_datasets() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn duplicate_collection_id_within_dataset_is_rejected() {
     let first = civic_dataset("civic_registry", "facility", &valid_point_spatial());
     let second_entity = r#"
@@ -231,6 +237,7 @@ fn duplicate_collection_id_within_dataset_is_rejected() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn non_crs84_geometry_is_rejected() {
     let invalid = valid_point_spatial().replace(CRS84, "EPSG:4326");
     let err = load_config(&civic_dataset("civic_registry", "facility", &invalid))
@@ -239,6 +246,7 @@ fn non_crs84_geometry_is_rejected() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn point_fields_must_be_numeric_and_exposed() {
     let non_numeric =
         valid_point_spatial().replace("longitude_field: lon", "longitude_field: label");
@@ -254,6 +262,7 @@ fn point_fields_must_be_numeric_and_exposed() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn geojson_bbox_and_datetime_fields_are_validated() {
     let valid = format!(
         r#"        spatial:
@@ -285,6 +294,7 @@ fn geojson_bbox_and_datetime_fields_are_validated() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn spatial_caps_must_be_positive() {
     let invalid_bbox =
         valid_point_spatial().replace("max_bbox_degrees: 5.0", "max_bbox_degrees: 0");
@@ -331,6 +341,7 @@ fn tagged_geometry_rejects_extra_or_missing_source_fields() {
 }
 
 #[test]
+#[cfg(feature = "ogcapi-features")]
 fn wkt_and_wkb_parse_but_are_rejected_for_phase_one() {
     for kind in ["wkt", "wkb"] {
         let spatial = format!(

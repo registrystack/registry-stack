@@ -70,14 +70,6 @@ datasets:
             from: household_id
           - name: lon
           - name: lat
-        spatial:
-          collection_id: households
-          title: Household locations
-          geometry:
-            kind: point
-            longitude_field: lon
-            latitude_field: lat
-            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
         access:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
@@ -151,6 +143,25 @@ audit:
 fn server(scopes: &[&str]) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config = Arc::new(config::load(&write_config(&tmp)).expect("config loads"));
+
+    TestServer::new(
+        datasets_router::<()>()
+            .layer(Extension(config))
+            .layer(Extension(principal(scopes))),
+    )
+}
+
+#[cfg(feature = "ogcapi-features")]
+fn ogc_server(scopes: &[&str]) -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "          - name: lon\n          - name: lat\n        access:\n",
+        "          - name: lon\n          - name: lat\n        spatial:\n          collection_id: households\n          title: Household locations\n          geometry:\n            kind: point\n            longitude_field: lon\n            latitude_field: lat\n            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84\n        access:\n",
+    );
+    std::fs::write(&path, body).expect("write OGC config");
+    let config = Arc::new(config::load(&path).expect("config loads"));
 
     TestServer::new(
         datasets_router::<()>()
@@ -263,7 +274,7 @@ async fn dataset_returns_single_summary_when_scope_matches_entity_in_dataset() {
 #[cfg(feature = "ogcapi-features")]
 #[tokio::test]
 async fn dataset_summary_advertises_visible_ogc_standard_service() {
-    let resp = server(&["social_registry:metadata"])
+    let resp = ogc_server(&["social_registry:metadata"])
         .get("/datasets/social_registry")
         .await;
 

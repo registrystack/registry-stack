@@ -27,7 +27,7 @@ use axum::http::{HeaderMap, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use time::format_description::FormatItem;
 use time::macros::format_description;
 use time::OffsetDateTime;
@@ -202,7 +202,11 @@ pub struct AuditRecord {
     pub dataset_id: Option<String>,
     /// Set when path includes an entity.
     pub entity_name: Option<String>,
-    /// Internal backing table when known by the handler.
+    /// HMAC binding for the internal backing table when known by the handler.
+    #[serde(
+        rename = "table_id_hash",
+        serialize_with = "serialize_optional_table_id_hash"
+    )]
     pub table_id: Option<String>,
     /// Relationship traversed by a nested entity request.
     pub relationship: Option<String>,
@@ -298,6 +302,80 @@ impl From<&ProvenanceIssuanceExt> for ProvenanceIssuanceRecord {
 /// the request path must not fail because of audit-write failures.
 pub type AuditError = registry_platform_audit::AuditError;
 
+/// A non-request operational event that still belongs in the tamper-evident
+/// audit chain.
+#[derive(Debug, Clone)]
+pub struct OperationalAuditEvent {
+    pub event: &'static str,
+    pub error_code: &'static str,
+    pub status_code: u16,
+    pub dataset_id: Option<String>,
+    pub table_id_hash: Option<String>,
+}
+
+impl OperationalAuditEvent {
+    #[must_use]
+    pub fn new(event: &'static str, error_code: &'static str) -> Self {
+        Self {
+            event,
+            error_code,
+            status_code: 500,
+            dataset_id: None,
+            table_id_hash: None,
+        }
+    }
+
+    #[must_use]
+    pub fn for_dataset(mut self, dataset_id: String) -> Self {
+        self.dataset_id = Some(dataset_id);
+        self
+    }
+
+    #[must_use]
+    pub fn with_table_id_hash(mut self, table_id_hash: String) -> Self {
+        self.table_id_hash = Some(table_id_hash);
+        self
+    }
+
+    fn into_record(self) -> AuditRecord {
+        AuditRecord {
+            ts: now_iso8601_millis(),
+            request_id: Ulid::new().to_string(),
+            principal_id: None,
+            auth_mode: None,
+            remote_addr: "background".to_string(),
+            method: "BACKGROUND".to_string(),
+            path: format!("/__events/{}", self.event),
+            endpoint_kind: EndpointKind::Other,
+            dataset_id: self.dataset_id,
+            entity_name: None,
+            table_id: self.table_id_hash,
+            relationship: None,
+            aggregate_id: None,
+            underlying_kind: None,
+            collection_id: None,
+            primary_key: None,
+            offering_id: None,
+            verification_id: None,
+            verification_decision: None,
+            claim_hash: None,
+            evidence_hash: None,
+            scopes_used: Vec::new(),
+            query_params: json!({}),
+            purpose: None,
+            status_code: self.status_code,
+            row_count: None,
+            null_geometry_count: None,
+            invalid_geometry_count: None,
+            geometry_vertex_count: None,
+            suppressed_groups: None,
+            duration_ms: 0,
+            error_code: Some(self.error_code.to_string()),
+            provenance: None,
+        }
+    }
+}
+
 /// Chained writer for relay audit records.
 ///
 /// Concrete sinks implement `registry-platform-audit::AuditSink`; this
@@ -342,6 +420,13 @@ impl AuditPipeline {
             .await?;
         chain.append(self.sink.as_ref(), record).await?;
         Ok(())
+    }
+
+    pub async fn write_operational_event(
+        &self,
+        event: OperationalAuditEvent,
+    ) -> Result<(), AuditError> {
+        self.write_record(event.into_record()).await
     }
 
     /// Best-effort flush hook kept for shutdown symmetry. Platform
@@ -593,6 +678,7 @@ pub async fn audit_layer(
         context_sensitive_fields(&settings, &context),
     );
     let primary_key = audit_primary_key_hash(&context, &settings.hash_hasher);
+    let table_id_hash = audit_table_id_hash(&context, &settings.hash_hasher);
     let record_path = audit_path(&path, &context, endpoint_kind);
 
     let record = AuditRecord {
@@ -606,7 +692,7 @@ pub async fn audit_layer(
         endpoint_kind,
         dataset_id: context.dataset_id,
         entity_name: context.entity_name,
-        table_id: context.table_id,
+        table_id: table_id_hash,
         relationship: context.relationship,
         aggregate_id: context.aggregate_id,
         underlying_kind: context.underlying_kind,
@@ -677,6 +763,54 @@ fn audit_primary_key_hash(context: &AuditContextExt, hasher: &AuditKeyHasher) ->
         &primary_key_hash_field(context),
         value,
     ))
+}
+
+fn audit_table_id_hash(context: &AuditContextExt, hasher: &AuditKeyHasher) -> Option<String> {
+    let value = context.table_id.as_deref()?;
+    Some(sensitive_value_hash_keyed(
+        hasher,
+        &table_id_hash_field(context),
+        value,
+    ))
+}
+
+fn serialize_optional_table_id_hash<S>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value.as_deref() {
+        Some(value) if is_audit_hash(value) => serializer.serialize_some(value),
+        Some(value) => {
+            let hash = sensitive_value_hash("table_id", value);
+            serializer.serialize_some(&hash)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
+fn is_audit_hash(value: &str) -> bool {
+    value.starts_with("sha256:") || value.starts_with("hmac-sha256:")
+}
+
+fn table_id_hash_field(context: &AuditContextExt) -> String {
+    let mut field = String::from("table_id");
+    if let Some(dataset_id) = context.dataset_id.as_deref().filter(|s| !s.is_empty()) {
+        field.push(':');
+        field.push_str(dataset_id);
+    }
+    if let Some(entity_or_collection) = context
+        .entity_name
+        .as_deref()
+        .or(context.collection_id.as_deref())
+        .filter(|s| !s.is_empty())
+    {
+        field.push(':');
+        field.push_str(entity_or_collection);
+    }
+    field
 }
 
 fn primary_key_hash_field(context: &AuditContextExt) -> String {

@@ -448,6 +448,7 @@ async fn legacy_catalog_routes_are_not_mounted() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
+#[cfg(feature = "ogcapi-features")]
 fn spatial_catalog_server() -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let path = write_config(&tmp);
@@ -485,6 +486,11 @@ fn principal(scopes: &[&str]) -> Principal {
     }
 }
 
+fn assert_private_metadata_headers(resp: &axum_test::TestResponse) {
+    assert_eq!(resp.header("cache-control"), "private, no-store");
+    assert_eq!(resp.header("vary"), "Authorization");
+}
+
 fn entity<'a>(body: &'a Value, name: &str) -> &'a Value {
     body["datasets"][0]["entities"]
         .as_array()
@@ -492,6 +498,25 @@ fn entity<'a>(body: &'a Value, name: &str) -> &'a Value {
         .iter()
         .find(|entity| entity["name"] == name)
         .expect("entity present")
+}
+
+#[tokio::test]
+async fn scope_filtered_metadata_responses_are_private_no_store() {
+    let server = server();
+
+    let catalog = server.get("/metadata/catalog").await;
+    catalog.assert_status(StatusCode::OK);
+    assert_private_metadata_headers(&catalog);
+
+    let dcat = server.get("/metadata/dcat").await;
+    dcat.assert_status(StatusCode::OK);
+    assert_private_metadata_headers(&dcat);
+
+    let schema = server
+        .get("/metadata/schema/social_registry/household/schema.json")
+        .await;
+    schema.assert_status(StatusCode::OK);
+    assert_private_metadata_headers(&schema);
 }
 
 fn assert_structural_dcat_shacl(body: &Value) {
@@ -627,19 +652,22 @@ async fn catalog_lists_entity_grain_metadata_without_hidden_columns() {
 
 #[cfg(not(feature = "ogcapi-features"))]
 #[tokio::test]
-async fn catalog_does_not_advertise_ogc_links_when_feature_is_disabled() {
-    let server = spatial_catalog_server();
+async fn spatial_config_fails_closed_when_ogc_features_disabled() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(&tmp);
+    let mut body = std::fs::read_to_string(&path).expect("read config");
+    body = body.replace(
+        "            - name: region_code\n              type: string\n              nullable: true\n              concept_uri: ex:properties/regionCode\n              codelist: ex:codelists/Region\n",
+        "            - name: region_code\n              type: string\n              nullable: true\n              concept_uri: ex:properties/regionCode\n              codelist: ex:codelists/Region\n            - name: lon\n              type: number\n              nullable: true\n            - name: lat\n              type: number\n              nullable: true\n",
+    );
+    body = body.replace(
+        "          - name: region\n            from: region_code\n            concept_uri: ex:properties/region\n",
+        "          - name: region\n            from: region_code\n            concept_uri: ex:properties/region\n          - name: lon\n          - name: lat\n        spatial:\n          collection_id: households\n          title: Household locations\n          geometry:\n            kind: point\n            longitude_field: lon\n            latitude_field: lat\n            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84\n",
+    );
+    std::fs::write(&path, body).expect("write spatial config");
 
-    let catalog_resp = server.get("/metadata/catalog").await;
-    catalog_resp.assert_status(StatusCode::OK);
-    let catalog: Value = catalog_resp.json();
-    let household = entity(&catalog, "household");
-    assert!(household.get("links").is_none());
-
-    let dcat_resp = server.get("/metadata/dcat/bregdcat-ap").await;
-    dcat_resp.assert_status(StatusCode::OK);
-    let dcat: Value = dcat_resp.json();
-    assert_distributions_do_not_contain(&dcat, "/ogc/v1/");
+    let err = config::load(&path).expect_err("spatial config rejected without OGC feature");
+    assert_eq!(err.to_string(), "ogc api features feature disabled");
 }
 
 #[cfg(feature = "ogcapi-features")]
@@ -950,6 +978,7 @@ async fn catalog_returns_etag_and_honors_if_none_match() {
 
     cached.assert_status(StatusCode::NOT_MODIFIED);
     assert_eq!(cached.header("etag").to_str().expect("etag"), etag);
+    assert_private_metadata_headers(&cached);
 }
 
 #[tokio::test]

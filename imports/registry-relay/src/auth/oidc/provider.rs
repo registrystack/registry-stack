@@ -13,7 +13,7 @@
 //!    `kid`.
 //! 3. Resolve the verifier key via [`super::jwks::JwksCache`]. On
 //!    unknown `kid` the cache triggers one (rate-limited) refresh.
-//! 4. Run [`jsonwebtoken::decode`] with a [`Validation`] configured for
+//! 4. Run [`jsonwebtoken::decode`] with a [`jsonwebtoken::Validation`] configured for
 //!    the configured issuer, audiences, leeway, and algorithm allowlist
 //!    plus `validate_nbf = true`. Required spec claims are `iss`, `aud`,
 //!    `exp`.
@@ -440,6 +440,7 @@ mod tests {
             audience: vec![TEST_AUDIENCE.to_string()],
             jwks_url: None,
             discovery_url: None,
+            allow_dev_insecure_fetch_urls: false,
             algorithms: vec![OidcAlgorithm::EdDsa],
             jwks_cache_ttl: Duration::from_secs(600),
             leeway: Duration::from_secs(60),

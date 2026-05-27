@@ -54,15 +54,9 @@ async fn ready(readiness: Option<Extension<watch::Receiver<ReadinessSnapshot>>>)
     if snapshot.fully_ready() {
         return Json(json!({
             "status": "ok",
-            "resources": snapshot
-                .ready
-                .iter()
-                .map(|((dataset_id, resource_id), entry)| json!({
-                    "dataset_id": dataset_id.as_str(),
-                    "resource_id": resource_id.as_str(),
-                    "ingest_ulid": entry.ingest_ulid.to_string(),
-                }))
-                .collect::<Vec<_>>()
+            "counts": {
+                "ready": snapshot.ready.len(),
+            },
         }))
         .into_response();
     }

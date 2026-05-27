@@ -27,11 +27,14 @@ use registry_relay::ingest::declared_schema::{DeclaredField, DeclaredSchema};
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn fixture(name: &str) -> Pin<Box<dyn AsyncRead + Send + Unpin>> {
+    Box::pin(std::io::Cursor::new(fixture_bytes(name)))
+}
+
+fn fixture_bytes(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures_xlsx")
         .join(name);
-    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("could not read {name}: {e}"));
-    Box::pin(std::io::Cursor::new(bytes))
+    fs::read(&path).unwrap_or_else(|e| panic!("could not read {name}: {e}"))
 }
 
 fn hints_default() -> FormatHints {
@@ -418,21 +421,12 @@ async fn infers_utf8_when_no_declared_schema() {
 
 // ── Decompression-bomb guard (security review 2026-05-16) ─────────────────
 
-/// Build a minimal, valid XLSX (a ZIP) whose `<dimension>` element advertises
-/// a huge cell count while the on-disk payload is tiny. Used to
-/// reproduce the XLSX cell-count bomb guard.
-///
-/// `dim_ref` is the A1-notation reference to embed in the sheet's `<dimension>`
-/// element (e.g. `"A1:Z10000000"` for a 26 col x 10M row sheet).
-fn build_bomb_xlsx(dim_ref: &str) -> Vec<u8> {
+/// Build a minimal, valid XLSX (a ZIP) with one worksheet.
+fn build_minimal_xlsx(sheet: &str) -> Vec<u8> {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
-    // Minimal OOXML package. We only need: [Content_Types].xml, the
-    // workbook _rels, the workbook itself, and one worksheet whose
-    // <dimension> advertises the bomb. Shared strings are unnecessary
-    // because the single data cell carries an inline string.
     let content_types = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -459,18 +453,6 @@ fn build_bomb_xlsx(dim_ref: &str) -> Vec<u8> {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>"#;
 
-    // The sheet declares a giant dimension via `<dimension ref="...">`,
-    // but the actual <sheetData> contains a single inline-string cell.
-    let sheet = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="{dim_ref}"/>
-  <sheetData>
-    <row r="1"><c r="A1" t="inlineStr"><is><t>hdr</t></is></c></row>
-  </sheetData>
-</worksheet>"#
-    );
-
     let mut buf: Vec<u8> = Vec::new();
     {
         let cursor = std::io::Cursor::new(&mut buf);
@@ -491,6 +473,64 @@ fn build_bomb_xlsx(dim_ref: &str) -> Vec<u8> {
         zip.finish().unwrap();
     }
     buf
+}
+
+/// Build a minimal, valid XLSX (a ZIP) whose `<dimension>` element advertises
+/// a huge cell count while the on-disk payload is tiny. Used to
+/// reproduce the XLSX cell-count bomb guard.
+///
+/// `dim_ref` is the A1-notation reference to embed in the sheet's `<dimension>`
+/// element (e.g. `"A1:Z10000000"` for a 26 col x 10M row sheet).
+fn build_bomb_xlsx(dim_ref: &str) -> Vec<u8> {
+    // The sheet declares a giant dimension via `<dimension ref="...">`,
+    // but the actual <sheetData> contains a single inline-string cell.
+    build_minimal_xlsx(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="{dim_ref}"/>
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>hdr</t></is></c></row>
+  </sheetData>
+</worksheet>"#
+    ))
+}
+
+fn build_formula_xlsx() -> Vec<u8> {
+    build_minimal_xlsx(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>id</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>amount</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2"><v>1</v></c>
+      <c r="B2"><f>A2*2</f><v>2</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#,
+    )
+}
+
+fn build_uncached_formula_xlsx() -> Vec<u8> {
+    build_minimal_xlsx(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>id</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>amount</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2"><v>1</v></c>
+      <c r="B2"><f>A2*2</f></c>
+    </row>
+  </sheetData>
+</worksheet>"#,
+    )
 }
 
 /// The synthetic-bomb helper above must actually be a workbook calamine
@@ -530,6 +570,106 @@ async fn rejects_xlsx_when_declared_dimension_exceeds_cell_cap() {
         Err(FormatError::LimitExceeded(_)) => {}
         Err(other) => panic!("expected FormatError::LimitExceeded, got {other:?}"),
         Ok(_) => panic!("expected the cell-count cap to reject this workbook"),
+    }
+}
+
+#[tokio::test]
+async fn rejects_corrupt_zip_xlsx_as_parse_error() {
+    let result = XlsxFormat::new()
+        .decode(
+            Box::pin(std::io::Cursor::new(b"not an xlsx zip".to_vec())),
+            hints_default(),
+        )
+        .await;
+
+    match result {
+        Err(FormatError::Parse(msg)) => {
+            assert!(
+                msg.contains("failed to open XLSX workbook"),
+                "parse error should identify workbook open failure: {msg}"
+            );
+        }
+        Err(other) => panic!("expected FormatError::Parse, got {other:?}"),
+        Ok(_) => panic!("expected corrupt XLSX bytes to fail"),
+    }
+}
+
+#[tokio::test]
+async fn rejects_truncated_zip_xlsx_as_parse_error() {
+    let mut bytes = fixture_bytes("simple.xlsx");
+    bytes.truncate(bytes.len() / 2);
+
+    let result = XlsxFormat::new()
+        .decode(Box::pin(std::io::Cursor::new(bytes)), hints_default())
+        .await;
+
+    match result {
+        Err(FormatError::Parse(_)) => {}
+        Err(other) => panic!("expected FormatError::Parse, got {other:?}"),
+        Ok(_) => panic!("expected truncated XLSX ZIP to fail"),
+    }
+}
+
+#[tokio::test]
+async fn rejects_formula_cells_inside_configured_range() {
+    let hints = FormatHints {
+        declared: schema_with(vec![
+            field("id", FieldType::Integer),
+            field("amount", FieldType::Number),
+        ]),
+        ..hints_default()
+    };
+
+    let result = XlsxFormat::new()
+        .decode(Box::pin(std::io::Cursor::new(build_formula_xlsx())), hints)
+        .await;
+
+    match result {
+        Err(FormatError::Parse(msg)) => {
+            assert!(
+                msg.contains("formula cell"),
+                "parse error should identify formula cell rejection: {msg}"
+            );
+            assert!(
+                !msg.contains("A2*2"),
+                "parse error must not echo formula text: {msg}"
+            );
+        }
+        Err(other) => panic!("expected FormatError::Parse, got {other:?}"),
+        Ok(_) => panic!("expected formula cells in the ingest range to fail"),
+    }
+}
+
+#[tokio::test]
+async fn rejects_formula_cells_without_cached_value_inside_configured_range() {
+    let hints = FormatHints {
+        declared: schema_with(vec![
+            field("id", FieldType::Integer),
+            field("amount", FieldType::Number),
+        ]),
+        ..hints_default()
+    };
+
+    let result = XlsxFormat::new()
+        .decode(
+            Box::pin(std::io::Cursor::new(build_uncached_formula_xlsx())),
+            hints,
+        )
+        .await;
+
+    match result {
+        Err(FormatError::Parse(msg)) => {
+            assert!(
+                msg.contains("formula cell"),
+                "parse error should identify formula cell rejection: {msg}"
+            );
+            assert!(
+                !msg.contains("A2*2"),
+                "parse error must not echo formula text: {msg}"
+            );
+        }
+        Err(other) => panic!("expected FormatError::Parse, got {other:?}"),
+        Ok(_) => panic!("expected uncached formula cells in the ingest range to fail"),
     }
 }
 

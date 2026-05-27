@@ -281,6 +281,18 @@ pub enum ConfigError {
     /// built without the optional mapper dependency.
     #[error("spdci cel mapping feature disabled")]
     SpdciMappingFeatureDisabled,
+    /// OGC API Features spatial entity config was configured but the
+    /// binary was built without the optional OGC API Features surface.
+    #[error("ogc api features feature disabled")]
+    OgcApiFeaturesFeatureDisabled,
+    /// OGC API EDR aggregate spatial config was configured but the
+    /// binary was built without the optional OGC API EDR surface.
+    #[error("ogc api edr feature disabled")]
+    OgcApiEdrFeatureDisabled,
+    /// OGC API Records conformance config was configured but the
+    /// binary was built without the optional OGC API Records surface.
+    #[error("ogc api records feature disabled")]
+    OgcApiRecordsFeatureDisabled,
 }
 
 /// `metadata.manifest.*` startup codes for split metadata manifest loading and
@@ -940,6 +952,9 @@ impl ConfigError {
             ConfigError::PublicSchemaFeatureDisabled => "publicschema.config.feature_disabled",
             ConfigError::SpdciFeatureDisabled => "spdci.config.feature_disabled",
             ConfigError::SpdciMappingFeatureDisabled => "spdci.config.mapping_feature_disabled",
+            ConfigError::OgcApiFeaturesFeatureDisabled => "ogcapi.features.config.feature_disabled",
+            ConfigError::OgcApiEdrFeatureDisabled => "ogcapi.edr.config.feature_disabled",
+            ConfigError::OgcApiRecordsFeatureDisabled => "ogcapi.records.config.feature_disabled",
         }
     }
 
@@ -970,6 +985,9 @@ impl ConfigError {
             ConfigError::PublicSchemaFeatureDisabled => "PublicSchema CEL feature disabled",
             ConfigError::SpdciFeatureDisabled => "SP DCI API standards feature disabled",
             ConfigError::SpdciMappingFeatureDisabled => "SP DCI CEL mapping feature disabled",
+            ConfigError::OgcApiFeaturesFeatureDisabled => "OGC API Features feature disabled",
+            ConfigError::OgcApiEdrFeatureDisabled => "OGC API EDR feature disabled",
+            ConfigError::OgcApiRecordsFeatureDisabled => "OGC API Records feature disabled",
         }
     }
 
@@ -1014,6 +1032,15 @@ impl ConfigError {
             }
             ConfigError::SpdciMappingFeatureDisabled => {
                 "SP DCI response mappings require a binary built with the standards-cel-mapping feature"
+            }
+            ConfigError::OgcApiFeaturesFeatureDisabled => {
+                "OGC API Features spatial config requires a binary built with the ogcapi-features feature"
+            }
+            ConfigError::OgcApiEdrFeatureDisabled => {
+                "OGC API EDR aggregate spatial config requires a binary built with the ogcapi-edr feature"
+            }
+            ConfigError::OgcApiRecordsFeatureDisabled => {
+                "OGC API Records conformance config requires a binary built with the ogcapi-records feature"
             }
         }
     }

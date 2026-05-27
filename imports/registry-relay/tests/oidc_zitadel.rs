@@ -173,6 +173,7 @@ fn oidc_config(env: &ZitadelEnv, audience: Vec<String>) -> OidcConfig {
         audience,
         jwks_url: None,
         discovery_url: Some(env.discovery_url()),
+        allow_dev_insecure_fetch_urls: false,
         algorithms: vec![
             OidcAlgorithm::Rs256,
             OidcAlgorithm::Es256,

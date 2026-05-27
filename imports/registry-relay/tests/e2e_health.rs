@@ -184,12 +184,12 @@ async fn ready_returns_200_when_all_resources_registered() {
 
     let body: Value = resp.json();
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["resources"][0]["dataset_id"], "social_registry");
-    assert_eq!(body["resources"][0]["resource_id"], "beneficiaries");
-    assert_eq!(
-        body["resources"][0]["ingest_ulid"],
-        "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-    );
+    assert_eq!(body["counts"]["ready"], 1);
+    assert!(body.get("resources").is_none());
+    let dump = body.to_string();
+    assert!(!dump.contains("social_registry"));
+    assert!(!dump.contains("beneficiaries"));
+    assert!(!dump.contains("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
 }
 
 #[tokio::test]

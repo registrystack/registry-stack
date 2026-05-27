@@ -45,6 +45,9 @@ auth:
     # Resolve the JWKS URL via OIDC discovery. Either `discovery_url`
     # or `jwks_url` is required; the validator rejects both at once.
     discovery_url: http://localhost:8080/.well-known/openid-configuration
+    # Local Zitadel runs over loopback HTTP. Production configs should
+    # omit this and use HTTPS issuer/discovery/JWKS URLs.
+    allow_dev_insecure_fetch_urls: true
     # Signature algorithms accepted by the verifier. RS256 is Zitadel's
     # default; ES256 and EdDSA are accepted for other IdPs. HS* and
     # `none` are intentionally absent from the algorithm enum.

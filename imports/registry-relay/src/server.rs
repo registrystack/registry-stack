@@ -2,7 +2,7 @@
 //! HTTP server composition.
 //!
 //! [`build_app`] composes the public data-plane router from parsed
-//! [`Config`], [`AuthProvider`], and [`AuditPipeline`] state. The production
+//! [`Config`], [`crate::auth::AuthProvider`], and [`AuditPipeline`] state. The production
 //! path installs ingest readiness plus entity/query state through
 //! [`build_app_with_entity_query`]. Layering order follows the V1
 //! operational requirements for request ids, audit records, bounded
@@ -72,7 +72,7 @@ use tracing::Level;
 use ulid::Ulid;
 
 use crate::api::{self, CursorSigner};
-use crate::audit::{self, AuditPipeline, AuditSettings};
+use crate::audit::{self, AuditPipeline, AuditSettings, OperationalAuditEvent};
 use crate::auth::middleware::{auth_layer, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
@@ -134,7 +134,7 @@ pub fn build_app(
 }
 
 /// Same as [`build_app`] but lets a caller install a pre-built
-/// [`ProvenanceState`]. Tests that don't exercise provenance keep the
+/// [`crate::provenance::ProvenanceState`]. Tests that don't exercise provenance keep the
 /// smaller [`build_app`] entry.
 pub fn build_app_with_provenance(
     config: Arc<Config>,
@@ -280,7 +280,7 @@ pub fn build_app_with_entity_query(
 }
 
 /// Production assembly: readiness, entity/query state, and optional
-/// [`ProvenanceState`]. Used by `main.rs` once runtime state has been
+/// [`crate::provenance::ProvenanceState`]. Used by `main.rs` once runtime state has been
 /// built from the parsed config; tests that need provenance plus query
 /// call this directly with their own handles.
 #[allow(clippy::too_many_arguments)]
@@ -412,7 +412,13 @@ fn apply_cross_cutting_layers_with_metrics(
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
     let x_request_id: HeaderName = HeaderName::from_static("x-request-id");
-    let cors = build_cors_layer(&config.server.cors);
+    let (cors, cors_fell_back) = build_cors_layer_with_status(&config.server.cors);
+    if cors_fell_back {
+        spawn_operational_audit_event(
+            Arc::clone(&audit_sink),
+            OperationalAuditEvent::new("cors.policy_invalid", "cors.policy_invalid"),
+        );
+    }
     let audit_settings = AuditSettings {
         include_health: config.audit.include_health,
         trust_proxy_enabled: config.server.trust_proxy.enabled,
@@ -600,7 +606,12 @@ async fn normalize_internal_error_response(request: Request<Body>, next: Next) -
 /// `Access-Control-Allow-Origin`, which is the deny case).
 /// When non-empty, the shared Registry Platform CORS policy validates
 /// and builds the concrete Tower layer.
+#[cfg(test)]
 fn build_cors_layer(cors: &CorsConfig) -> CorsLayer {
+    build_cors_layer_with_status(cors).0
+}
+
+fn build_cors_layer_with_status(cors: &CorsConfig) -> (CorsLayer, bool) {
     let policy = platform_cors_policy(cors);
     if let Err(err) = policy.validate() {
         tracing::error!(
@@ -608,9 +619,28 @@ fn build_cors_layer(cors: &CorsConfig) -> CorsLayer {
             error = %err,
             "cors policy failed platform validation; falling back to deny-all"
         );
-        return CorsLayer::new();
+        return (CorsLayer::new(), true);
     }
-    policy.layer()
+    (policy.layer(), false)
+}
+
+fn spawn_operational_audit_event(audit_sink: Arc<AuditPipeline>, event: OperationalAuditEvent) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                if let Err(err) = audit_sink.write_operational_event(event).await {
+                    tracing::error!(error = %err, "audit.operational_event_write_failed");
+                }
+            });
+        }
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                event = event.event,
+                "audit operational event skipped because no Tokio runtime is active",
+            );
+        }
+    }
 }
 
 fn platform_cors_policy(cors: &CorsConfig) -> CorsPolicy {
@@ -729,6 +759,51 @@ mod tests {
             allowed_origins: vec!["https://bad\norigin".to_string()],
         };
         let _ = build_cors_layer(&cors);
+    }
+
+    #[tokio::test]
+    async fn invalid_cors_policy_writes_operational_audit_event() {
+        let mut config = load_example_config();
+        config.server.cors.allowed_origins = vec!["https://bad\norigin".to_string()];
+        let config = Arc::new(config);
+        let inmem = InMemorySink::new();
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
+        let router = Router::new().route("/ok", get(|| async { StatusCode::OK }));
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        )
+        .expect("audit hash secret configured");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let records = inmem.snapshot();
+                if records.iter().any(|line| {
+                    let record = captured_audit_record(line);
+                    record["path"] == "/__events/cors.policy_invalid"
+                        && record["method"] == "BACKGROUND"
+                        && record["error_code"] == "cors.policy_invalid"
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cors operational audit event");
     }
 
     #[tokio::test]

@@ -1483,7 +1483,7 @@ audit:
 }
 
 #[test]
-fn oidc_config_allows_localhost_http_issuer_for_dev() {
+fn oidc_config_rejects_localhost_http_without_dev_opt_in() {
     let tmp = TempDir::new().expect("tempdir");
     let body = r#"
 server:
@@ -1503,11 +1503,39 @@ datasets: []
 audit:
   sink: stdout
   format: jsonl
+	"#;
+    let path = write_config(&tmp, body);
+    assert_config_code(config::load(&path), "config.validation_error");
+}
+
+#[test]
+fn oidc_config_allows_localhost_http_with_dev_opt_in() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: oidc
+  oidc:
+    issuer: http://localhost:8080/realms/relay
+    audience: [registry-relay]
+    jwks_url: http://localhost:8080/realms/relay/protocol/openid-connect/certs
+    allow_dev_insecure_fetch_urls: true
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
 "#;
     let path = write_config(&tmp, body);
     let config = config::load(&path).expect("localhost dev config must load");
     let oidc = config.auth.oidc.as_ref().expect("oidc present");
     assert!(oidc.issuer.starts_with("http://localhost"));
+    assert!(oidc.allow_dev_insecure_fetch_urls);
 }
 
 #[test]

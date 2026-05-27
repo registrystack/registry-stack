@@ -316,6 +316,11 @@ pub struct OidcConfig {
     /// from `jwks_uri` in the discovered document.
     #[serde(default)]
     pub discovery_url: Option<String>,
+    /// Development-only escape hatch that permits loopback HTTP issuer,
+    /// discovery, and JWKS URLs. Private non-loopback networks and cloud
+    /// metadata endpoints remain denied by the platform fetch policy.
+    #[serde(default)]
+    pub allow_dev_insecure_fetch_urls: bool,
     /// Signature algorithms accepted by the verifier. Defaults to
     /// RS256, ES256, EdDSA. HS\* and `none` are intentionally absent
     /// from [`OidcAlgorithm`].

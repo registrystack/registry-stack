@@ -17,9 +17,9 @@ const HOLDER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLf
 const NOW: i64 = 1_700_000_000;
 const SERVICE_ID: &str = "registry-relay";
 
-#[test]
-fn sdjwt_jti_matches_credential_id() {
-    let signed = issue_sdjwt(Vec::new());
+#[tokio::test]
+async fn sdjwt_jti_matches_credential_id() {
+    let signed = issue_sdjwt(Vec::new()).await;
 
     assert_eq!(signed.jti, signed.credential_id);
     let payload = jwt_payload(&signed.jwt);
@@ -27,8 +27,8 @@ fn sdjwt_jti_matches_credential_id() {
     assert_eq!(payload["id"], signed.credential_id);
 }
 
-#[test]
-fn sd_digests_are_sorted_by_digest() {
+#[tokio::test]
+async fn sd_digests_are_sorted_by_digest() {
     let signed = issue_sdjwt(vec![
         Disclosure {
             name: "third".to_string(),
@@ -42,7 +42,8 @@ fn sd_digests_are_sorted_by_digest() {
             name: "second".to_string(),
             value: json!(2),
         },
-    ]);
+    ])
+    .await;
     let payload = jwt_payload(&signed.jwt);
     let sd = payload["_sd"]
         .as_array()
@@ -160,7 +161,9 @@ fn holder_proof_enforces_full_holder_proof_bindings() {
         .expect_err("claim_set binding must match");
 }
 
-fn issue_sdjwt(disclosures: Vec<Disclosure>) -> registry_relay::provenance::sdjwt::SignedSdJwt {
+async fn issue_sdjwt(
+    disclosures: Vec<Disclosure>,
+) -> registry_relay::provenance::sdjwt::SignedSdJwt {
     let issuer = SdJwtIssuer::from_jwk(PrivateJwk::parse(ISSUER_JWK).expect("issuer jwk"))
         .expect("issuer builds");
     let holder = holder_key();
@@ -171,13 +174,13 @@ fn issue_sdjwt(disclosures: Vec<Disclosure>) -> registry_relay::provenance::sdjw
             iat: NOW,
             exp: NOW + 600,
             vct: "https://relay.example/credentials/entity-record/v1".to_string(),
-            signing_kid: "did:web:relay.example#issuer".to_string(),
             cnf: Some(HolderConfirmation {
                 jwk: holder.public(),
                 kid: Some("did:key:z6Mkholder#key-1".to_string()),
             }),
             disclosures,
         })
+        .await
         .expect("sd-jwt issues")
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! OIDC / OAuth2 resource-server [`AuthProvider`].
+//! OIDC / OAuth2 resource-server [`super::AuthProvider`].
 //!
 //! The relay is a resource server, not an authorization server: it
 //! validates inbound bearer JWTs against an external IdP's JWKS but
