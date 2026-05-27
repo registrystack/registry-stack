@@ -519,11 +519,7 @@ fn assert_index_urls_exist(out: &Path, index: &serde_json::Value) {
 }
 
 fn assert_well_known_discovery_matches_index(out: &Path, index: &serde_json::Value) {
-    let discovery_path = out
-        .parent()
-        .expect("metadata out has parent")
-        .join(".well-known")
-        .join("registry-manifest.json");
+    let discovery_path = out.join(".well-known").join("registry-manifest.json");
     let discovery: serde_json::Value =
         serde_json::from_slice(&fs::read(discovery_path).expect("well-known reads"))
             .expect("well-known json");
@@ -540,11 +536,7 @@ fn assert_well_known_discovery_matches_index(out: &Path, index: &serde_json::Val
 }
 
 fn assert_api_catalog_points_at_index_and_catalogs(out: &Path, index: &serde_json::Value) {
-    let api_catalog_path = out
-        .parent()
-        .expect("metadata out has parent")
-        .join(".well-known")
-        .join("api-catalog");
+    let api_catalog_path = out.join(".well-known").join("api-catalog");
     let api_catalog: serde_json::Value =
         serde_json::from_slice(&fs::read(api_catalog_path).expect("api-catalog reads"))
             .expect("api-catalog json");
@@ -574,5 +566,567 @@ fn assert_url_exists(out: &Path, url: &str) {
     assert!(
         out.join(relative).exists(),
         "missing indexed artifact: {url}"
+    );
+}
+
+fn collect_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if !root.exists() {
+        return paths;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).expect("read dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path.clone());
+            }
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+#[test]
+fn publish_default_writes_only_inside_out() {
+    let parent = temp_dir("publish-contained-parent");
+    let out = parent.join("metadata");
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let status = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run cli");
+    assert!(status.success(), "publish must succeed");
+
+    let stray = collect_paths(&parent)
+        .into_iter()
+        .filter(|path| !path.starts_with(&out))
+        .collect::<Vec<_>>();
+    assert!(
+        stray.is_empty(),
+        "publish wrote files outside --out: {stray:?}"
+    );
+
+    assert!(out.join(".well-known").join("api-catalog").exists());
+    assert!(out
+        .join(".well-known")
+        .join("registry-manifest.json")
+        .exists());
+}
+
+#[test]
+fn publish_with_site_root_writes_well_known_under_site_root_only() {
+    let parent = temp_dir("publish-site-root-parent");
+    let out = parent.join("metadata");
+    let site_root = parent.join("site");
+    fs::create_dir_all(&site_root).expect("site root");
+
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let status = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--site-root",
+            site_root.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run cli");
+    assert!(status.success(), "publish must succeed");
+
+    assert!(site_root.join(".well-known").join("api-catalog").exists());
+    assert!(site_root
+        .join(".well-known")
+        .join("registry-manifest.json")
+        .exists());
+    assert!(!out.join(".well-known").exists(),);
+    assert!(out.join("catalog.json").exists());
+    assert!(out.join("index.json").exists());
+
+    let stray = collect_paths(&parent)
+        .into_iter()
+        .filter(|path| !path.starts_with(&out) && !path.starts_with(&site_root))
+        .collect::<Vec<_>>();
+    assert!(
+        stray.is_empty(),
+        "publish wrote files outside --out ∪ --site-root: {stray:?}"
+    );
+}
+
+#[test]
+fn publish_fails_closed_on_malformed_manifest() {
+    let dir = temp_dir("publish-malformed");
+    let manifest = dir.join("metadata.yaml");
+    fs::write(
+        &manifest,
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: not-a-url
+  title: Demo
+  publisher:
+    name: Publisher
+datasets: []
+"#,
+    )
+    .expect("write malformed manifest");
+    let out = dir.join("out");
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success(), "publish must exit non-zero");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.validation_failed"));
+}
+
+#[test]
+fn publish_fails_closed_when_out_cannot_be_created() {
+    let dir = temp_dir("publish-bad-out");
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let blocker = dir.join("blocker");
+    fs::write(&blocker, b"not a directory").expect("write blocker");
+    let out = blocker.join("nested");
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run cli");
+    assert!(
+        !output.status.success(),
+        "publish must exit non-zero when --out cannot be created"
+    );
+}
+
+#[test]
+fn render_reports_required_flag_errors() {
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+
+    for (format, expected) in &[
+        (
+            "evidence-offering",
+            "evidence-offering render requires --offering <id>",
+        ),
+        ("policy", "policy render requires --dataset <id>"),
+        (
+            "form-json-schema",
+            "form-json-schema render requires --form <id>",
+        ),
+        (
+            "json-schema",
+            "json-schema render requires --dataset <id> and --entity <name>",
+        ),
+    ] {
+        let output = Command::new(bin())
+            .args(["render", manifest.to_str().unwrap(), "--format", format])
+            .output()
+            .expect("run cli");
+        assert!(!output.status.success(), "format {format} must fail closed");
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert!(
+            stderr.contains(expected),
+            "stderr {stderr:?} missing {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn render_reports_lookup_errors_and_unsupported_format() {
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["render", "--format", "policy", "--dataset", "missing"],
+            "dataset not found: missing",
+        ),
+        (
+            &[
+                "render",
+                "--format",
+                "json-schema",
+                "--dataset",
+                "missing",
+                "--entity",
+                "person",
+            ],
+            "entity not found: missing/person",
+        ),
+        (
+            &[
+                "render",
+                "--format",
+                "form-json-schema",
+                "--form",
+                "missing",
+            ],
+            "form not found: missing",
+        ),
+        (
+            &[
+                "render",
+                "--format",
+                "evidence-offering",
+                "--offering",
+                "missing",
+            ],
+            "evidence offering not found: missing",
+        ),
+        (
+            &["render", "--format", "unicorn-schema"],
+            "unsupported render format: unicorn-schema",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let mut full = vec!["render", manifest.to_str().unwrap()];
+        full.extend_from_slice(&args[1..]);
+        let output = Command::new(bin()).args(&full).output().expect("run cli");
+        assert!(!output.status.success(), "{args:?} must fail closed");
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert!(
+            stderr.contains(expected),
+            "stderr {stderr:?} missing {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn render_dcat_with_unsupported_profile_fails_closed() {
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let output = Command::new(bin())
+        .args([
+            "render",
+            manifest.to_str().unwrap(),
+            "--format",
+            "dcat",
+            "--profile",
+            "not-a-real-profile",
+        ])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.unsupported_application_profile"));
+}
+
+#[test]
+fn validate_reports_missing_manifest_file() {
+    let output = Command::new(bin())
+        .args(["validate", "/this/path/does/not/exist.yaml"])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.file_not_found"));
+}
+
+#[test]
+fn validate_reports_yaml_parse_failure() {
+    let dir = temp_dir("validate-yaml-parse");
+    let manifest = dir.join("broken.yaml");
+    fs::write(&manifest, b": : not yaml :\n - foo\n").expect("write broken yaml");
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.parse_failed"));
+}
+
+#[test]
+fn unknown_subcommand_returns_usage() {
+    let output = Command::new(bin())
+        .arg("teleport")
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("usage:"));
+}
+
+#[test]
+fn validate_profiles_reports_missing_directory_and_empty_root() {
+    let output = Command::new(bin())
+        .args(["validate-profiles", "/no/such/profiles/dir"])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.profile.directory_read_failed"));
+
+    let empty_root = temp_dir("empty-profile-root");
+    let output = Command::new(bin())
+        .args(["validate-profiles", empty_root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.profile.descriptor_missing"));
+}
+
+#[test]
+fn validate_profiles_reports_descriptor_and_fixture_misalignment() {
+    let root = temp_dir("profile-fixture-checks");
+    let profile_dir = root.join("misalign");
+    let fixtures_dir = profile_dir.join("fixtures");
+    fs::create_dir_all(&fixtures_dir).expect("fixtures dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile:
+  id: misalign
+  version: "1"
+supported_input_artifacts:
+  - kind: metadata_manifest
+conformance_checks:
+  - id: misalign.check
+required_concepts:
+  - iri: https://metadata.example.test/concepts/missing
+required_identifiers:
+  - entity: person
+    name: missing_id
+    kind: legal-id
+cardinality_expectations:
+  - entity: person
+    field: missing_field
+    min: 1
+    max: 1
+codelist_expectations:
+  - id: missing-codelist
+    required_codes: [alpha]
+fixtures:
+  - path: fixtures/metadata.yaml
+"#,
+    )
+    .expect("write profile");
+    fs::write(
+        fixtures_dir.join("metadata.yaml"),
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: misalign
+  base_url: https://metadata.example.test
+  title: Misalign
+  publisher:
+    name: Publisher
+profiles:
+  - id: misalign
+    version: "1"
+datasets:
+  - id: vital-events
+    title: Vital Events
+    entities:
+      - name: person
+        fields:
+          - name: person_id
+            type: string
+"#,
+    )
+    .expect("write fixture");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success(), "expected failure");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for code in [
+        "metadata.profile.required_concept_missing",
+        "metadata.profile.identifier_missing",
+        "metadata.profile.cardinality_mismatch",
+        "metadata.profile.codelist_mismatch",
+    ] {
+        assert!(
+            combined.contains(code),
+            "expected `{code}` in output, got:\n{combined}"
+        );
+    }
+}
+
+#[test]
+fn validate_profiles_reports_descriptor_field_errors() {
+    let root = temp_dir("profile-descriptor-errors");
+    let profile_dir = root.join("misnamed");
+    fs::create_dir_all(&profile_dir).expect("profile dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile:
+  id: other-name
+  version: ""
+supported_input_artifacts: []
+conformance_checks: []
+fixtures: []
+"#,
+    )
+    .expect("write profile");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.profile.id_mismatch"));
+    assert!(stderr.contains("metadata.profile.version_missing"));
+    assert!(stderr.contains("metadata.profile.supported_input_artifacts_missing"));
+    assert!(stderr.contains("metadata.profile.conformance_checks_missing"));
+    assert!(stderr.contains("metadata.profile.fixtures_missing"));
+}
+
+#[test]
+fn validate_profiles_reports_missing_fixture_and_claim() {
+    let root = temp_dir("profile-fixture-missing");
+    let profile_dir = root.join("missing-fixture");
+    fs::create_dir_all(&profile_dir).expect("profile dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile:
+  id: missing-fixture
+  version: "1"
+supported_input_artifacts:
+  - kind: metadata_manifest
+conformance_checks:
+  - id: missing-fixture.check
+fixtures:
+  - path: fixtures/nonexistent.yaml
+"#,
+    )
+    .expect("write profile");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.profile.fixture_missing"));
+}
+
+#[test]
+fn validate_profiles_reports_unparseable_fixture() {
+    let root = temp_dir("profile-fixture-unparseable");
+    let profile_dir = root.join("unparseable");
+    let fixtures_dir = profile_dir.join("fixtures");
+    fs::create_dir_all(&fixtures_dir).expect("fixtures dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile:
+  id: unparseable
+  version: "1"
+supported_input_artifacts:
+  - kind: metadata_manifest
+conformance_checks:
+  - id: unparseable.check
+fixtures:
+  - path: fixtures/metadata.yaml
+"#,
+    )
+    .expect("write profile");
+    fs::write(fixtures_dir.join("metadata.yaml"), b": : nope :\n").expect("write fixture");
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.parse_failed"));
+}
+
+#[test]
+fn validate_profiles_reports_claim_missing() {
+    let root = temp_dir("profile-claim-missing");
+    let profile_dir = root.join("claim-missing");
+    let fixtures_dir = profile_dir.join("fixtures");
+    fs::create_dir_all(&fixtures_dir).expect("fixtures dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile:
+  id: claim-missing
+  version: "1"
+supported_input_artifacts:
+  - kind: metadata_manifest
+conformance_checks:
+  - id: claim-missing.check
+fixtures:
+  - path: fixtures/metadata.yaml
+"#,
+    )
+    .expect("write profile");
+    fs::write(
+        fixtures_dir.join("metadata.yaml"),
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: claim-missing
+  base_url: https://metadata.example.test
+  title: Claim Missing
+  publisher:
+    name: Publisher
+datasets: []
+"#,
+    )
+    .expect("write fixture");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.profile.claim_missing"));
+}
+
+#[test]
+fn publish_fails_closed_when_site_root_is_a_file() {
+    let dir = temp_dir("publish-site-root-file");
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let site_root = dir.join("site-as-file");
+    fs::write(&site_root, b"not a directory").expect("write site root file");
+    let out = dir.join("out");
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--site-root",
+            site_root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run cli");
+    assert!(
+        !output.status.success(),
+        "publish must exit non-zero when --site-root is a file"
     );
 }

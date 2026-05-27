@@ -8,11 +8,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 
+#[allow(dead_code)]
 const DATASETS_COLLECTION_ID: &str = "datasets";
 const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/authority/data-theme";
 const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
 const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
+const REGISTRY_WITNESS_FEDERATION_PROTOCOL: &str = "registry-witness-federation/v0.1";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +25,10 @@ pub struct MetadataManifest {
     pub vocabularies: BTreeMap<String, String>,
     #[serde(default)]
     pub profiles: Vec<ProfileClaim>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<FederationManifest>,
+    #[serde(default)]
+    pub evaluation_profiles: Vec<EvaluationProfileManifest>,
     #[serde(default)]
     pub requirements: Vec<RequirementManifest>,
     #[serde(default)]
@@ -83,6 +89,28 @@ pub struct ApplicationProfile {
 pub struct ProfileClaim {
     pub id: String,
     pub version: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FederationManifest {
+    pub node_id: String,
+    pub issuer: String,
+    pub jwks_uri: String,
+    pub federation_api: String,
+    #[serde(default)]
+    pub supported_protocol_versions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EvaluationProfileManifest {
+    pub id: String,
+    pub ruleset: String,
+    pub claim_id: String,
+    pub subject_id_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_source_observed_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -687,6 +715,9 @@ pub struct CompiledMetadataInner {
     pub datasets: BTreeMap<String, CompiledDataset>,
     pub codelists: BTreeMap<String, CompiledCodelist>,
     pub profiles: Vec<ProfileClaim>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federation: Option<FederationManifest>,
+    pub evaluation_profiles: Vec<EvaluationProfileManifest>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1108,6 +1139,14 @@ impl CompiledMetadata {
         &self.inner.profiles
     }
 
+    pub fn federation(&self) -> Option<&FederationManifest> {
+        self.inner.federation.as_ref()
+    }
+
+    pub fn evaluation_profiles(&self) -> &[EvaluationProfileManifest] {
+        &self.inner.evaluation_profiles
+    }
+
     pub fn filter(
         &self,
         predicate: impl Fn(&CompiledDataset, &CompiledEntity) -> bool,
@@ -1176,6 +1215,8 @@ impl CompiledMetadata {
                 datasets,
                 codelists: self.inner.codelists.clone(),
                 profiles: self.inner.profiles.clone(),
+                federation: self.inner.federation.clone(),
+                evaluation_profiles: self.inner.evaluation_profiles.clone(),
             }),
         }
     }
@@ -1202,6 +1243,89 @@ impl ValidationError {
             message: message.into(),
         }
     }
+}
+
+fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec<ValidationError>) {
+    let Some(federation) = federation else {
+        return;
+    };
+
+    validate_non_empty(&federation.node_id, "federation.node_id", errors);
+    validate_https_url(&federation.issuer, "federation.issuer", errors);
+    validate_https_url(&federation.jwks_uri, "federation.jwks_uri", errors);
+    validate_https_url(
+        &federation.federation_api,
+        "federation.federation_api",
+        errors,
+    );
+    if !federation
+        .supported_protocol_versions
+        .iter()
+        .any(|version| version == REGISTRY_WITNESS_FEDERATION_PROTOCOL)
+    {
+        errors.push(ValidationError::new(
+            "federation.supported_protocol_versions",
+            format!(
+                "supported protocol versions must include {REGISTRY_WITNESS_FEDERATION_PROTOCOL}"
+            ),
+        ));
+    }
+    for (index, version) in federation.supported_protocol_versions.iter().enumerate() {
+        validate_non_empty(
+            version,
+            format!("federation.supported_protocol_versions[{index}]"),
+            errors,
+        );
+    }
+
+    match did_web_host(&federation.node_id) {
+        Some(did_web_host) => {
+            if url_host(&federation.issuer)
+                .is_some_and(|issuer_host| !did_web_host.eq_ignore_ascii_case(issuer_host.as_str()))
+            {
+                errors.push(ValidationError::new(
+                    "federation.node_id",
+                    "DID:web node id must bind to federation issuer host",
+                ));
+            }
+        }
+        None => errors.push(ValidationError::new(
+            "federation.node_id",
+            "federation node id must be a did:web identifier",
+        )),
+    }
+}
+
+fn validate_evaluation_profiles<'a>(
+    manifest: &'a MetadataManifest,
+    errors: &mut Vec<ValidationError>,
+) -> BTreeSet<&'a str> {
+    let mut ids = BTreeSet::new();
+    let mut rulesets = BTreeSet::new();
+    for (index, profile) in manifest.evaluation_profiles.iter().enumerate() {
+        let path = format!("evaluation_profiles[{index}]");
+        validate_id(&profile.id, format!("{path}.id"), errors);
+        if !ids.insert(profile.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "evaluation profile id must be unique",
+            ));
+        }
+        validate_non_empty(&profile.ruleset, format!("{path}.ruleset"), errors);
+        if !profile.ruleset.trim().is_empty() && !rulesets.insert(profile.ruleset.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.ruleset"),
+                "evaluation profile ruleset must be unique",
+            ));
+        }
+        validate_id(&profile.claim_id, format!("{path}.claim_id"), errors);
+        validate_id(
+            &profile.subject_id_type,
+            format!("{path}.subject_id_type"),
+            errors,
+        );
+    }
+    rulesets
 }
 
 pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataError> {
@@ -1254,6 +1378,8 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         }
     }
 
+    validate_federation(manifest.federation.as_ref(), &mut errors);
+    let evaluation_profile_rulesets = validate_evaluation_profiles(manifest, &mut errors);
     let requirement_ids = validate_requirements(manifest, &mut errors);
     let evidence_type_ids = validate_evidence_types(manifest, &requirement_ids, &mut errors);
     validate_requirement_evidence_type_lists(manifest, &evidence_type_ids, &mut errors);
@@ -1281,6 +1407,20 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &manifest.vocabularies,
             &mut errors,
         );
+    }
+
+    if manifest.federation.is_none()
+        && manifest.datasets.iter().any(|dataset| {
+            dataset
+                .evidence_offerings
+                .iter()
+                .any(|offering| offering.access.kind == "registry-witness")
+        })
+    {
+        errors.push(ValidationError::new(
+            "federation",
+            "registry-witness access requires a top-level federation block",
+        ));
     }
 
     let mut dataset_ids = BTreeSet::new();
@@ -1344,6 +1484,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             dataset,
             &path,
             &evidence_type_ids,
+            &evaluation_profile_rulesets,
             &mut offering_ids,
             &manifest.vocabularies,
             &mut errors,
@@ -1489,6 +1630,8 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             datasets,
             codelists,
             profiles: manifest.profiles.clone(),
+            federation: manifest.federation.clone(),
+            evaluation_profiles: manifest.evaluation_profiles.clone(),
         }),
     })
 }
@@ -1533,6 +1676,12 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     let evidence_offerings = compiled.evidence_offerings().collect::<Vec<_>>();
     if !evidence_offerings.is_empty() {
         catalog["evidence_offerings"] = json!(evidence_offerings);
+    }
+    if let Some(federation) = compiled.federation() {
+        catalog["federation"] = json!(federation);
+    }
+    if !compiled.evaluation_profiles().is_empty() {
+        catalog["evaluation_profiles"] = json!(compiled.evaluation_profiles());
     }
     catalog
 }
@@ -2023,6 +2172,8 @@ pub fn render_shacl(compiled: &CompiledMetadata) -> Value {
     })
 }
 
+/// Consumed by Registry Relay's metadata API (`src/api/metadata.rs`) to render a
+/// per-entity SHACL document.
 pub fn render_entity_shacl(
     compiled: &CompiledMetadata,
     dataset_id: &str,
@@ -2067,19 +2218,28 @@ pub fn render_ogc_records_items(compiled: &CompiledMetadata) -> Value {
     })
 }
 
+/// Consumed by Registry Relay's metadata + OGC Records API
+/// (`src/api/metadata.rs`, `src/api/ogc/records.rs`) to render a single record.
 pub fn render_ogc_records_item(compiled: &CompiledMetadata, record_id: &str) -> Option<Value> {
     compiled.dataset(record_id).map(record_feature_json)
 }
 
-pub fn render_ogc_records_collections() -> Value {
+// OGC API Records collection / conformance scaffolding. Currently unused
+// inside the workspace (Registry Relay serves its own collection / conformance
+// documents). Kept as `pub(crate)` so the renderer set stays internally
+// complete; the `#[allow(dead_code)]` will lift the moment a caller is added.
+#[allow(dead_code)]
+pub(crate) fn render_ogc_records_collections() -> Value {
     json!({ "collections": [records_collection_json()] })
 }
 
-pub fn render_ogc_records_collection(collection_id: &str) -> Option<Value> {
+#[allow(dead_code)]
+pub(crate) fn render_ogc_records_collection(collection_id: &str) -> Option<Value> {
     (collection_id == DATASETS_COLLECTION_ID).then(records_collection_json)
 }
 
-pub fn render_ogc_records_conformance() -> Value {
+#[allow(dead_code)]
+pub(crate) fn render_ogc_records_conformance() -> Value {
     json!({ "conformsTo": ogc_records_conformance() })
 }
 
@@ -2826,10 +2986,16 @@ fn validate_entities(
     }
 }
 
+// Validates every evidence offering on a dataset against the manifest's
+// cross-cutting context (catalog-wide id table, evidence-type allowlist,
+// evaluation-profile rulesets, vocabulary prefixes). Each argument is
+// load-bearing for at least one validation rule, so collapsing them into a
+// context struct would only rename the dependency, not remove it.
 fn validate_evidence_offerings(
     dataset: &DatasetManifest,
     path: &str,
     evidence_type_ids: &BTreeSet<&str>,
+    evaluation_profile_rulesets: &BTreeSet<&str>,
     offering_ids: &mut BTreeSet<String>,
     vocabularies: &BTreeMap<String, String>,
     errors: &mut Vec<ValidationError>,
@@ -2953,25 +3119,36 @@ fn validate_evidence_offerings(
                 "access kind must not be empty",
             ));
         }
-        validate_optional_uri(
-            offering.access.conforms_to.as_deref(),
-            format!("{offering_path}.access.conforms_to"),
-            vocabularies,
-            errors,
-        );
-        if let Some(endpoint_url) = offering.access.endpoint_url.as_deref() {
-            validate_http_url(
-                endpoint_url,
-                format!("{offering_path}.access.endpoint_url"),
+        if offering.access.conforms_to.as_deref() != Some(REGISTRY_WITNESS_FEDERATION_PROTOCOL) {
+            validate_optional_uri(
+                offering.access.conforms_to.as_deref(),
+                format!("{offering_path}.access.conforms_to"),
+                vocabularies,
                 errors,
             );
         }
-        if let Some(discovery_url) = offering.access.discovery_url.as_deref() {
-            validate_http_url(
-                discovery_url,
-                format!("{offering_path}.access.discovery_url"),
+        if offering.access.kind == "registry-witness" {
+            validate_registry_witness_access(
+                offering,
+                &offering_path,
+                evaluation_profile_rulesets,
                 errors,
             );
+        } else {
+            if let Some(endpoint_url) = offering.access.endpoint_url.as_deref() {
+                validate_http_url(
+                    endpoint_url,
+                    format!("{offering_path}.access.endpoint_url"),
+                    errors,
+                );
+            }
+            if let Some(discovery_url) = offering.access.discovery_url.as_deref() {
+                validate_http_url(
+                    discovery_url,
+                    format!("{offering_path}.access.discovery_url"),
+                    errors,
+                );
+            }
         }
         validate_non_empty(
             &offering.access.ruleset,
@@ -2986,6 +3163,52 @@ fn validate_evidence_offerings(
                 errors,
             );
         }
+    }
+}
+
+fn validate_registry_witness_access(
+    offering: &EvidenceOfferingManifest,
+    offering_path: &str,
+    evaluation_profile_rulesets: &BTreeSet<&str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if offering.access.conforms_to.as_deref() != Some(REGISTRY_WITNESS_FEDERATION_PROTOCOL) {
+        errors.push(ValidationError::new(
+            format!("{offering_path}.access.conforms_to"),
+            format!(
+                "registry-witness access must conform to {REGISTRY_WITNESS_FEDERATION_PROTOCOL}"
+            ),
+        ));
+    }
+    match offering.access.endpoint_url.as_deref() {
+        Some(endpoint_url) => validate_https_url(
+            endpoint_url,
+            format!("{offering_path}.access.endpoint_url"),
+            errors,
+        ),
+        None => errors.push(ValidationError::new(
+            format!("{offering_path}.access.endpoint_url"),
+            "registry-witness access must declare an HTTPS endpoint URL",
+        )),
+    }
+    match offering.access.discovery_url.as_deref() {
+        Some(discovery_url) => validate_https_url(
+            discovery_url,
+            format!("{offering_path}.access.discovery_url"),
+            errors,
+        ),
+        None => errors.push(ValidationError::new(
+            format!("{offering_path}.access.discovery_url"),
+            "registry-witness access must declare an HTTPS discovery URL",
+        )),
+    }
+    if !offering.access.ruleset.trim().is_empty()
+        && !evaluation_profile_rulesets.contains(offering.access.ruleset.as_str())
+    {
+        errors.push(ValidationError::new(
+            format!("{offering_path}.access.ruleset"),
+            "registry-witness access.ruleset must reference a known evaluation profile ruleset",
+        ));
     }
 }
 
@@ -5134,6 +5357,7 @@ fn entity_record_summary(entity: &CompiledEntity) -> Value {
     })
 }
 
+#[allow(dead_code)]
 fn records_collection_json() -> Value {
     json!({
         "id": DATASETS_COLLECTION_ID,
@@ -5183,6 +5407,57 @@ fn validate_http_url(value: &str, path: impl Into<String>, errors: &mut Vec<Vali
             "URL must start with http:// or https://",
         ));
     }
+}
+
+fn validate_https_url(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
+    if !value.starts_with("https://") || https_url_host(value).is_none() {
+        errors.push(ValidationError::new(
+            path,
+            "URL must start with https:// and include a host",
+        ));
+    }
+}
+
+fn https_url_host(value: &str) -> Option<String> {
+    value
+        .strip_prefix("https://")
+        .and_then(url_host_after_scheme)
+}
+
+fn url_host(value: &str) -> Option<String> {
+    value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .and_then(url_host_after_scheme)
+}
+
+// Returns the full authority (host plus port when present), lower-cased, so that
+// did:web bindings can match the issuer URL on origin boundary, not just host.
+fn url_host_after_scheme(remainder: &str) -> Option<String> {
+    let authority = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|authority| !authority.is_empty())?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+fn did_web_host(node_id: &str) -> Option<String> {
+    node_id
+        .strip_prefix("did:web:")
+        .and_then(|method_id| method_id.split(':').next())
+        .filter(|host| !host.is_empty())
+        .map(|host| {
+            host.replace("%3A", ":")
+                .replace("%3a", ":")
+                .replace("%5B", "[")
+                .replace("%5b", "[")
+                .replace("%5D", "]")
+                .replace("%5d", "]")
+                .to_ascii_lowercase()
+        })
 }
 
 fn validate_uri(
@@ -5452,6 +5727,7 @@ fn field_type_name(field_type: FieldType) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn ogc_records_conformance() -> Value {
     json!([
         "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core",

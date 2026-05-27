@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 #[test]
 fn as_needed_update_frequency_maps_to_eu_as_needed_iri() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -49,11 +49,11 @@ fn fixture(path: &str) -> MetadataManifest {
         "example-benefits-sync" => EXAMPLE_BENEFITS_SYNC_FIXTURE,
         other => panic!("unknown fixture: {other}"),
     };
-    serde_yml::from_str(raw).expect("fixture parses")
+    serde_yaml_ng::from_str(raw).expect("fixture parses")
 }
 
 fn service_first_fixture() -> MetadataManifest {
-    serde_yml::from_str(include_str!(
+    serde_yaml_ng::from_str(include_str!(
         "../../../fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses")
@@ -356,7 +356,7 @@ fn validation_rejects_duplicate_entities() {
 
 #[test]
 fn validation_rejects_duplicate_evidence_offering_ids_globally() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -431,7 +431,7 @@ datasets:
 
 #[test]
 fn validation_rejects_blank_issuing_authority_country() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -487,7 +487,7 @@ datasets:
 
 #[test]
 fn validation_allows_portable_evidence_access_kinds() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -534,7 +534,7 @@ datasets:
 
 #[test]
 fn evidence_server_offerings_publish_endpoint_metadata() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -614,6 +614,281 @@ datasets:
     assert!(
         serves_entity.contains("entity-farmer"),
         "registry_manifest:servesEntity must still reference the entity name; got: {serves_entity}"
+    );
+}
+
+fn federated_evaluation_manifest() -> MetadataManifest {
+    serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: federated-evaluation
+  base_url: https://registry.example.test
+  title: Federated Evaluation
+  publisher:
+    name: Example Registry
+federation:
+  node_id: did:web:registry.example.test
+  issuer: https://registry.example.test
+  jwks_uri: https://registry.example.test/.well-known/jwks.json
+  federation_api: https://registry.example.test/federation
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
+evaluation_profiles:
+  - id: age_eligibility_profile
+    ruleset: age-eligibility-v1
+    claim_id: age_eligibility
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+requirements:
+  - id: age_requirement
+    title: Age requirement
+evidence_types:
+  - id: age_evidence
+    title: Age evidence
+    proves: [age_requirement]
+datasets:
+  - id: residents
+    title: Residents
+    evidence_offerings:
+      - id: age_witness
+        title: Age witness
+        evidence_type: age_evidence
+        issuing_authority:
+          id: civil_registry
+          name: Civil Registry
+        entity: resident
+        lookup_keys: [national_id]
+        access:
+          kind: registry-witness
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://witness.example.test/evaluate
+          discovery_url: https://witness.example.test/.well-known/registry-witness
+          ruleset: age-eligibility-v1
+    entities:
+      - name: resident
+        fields:
+          - name: national_id
+            type: string
+"#,
+    )
+    .expect("federated evaluation manifest parses")
+}
+
+#[test]
+fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
+    let manifest = federated_evaluation_manifest();
+
+    validate_manifest(&manifest).expect("federated manifest validates");
+    let compiled = compile_manifest(&manifest).expect("federated manifest compiles");
+    let catalog = render_catalog(&compiled);
+
+    assert_eq!(
+        catalog["federation"]["supported_protocol_versions"][0],
+        json!("registry-witness-federation/v0.1")
+    );
+    assert_eq!(
+        catalog["evaluation_profiles"][0]["id"],
+        json!("age_eligibility_profile")
+    );
+    assert_eq!(
+        catalog["evidence_offerings"][0]["access"]["ruleset"],
+        json!("age-eligibility-v1")
+    );
+}
+
+#[test]
+fn validation_rejects_registry_witness_unresolved_ruleset() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest.datasets[0].evidence_offerings[0].access.ruleset = "missing_profile".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("unresolved ruleset rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path == "datasets[0].evidence_offerings[0].access.ruleset"
+            && error
+                .message
+                .contains("must reference a known evaluation profile")
+    }));
+}
+
+#[test]
+fn validation_rejects_registry_witness_bad_conforms_to() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest.datasets[0].evidence_offerings[0]
+        .access
+        .conforms_to = Some("registry_relay:evidence-server-v1".to_string());
+
+    let error = validate_manifest(&manifest).expect_err("bad protocol rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path == "datasets[0].evidence_offerings[0].access.conforms_to"
+            && error.message.contains("registry-witness-federation/v0.1")
+    }));
+}
+
+#[test]
+fn validation_rejects_duplicate_evaluation_profile_ids() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest
+        .evaluation_profiles
+        .push(manifest.evaluation_profiles[0].clone());
+
+    let error = validate_manifest(&manifest).expect_err("duplicate profile rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path == "evaluation_profiles[1].id"
+            && error
+                .message
+                .contains("evaluation profile id must be unique")
+    }));
+}
+
+#[test]
+fn validation_rejects_invalid_federation_urls_and_did_web_binding() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "http://registry.example.test".to_string();
+    federation.jwks_uri = "http://registry.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "http://registry.example.test/federation".to_string();
+    federation.node_id = "did:web:other.example.test".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("bad federation rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| error.path == "federation.issuer"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "federation.jwks_uri"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "federation.federation_api"));
+    assert!(errors.iter().any(|error| {
+        error.path == "federation.node_id"
+            && error
+                .message
+                .contains("must bind to federation issuer host")
+    }));
+}
+
+#[test]
+fn validation_rejects_did_web_port_mismatch_against_issuer() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test:9090".to_string();
+    federation.jwks_uri = "https://registry.example.test:9090/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test:9090/federation".to_string();
+    federation.node_id = "did:web:registry.example.test%3A8080".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("port mismatch rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.node_id"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected DID:web port mismatch to be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_did_web_with_port_against_default_port_issuer() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test".to_string();
+    federation.jwks_uri = "https://registry.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test/federation".to_string();
+    federation.node_id = "did:web:registry.example.test%3A8443".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("asymmetric port rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.node_id"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected DID:web port-vs-default-port asymmetry to be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_default_port_did_web_against_issuer_with_port() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test:8443".to_string();
+    federation.jwks_uri = "https://registry.example.test:8443/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test:8443/federation".to_string();
+    federation.node_id = "did:web:registry.example.test".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("asymmetric port rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.node_id"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected DID:web default-vs-explicit-port asymmetry to be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn validation_accepts_did_web_port_match_against_issuer() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test:8443".to_string();
+    federation.jwks_uri = "https://registry.example.test:8443/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test:8443/federation".to_string();
+    federation.node_id = "did:web:registry.example.test%3A8443".to_string();
+
+    validate_manifest(&manifest).expect("matching port binds");
+}
+
+#[test]
+fn validation_reports_missing_federation_block_once_across_offerings() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest.federation = None;
+    let template = manifest.datasets[0].evidence_offerings[0].clone();
+    for index in 1..3 {
+        let mut copy = template.clone();
+        copy.id = format!("age_witness_{index}");
+        manifest.datasets[0].evidence_offerings.push(copy);
+    }
+
+    let error = validate_manifest(&manifest).expect_err("missing federation rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    let federation_errors = errors
+        .iter()
+        .filter(|error| {
+            error.path == "federation"
+                && error
+                    .message
+                    .contains("registry-witness access requires a top-level federation block")
+        })
+        .count();
+    assert_eq!(
+        federation_errors, 1,
+        "expected exactly one federation-missing error, got {federation_errors}: {errors:?}"
     );
 }
 
@@ -1037,7 +1312,7 @@ fn breg_dcat_preserves_active_adms_status() {
 
 #[test]
 fn breg_dcat_omits_empty_cccev_predicates_on_requirements() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1090,7 +1365,7 @@ datasets:
 
 #[test]
 fn validation_rejects_grouped_evidence_list_that_does_not_prove_requirement() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
