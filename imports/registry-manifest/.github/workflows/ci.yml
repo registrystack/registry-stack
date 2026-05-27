@@ -76,7 +76,7 @@ jobs:
         run: cargo deny check
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.1 --locked
 
       - name: Audit
         run: cargo audit --deny warnings

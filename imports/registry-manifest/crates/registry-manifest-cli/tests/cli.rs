@@ -953,10 +953,17 @@ datasets:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        combined.contains("metadata.profile."),
-        "expected a profile-level error code, got:\n{combined}"
-    );
+    for code in [
+        "metadata.profile.required_concept_missing",
+        "metadata.profile.identifier_missing",
+        "metadata.profile.cardinality_mismatch",
+        "metadata.profile.codelist_mismatch",
+    ] {
+        assert!(
+            combined.contains(code),
+            "expected `{code}` in output, got:\n{combined}"
+        );
+    }
 }
 
 #[test]
