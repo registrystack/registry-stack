@@ -26,6 +26,15 @@ use wiremock::{
 };
 
 const TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
+pub const FEDERATION_PROTOCOL: &str = "registry-witness-federation/v0.1";
+pub const FEDERATION_REQUEST_JWT_TYPE: &str = "registry-witness-request+jwt";
+pub const FEDERATION_RESPONSE_JWT_TYPE: &str = "registry-witness-response+jwt";
+pub const FEDERATION_EVALUATE_ACTION: &str = "evaluate";
+pub const FEDERATION_REQUEST_FIXTURE_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6";
+pub const FEDERATION_RESPONSE_FIXTURE_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q7";
+pub const FEDERATION_FIXTURE_PROFILE: &str = "disability_status_predicate";
+pub const FEDERATION_FIXTURE_PURPOSE: &str =
+    "https://purpose.example.gov/social-protection/service-delivery";
 
 #[derive(Debug)]
 pub struct MockIdp {
@@ -173,15 +182,101 @@ fn mint_ed25519_jwt(issuer: &str, claims: Value, private: &PrivateJwk) -> String
         .kid
         .clone()
         .unwrap_or_else(|| "registry-platform-testing-ed25519-1".to_string());
+    let claims = normalize_claims(issuer, claims);
+    sign_ed25519_compact_jwt_with_key(private, "JWT", &kid, claims)
+}
+
+#[must_use]
+pub fn sign_ed25519_compact_jwt(private_jwk: &str, typ: &str, kid: &str, claims: Value) -> String {
+    let private = PrivateJwk::parse(private_jwk).expect("fixture private JWK parses");
+    sign_ed25519_compact_jwt_with_key(&private, typ, kid, claims)
+}
+
+#[must_use]
+pub fn sign_ed25519_compact_jwt_with_key(
+    private: &PrivateJwk,
+    typ: &str,
+    kid: &str,
+    claims: Value,
+) -> String {
     let header = json!({
         "alg": "EdDSA",
-        "typ": "JWT",
+        "typ": typ,
         "kid": kid,
     });
-    let claims = normalize_claims(issuer, claims);
     let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
     let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");
     format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
+}
+
+#[must_use]
+pub fn jwks_from_private_jwk(private: &PrivateJwk) -> Value {
+    json!({ "keys": [private.public()] })
+}
+
+#[must_use]
+pub fn federation_request_fixture_claims(
+    issuer: &str,
+    subject_node_id: &str,
+    audience_node_id: &str,
+    now_unix_seconds: i64,
+) -> Value {
+    json!({
+        "iss": issuer,
+        "sub": subject_node_id,
+        "aud": audience_node_id,
+        "iat": now_unix_seconds,
+        "nbf": now_unix_seconds,
+        "exp": now_unix_seconds + 300,
+        "jti": FEDERATION_REQUEST_FIXTURE_JTI,
+        "protocol": FEDERATION_PROTOCOL,
+        "action": FEDERATION_EVALUATE_ACTION,
+        "profile": FEDERATION_FIXTURE_PROFILE,
+        "purpose": FEDERATION_FIXTURE_PURPOSE,
+        "request": {
+            "subject": {
+                "id": "example-subject-id",
+                "id_type": "national_id",
+            },
+            "claims": ["disability_status"],
+        },
+    })
+}
+
+#[must_use]
+pub fn federation_response_fixture_claims(
+    issuer: &str,
+    subject_node_id: &str,
+    audience_node_id: &str,
+    request_jti: &str,
+    now_unix_seconds: i64,
+) -> Value {
+    json!({
+        "iss": issuer,
+        "sub": subject_node_id,
+        "aud": audience_node_id,
+        "iat": now_unix_seconds,
+        "nbf": now_unix_seconds,
+        "exp": now_unix_seconds + 600,
+        "jti": FEDERATION_RESPONSE_FIXTURE_JTI,
+        "request_jti": request_jti,
+        "protocol": FEDERATION_PROTOCOL,
+        "action": FEDERATION_EVALUATE_ACTION,
+        "profile": FEDERATION_FIXTURE_PROFILE,
+        "result": {
+            "evaluation_id": "eval_01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6",
+            "subject_ref": {
+                "hash": "hmac-sha256:fixture",
+                "id_type": "national_id",
+            },
+            "claims": {
+                "disability_status": {
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        },
+    })
 }
 
 #[must_use]
@@ -401,6 +496,7 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
+    use jsonwebtoken::decode_header;
     use registry_platform_audit::{AuditError, AuditSink, ChainState};
     use registry_platform_crypto::verify;
     use registry_platform_httputil::FetchUrlPolicy;
@@ -427,6 +523,72 @@ mod tests {
             .expect("rotated fixture parses");
         assert_ne!(first["d"], rotated["d"]);
         assert_ne!(first["x"], rotated["x"]);
+    }
+
+    #[tokio::test]
+    async fn federation_request_jwt_signs_verifies_and_tampering_fails() {
+        let (private, _) = fixtures::ed25519_pair();
+        let issuer = "https://agency-a.example.gov";
+        let audience = "did:web:agency-b.example.gov";
+        let subject = "did:web:agency-a.example.gov";
+        let now = now_unix_seconds();
+        let claims = federation_request_fixture_claims(issuer, subject, audience, now);
+        let token = sign_ed25519_compact_jwt_with_key(
+            &private,
+            FEDERATION_REQUEST_JWT_TYPE,
+            "registry-platform-testing-ed25519-1",
+            claims,
+        );
+
+        let header = decode_header(&token).expect("header decodes");
+        assert_eq!(header.typ.as_deref(), Some(FEDERATION_REQUEST_JWT_TYPE));
+        assert_eq!(
+            jwt_claims(&token)["jti"],
+            Value::String(FEDERATION_REQUEST_FIXTURE_JTI.to_string())
+        );
+
+        let jwks = jwks_from_private_jwk(&private);
+        let upstream = MockHttpUpstream::start().await;
+        upstream
+            .expect("GET", "/jwks")
+            .respond_json(200, jwks)
+            .await;
+        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            format!("{}/jwks", upstream.url()),
+            JwksFetcherConfig {
+                cache_ttl: Duration::from_secs(60),
+                negative_cache_ttl: Duration::from_millis(1),
+                refresh_cooldown: Duration::from_millis(1),
+                max_doc_bytes: 16 * 1024,
+                request_timeout: Duration::from_secs(5),
+            },
+            FetchUrlPolicy::dev(),
+        ));
+        let verifier = TokenVerifier::new(
+            registry_platform_oidc::TokenVerifierConfig {
+                issuer: issuer.to_string(),
+                audiences: vec![audience.to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: vec![FEDERATION_REQUEST_JWT_TYPE.to_string()],
+                scope_claim: "scope".to_string(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients: Vec::new(),
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        );
+
+        let verified = verifier.verify(&token).await.expect("request verifies");
+        assert_eq!(verified.claims.iss.as_deref(), Some(issuer));
+        assert_eq!(verified.claims.sub.as_deref(), Some(subject));
+        assert_eq!(
+            verified.claims.extra["jti"],
+            Value::String(FEDERATION_REQUEST_FIXTURE_JTI.to_string())
+        );
+
+        let tampered = tamper_payload_claim(&token, "purpose", json!("https://attacker.test"));
+        assert!(verifier.verify(&tampered).await.is_err());
     }
 
     #[tokio::test]
@@ -567,6 +729,26 @@ mod tests {
             ChainAssertionAnchors::from_trusted_last_hash(second.record_hash),
         )
         .expect("anchored chain verifies");
+    }
+
+    fn jwt_claims(token: &str) -> Value {
+        let payload = token
+            .split('.')
+            .nth(1)
+            .expect("compact JWT has a payload segment");
+        let payload = URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("payload is base64url");
+        serde_json::from_slice(&payload).expect("payload is JSON")
+    }
+
+    fn tamper_payload_claim(token: &str, claim: &str, value: Value) -> String {
+        let mut parts = token.split('.').map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3, "compact JWT has three segments");
+        let mut claims = jwt_claims(token);
+        claims[claim] = value;
+        parts[1] = encode_json(&claims);
+        parts.join(".")
     }
 
     #[derive(Default)]

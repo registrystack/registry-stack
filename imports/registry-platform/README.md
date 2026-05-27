@@ -1,5 +1,7 @@
 # Registry Platform
 
+> **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
+
 Shared Rust security and operational primitives for Registry Relay, Registry
 Witness, and related registry services.
 

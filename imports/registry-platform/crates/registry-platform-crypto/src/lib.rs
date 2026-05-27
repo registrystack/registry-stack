@@ -4,13 +4,14 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::net::IpAddr;
 use thiserror::Error;
-use url::Host;
+use url::{Host, Url};
 use zeroize::Zeroize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +236,12 @@ pub enum DidError {
     PathTraversal,
     #[error("did:jwk payload is invalid")]
     InvalidDidJwk,
+    #[error("issuer URL is invalid")]
+    InvalidIssuerUrl,
+    #[error("issuer URL must use HTTPS")]
+    IssuerMustUseHttps,
+    #[error("did:web host does not match issuer host")]
+    IssuerHostMismatch,
 }
 
 pub fn validate_did(s: &str, allowed_methods: &[DidMethod]) -> Result<ValidatedDid, DidError> {
@@ -323,6 +330,21 @@ pub fn validate_did_web(s: &str) -> Result<(), DidError> {
     Ok(())
 }
 
+pub fn validate_did_web_https_issuer_binding(did: &str, issuer: &str) -> Result<(), DidError> {
+    validate_did_web(did)?;
+    let did_host = did_web_host(did)?;
+    let issuer = Url::parse(issuer).map_err(|_| DidError::InvalidIssuerUrl)?;
+    if issuer.scheme() != "https" {
+        return Err(DidError::IssuerMustUseHttps);
+    }
+    let issuer_host = issuer.host_str().ok_or(DidError::InvalidIssuerUrl)?;
+    if did_host.eq_ignore_ascii_case(issuer_host) {
+        Ok(())
+    } else {
+        Err(DidError::IssuerHostMismatch)
+    }
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum JcsError {
@@ -336,6 +358,36 @@ pub fn canonicalize_json(value: &Value) -> Result<Vec<u8>, JcsError> {
     let mut out = Vec::new();
     write_canonical(value, &mut out)?;
     Ok(out)
+}
+
+#[must_use]
+pub fn hmac_sha256_base64url_no_pad(key: &[u8], input: &[u8]) -> String {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(key).expect("HMAC-SHA256 accepts keys of any length");
+    mac.update(input);
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+pub fn pairwise_subject_ref_hash(
+    key: &[u8],
+    aud: &str,
+    issuer: &str,
+    profile: &str,
+    id_type: &str,
+    subject_id: &str,
+) -> Result<String, JcsError> {
+    let input = json_string_object(&[
+        ("aud", aud),
+        ("issuer", issuer),
+        ("profile", profile),
+        ("id_type", id_type),
+        ("subject_id", subject_id),
+    ]);
+    let canonical = canonicalize_json(&input)?;
+    Ok(format!(
+        "hmac-sha256:{}",
+        hmac_sha256_base64url_no_pad(key, &canonical)
+    ))
 }
 
 pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
@@ -393,6 +445,10 @@ fn required_thumbprint_member<'a>(
 }
 
 fn json_object(entries: &[(&str, &str)]) -> Value {
+    json_string_object(entries)
+}
+
+fn json_string_object(entries: &[(&str, &str)]) -> Value {
     let mut object = Map::new();
     for (key, value) in entries {
         object.insert((*key).to_string(), Value::String((*value).to_string()));
@@ -437,6 +493,20 @@ fn validate_dns_host(host: &str) -> Result<(), DidError> {
         return Err(DidError::InvalidDidWebHost);
     }
     Ok(())
+}
+
+fn did_web_host(s: &str) -> Result<String, DidError> {
+    let rest = s
+        .strip_prefix("did:web:")
+        .ok_or(DidError::UnsupportedMethod)?;
+    let identifier = rest
+        .split_once('#')
+        .map_or(rest, |(identifier, _)| identifier);
+    let host = identifier
+        .split(':')
+        .next()
+        .ok_or(DidError::InvalidIdentifier)?;
+    percent_decode(host).ok_or(DidError::InvalidIdentifier)
 }
 
 fn percent_decode(input: &str) -> Option<String> {
@@ -634,6 +704,42 @@ mod tests {
     }
 
     #[test]
+    fn did_web_https_issuer_binding_accepts_matching_https_host() {
+        validate_did_web_https_issuer_binding(
+            "did:web:agency-a.example.gov",
+            "https://agency-a.example.gov",
+        )
+        .expect("matching HTTPS issuer host binds");
+        validate_did_web_https_issuer_binding(
+            "did:web:agency-a.example.gov:issuers:alpha#key-1",
+            "https://AGENCY-A.example.gov/federation/v1",
+        )
+        .expect("matching HTTPS issuer host binds case-insensitively");
+    }
+
+    #[test]
+    fn did_web_https_issuer_binding_rejects_non_https_and_mismatch() {
+        assert_eq!(
+            validate_did_web_https_issuer_binding(
+                "did:web:agency-a.example.gov",
+                "http://agency-a.example.gov"
+            ),
+            Err(DidError::IssuerMustUseHttps)
+        );
+        assert_eq!(
+            validate_did_web_https_issuer_binding(
+                "did:web:agency-a.example.gov",
+                "https://agency-b.example.gov"
+            ),
+            Err(DidError::IssuerHostMismatch)
+        );
+        assert_eq!(
+            validate_did_web_https_issuer_binding("did:key:z6MkiTBz", "https://example.gov"),
+            Err(DidError::UnsupportedMethod)
+        );
+    }
+
+    #[test]
     fn canonicalize_json_sorts_object_keys_recursively() {
         let value = json!({"z": 1, "a": {"b": true, "a": [null, "x"]}});
         let canonical = canonicalize_json(&value).expect("canonicalizes");
@@ -642,6 +748,64 @@ mod tests {
             String::from_utf8(canonical).expect("utf8"),
             r#"{"a":{"a":[null,"x"],"b":true},"z":1}"#
         );
+    }
+
+    #[test]
+    fn hmac_sha256_base64url_no_pad_matches_fixed_vector() {
+        assert_eq!(
+            hmac_sha256_base64url_no_pad(b"key", b"The quick brown fox jumps over the lazy dog"),
+            "97yD9DBThCSxMpjmqm-xQ-9NWaFJRhdZl0edvC0aPNg"
+        );
+    }
+
+    #[test]
+    fn pairwise_subject_ref_hash_uses_stable_canonical_input() {
+        assert_eq!(
+            pairwise_subject_ref_hash(
+                b"federation-subject-secret",
+                "did:web:agency-b.example.gov",
+                "did:web:agency-a.example.gov",
+                "disability_status_predicate",
+                "national_id",
+                "example-subject-id",
+            )
+            .expect("subject ref hashes"),
+            "hmac-sha256:XIUcSUpspCMpOXVEeUes5EqZso47ytCAwtwAzlLpMEE"
+        );
+    }
+
+    #[test]
+    fn pairwise_subject_ref_hash_separates_audience_and_profile() {
+        let base = pairwise_subject_ref_hash(
+            b"federation-subject-secret",
+            "did:web:agency-b.example.gov",
+            "did:web:agency-a.example.gov",
+            "disability_status_predicate",
+            "national_id",
+            "example-subject-id",
+        )
+        .expect("subject ref hashes");
+        let other_audience = pairwise_subject_ref_hash(
+            b"federation-subject-secret",
+            "did:web:agency-c.example.gov",
+            "did:web:agency-a.example.gov",
+            "disability_status_predicate",
+            "national_id",
+            "example-subject-id",
+        )
+        .expect("subject ref hashes");
+        let other_profile = pairwise_subject_ref_hash(
+            b"federation-subject-secret",
+            "did:web:agency-b.example.gov",
+            "did:web:agency-a.example.gov",
+            "eligibility_predicate",
+            "national_id",
+            "example-subject-id",
+        )
+        .expect("subject ref hashes");
+
+        assert_ne!(base, other_audience);
+        assert_ne!(base, other_profile);
     }
 
     #[test]
