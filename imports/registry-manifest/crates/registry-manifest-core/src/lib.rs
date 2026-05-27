@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 
+#[allow(dead_code)]
 const DATASETS_COLLECTION_ID: &str = "datasets";
 const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/authority/data-theme";
@@ -2158,6 +2159,8 @@ pub fn render_shacl(compiled: &CompiledMetadata) -> Value {
     })
 }
 
+/// Consumed by Registry Relay's metadata API (`src/api/metadata.rs`) to render a
+/// per-entity SHACL document.
 pub fn render_entity_shacl(
     compiled: &CompiledMetadata,
     dataset_id: &str,
@@ -2202,19 +2205,28 @@ pub fn render_ogc_records_items(compiled: &CompiledMetadata) -> Value {
     })
 }
 
+/// Consumed by Registry Relay's metadata + OGC Records API
+/// (`src/api/metadata.rs`, `src/api/ogc/records.rs`) to render a single record.
 pub fn render_ogc_records_item(compiled: &CompiledMetadata, record_id: &str) -> Option<Value> {
     compiled.dataset(record_id).map(record_feature_json)
 }
 
-pub fn render_ogc_records_collections() -> Value {
+// OGC API Records collection / conformance scaffolding. Currently unused
+// inside the workspace (Registry Relay serves its own collection / conformance
+// documents). Kept as `pub(crate)` so the renderer set stays internally
+// complete; the `#[allow(dead_code)]` will lift the moment a caller is added.
+#[allow(dead_code)]
+pub(crate) fn render_ogc_records_collections() -> Value {
     json!({ "collections": [records_collection_json()] })
 }
 
-pub fn render_ogc_records_collection(collection_id: &str) -> Option<Value> {
+#[allow(dead_code)]
+pub(crate) fn render_ogc_records_collection(collection_id: &str) -> Option<Value> {
     (collection_id == DATASETS_COLLECTION_ID).then(records_collection_json)
 }
 
-pub fn render_ogc_records_conformance() -> Value {
+#[allow(dead_code)]
+pub(crate) fn render_ogc_records_conformance() -> Value {
     json!({ "conformsTo": ogc_records_conformance() })
 }
 
@@ -2961,6 +2973,11 @@ fn validate_entities(
     }
 }
 
+// Validates every evidence offering on a dataset against the manifest's
+// cross-cutting context (catalog-wide id table, evidence-type allowlist,
+// evaluation-profile rulesets, federation peers, vocabulary prefixes). Each
+// argument is load-bearing for at least one validation rule, so collapsing them
+// into a context struct would only rename the dependency, not remove it.
 #[allow(clippy::too_many_arguments)]
 fn validate_evidence_offerings(
     dataset: &DatasetManifest,
@@ -5337,6 +5354,7 @@ fn entity_record_summary(entity: &CompiledEntity) -> Value {
     })
 }
 
+#[allow(dead_code)]
 fn records_collection_json() -> Value {
     json!({
         "id": DATASETS_COLLECTION_ID,
@@ -5705,6 +5723,7 @@ fn field_type_name(field_type: FieldType) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn ogc_records_conformance() -> Value {
     json!([
         "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core",
