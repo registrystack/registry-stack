@@ -184,8 +184,8 @@ use registry_witness_core::{
     ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
     EvaluateRequest, EvidenceConfig, EvidenceError, EvidenceFormat, EvidencePrincipal,
     RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
-    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
-    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectRefView,
+    SubjectRequest, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
     SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
     SD_JWT_VC_SIGNING_ALG,
 };
@@ -483,7 +483,8 @@ struct ClaimResultInternal {
     claim_id: String,
     claim_version: String,
     subject_type: String,
-    subject_ref: String,
+    subject_ref_handle: String,
+    subject_id_type: String,
     value: Value,
     issued_at: OffsetDateTime,
     expires_at: Option<OffsetDateTime>,
@@ -971,7 +972,13 @@ impl RegistryWitnessRuntime {
                 let result = internal
                     .get(claim_id)
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
-                view_claim(result, claim, disclosure, &format)
+                view_claim(
+                    &self.self_attestation_rate_keys,
+                    result,
+                    claim,
+                    disclosure,
+                    &format,
+                )
             })
             .collect::<Result<Vec<_>, EvidenceError>>()?;
         let expires_at = self_attestation
@@ -1161,9 +1168,17 @@ impl RegistryWitnessRuntime {
                         });
                     }
                     succeeded += 1;
+                    let subject_ref = subject_ref_view(
+                        &self.self_attestation_rate_keys,
+                        &batch_subject_ref(input_index),
+                        request.subjects[input_index]
+                            .id_type
+                            .as_deref()
+                            .unwrap_or_default(),
+                    )?;
                     items[input_index] = Some(BatchItemResponse {
                         input_index,
-                        subject_ref: batch_subject_ref(input_index),
+                        subject_ref,
                         evaluation_id,
                         status: BatchItemStatus::Succeeded,
                         claim_results,
@@ -1172,9 +1187,17 @@ impl RegistryWitnessRuntime {
                 }
                 Err(error) => {
                     failed += 1;
+                    let subject_ref = subject_ref_view(
+                        &self.self_attestation_rate_keys,
+                        &batch_subject_ref(input_index),
+                        request.subjects[input_index]
+                            .id_type
+                            .as_deref()
+                            .unwrap_or_default(),
+                    )?;
                     items[input_index] = Some(BatchItemResponse {
                         input_index,
-                        subject_ref: batch_subject_ref(input_index),
+                        subject_ref,
                         evaluation_id: None,
                         status: BatchItemStatus::Failed,
                         claim_results: Vec::new(),
@@ -1260,7 +1283,13 @@ impl RegistryWitnessRuntime {
                 let result = internal
                     .get(claim_id)
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
-                view_claim(result, claim, disclosure, &format)
+                view_claim(
+                    &self.self_attestation_rate_keys,
+                    result,
+                    claim,
+                    disclosure,
+                    &format,
+                )
             })
             .collect::<Result<Vec<_>, EvidenceError>>()
     }
@@ -1482,7 +1511,8 @@ async fn evaluate_claim_task(
         claim_id: claim.id.clone(),
         claim_version: claim.version.clone(),
         subject_type: claim.subject_type.clone(),
-        subject_ref: evaluation_subject_ref(&ctx.evaluation_id),
+        subject_ref_handle: evaluation_subject_ref(&ctx.evaluation_id),
+        subject_id_type: ctx.subject.id_type.clone().unwrap_or_default(),
         value,
         issued_at,
         expires_at: None,
@@ -2307,6 +2337,7 @@ fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
 }
 
 fn view_claim(
+    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
     result: &ClaimResultInternal,
     claim: &ClaimDefinition,
     disclosure: DisclosureProfile,
@@ -2350,7 +2381,11 @@ fn view_claim(
         claim_id: result.claim_id.clone(),
         claim_version: result.claim_version.clone(),
         subject_type: result.subject_type.clone(),
-        subject_ref: result.subject_ref.clone(),
+        subject_ref: subject_ref_view(
+            self_attestation_rate_keys,
+            &result.subject_ref_handle,
+            &result.subject_id_type,
+        )?,
         value,
         satisfied,
         disclosure: effective_disclosure.as_str().to_string(),
@@ -2510,6 +2545,20 @@ fn evaluation_subject_ref(evaluation_id: &str) -> String {
 
 fn batch_subject_ref(input_index: usize) -> String {
     format!("request.subjects[{input_index}]")
+}
+
+fn subject_ref_view(
+    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
+    subject_ref: &str,
+    id_type: &str,
+) -> Result<SubjectRefView, EvidenceError> {
+    let hash = self_attestation_rate_keys
+        .subject_ref(id_type, subject_ref)
+        .map_err(|error| error.evidence_error())?;
+    Ok(SubjectRefView {
+        hash,
+        id_type: id_type.to_string(),
+    })
 }
 
 fn batch_claim_result(
@@ -3059,6 +3108,73 @@ mod tests {
             evaluation_subject_ref("01KSARTEST"),
             "urn:subject:evaluation:01KSARTEST"
         );
+    }
+
+    #[tokio::test]
+    async fn evaluate_subject_ref_serializes_as_hash_view() {
+        let source = Arc::new(CountingSource::default());
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let store = EvidenceStore::default();
+        let mut request = test_request("selected");
+        request.subject.id_type = Some("national_id".to_string());
+
+        let results = RegistryWitnessRuntime::new()
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                None,
+            )
+            .await
+            .expect("evaluate succeeds");
+        let subject_ref =
+            serde_json::to_value(&results[0].subject_ref).expect("subject_ref serializes");
+
+        assert_eq!(subject_ref["id_type"], json!("national_id"));
+        assert!(subject_ref["hash"].as_str().is_some());
+        assert!(!subject_ref.to_string().contains("person-1"));
+    }
+
+    #[tokio::test]
+    async fn batch_item_subject_ref_serializes_as_hash_view() {
+        let source = Arc::new(CountingSource::default());
+        let mut claim = test_claim("selected", Vec::new(), true);
+        claim.operations.batch_evaluate.enabled = true;
+        claim.operations.batch_evaluate.max_subjects = 1;
+        let mut evidence_config = (*test_evidence(vec![claim])).clone();
+        evidence_config.inline_batch_limit = 1;
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let request = BatchEvaluateRequest {
+            subjects: vec![SubjectRequest {
+                id: "person-1".to_string(),
+                id_type: Some("national_id".to_string()),
+            }],
+            claims: vec!["selected".to_string()],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("test".to_string()),
+        };
+
+        let response = RegistryWitnessRuntime::new()
+            .batch_evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                BatchEvaluateOptions::default(),
+            )
+            .await
+            .expect("batch evaluate succeeds");
+        let subject_ref =
+            serde_json::to_value(&response.items[0].subject_ref).expect("subject_ref serializes");
+
+        assert_eq!(subject_ref["id_type"], json!("national_id"));
+        assert!(subject_ref["hash"].as_str().is_some());
+        assert!(!subject_ref.to_string().contains("person-1"));
     }
 
     #[tokio::test]

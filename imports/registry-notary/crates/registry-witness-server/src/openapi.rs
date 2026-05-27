@@ -1625,7 +1625,7 @@ fn batch_evaluate_example() -> Value {
         "items": [
             {
                 "input_index": 0,
-                "subject_ref": "person-1",
+                "subject_ref": subject_ref_example(),
                 "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                 "status": "succeeded",
                 "claim_results": [
@@ -1664,7 +1664,7 @@ fn claim_result_example() -> Value {
         "claim_id": "farmer-under-4ha",
         "claim_version": "2026-05",
         "subject_type": "person",
-        "subject_ref": "person-1",
+        "subject_ref": subject_ref_example(),
         "value": true,
         "satisfied": true,
         "disclosure": "predicate",
@@ -1672,6 +1672,13 @@ fn claim_result_example() -> Value {
         "issued_at": "2026-05-24T12:00:00Z",
         "expires_at": "2026-05-25T12:00:00Z",
         "provenance": provenance_example()
+    })
+}
+
+fn subject_ref_example() -> Value {
+    json!({
+        "hash": "hmac-sha256:example-subject-ref-hash",
+        "id_type": "national_id"
     })
 }
 

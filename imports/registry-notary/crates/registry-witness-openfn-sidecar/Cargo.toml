@@ -15,7 +15,6 @@ serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 registry-platform-authcommon.workspace = true
-subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "process"] }
 tracing.workspace = true

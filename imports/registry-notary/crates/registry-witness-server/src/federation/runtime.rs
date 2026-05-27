@@ -7,7 +7,11 @@ use jsonwebtoken::Algorithm;
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
-use registry_witness_core::{FederationConfig, FederationPeerConfig, FEDERATION_REQUEST_JWT_TYP};
+use registry_witness_core::{
+    FederationConfig, FederationPeerConfig, FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY,
+    FEDERATION_REQUEST_JWT_TYP,
+};
+use zeroize::Zeroizing;
 
 use super::replay::FederationReplayStore;
 use super::signing::FederationResponseSigner;
@@ -32,20 +36,28 @@ impl FederationRuntimeState {
         config: &FederationConfig,
         audit: Option<crate::standalone::AuditPipeline>,
     ) -> Result<Self, crate::standalone::StandaloneServerError> {
-        let signing_key = env::var(&config.signing.key_env)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                crate::standalone::StandaloneServerError::MissingFederationSecretEnv(
-                    config.signing.key_env.clone(),
-                )
-            })?;
-        let key = PrivateJwk::parse(&signing_key).map_err(|error| {
+        let signing_key = Zeroizing::new(
+            env::var(&config.signing.key_env)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    crate::standalone::StandaloneServerError::MissingFederationSecretEnv(
+                        config.signing.key_env.clone(),
+                    )
+                })?,
+        );
+        let key = PrivateJwk::parse(signing_key.as_str()).map_err(|error| {
             crate::standalone::StandaloneServerError::InvalidFederationSigningKeyEnv(
                 config.signing.key_env.clone(),
                 error.to_string(),
             )
         })?;
+        if config.replay.storage == FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY {
+            tracing::warn!(
+                target: "registry_witness::federation",
+                "federation replay store is in-process single-instance only; do not deploy active-active"
+            );
+        }
         let pairwise_subject_hash_secret = env::var(&config.pairwise_subject_hash.secret_env)
             .ok()
             .filter(|value| !value.is_empty())

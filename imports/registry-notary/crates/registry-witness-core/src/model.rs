@@ -551,7 +551,7 @@ pub struct BatchSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchItemResponse {
     pub input_index: usize,
-    pub subject_ref: String,
+    pub subject_ref: SubjectRefView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation_id: Option<String>,
     pub status: BatchItemStatus,
@@ -639,7 +639,7 @@ pub struct ClaimResultView {
     pub claim_id: String,
     pub claim_version: String,
     pub subject_type: String,
-    pub subject_ref: String,
+    pub subject_ref: SubjectRefView,
     pub value: Option<Value>,
     pub satisfied: Option<bool>,
     pub disclosure: String,
@@ -647,6 +647,12 @@ pub struct ClaimResultView {
     pub issued_at: String,
     pub expires_at: Option<String>,
     pub provenance: ClaimProvenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubjectRefView {
+    pub hash: Hashed<SubjectBinding>,
+    pub id_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

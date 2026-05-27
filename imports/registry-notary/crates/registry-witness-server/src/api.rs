@@ -213,6 +213,7 @@ impl RegistryWitnessApiState {
     #[must_use]
     pub fn new(
         evidence: Arc<EvidenceConfig>,
+        audit_hasher: AuditKeyHasher,
         source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
@@ -220,6 +221,7 @@ impl RegistryWitnessApiState {
         Self::new_with_self_attestation(
             evidence,
             Arc::new(SelfAttestationConfig::default()),
+            audit_hasher,
             source,
             store,
             issuers,
@@ -230,6 +232,7 @@ impl RegistryWitnessApiState {
     pub fn new_with_self_attestation(
         evidence: Arc<EvidenceConfig>,
         self_attestation: Arc<SelfAttestationConfig>,
+        audit_hasher: AuditKeyHasher,
         source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
@@ -238,6 +241,7 @@ impl RegistryWitnessApiState {
             evidence,
             self_attestation,
             Arc::new(Oid4vciConfig::default()),
+            audit_hasher,
             source,
             store,
             issuers,
@@ -249,6 +253,7 @@ impl RegistryWitnessApiState {
         evidence: Arc<EvidenceConfig>,
         self_attestation: Arc<SelfAttestationConfig>,
         oid4vci: Arc<Oid4vciConfig>,
+        audit_hasher: AuditKeyHasher,
         source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
@@ -257,7 +262,7 @@ impl RegistryWitnessApiState {
             evidence,
             self_attestation,
             oid4vci,
-            AuditKeyHasher::unkeyed_dev_only(),
+            audit_hasher,
             source,
             store,
             issuers,
@@ -731,7 +736,9 @@ async fn oid4vci_credential(
         holder_id,
         Some(holder_id),
         iat,
-    ) {
+    )
+    .await
+    {
         Ok(signed) => signed,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
@@ -1441,7 +1448,7 @@ async fn issue_credential(
             evaluation
                 .results
                 .first()
-                .map(|result| result.subject_ref.as_str())
+                .map(|result| result.subject_ref.hash.as_str())
         }) {
             Some(subject_ref) => subject_ref,
             None => return evidence_error_response(EvidenceError::InvalidRequest),
@@ -1454,7 +1461,9 @@ async fn issue_credential(
         subject_ref,
         holder_id,
         iat,
-    ) {
+    )
+    .await
+    {
         Ok(signed) => signed,
         Err(error) => return evidence_error_response(error),
     };
@@ -3253,6 +3262,7 @@ mod tests {
                 Arc::new(evidence),
                 Arc::new(self_attestation),
                 Arc::new(oid4vci),
+                AuditKeyHasher::unkeyed_dev_only(),
                 Arc::new(CountingSource {
                     reads: Arc::clone(&reads),
                 }),
@@ -3374,6 +3384,7 @@ mod tests {
                 Arc::new(evidence),
                 Arc::new(self_attestation),
                 Arc::new(oid4vci),
+                AuditKeyHasher::unkeyed_dev_only(),
                 Arc::new(CountingSource {
                     reads: Arc::clone(&reads),
                 }),
@@ -3653,6 +3664,7 @@ mod tests {
         let state = RegistryWitnessApiState::new_with_self_attestation(
             Arc::new(evidence.clone()),
             Arc::new(config),
+            AuditKeyHasher::unkeyed_dev_only(),
             Arc::new(CountingSource::default()),
             Arc::new(EvidenceStore::default()),
             Arc::new(NoopIssuerResolver),
@@ -3765,6 +3777,7 @@ mod tests {
         let state = RegistryWitnessApiState::new_with_self_attestation(
             Arc::new(evidence.clone()),
             Arc::new(config),
+            AuditKeyHasher::unkeyed_dev_only(),
             Arc::new(CountingSource::default()),
             Arc::new(EvidenceStore::default()),
             Arc::new(NoopIssuerResolver),
@@ -3817,6 +3830,7 @@ mod tests {
         let state = RegistryWitnessApiState::new_with_self_attestation(
             Arc::new(evidence.clone()),
             Arc::new(config),
+            AuditKeyHasher::unkeyed_dev_only(),
             Arc::new(CountingSource::default()),
             Arc::new(EvidenceStore::default()),
             Arc::new(NoopIssuerResolver),
@@ -4011,6 +4025,7 @@ mod tests {
         let state = Arc::new(RegistryWitnessApiState::new_with_self_attestation(
             Arc::new(evidence_config()),
             Arc::new(self_attestation_config()),
+            AuditKeyHasher::unkeyed_dev_only(),
             Arc::new(CountingSource {
                 reads: Arc::clone(&reads),
             }),
@@ -4323,9 +4338,10 @@ mod tests {
         .expect_err("exp > iat + 300 must be rejected");
         assert!(matches!(err, EvidenceError::HolderProofRequired));
 
+        let valid_now = OffsetDateTime::now_utc().unix_timestamp() + 20;
         let proof_just_positive = sign_holder_proof(
             &holder_id,
-            windowed_proof_payload(&holder_id, service_id, now, now + 1),
+            windowed_proof_payload(&holder_id, service_id, valid_now, valid_now + 1),
         );
         validate_holder_proof_payload(
             &proof_just_positive,

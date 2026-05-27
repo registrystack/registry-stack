@@ -1140,6 +1140,10 @@ Credential issuance must preserve current Witness invariants:
 - credential validity is bounded;
 - audit records distinguish local issuance from federated issuance.
 
+The in-process replay store is single-instance only for the MVP; see the
+operator guide's "Replay Limitation" section before enabling privileged
+federation traffic.
+
 ## Audit Checkpoints
 
 Witness should publish signed audit checkpoints instead of raw audit logs. V1

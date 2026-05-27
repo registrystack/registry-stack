@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
 use registry_platform_oid4vci::{
-    CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK, PKCE_METHOD_S256,
+    CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK,
     SD_JWT_VC_FORMAT as OID4VCI_SD_JWT_VC_FORMAT,
 };
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     DisclosureProfile, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
 };
+
+const PKCE_METHOD_S256: &str = "S256";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -862,6 +864,8 @@ impl Oid4vciCredentialConfigurationConfig {
             .claims
             .iter()
             .find(|claim| claim.id == self.claim_id)
+            // SAFETY: the loop above has already rejected every unknown
+            // credential configuration claim id before this lookup.
             .expect("claim id was checked above");
         if !claim
             .credential_profiles
@@ -951,6 +955,7 @@ fn validate_oid4vci_endpoint_url(
     credential_issuer: &str,
 ) -> Result<(), EvidenceConfigError> {
     validate_oid4vci_public_url(name, url)?;
+    // SAFETY: validate_oid4vci_public_url accepted the absolute URL shape.
     let (_, _, path) = split_absolute_url(url).expect("absolute URL was validated above");
     if path.is_empty() || path == "/" {
         return invalid_oid4vci(format!("{name} must include an endpoint path"));
@@ -1185,6 +1190,8 @@ impl SelfAttestationConfig {
             let profile = evidence
                 .credential_profiles
                 .get(profile_id)
+                // SAFETY: the preceding credential_profiles loop rejects
+                // every profile id missing from evidence.credential_profiles.
                 .expect("profile id was checked above");
             validate_self_attestation_profile(
                 profile_id,
@@ -1201,6 +1208,8 @@ impl SelfAttestationConfig {
                 .claims
                 .iter()
                 .find(|claim| claim.id == *claim_id)
+                // SAFETY: the preceding allowed_claims loop rejects every
+                // claim id missing from evidence.claims.
                 .expect("claim id was checked above");
             validate_self_attestation_claim(
                 claim,
@@ -1826,6 +1835,7 @@ impl Default for RegistryWitnessHttpConfig {
 }
 
 fn default_bind_addr() -> SocketAddr {
+    // SAFETY: the literal is a valid loopback socket address.
     "127.0.0.1:8081"
         .parse()
         .expect("default bind address is valid")
@@ -2018,6 +2028,12 @@ pub struct EvidenceAuditConfig {
     pub path: Option<String>,
     #[serde(default)]
     pub hash_secret_env: Option<String>,
+    #[serde(default)]
+    pub max_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub max_files: Option<u32>,
+    #[serde(default)]
+    pub syslog_socket_path: Option<String>,
 }
 
 impl Default for EvidenceAuditConfig {
@@ -2026,7 +2042,23 @@ impl Default for EvidenceAuditConfig {
             sink: default_audit_sink(),
             path: None,
             hash_secret_env: None,
+            max_size_bytes: None,
+            max_files: None,
+            syslog_socket_path: None,
         }
+    }
+}
+
+impl EvidenceAuditConfig {
+    pub const DEFAULT_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+    pub const DEFAULT_MAX_FILES: u32 = 5;
+
+    pub fn max_size_bytes(&self) -> u64 {
+        self.max_size_bytes.unwrap_or(Self::DEFAULT_MAX_SIZE_BYTES)
+    }
+
+    pub fn max_files(&self) -> u32 {
+        self.max_files.unwrap_or(Self::DEFAULT_MAX_FILES)
     }
 }
 
@@ -2966,6 +2998,44 @@ credential_configurations:
             EvidenceConfigError::InvalidFederationConfig { reason } => reason,
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    #[test]
+    fn audit_config_deserializes_rotation_and_syslog_fields() {
+        let file: EvidenceAuditConfig = serde_norway::from_str(
+            r#"
+sink: file
+path: /var/log/registry-witness/audit.jsonl
+hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+max_size_bytes: 4096
+max_files: 3
+"#,
+        )
+        .expect("file audit config is valid YAML");
+
+        assert_eq!(file.sink, "file");
+        assert_eq!(
+            file.path.as_deref(),
+            Some("/var/log/registry-witness/audit.jsonl")
+        );
+        assert_eq!(file.max_size_bytes(), 4096);
+        assert_eq!(file.max_files(), 3);
+        assert_eq!(file.syslog_socket_path, None);
+
+        let syslog: EvidenceAuditConfig = serde_norway::from_str(
+            r#"
+sink: syslog
+hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+syslog_socket_path: /dev/log
+"#,
+        )
+        .expect("syslog audit config is valid YAML");
+
+        assert_eq!(syslog.sink, "syslog");
+        assert_eq!(syslog.path, None);
+        assert_eq!(syslog.max_size_bytes(), 10 * 1024 * 1024);
+        assert_eq!(syslog.max_files(), 5);
+        assert_eq!(syslog.syslog_socket_path.as_deref(), Some("/dev/log"));
     }
 
     fn valid_federation_config() -> StandaloneRegistryWitnessConfig {

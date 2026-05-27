@@ -12,7 +12,7 @@ use crate::config::CredentialProfileConfig;
 use crate::error::EvidenceError;
 use crate::model::{ClaimResultView, SD_JWT_VC_SIGNING_ALG};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SignedSdJwtVc {
     pub credential_id: String,
     pub issuer: String,
@@ -20,6 +20,19 @@ pub struct SignedSdJwtVc {
     pub compact: String,
     pub issuer_signed_jwt: String,
     pub disclosures: Vec<String>,
+}
+
+impl fmt::Debug for SignedSdJwtVc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignedSdJwtVc")
+            .field("credential_id", &self.credential_id)
+            .field("issuer", &self.issuer)
+            .field("expires_at", &self.expires_at)
+            .field("compact", &"[redacted]")
+            .field("issuer_signed_jwt", &"[redacted]")
+            .field("disclosures", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -51,12 +64,12 @@ impl EvidenceIssuer {
     }
 
     pub fn from_jwk_str(raw: &str, verification_method_id: String) -> Result<Self, EvidenceError> {
-        let jwk = PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
-        let mut public = jwk.public();
-        public.kid = Some(verification_method_id.clone());
-        public
-            .alg
+        let mut jwk =
+            PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        jwk.kid = Some(verification_method_id.clone());
+        jwk.alg
             .get_or_insert_with(|| SD_JWT_VC_SIGNING_ALG.to_string());
+        let public = jwk.public();
         let public_jwk =
             serde_json::to_value(public).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
         let issuer =
@@ -74,7 +87,7 @@ impl EvidenceIssuer {
     }
 }
 
-pub fn issue(
+pub async fn issue(
     profile: &CredentialProfileConfig,
     issuer: &EvidenceIssuer,
     results: &[ClaimResultView],
@@ -112,10 +125,10 @@ pub fn issue(
             iat: iat.unix_timestamp(),
             exp: expires_at.unix_timestamp(),
             vct: profile.vct.clone(),
-            signing_kid: issuer.verification_method_id.clone(),
             cnf: holder_confirmation,
             disclosures,
         })
+        .await
         .map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
     let (issuer_signed_jwt, disclosures) = split_sd_jwt_compact(&signed.jwt)?;
     Ok(SignedSdJwtVc {
@@ -162,7 +175,10 @@ fn format_time(value: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ClaimProvenance, FORMAT_SD_JWT_VC, SD_JWT_VC_JWT_TYP};
+    use crate::model::{
+        ClaimProvenance, Hashed, SubjectBinding, SubjectRefView, FORMAT_SD_JWT_VC,
+        SD_JWT_VC_JWT_TYP,
+    };
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use registry_platform_crypto::did_jwk_from_public_jwk;
@@ -170,6 +186,28 @@ mod tests {
     use std::collections::BTreeMap;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+    fn issue(
+        profile: &CredentialProfileConfig,
+        issuer: &EvidenceIssuer,
+        results: &[ClaimResultView],
+        subject_ref: &str,
+        holder_id: Option<&str>,
+        iat: OffsetDateTime,
+    ) -> Result<SignedSdJwtVc, EvidenceError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime builds")
+            .block_on(super::issue(
+                profile,
+                issuer,
+                results,
+                subject_ref,
+                holder_id,
+                iat,
+            ))
+    }
 
     #[test]
     fn signing_algorithm_header_value_is_stable() {
@@ -223,7 +261,7 @@ mod tests {
         let iat = OffsetDateTime::from_unix_timestamp(1_700_000_000)
             .expect("test fixture timestamp is valid");
         let mut result = claim_result("first");
-        result.subject_ref = "registry-subject-ref".to_string();
+        result.subject_ref = subject_ref_view("registry-subject-ref");
         let signed = issue(
             &holder_required_profile(),
             &issuer,
@@ -317,7 +355,7 @@ mod tests {
             .expect("test issuer builds");
         let holder = holder_did_jwk();
         let mut result = claim_result("first");
-        result.subject_ref = "registry-subject-ref".to_string();
+        result.subject_ref = subject_ref_view("registry-subject-ref");
 
         let signed = issue(
             &test_profile(),
@@ -342,7 +380,7 @@ mod tests {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
         let mut result = claim_result("first");
-        result.subject_ref = "registry-subject-ref".to_string();
+        result.subject_ref = subject_ref_view("registry-subject-ref");
 
         let signed = issue(
             &test_profile(),
@@ -462,6 +500,32 @@ mod tests {
     }
 
     #[test]
+    fn signed_sd_jwt_vc_debug_redacts_compact_material() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("person-is-alive")],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential issues");
+        let debug = format!("{signed:?}");
+
+        assert!(debug.contains("SignedSdJwtVc"));
+        assert!(debug.contains(&signed.credential_id));
+        assert!(debug.contains(&signed.issuer));
+        assert!(debug.contains(&signed.expires_at));
+        assert!(!debug.contains(&signed.compact));
+        assert!(!debug.contains(&signed.issuer_signed_jwt));
+        for disclosure in &signed.disclosures {
+            assert!(!debug.contains(disclosure));
+        }
+    }
+
+    #[test]
     fn issued_sd_digests_are_sorted_by_digest() {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
@@ -516,7 +580,7 @@ mod tests {
             claim_id: claim_id.to_string(),
             claim_version: "1.0.0".to_string(),
             subject_type: "person".to_string(),
-            subject_ref: "subject-ref".to_string(),
+            subject_ref: subject_ref_view("subject-ref"),
             value: Some(json!({ "claim": claim_id })),
             satisfied: Some(true),
             disclosure: "redacted".to_string(),
@@ -580,6 +644,13 @@ mod tests {
                 .expect("header decodes as base64url"),
         )
         .expect("header decodes as JSON")
+    }
+
+    fn subject_ref_view(hash: &str) -> SubjectRefView {
+        SubjectRefView {
+            hash: Hashed::<SubjectBinding>::from_hash(hash),
+            id_type: "national_id".to_string(),
+        }
     }
 
     fn disclosure_digests(signed: &SignedSdJwtVc) -> Vec<String> {

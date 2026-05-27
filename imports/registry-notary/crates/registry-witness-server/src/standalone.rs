@@ -20,7 +20,7 @@ use axum::{Json, Router};
 use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState, JsonlFileSink,
-    JsonlStdoutSink,
+    JsonlStdoutSink, SyslogSink,
 };
 use registry_platform_authcommon::{
     parse_bearer_token, parse_fingerprint, verify_api_key, FingerprintFormatError,
@@ -45,6 +45,7 @@ use serde_json::{json, Map, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
+use zeroize::Zeroizing;
 
 use crate::{
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
@@ -280,7 +281,7 @@ pub enum StandaloneServerError {
     MissingFederationSecretEnv(String),
     #[error("federation signing key environment variable is invalid: {0}: {1}")]
     InvalidFederationSigningKeyEnv(String, String),
-    #[error("audit sink path is required when sink=file")]
+    #[error("audit sink path is required when sink=file or sink=jsonl")]
     MissingAuditPath,
     #[error("audit.hash_secret_env is required")]
     MissingAuditHashSecretEnv,
@@ -290,6 +291,8 @@ pub enum StandaloneServerError {
     Cors(#[from] registry_platform_httpsec::CorsValidationError),
     #[error("unsupported audit sink: {0}")]
     InvalidAuditSink(String),
+    #[error("invalid audit configuration: {0}")]
+    InvalidAuditConfig(String),
     #[error("failed to build HTTP source client")]
     HttpClient(#[source] reqwest::Error),
     #[error("invalid OIDC auth configuration: {0}")]
@@ -572,13 +575,15 @@ impl EvidenceIssuerRegistry {
     pub fn from_config(config: &EvidenceConfig) -> Result<Self, StandaloneServerError> {
         let mut issuers = BTreeMap::new();
         for (profile_id, profile) in &config.credential_profiles {
-            let raw = env::var(&profile.issuer_key_env)
-                .ok()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    StandaloneServerError::InvalidIssuerEnv(profile.issuer_key_env.clone())
-                })?;
-            let issuer = EvidenceIssuer::from_profile_key(profile, &raw).map_err(|_| {
+            let raw = Zeroizing::new(
+                env::var(&profile.issuer_key_env)
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        StandaloneServerError::InvalidIssuerEnv(profile.issuer_key_env.clone())
+                    })?,
+            );
+            let issuer = EvidenceIssuer::from_profile_key(profile, raw.as_str()).map_err(|_| {
                 StandaloneServerError::InvalidIssuerEnv(profile.issuer_key_env.clone())
             })?;
             issuers.insert(profile_id.clone(), issuer);
@@ -830,13 +835,35 @@ impl AuditPipeline {
             .ok_or(StandaloneServerError::MissingAuditHashSecretEnv)?;
         let hasher = AuditKeyHasher::from_env(hash_secret_env)?;
         let sink: Arc<dyn PlatformAuditSink> = match config.sink.as_str() {
-            "stdout" => Arc::new(JsonlStdoutSink::new()),
+            "stdout" => {
+                validate_no_file_audit_fields(config, "stdout")?;
+                validate_no_syslog_audit_fields(config, "stdout")?;
+                Arc::new(JsonlStdoutSink::new())
+            }
             "file" | "jsonl" => {
+                validate_no_syslog_audit_fields(config, config.sink.as_str())?;
+                if config.max_files == Some(0) {
+                    return Err(StandaloneServerError::InvalidAuditConfig(
+                        "audit.max_files must be at least 1 when set".to_string(),
+                    ));
+                }
                 let path = config
                     .path
                     .as_deref()
                     .ok_or(StandaloneServerError::MissingAuditPath)?;
-                Arc::new(JsonlFileSink::new(path))
+                Arc::new(JsonlFileSink::with_rotation(
+                    path,
+                    config.max_size_bytes(),
+                    config.max_files(),
+                ))
+            }
+            "syslog" => {
+                validate_no_file_audit_fields(config, "syslog")?;
+                let sink = match config.syslog_socket_path.as_deref() {
+                    Some(path) => SyslogSink::with_socket_path(path),
+                    None => SyslogSink::new(),
+                };
+                Arc::new(sink)
             }
             sink => return Err(StandaloneServerError::InvalidAuditSink(sink.to_string())),
         };
@@ -869,6 +896,35 @@ impl AuditPipeline {
         chain.append(self.sink.as_ref(), record).await?;
         Ok(())
     }
+}
+
+fn validate_no_file_audit_fields(
+    config: &registry_witness_core::EvidenceAuditConfig,
+    sink: &str,
+) -> Result<(), StandaloneServerError> {
+    if config.path.is_some() {
+        return Err(StandaloneServerError::InvalidAuditConfig(format!(
+            "audit.path is only valid when audit.sink is file or jsonl, not {sink}"
+        )));
+    }
+    if config.max_size_bytes.is_some() || config.max_files.is_some() {
+        return Err(StandaloneServerError::InvalidAuditConfig(format!(
+            "audit.max_size_bytes and audit.max_files are only valid when audit.sink is file or jsonl, not {sink}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_no_syslog_audit_fields(
+    config: &registry_witness_core::EvidenceAuditConfig,
+    sink: &str,
+) -> Result<(), StandaloneServerError> {
+    if config.syslog_socket_path.is_some() {
+        return Err(StandaloneServerError::InvalidAuditConfig(format!(
+            "audit.syslog_socket_path is only valid when audit.sink is syslog, not {sink}"
+        )));
+    }
+    Ok(())
 }
 
 async fn auth_audit_middleware(
@@ -2415,6 +2471,7 @@ mod tests {
     const OPENFN_SIDECAR_TOKEN_HASH: &str =
         "sha256:42f3b7ab760b221b8a166aad9d82b76286e310f878e2d6cbac7583586ca1e225";
     const OPENFN_SPIKE_PURPOSE: &str = "https://purpose.example.test/eligibility";
+    const TEST_AUDIT_HASH_SECRET_ENV: &str = "REGISTRY_WITNESS_TEST_AUDIT_HASH_SECRET";
 
     fn audit_event() -> EvidenceAuditEvent {
         EvidenceAuditEvent {
@@ -2463,6 +2520,18 @@ mod tests {
             self_attestation_invalid_token_limiter: None,
             self_attestation_rate_keys: None,
         })
+    }
+
+    fn test_audit_config(sink: &str) -> registry_witness_core::EvidenceAuditConfig {
+        std::env::set_var(
+            TEST_AUDIT_HASH_SECRET_ENV,
+            "0123456789abcdef0123456789abcdef",
+        );
+        registry_witness_core::EvidenceAuditConfig {
+            sink: sink.to_string(),
+            hash_secret_env: Some(TEST_AUDIT_HASH_SECRET_ENV.to_string()),
+            ..registry_witness_core::EvidenceAuditConfig::default()
+        }
     }
 
     #[test]
@@ -2740,6 +2809,109 @@ sources:
         assert!(line["record"].get("principal_id").is_none());
         assert!(line["record"].get("fields").is_none());
         assert!(line["record"].get("audit").is_none());
+    }
+
+    #[tokio::test]
+    async fn audit_pipeline_file_sink_uses_configured_rotation() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = tmp.path().join("audit.jsonl");
+        let mut config = test_audit_config("file");
+        config.path = Some(path.display().to_string());
+        config.max_size_bytes = Some(1);
+        config.max_files = Some(2);
+        let audit = AuditPipeline::from_config(&config).expect("audit config builds");
+
+        for _ in 0..3 {
+            audit
+                .emit(&audit_event())
+                .await
+                .expect("audit write succeeds");
+        }
+
+        assert!(path.exists(), "active audit file should exist");
+        assert!(
+            tmp.path().join("audit.jsonl.1").exists(),
+            "rotated audit file should exist"
+        );
+        assert!(
+            !tmp.path().join("audit.jsonl.2").exists(),
+            "rotation should retain only the configured number of files"
+        );
+    }
+
+    #[test]
+    fn audit_pipeline_accepts_syslog_sink_config() {
+        let mut config = test_audit_config("syslog");
+        config.syslog_socket_path = Some("/tmp/registry-witness-test-syslog.sock".to_string());
+
+        AuditPipeline::from_config(&config).expect("syslog audit config builds");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_pipeline_syslog_sink_writes_to_configured_socket() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let socket_path = tmp.path().join("audit.sock");
+        let socket = tokio::net::UnixDatagram::bind(&socket_path).expect("bind syslog socket");
+        let mut config = test_audit_config("syslog");
+        config.syslog_socket_path = Some(socket_path.display().to_string());
+        let audit = AuditPipeline::from_config(&config).expect("syslog audit config builds");
+
+        audit
+            .emit(&audit_event())
+            .await
+            .expect("audit write succeeds");
+
+        let mut buffer = vec![0; 8192];
+        let bytes = tokio::time::timeout(Duration::from_secs(2), socket.recv(&mut buffer))
+            .await
+            .expect("syslog datagram is received")
+            .expect("syslog socket receives datagram");
+        let frame = std::str::from_utf8(&buffer[..bytes]).expect("syslog frame is UTF-8");
+        assert!(frame.starts_with("<134>1 "));
+        assert!(frame.contains("registry-platform-audit"));
+        assert!(frame.contains(r#""event_id":"01HX0000000000000000000000""#));
+    }
+
+    #[test]
+    fn audit_pipeline_rejects_zero_file_retention() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let mut config = test_audit_config("file");
+        config.path = Some(tmp.path().join("audit.jsonl").display().to_string());
+        config.max_files = Some(0);
+
+        let error = AuditPipeline::from_config(&config).expect_err("zero retention is rejected");
+
+        assert!(matches!(
+            error,
+            StandaloneServerError::InvalidAuditConfig(_)
+        ));
+        assert!(
+            error.to_string().contains("max_files"),
+            "error should name the invalid field"
+        );
+    }
+
+    #[test]
+    fn audit_pipeline_rejects_sink_specific_fields_on_wrong_sink() {
+        let mut stdout_config = test_audit_config("stdout");
+        stdout_config.max_size_bytes = Some(1024);
+        let stdout_error = AuditPipeline::from_config(&stdout_config)
+            .expect_err("stdout cannot accept file rotation");
+        assert!(matches!(
+            stdout_error,
+            StandaloneServerError::InvalidAuditConfig(_)
+        ));
+
+        let mut file_config = test_audit_config("file");
+        file_config.path = Some("/tmp/audit.jsonl".to_string());
+        file_config.syslog_socket_path = Some("/tmp/syslog.sock".to_string());
+        let file_error =
+            AuditPipeline::from_config(&file_config).expect_err("file cannot accept syslog path");
+        assert!(matches!(
+            file_error,
+            StandaloneServerError::InvalidAuditConfig(_)
+        ));
     }
 
     #[tokio::test]

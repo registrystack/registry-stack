@@ -16,7 +16,9 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use registry_witness_core::config::{
     CredentialDisclosureConfig, CredentialProfileConfig, HolderBindingConfig,
 };
-use registry_witness_core::model::{ClaimProvenance, ClaimResultView};
+use registry_witness_core::model::{
+    ClaimProvenance, ClaimResultView, Hashed, SubjectBinding, SubjectRefView,
+};
 use registry_witness_core::sd_jwt::{issue, EvidenceIssuer};
 use time::OffsetDateTime;
 
@@ -52,7 +54,10 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
         claim_id: claim_id.to_string(),
         claim_version: "1.0.0".to_string(),
         subject_type: "farmer".to_string(),
-        subject_ref: "subject-perf-ref".to_string(),
+        subject_ref: SubjectRefView {
+            hash: Hashed::<SubjectBinding>::from_hash("hmac-sha256:subject-perf-ref"),
+            id_type: "farmer_id".to_string(),
+        },
         value: Some(value),
         satisfied: Some(true),
         disclosure: "value".to_string(),
@@ -102,17 +107,22 @@ fn benchmark_issue_single_claim(c: &mut Criterion) {
     let issuer = build_issuer();
     let results = build_single_claim();
     let iat = OffsetDateTime::UNIX_EPOCH;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("bench runtime builds");
     c.bench_function("sd_jwt/issue_single_claim", |b| {
         b.iter(|| {
-            issue(
-                black_box(&profile),
-                black_box(&issuer),
-                black_box(&results),
-                black_box("bench-subject"),
-                black_box(None),
-                black_box(iat),
-            )
-            .expect("issue must succeed")
+            runtime
+                .block_on(issue(
+                    black_box(&profile),
+                    black_box(&issuer),
+                    black_box(&results),
+                    black_box("bench-subject"),
+                    black_box(None),
+                    black_box(iat),
+                ))
+                .expect("issue must succeed")
         });
     });
 }
@@ -122,17 +132,22 @@ fn benchmark_issue_three_claims(c: &mut Criterion) {
     let issuer = build_issuer();
     let results = build_three_claims();
     let iat = OffsetDateTime::UNIX_EPOCH;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("bench runtime builds");
     c.bench_function("sd_jwt/issue_three_claims", |b| {
         b.iter(|| {
-            issue(
-                black_box(&profile),
-                black_box(&issuer),
-                black_box(&results),
-                black_box("bench-subject"),
-                black_box(None),
-                black_box(iat),
-            )
-            .expect("issue must succeed")
+            runtime
+                .block_on(issue(
+                    black_box(&profile),
+                    black_box(&issuer),
+                    black_box(&results),
+                    black_box("bench-subject"),
+                    black_box(None),
+                    black_box(iat),
+                ))
+                .expect("issue must succeed")
         });
     });
 }

@@ -91,6 +91,45 @@ The demo config uses HTTP source connections, so claim evaluation requires a
 source service at the configured `base_url`. The binary still starts fail-closed:
 no Registry Witness route is served without a configured API key or bearer token.
 
+## Audit Sink Configuration
+
+Registry Witness emits redacted, tamper-evident audit envelopes. Configure the
+audit destination under `audit` and provide a stable HMAC secret through
+`hash_secret_env`:
+
+```yaml
+audit:
+  sink: file
+  path: /var/log/registry-witness/audit.jsonl
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+  max_size_bytes: 10485760
+  max_files: 5
+```
+
+Supported sink values:
+
+- `stdout`: writes one JSON audit envelope per line to process stdout. Use this
+  when a container runtime or process supervisor owns log collection.
+- `file` or `jsonl`: writes JSONL envelopes to `path`. `max_size_bytes` enables
+  byte-based rotation and `max_files` controls retained files, including the
+  active file. Set `max_size_bytes: 0` to disable in-process rotation.
+- `syslog`: writes JSONL envelopes as RFC 5424 messages to the local syslog Unix
+  datagram socket. Use `syslog_socket_path` when the deployment socket differs
+  from the platform default.
+
+`REGISTRY_WITNESS_AUDIT_HASH_SECRET` must contain a high-entropy deployment
+secret. Registry Witness fails closed when the variable named by
+`hash_secret_env` is missing, and uses it to HMAC identifiers before they enter
+the audit envelope. Keep the secret stable for correlation across records; rotate
+it only with an audit-retention plan.
+
+Each envelope links to the previous envelope through `prev_hash` and exposes its
+own `record_hash`. For file/jsonl sinks, startup resumes from the retained tail
+hash. For stdout, syslog, or rotated-file retention windows, publish external
+anchors for the retained head and tail hashes in storage the audit writer cannot
+rewrite. Verification should check both the trusted starting `prev_hash` for a
+retained suffix and the trusted final `record_hash` for the period under review.
+
 ## Verification
 
 ```bash

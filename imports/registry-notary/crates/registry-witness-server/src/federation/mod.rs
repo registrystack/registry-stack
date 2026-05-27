@@ -225,7 +225,7 @@ async fn handle_federated_evaluate(
             profile
                 .disclosure
                 .clone()
-                .unwrap_or_else(|| "predicate".to_string()),
+                .unwrap_or_else(|| "redacted".to_string()),
         ),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: Some(purpose.clone()),

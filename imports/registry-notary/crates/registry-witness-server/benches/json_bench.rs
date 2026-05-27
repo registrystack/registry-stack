@@ -18,6 +18,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use registry_witness_core::model::{
     ClaimProvenance, ClaimResultView, EvidenceAuditEvent, Hashed, PrincipalIdentifier,
+    SubjectBinding, SubjectRefView,
 };
 use serde_json::{json, Value};
 
@@ -71,7 +72,10 @@ fn build_claim_result_view() -> ClaimResultView {
         claim_id: "date-of-birth".to_string(),
         claim_version: "1.0.0".to_string(),
         subject_type: "national_id".to_string(),
-        subject_ref: "subj-0000007".to_string(),
+        subject_ref: SubjectRefView {
+            hash: Hashed::<SubjectBinding>::from_hash("hmac-sha256:subj-0000007"),
+            id_type: "national_id".to_string(),
+        },
         value: Some(json!("1990-01-01")),
         satisfied: Some(true),
         disclosure: "full_disclosure".to_string(),

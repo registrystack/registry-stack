@@ -149,6 +149,25 @@ impl SelfAttestationRateLimitKeys {
         self.hash_identifier("subject_binding", subject_binding)
     }
 
+    pub fn subject_ref(
+        &self,
+        id_type: &str,
+        subject_ref: &str,
+    ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
+        if subject_ref.is_empty() {
+            return Err(SelfAttestationRateLimitError::Unavailable {
+                reason: "subject_ref identifier is empty".to_string(),
+            });
+        }
+        let hashed = self.hasher.hash(&format!(
+            "registry-witness:subject-ref:{}:{id_type}:{}:{subject_ref}",
+            id_type.len(),
+            subject_ref.len()
+        ));
+        ensure_bounded(&hashed)?;
+        Ok(Hashed::from_hash(hashed))
+    }
+
     pub fn oid4vci_nonce(
         &self,
         issuer: &str,
@@ -590,6 +609,22 @@ mod tests {
                 .iter()
                 .all(|key| !key.contains("203.0.113.10")),
             "raw client address must not be stored in limiter keys"
+        );
+    }
+
+    #[test]
+    fn subject_ref_hash_is_delimiter_collision_resistant() {
+        let key_builder = keys();
+        let first = key_builder
+            .subject_ref("national_id", "123:456")
+            .expect("first subject ref hashes");
+        let second = key_builder
+            .subject_ref("national_id:123", "456")
+            .expect("second subject ref hashes");
+
+        assert_ne!(
+            first, second,
+            "id_type and subject_ref must be encoded unambiguously before hashing"
         );
     }
 

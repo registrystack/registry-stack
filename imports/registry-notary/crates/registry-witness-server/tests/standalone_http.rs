@@ -848,9 +848,10 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
         .expect("subject hash is string")
         .starts_with("hmac-sha256:"));
     assert_eq!(
-        claims["result"]["claims"]["farmer-under-4ha"]["satisfied"],
-        json!(true)
+        claims["result"]["claims"]["farmer-under-4ha"]["disclosure"],
+        json!("redacted")
     );
+    assert!(claims["result"]["claims"]["farmer-under-4ha"]["satisfied"].is_null());
     assert!(claims["result"]["evaluation_id"]
         .as_str()
         .expect("evaluation id is string")
@@ -964,9 +965,10 @@ async fn federation_two_standalone_witnesses_smoke() {
     assert_eq!(claims["iss"], json!("https://agency-a.example.gov"));
     assert_eq!(claims["aud"], json!("did:web:agency-b.example.gov"));
     assert_eq!(
-        claims["result"]["claims"]["farmer-under-4ha"]["satisfied"],
-        json!(true)
+        claims["result"]["claims"]["farmer-under-4ha"]["disclosure"],
+        json!("redacted")
     );
+    assert!(claims["result"]["claims"]["farmer-under-4ha"]["satisfied"].is_null());
     let records = audit_records(&agency_a_audit);
     assert!(records
         .iter()
@@ -2675,12 +2677,12 @@ fn standalone_router_rejects_unknown_audit_sink() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.audit.sink = "syslog".to_string();
+    config.audit.sink = "bogus".to_string();
 
     let error = standalone_router(config).expect_err("unknown audit sink is rejected");
     assert!(matches!(
         error,
-        StandaloneServerError::InvalidAuditSink(sink) if sink == "syslog"
+        StandaloneServerError::InvalidAuditSink(sink) if sink == "bogus"
     ));
 }
 

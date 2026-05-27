@@ -23,4 +23,6 @@ identifiers.
 Known pilot limitations such as no revocation service, no
 `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
 workflow should be reported as product gaps unless they create an exploitable
-security or privacy issue beyond the documented limitation.
+security or privacy issue beyond the documented limitation. The OpenFn sidecar
+also relies on deployment-network egress controls for JavaScript adaptor
+traffic; see `crates/registry-witness-openfn-sidecar/README.md`.
