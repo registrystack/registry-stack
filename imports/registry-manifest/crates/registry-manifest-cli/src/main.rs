@@ -13,7 +13,7 @@ use registry_manifest_core::{
     MetadataManifest,
 };
 use serde::Deserialize;
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 
 fn main() {
     if let Err(error) = run() {
@@ -108,9 +108,19 @@ fn render_command(args: &[String]) -> Result<(), String> {
 fn publish_command(args: &[String]) -> Result<(), String> {
     let manifest_path = args.first().ok_or_else(usage)?;
     let out = option_value(args, "--out").unwrap_or_else(|| "public/metadata".to_string());
+    let site_root = option_value(args, "--site-root").map(PathBuf::from);
     let manifest = load_manifest(manifest_path)?;
     let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
     let out = PathBuf::from(out);
+    if let Some(ref site_root) = site_root {
+        if site_root.exists() && !site_root.is_dir() {
+            return Err(format!(
+                "metadata.publish.site_root_not_directory: {}",
+                site_root.display()
+            ));
+        }
+        fs::create_dir_all(site_root).map_err(|error| error.to_string())?;
+    }
     fs::create_dir_all(out.join("schema")).map_err(|error| error.to_string())?;
     fs::create_dir_all(out.join("forms")).map_err(|error| error.to_string())?;
     fs::create_dir_all(out.join("profiles")).map_err(|error| error.to_string())?;
@@ -160,8 +170,13 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     let mut policy_documents = Vec::new();
     for dataset in compiled.datasets() {
         let policy_filename = format!("{}.jsonld", dataset.dataset_id);
-        let policy = render_dataset_policy_document(&compiled, &dataset.dataset_id)
-            .expect("compiled dataset policy renders");
+        let policy =
+            render_dataset_policy_document(&compiled, &dataset.dataset_id).ok_or_else(|| {
+                format!(
+                    "metadata.publish.compiled_renderer_missing: dataset policy for {}",
+                    dataset.dataset_id
+                )
+            })?;
         write_json(out.join("policies").join(&policy_filename), &policy)?;
         policy_documents.push(serde_json::json!({
             "dataset": dataset.dataset_id,
@@ -179,7 +194,12 @@ fn publish_command(args: &[String]) -> Result<(), String> {
             );
             let schema =
                 render_entity_schema_draft_2020_12(&compiled, &dataset.dataset_id, &entity.name)
-                    .expect("compiled entity schema renders");
+                    .ok_or_else(|| {
+                        format!(
+                            "metadata.publish.compiled_renderer_missing: entity schema for {}/{}",
+                            dataset.dataset_id, entity.name
+                        )
+                    })?;
             write_json(entity_dir.join("schema.json"), &schema)?;
             schemas.push(serde_json::json!({
                 "dataset": dataset.dataset_id,
@@ -194,8 +214,12 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         let form_dir = out.join("forms").join(&form.id);
         fs::create_dir_all(&form_dir).map_err(|error| error.to_string())?;
         let relative = format!("/metadata/forms/{}/schema.json", form.id);
-        let schema =
-            render_form_schema_draft_2020_12(&compiled, &form.id).expect("compiled form renders");
+        let schema = render_form_schema_draft_2020_12(&compiled, &form.id).ok_or_else(|| {
+            format!(
+                "metadata.publish.compiled_renderer_missing: form schema for {}",
+                form.id
+            )
+        })?;
         write_json(form_dir.join("schema.json"), &schema)?;
         form_schemas.push(serde_json::json!({
             "form": form.id,
@@ -206,8 +230,12 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     let mut evidence_offerings = Vec::new();
     for offering in compiled.evidence_offerings() {
         let filename = format!("{}.json", offering.id);
-        let document = render_evidence_offering(&compiled, &offering.id)
-            .expect("compiled evidence offering renders");
+        let document = render_evidence_offering(&compiled, &offering.id).ok_or_else(|| {
+            format!(
+                "metadata.publish.compiled_renderer_missing: evidence offering {}",
+                offering.id
+            )
+        })?;
         write_json(out.join("evidence-offerings").join(&filename), &document)?;
         evidence_offerings.push(serde_json::json!({
             "id": offering.id,
@@ -258,13 +286,13 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         "application_profiles": application_profiles,
     });
     write_json(out.join("index.json"), &index)?;
-    write_well_known_discovery(&out, &index)?;
+    let public_root = site_root.as_deref().unwrap_or(out.as_path());
+    write_well_known_discovery(public_root, &index)?;
     println!("published metadata artifacts to {}", out.display());
     Ok(())
 }
 
-fn write_well_known_discovery(out: &Path, index: &serde_json::Value) -> Result<(), String> {
-    let public_root = out.parent().unwrap_or(out);
+fn write_well_known_discovery(public_root: &Path, index: &serde_json::Value) -> Result<(), String> {
     let well_known_dir = public_root.join(".well-known");
     fs::create_dir_all(&well_known_dir).map_err(|error| error.to_string())?;
     write_api_catalog(&well_known_dir, index)?;
@@ -467,7 +495,7 @@ fn load_profile_descriptor(path: &Path) -> Result<ProfileDescriptor, String> {
             path.display()
         )
     })?;
-    serde_yml::from_str(&raw)
+    serde_yaml_ng::from_str(&raw)
         .map_err(|error| format!("metadata.profile.parse_failed: {}: {error}", path.display()))
 }
 
@@ -545,7 +573,7 @@ fn validate_profile_fixture(
             return;
         }
     };
-    let manifest: MetadataManifest = match serde_yml::from_str(&raw) {
+    let manifest: MetadataManifest = match serde_yaml_ng::from_str(&raw) {
         Ok(manifest) => manifest,
         Err(error) => {
             errors.push(format!(
@@ -563,7 +591,7 @@ fn validate_profile_fixture(
         ));
         return;
     }
-    let raw_value = match serde_yml::from_str::<Value>(&raw) {
+    let raw_value = match serde_yaml_ng::from_str::<Value>(&raw) {
         Ok(value) => value,
         Err(error) => {
             errors.push(format!(
@@ -666,7 +694,8 @@ fn load_manifest(path: impl AsRef<Path>) -> Result<MetadataManifest, String> {
     let path = path.as_ref();
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("metadata.manifest.file_not_found: {error}"))?;
-    serde_yml::from_str(&raw).map_err(|error| format!("metadata.manifest.parse_failed: {error}"))
+    serde_yaml_ng::from_str(&raw)
+        .map_err(|error| format!("metadata.manifest.parse_failed: {error}"))
 }
 
 fn manifest_entities(manifest: &MetadataManifest) -> Vec<&registry_manifest_core::EntityManifest> {
@@ -858,5 +887,5 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: registry-manifest validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|cpsv-ap|shacl|json-schema|form-json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--form <id>] [--offering <id>] | publish <metadata.yaml> --out <dir>".to_string()
+    "usage: registry-manifest validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|cpsv-ap|shacl|json-schema|form-json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--form <id>] [--offering <id>] | publish <metadata.yaml> --out <dir> [--site-root <dir>]".to_string()
 }

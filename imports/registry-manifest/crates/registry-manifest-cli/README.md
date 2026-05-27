@@ -31,12 +31,26 @@ Publish a static metadata directory:
 cargo run -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
 ```
 
-Publishing writes the metadata bundle under the requested output directory and
-adds discovery files next to that directory under `.well-known/`. Serve the
-bundle as `/metadata/`; `/metadata/index.json` is the canonical metadata entry
-point, and `/.well-known/api-catalog` is the standards-facing discovery
-document. `/.well-known/registry-manifest.json` remains for compatibility with
-older Registry Manifest clients.
+By default, publishing writes every artifact, including `.well-known/api-catalog`
+and `.well-known/registry-manifest.json`, inside the directory passed to
+`--out`. Serve that directory as `/`; `/metadata/index.json` is the canonical
+metadata entry point, `/.well-known/api-catalog` is the standards-facing
+discovery document, and `/.well-known/registry-manifest.json` remains for
+compatibility with older Registry Manifest clients.
+
+If the metadata bundle is a sibling of the site root rather than the site root
+itself (for example, when `--out` points at `/srv/site/metadata-public/`), pass
+`--site-root` so the discovery files land at the URL root:
+
+```sh
+cargo run -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml \
+    --out /srv/site/metadata-public \
+    --site-root /srv/site
+```
+
+With `--site-root SITE`, `.well-known/*` is written under `SITE/.well-known/`
+while the metadata bundle still lands under `--out`. No files are written
+outside `--out` (or `SITE`, when set).
 
 Validate all checked-in profile descriptors and fixtures:
 
@@ -56,6 +70,7 @@ cargo run -p registry-manifest-cli -- validate-profiles profiles
 - `cpsv-ap`
 - `shacl`
 - `json-schema` with `--dataset <id> --entity <name>`
+- `form-json-schema` with `--form <id>`
 - `ogc-records`
 
 ## Boundary
