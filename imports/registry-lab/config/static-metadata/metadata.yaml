@@ -34,6 +34,30 @@ authorities:
     iri: did:web:health-registry.demo.example.gov
     name: Health Services Authority
     spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: agricultural_registry_authority
+    iri: did:web:agri-registry.demo.example.gov
+    name: Agricultural Registry Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: land_farm_services_authority
+    iri: did:web:land-farm-services.demo.example.gov
+    name: Land and Farm Services Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: agricultural_programs_authority
+    iri: did:web:agri-programs.demo.example.gov
+    name: Agricultural Programs Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: agroclimate_market_information_unit
+    iri: did:web:agroclimate-market.demo.example.gov
+    name: Agroclimate and Market Information Unit
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: animal_health_authority
+    iri: did:web:animal-health.demo.example.gov
+    name: Animal Health Authority
+    spatial: https://demo.example.gov/jurisdictions/ZZ
+  - id: nagdi_governance_body
+    iri: did:web:nagdi-governance.demo.example.gov
+    name: NAgDI Governance Body
+    spatial: https://demo.example.gov/jurisdictions/ZZ
   - id: interoperability_metadata_publisher
     iri: did:web:static-metadata.demo.example.gov
     name: Interoperability Metadata Publisher
@@ -68,6 +92,85 @@ requirements:
         description: A single composed evidence record satisfying the same requirement.
         evidence_types:
           - combined_support_evidence
+  - id: farmer_registration_requirement
+    iri: https://demo.example.gov/requirements/nagdi/farmer-registration
+    title: Farmer registration requirement
+    description: Requirement to confirm that the applicant is registered and active in an agricultural registry.
+  - id: agri_lawful_basis_requirement
+    iri: https://demo.example.gov/requirements/nagdi/lawful-basis
+    title: Agricultural data-use authorization requirement
+    description: Requirement to confirm a lawful basis and purpose for agricultural data consultation.
+  - id: active_parcel_requirement
+    iri: https://demo.example.gov/requirements/nagdi/active-parcel
+    title: Active farm parcel requirement
+    description: Requirement to confirm that the farmer has an active farm parcel for the season under review.
+  - id: crop_declaration_requirement
+    iri: https://demo.example.gov/requirements/nagdi/crop-declaration
+    title: Crop declaration requirement
+    description: Requirement to confirm that a crop has been declared for the deterministic demo season.
+  - id: climate_risk_targeting_requirement
+    iri: https://demo.example.gov/requirements/nagdi/climate-risk-targeting
+    title: Climate-risk targeting requirement
+    description: Requirement to confirm that the district and crop are targeted for climate-smart input support.
+  - id: voucher_redemption_exclusion_requirement
+    iri: https://demo.example.gov/requirements/nagdi/voucher-redemption-exclusion
+    title: Voucher redemption exclusion requirement
+    description: Requirement to confirm that a farmer has not already redeemed the input voucher under review.
+  - id: livestock_holding_requirement
+    iri: https://demo.example.gov/requirements/nagdi/livestock-holding
+    title: Livestock holding requirement
+    description: Requirement to confirm an active livestock holding before movement permit review.
+  - id: vaccination_requirement
+    iri: https://demo.example.gov/requirements/nagdi/vaccination
+    title: Livestock vaccination requirement
+    description: Requirement to confirm current vaccination status for herd movement.
+  - id: quarantine_clearance_requirement
+    iri: https://demo.example.gov/requirements/nagdi/quarantine-clearance
+    title: Quarantine clearance requirement
+    description: Requirement to confirm that no active quarantine blocks the requested livestock movement.
+  - id: climate_smart_input_voucher_requirement
+    iri: https://demo.example.gov/requirements/nagdi/climate-smart-input-voucher
+    title: Climate-smart input voucher eligibility requirement
+    description: Composed requirement for farmer registration, parcel, crop, climate-risk, and redemption checks.
+    evidence_type_lists:
+      - id: granular-agri-voucher-evidence
+        title: Agricultural voucher evidence bundle
+        description: Bounded evidence from agricultural registry, land, program, and climate sources.
+        evidence_types:
+          - farmer_registration_evidence
+          - active_farm_parcel_evidence
+          - climate_risk_district_evidence
+          - voucher_redemption_status_evidence
+      - id: composed-agri-voucher-evidence
+        title: Composed input voucher eligibility evidence
+        description: A single composed evidence result for input voucher review.
+        evidence_types:
+          - composed_input_voucher_eligibility_evidence
+  - id: livestock_movement_permit_requirement
+    iri: https://demo.example.gov/requirements/nagdi/livestock-movement-permit
+    title: Livestock movement permit eligibility requirement
+    description: Composed requirement for livestock holding, vaccination, quarantine, and permit status checks.
+    evidence_type_lists:
+      - id: granular-livestock-movement-evidence
+        title: Livestock movement evidence bundle
+        description: Bounded evidence from livestock, vaccination, quarantine, and permit records.
+        evidence_types:
+          - livestock_vaccination_evidence
+          - quarantine_clearance_evidence
+          - movement_permit_status_evidence
+      - id: composed-livestock-movement-evidence
+        title: Composed livestock movement eligibility evidence
+        description: A single composed evidence result for livestock movement permit review.
+        evidence_types:
+          - composed_livestock_movement_eligibility_evidence
+  - id: agricultural_market_sizing_requirement
+    iri: https://demo.example.gov/requirements/nagdi/agricultural-market-sizing
+    title: Agricultural market sizing aggregate requirement
+    description: Requirement to provide suppressed district-level planning aggregates without raw farmer row export.
+  - id: livestock_herd_planning_requirement
+    iri: https://demo.example.gov/requirements/nagdi/livestock-herd-planning
+    title: Livestock herd planning aggregate requirement
+    description: Requirement to provide suppressed herd-count planning aggregates without raw livestock holder, herd, or animal row export.
 evidence_types:
   - id: civil_child_status_evidence
     iri: https://demo.example.gov/evidence-types/civil-child-status
@@ -92,6 +195,69 @@ evidence_types:
     title: Combined cross-authority support evidence
     proves:
       - combined_support_bundle_requirement
+  - id: farmer_registration_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/farmer-registration
+    title: Farmer registration evidence
+    proves:
+      - farmer_registration_requirement
+      - climate_smart_input_voucher_requirement
+  - id: active_farm_parcel_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/active-farm-parcel
+    title: Active farm parcel evidence
+    proves:
+      - active_parcel_requirement
+      - climate_smart_input_voucher_requirement
+  - id: climate_risk_district_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/climate-risk-district
+    title: Climate-risk district evidence
+    proves:
+      - climate_risk_targeting_requirement
+      - climate_smart_input_voucher_requirement
+  - id: voucher_redemption_status_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/voucher-redemption-status
+    title: Voucher redemption status evidence
+    proves:
+      - voucher_redemption_exclusion_requirement
+      - climate_smart_input_voucher_requirement
+  - id: livestock_vaccination_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/livestock-vaccination
+    title: Livestock vaccination evidence
+    proves:
+      - vaccination_requirement
+      - livestock_movement_permit_requirement
+  - id: quarantine_clearance_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/quarantine-clearance
+    title: Quarantine clearance evidence
+    proves:
+      - quarantine_clearance_requirement
+      - livestock_movement_permit_requirement
+  - id: movement_permit_status_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/movement-permit-status
+    title: Movement permit status evidence
+    proves:
+      - livestock_movement_permit_requirement
+  - id: composed_input_voucher_eligibility_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/input-voucher-eligibility
+    title: Composed input voucher eligibility evidence
+    proves:
+      - climate_smart_input_voucher_requirement
+  - id: composed_livestock_movement_eligibility_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/livestock-movement-eligibility
+    title: Composed livestock movement eligibility evidence
+    proves:
+      - livestock_movement_permit_requirement
+  - id: agricultural_market_sizing_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/agricultural-market-sizing
+    title: Agricultural market sizing evidence
+    description: Suppressed aggregate evidence for planning and market sizing without individual row disclosure.
+    proves:
+      - agricultural_market_sizing_requirement
+  - id: livestock_herd_planning_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/livestock-herd-planning
+    title: Livestock herd planning evidence
+    description: Suppressed aggregate evidence for animal-health planning without livestock holder, herd, or animal row disclosure.
+    proves:
+      - livestock_herd_planning_requirement
 public_services:
   - id: health_linked_child_support
     iri: https://demo.example.gov/services/health-linked-child-support
@@ -111,6 +277,57 @@ public_services:
       - health_facility_lookup_api
     forms:
       - health_linked_child_support_form
+  - id: climate_smart_input_voucher
+    iri: https://demo.example.gov/services/nagdi/climate-smart-input-voucher
+    title: Climate-smart input voucher review
+    description: Agricultural service that reviews input voucher eligibility using bounded NAgDI evidence.
+    competent_authority: agricultural_programs_authority
+    jurisdiction: https://demo.example.gov/jurisdictions/ZZ
+    channels:
+      - id: climate_smart_input_voucher_online
+        iri: https://demo.example.gov/services/nagdi/climate-smart-input-voucher/channels/online
+        title: Online voucher review channel
+        kind: cv:OnlineChannel
+        access_url: https://demo.example.gov/services/nagdi/climate-smart-input-voucher
+    holds_requirements:
+      - climate_smart_input_voucher_requirement
+      - agri_lawful_basis_requirement
+    data_services:
+      - agri_registry_lookup_api
+  - id: livestock_movement_permit
+    iri: https://demo.example.gov/services/nagdi/livestock-movement-permit
+    title: Livestock movement permit review
+    description: Agricultural service that reviews livestock movement eligibility using bounded NAgDI evidence.
+    competent_authority: animal_health_authority
+    jurisdiction: https://demo.example.gov/jurisdictions/ZZ
+    channels:
+      - id: livestock_movement_permit_online
+        iri: https://demo.example.gov/services/nagdi/livestock-movement-permit/channels/online
+        title: Online permit review channel
+        kind: cv:OnlineChannel
+        access_url: https://demo.example.gov/services/nagdi/livestock-movement-permit
+    holds_requirements:
+      - livestock_movement_permit_requirement
+      - agri_lawful_basis_requirement
+    data_services:
+      - agri_registry_lookup_api
+  - id: agricultural_market_sizing
+    iri: https://demo.example.gov/services/nagdi/agricultural-market-sizing
+    title: Agricultural market sizing
+    description: Aggregate-only planning service for estimating eligible voucher opportunities without farmer discovery.
+    competent_authority: nagdi_governance_body
+    jurisdiction: https://demo.example.gov/jurisdictions/ZZ
+    channels:
+      - id: agricultural_market_sizing_online
+        iri: https://demo.example.gov/services/nagdi/agricultural-market-sizing/channels/online
+        title: Online market sizing channel
+        kind: cv:OnlineChannel
+        access_url: https://demo.example.gov/services/nagdi/agricultural-market-sizing
+    holds_requirements:
+      - agri_lawful_basis_requirement
+      - agricultural_market_sizing_requirement
+    data_services:
+      - agri_aggregate_planning_api
 data_services:
   - id: health_facility_lookup_api
     iri: https://demo.example.gov/data-services/health-facility-lookup
@@ -120,6 +337,24 @@ data_services:
     endpoint_description: https://demo.example.gov/openapi/health-facilities.yaml
     serves_datasets:
       - health_registry
+    conforms_to: https://spec.openapis.org/oas/v3.1.0
+  - id: agri_registry_lookup_api
+    iri: https://demo.example.gov/data-services/nagdi/agri-registry-lookup
+    title: Agricultural registry lookup API
+    description: Purpose-bound Relay API for farmer, parcel, program, agroclimate, and livestock evidence source lookups.
+    endpoint_url: http://agri-registry-relay:8080
+    endpoint_description: http://agri-registry-relay:8080/openapi.json
+    serves_datasets:
+      - agricultural_registry
+    conforms_to: https://spec.openapis.org/oas/v3.1.0
+  - id: agri_aggregate_planning_api
+    iri: https://demo.example.gov/data-services/nagdi/agri-aggregate-planning
+    title: Agricultural aggregate planning API
+    description: Aggregate-only Relay API for voucher market sizing with minimum cell and geography controls.
+    endpoint_url: http://agri-registry-relay:8080
+    endpoint_description: http://agri-registry-relay:8080/openapi.json
+    serves_datasets:
+      - agricultural_registry
     conforms_to: https://spec.openapis.org/oas/v3.1.0
 forms:
   - id: health_linked_child_support_form
@@ -386,6 +621,441 @@ datasets:
             required: true
           - name: updated_on
             type: date
+            required: true
+  - id: agricultural_registry
+    title: NAgDI Agricultural Registry View
+    description: Static metadata for simulated farmer, farm holding, program, agroclimate, and livestock records used by NAgDI evidence flows.
+    owner: NAgDI Governance Body
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    public_services:
+      - id: https://demo.example.gov/services/nagdi/climate-smart-input-voucher
+        title: Climate-smart input voucher review
+        description: Service that reviews bounded agricultural evidence without exposing broad farmer lists.
+      - id: https://demo.example.gov/services/nagdi/livestock-movement-permit
+        title: Livestock movement permit review
+        description: Service that reviews bounded livestock movement evidence.
+      - id: https://demo.example.gov/services/nagdi/agricultural-market-sizing
+        title: Agricultural market sizing
+        description: Aggregate-only planning service with geography and cell-size safeguards.
+    evidence_offerings:
+      - id: farmer_registration_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/farmer-registration
+        title: Farmer registration evidence service
+        evidence_type: farmer_registration_evidence
+        issuing_authority:
+          id: agricultural_registry_authority
+          iri: did:web:agri-registry.demo.example.gov
+          name: Agricultural Registry Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: farmer
+        lookup_keys:
+          - farmer_id
+        procedure_contexts:
+          - climate_smart_input_voucher
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://nagdi-agriculture-witness:8080
+          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          ruleset: farmer-registered-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+      - id: active_farm_parcel_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/active-farm-parcel
+        title: Active farm parcel evidence service
+        evidence_type: active_farm_parcel_evidence
+        issuing_authority:
+          id: land_farm_services_authority
+          iri: did:web:land-farm-services.demo.example.gov
+          name: Land and Farm Services Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: parcel
+        lookup_keys:
+          - farmer_id
+        procedure_contexts:
+          - climate_smart_input_voucher
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://nagdi-agriculture-witness:8080
+          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          ruleset: active-farm-parcel-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+      - id: climate_risk_district_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/climate-risk-district
+        title: Climate-risk district evidence service
+        evidence_type: climate_risk_district_evidence
+        issuing_authority:
+          id: agroclimate_market_information_unit
+          iri: did:web:agroclimate-market.demo.example.gov
+          name: Agroclimate and Market Information Unit
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: district_climate_risk
+        lookup_keys:
+          - district
+        procedure_contexts:
+          - climate_smart_input_voucher
+          - agricultural_market_sizing
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://nagdi-agriculture-witness:8080
+          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          ruleset: climate-risk-district-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+            - https://demo.example.gov/purpose/nagdi/agricultural-market-sizing
+      - id: voucher_redemption_status_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/voucher-redemption-status
+        title: Voucher redemption status evidence service
+        evidence_type: voucher_redemption_status_evidence
+        issuing_authority:
+          id: agricultural_programs_authority
+          iri: did:web:agri-programs.demo.example.gov
+          name: Agricultural Programs Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: voucher_entitlement
+        lookup_keys:
+          - farmer_id
+        procedure_contexts:
+          - climate_smart_input_voucher
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://nagdi-agriculture-witness:8080
+          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          ruleset: voucher-redemption-status-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+            - https://demo.example.gov/purpose/nagdi/program-integrity-audit
+      - id: composed_input_voucher_eligibility_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/input-voucher-eligibility
+        title: Composed input voucher eligibility evidence service
+        evidence_type: composed_input_voucher_eligibility_evidence
+        issuing_authority:
+          id: nagdi_governance_body
+          iri: did:web:nagdi-governance.demo.example.gov
+          name: NAgDI Governance Body
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: voucher_eligibility_snapshot
+        lookup_keys:
+          - id
+        procedure_contexts:
+          - climate_smart_input_voucher
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://nagdi-agriculture-witness:8080
+          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          ruleset: eligible-for-input-voucher-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+      - id: composed_livestock_movement_eligibility_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/livestock-movement-eligibility
+        title: Composed livestock movement eligibility evidence service
+        evidence_type: composed_livestock_movement_eligibility_evidence
+        issuing_authority:
+          id: animal_health_authority
+          iri: did:web:animal-health.demo.example.gov
+          name: Animal Health Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: livestock_movement_snapshot
+        lookup_keys:
+          - farmer_id
+          - herd_id
+        procedure_contexts:
+          - livestock_movement_permit
+        access:
+          kind: registry-witness
+          conforms_to: registry_relay:registry-witness-v1
+          endpoint_url: http://nagdi-agriculture-witness:8080
+          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          ruleset: eligible-for-livestock-movement-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
+      - id: agricultural_market_sizing_aggregate_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/agricultural-market-sizing
+        title: Agricultural market sizing aggregate service
+        description: Registry Relay aggregate endpoint for suppressed district-level voucher opportunity sizing. This offering is served by Relay aggregate routes, not by Registry Witness.
+        evidence_type: agricultural_market_sizing_evidence
+        issuing_authority:
+          id: nagdi_governance_body
+          iri: did:web:nagdi-governance.demo.example.gov
+          name: NAgDI Governance Body
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: moderate
+        entity: market_sizing_cell
+        lookup_keys:
+          - district_code
+          - crop
+          - risk_band
+          - input_type
+        procedure_contexts:
+          - agricultural_market_sizing
+        access:
+          kind: registry-relay-aggregate
+          conforms_to: registry_relay:aggregate-v1
+          endpoint_url: http://agri-registry-relay:8080/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input
+          discovery_url: http://agri-registry-relay:8080/.well-known/api-catalog
+          ruleset: voucher_opportunities_by_district_crop_risk_input
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/agricultural-market-sizing
+      - id: livestock_herd_planning_aggregate_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/livestock-herd-planning
+        title: Livestock herd planning aggregate service
+        description: Registry Relay aggregate endpoint for suppressed herd and animal counts by species and district. This offering is served by Relay aggregate routes, not by Registry Witness.
+        evidence_type: livestock_herd_planning_evidence
+        issuing_authority:
+          id: animal_health_authority
+          iri: did:web:animal-health.demo.example.gov
+          name: Animal Health Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: moderate
+        entity: herd
+        lookup_keys:
+          - species
+          - district_code
+        procedure_contexts:
+          - livestock_movement_permit
+        access:
+          kind: registry-relay-aggregate
+          conforms_to: registry_relay:aggregate-v1
+          endpoint_url: http://agri-registry-relay:8080/datasets/agri_registry/aggregates/livestock_herds_by_species_district
+          discovery_url: http://agri-registry-relay:8080/.well-known/api-catalog
+          ruleset: livestock_herds_by_species_district
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
+    entities:
+      - name: farmer
+        title: Farmer
+        identifiers:
+          - name: farmer_id
+            kind: primary
+        fields:
+          - name: farmer_id
+            type: string
+            required: true
+          - name: registration_status
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+      - name: parcel
+        title: Farm Parcel
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: holding_id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: area_ha
+            type: number
+            required: true
+          - name: active
+            type: boolean
+            required: true
+      - name: crop_declaration
+        title: Crop Declaration
+        identifiers:
+          - name: crop_declaration_id
+            kind: primary
+        fields:
+          - name: crop_declaration_id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: crop
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+      - name: voucher_entitlement
+        title: Voucher Entitlement
+        identifiers:
+          - name: entitlement_id
+            kind: primary
+        fields:
+          - name: entitlement_id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: program_year
+            type: string
+            required: true
+          - name: redemption_status
+            type: string
+            required: true
+      - name: district_climate_risk
+        title: District Climate Risk
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: drought_risk_level
+            type: string
+            required: true
+          - name: recommended_input_type
+            type: string
+            required: true
+      - name: voucher_eligibility_snapshot
+        title: Voucher Eligibility Snapshot
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: farmer_registered
+            type: boolean
+            required: true
+          - name: data_use_authorized
+            type: boolean
+            required: true
+          - name: active_farm_parcel
+            type: boolean
+            required: true
+          - name: voucher_not_redeemed
+            type: boolean
+            required: true
+          - name: reason_code
+            type: string
+            required: true
+      - name: livestock_movement_snapshot
+        title: Livestock Movement Snapshot
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: herd_id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: registered_livestock_holder
+            type: boolean
+            required: true
+          - name: herd_vaccination_current
+            type: boolean
+            required: true
+          - name: origin_district_not_quarantined
+            type: boolean
+            required: true
+          - name: reason_code
+            type: string
+            required: true
+      - name: herd
+        title: Herd
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: species
+            type: string
+            required: true
+          - name: count
+            type: integer
+            required: true
+      - name: market_sizing_cell
+        title: Market Sizing Cell
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: crop
+            type: string
+            required: true
+          - name: risk_band
+            type: string
+            required: true
+          - name: input_type
+            type: string
+            required: true
+          - name: eligible_opportunity_count
+            type: integer
             required: true
   - id: combined_support_registry_view
     title: Combined Support Registry View

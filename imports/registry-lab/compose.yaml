@@ -8,13 +8,15 @@ x-relay-common: &relay-common
     additional_contexts:
       registry_relay_src: ${REGISTRY_RELAY_SOURCE_DIR:-./vendor/registry-relay}
       registry_platform_src: ${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+    args:
+      REGISTRY_RELAY_FEATURES: ${REGISTRY_RELAY_FEATURES:-spdci-api-standards,standards-cel-mapping}
   env_file:
     - .env
   environment:
     RUST_LOG: info
   restart: unless-stopped
   healthcheck:
-    test: ["CMD", "/usr/local/bin/registry-relay", "--help"]
+    test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
     interval: 30s
     timeout: 10s
     retries: 3
@@ -268,6 +270,39 @@ services:
       - ./scripts/static-metadata-server.py:/usr/local/bin/static-metadata-server.py:ro
     restart: unless-stopped
 
+  agri-registry-relay:
+    <<: *relay-common
+    profiles: ["agri"]
+    command: ["--config", "/etc/registry-relay/agri-registry-relay.yaml"]
+    ports:
+      - "4341:8080"
+    volumes:
+      - ./config/relay:/etc/registry-relay:ro
+      - ./data/agriculture:/demo/data/agriculture:ro
+      - agri-registry-cache:/var/lib/registry-relay/cache
+
+  nagdi-agriculture-witness:
+    <<: *witness-common
+    profiles: ["agri"]
+    command: ["--config", "/etc/registry-witness/nagdi-agriculture-witness.yaml"]
+    ports:
+      - "4342:8080"
+    volumes:
+      - ./config/witness/nagdi-agriculture-witness.yaml:/etc/registry-witness/nagdi-agriculture-witness.yaml:ro
+    depends_on:
+      - agri-registry-relay
+
+  agri-static-metadata-publisher:
+    image: python:3.12.3-slim-bookworm
+    profiles: ["agri"]
+    command: ["python", "/usr/local/bin/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]
+    ports:
+      - "4343:8080"
+    volumes:
+      - ./static-metadata:/srv/static:ro
+      - ./scripts/static-metadata-server.py:/usr/local/bin/static-metadata-server.py:ro
+    restart: unless-stopped
+
   demo-client:
     image: python:3.12.3-slim-bookworm
     profiles: ["client"]
@@ -296,12 +331,34 @@ services:
       - shared-eligibility-witness
       - static-metadata-publisher
 
+  agri-demo-client:
+    image: python:3.12.3-slim-bookworm
+    profiles: ["agri-client"]
+    env_file:
+      - .env
+    environment:
+      AGRI_RELAY_URL: http://agri-registry-relay:8080
+      AGRI_WITNESS_URL: http://nagdi-agriculture-witness:8080
+      AGRI_EVIDENCE_URL: http://nagdi-agriculture-witness:8080
+      AGRI_STATIC_METADATA_URL: http://agri-static-metadata-publisher:8080
+      DEMO_OUTPUT_DIR: /demo/output/agri-client
+    working_dir: /workspace
+    command: ["python", "/workspace/scripts/demo-agri-flow.py"]
+    volumes:
+      - ./scripts:/workspace/scripts:ro
+      - ./output:/demo/output
+    depends_on:
+      - agri-registry-relay
+      - nagdi-agriculture-witness
+      - agri-static-metadata-publisher
+
 volumes:
   postgres-data:
   zitadel-seed:
   civil-registry-cache:
   social-protection-registry-cache:
   health-registry-cache:
+  agri-registry-cache:
 
 networks:
   openfn-internal:

@@ -1,0 +1,659 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: nagdi_agriculture_evidence_client
+      hash_env: AGRI_EVIDENCE_CLIENT_TOKEN_HASH
+      scopes:
+        - agri_registry:evidence_verification
+  bearer_tokens:
+    - id: nagdi_agriculture_evidence_client
+      hash_env: AGRI_EVIDENCE_CLIENT_BEARER_HASH
+      scopes:
+        - agri_registry:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: nagdi-agriculture-witness
+  api_base_url: http://nagdi-agriculture-witness:8080
+  inline_batch_limit: 20
+  source_connections:
+    agriculture:
+      base_url: http://agri-registry-relay:8080
+      allow_insecure_private_network: true
+      token_env: AGRI_EVIDENCE_SOURCE_RAW
+  credential_profiles:
+    climate_smart_input_voucher_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
+      vct: https://demo.example.gov/credentials/nagdi/climate-smart-input-voucher/v1
+      validity_seconds: 86400
+      allowed_claims:
+        - farmer-registered
+        - data-use-authorized-for-purpose
+        - active-smallholder-farmer
+        - active-farm-parcel
+        - crop-declared-for-season
+        - district-climate-risk-active
+        - voucher-entitlement-current
+        - voucher-not-redeemed
+        - supplier-license-active
+        - no-manual-review-required
+        - eligible-for-climate-smart-input-voucher
+        - voucher-redemption-authorized
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - predicate
+          - value
+    livestock_movement_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
+      vct: https://demo.example.gov/credentials/nagdi/livestock-movement-permit/v1
+      validity_seconds: 86400
+      allowed_claims:
+        - registered-livestock-holder
+        - registered-herd
+        - herd-vaccination-current
+        - origin-district-not-quarantined
+        - destination-district-open
+        - no-conflicting-open-movement-permit
+        - eligible-for-livestock-movement-permit
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - predicate
+          - value
+  claims:
+    - id: farmer-registered
+      title: Farmer registered
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: &voucher_snapshot_binding
+        voucher_snapshot:
+          connector: registry_data_api
+          connection: agriculture
+          required_scope: agri_registry:evidence_verification
+          dataset: agri_registry
+          entity: voucher_eligibility_snapshot
+          lookup:
+            input: subject_id
+            field: id
+            op: eq
+            cardinality: one
+          fields: &voucher_snapshot_fields
+            farmer_registered:
+              field: farmer_registered
+              type: boolean
+              required: true
+            data_use_authorized:
+              field: data_use_authorized
+              type: boolean
+              required: true
+            active_smallholder_farmer:
+              field: active_smallholder_farmer
+              type: boolean
+              required: true
+            active_farm_parcel:
+              field: active_farm_parcel
+              type: boolean
+              required: true
+            crop_declared_for_season:
+              field: crop_declared_for_season
+              type: boolean
+              required: true
+            district_climate_risk_active:
+              field: district_climate_risk_active
+              type: boolean
+              required: true
+            voucher_entitlement_current:
+              field: voucher_entitlement_current
+              type: boolean
+              required: true
+            voucher_not_redeemed:
+              field: voucher_not_redeemed
+              type: boolean
+              required: true
+            supplier_license_active:
+              field: supplier_license_active
+              type: boolean
+              required: true
+            manual_review_required:
+              field: manual_review_required
+              type: boolean
+              required: true
+            reason_code:
+              field: reason_code
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.farmer_registered == true"
+      disclosure: &predicate_disclosure
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats: &json_formats
+        - application/vnd.registry-witness.claim-result+json
+    - id: data-use-authorized-for-purpose
+      title: Data use authorized for purpose
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.data_use_authorized == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: active-smallholder-farmer
+      title: Active smallholder farmer
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.active_smallholder_farmer == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: active-farm-parcel
+      title: Active farm parcel
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.active_farm_parcel == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: crop-declared-for-season
+      title: Crop declared for season
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.crop_declared_for_season == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: district-climate-risk-active
+      title: District climate risk active
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.district_climate_risk_active == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: voucher-entitlement-current
+      title: Voucher entitlement current
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.voucher_entitlement_current == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: voucher-not-redeemed
+      title: Voucher not redeemed
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.voucher_not_redeemed == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: supplier-license-active
+      title: Supplier license active
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.supplier_license_active == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: voucher-eligibility-reason-code
+      title: Voucher eligibility reason code
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: extract
+        source: voucher_snapshot
+        field: reason_code
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats: *json_formats
+    - id: no-manual-review-required
+      title: No manual review required
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *voucher_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.voucher_snapshot.manual_review_required == false"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: eligible-for-climate-smart-input-voucher
+      title: Eligible for climate-smart input voucher
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      depends_on:
+        - farmer-registered
+        - data-use-authorized-for-purpose
+        - active-smallholder-farmer
+        - active-farm-parcel
+        - crop-declared-for-season
+        - district-climate-risk-active
+        - voucher-entitlement-current
+        - voucher-not-redeemed
+        - no-manual-review-required
+      rule:
+        type: cel
+        expression: "claims.farmer_registered.satisfied && claims.data_use_authorized_for_purpose.satisfied && claims.active_smallholder_farmer.satisfied && claims.active_farm_parcel.satisfied && claims.crop_declared_for_season.satisfied && claims.district_climate_risk_active.satisfied && claims.voucher_entitlement_current.satisfied && claims.voucher_not_redeemed.satisfied && claims.no_manual_review_required.satisfied"
+        bindings:
+          claims:
+            farmer_registered:
+              claim: farmer-registered
+            data_use_authorized_for_purpose:
+              claim: data-use-authorized-for-purpose
+            active_smallholder_farmer:
+              claim: active-smallholder-farmer
+            active_farm_parcel:
+              claim: active-farm-parcel
+            crop_declared_for_season:
+              claim: crop-declared-for-season
+            district_climate_risk_active:
+              claim: district-climate-risk-active
+            voucher_entitlement_current:
+              claim: voucher-entitlement-current
+            voucher_not_redeemed:
+              claim: voucher-not-redeemed
+            no_manual_review_required:
+              claim: no-manual-review-required
+      operations:
+        evaluate:
+          enabled: true
+        batch_evaluate:
+          enabled: true
+          max_subjects: 10
+      disclosure: *predicate_disclosure
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: climate_smart_input_voucher_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/nagdi/climate-smart-input-voucher
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
+    - id: voucher-redemption-authorized
+      title: Voucher redemption authorized
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      depends_on:
+        - eligible-for-climate-smart-input-voucher
+        - supplier-license-active
+      rule:
+        type: cel
+        expression: "claims.eligible_for_climate_smart_input_voucher.satisfied && claims.supplier_license_active.satisfied"
+        bindings:
+          claims:
+            eligible_for_climate_smart_input_voucher:
+              claim: eligible-for-climate-smart-input-voucher
+            supplier_license_active:
+              claim: supplier-license-active
+      operations:
+        evaluate:
+          enabled: true
+        batch_evaluate:
+          enabled: true
+          max_subjects: 10
+      disclosure: *predicate_disclosure
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
+    - id: market-sizing-aggregate-controls
+      title: Market sizing aggregate controls
+      version: 2026-05
+      subject_type: policy
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        market_policy:
+          connector: registry_data_api
+          connection: agriculture
+          required_scope: agri_registry:evidence_verification
+          dataset: agri_registry
+          entity: purpose_policy
+          lookup:
+            input: subject_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            minimum_cell_count:
+              field: minimum_cell_count
+              type: integer
+              required: true
+            geography_floor:
+              field: geography_floor
+              type: string
+              required: true
+            suppression_policy:
+              field: suppression_policy
+              type: string
+              required: true
+            rare_category_suppression:
+              field: rare_category_suppression
+              type: boolean
+              required: true
+            onward_sharing_allowed:
+              field: onward_sharing_allowed
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.market_policy.minimum_cell_count >= 5 && source.market_policy.geography_floor == 'district' && source.market_policy.suppression_policy == 'omit' && source.market_policy.rare_category_suppression == true && source.market_policy.onward_sharing_allowed == false"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: registered-livestock-holder
+      title: Registered livestock holder
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: &livestock_snapshot_binding
+        livestock_snapshot:
+          connector: registry_data_api
+          connection: agriculture
+          required_scope: agri_registry:evidence_verification
+          dataset: agri_registry
+          entity: livestock_movement_snapshot
+          lookup:
+            input: subject_id
+            field: id
+            op: eq
+            cardinality: one
+          fields: &livestock_snapshot_fields
+            registered_livestock_holder:
+              field: registered_livestock_holder
+              type: boolean
+              required: true
+            registered_herd:
+              field: registered_herd
+              type: boolean
+              required: true
+            herd_vaccination_current:
+              field: herd_vaccination_current
+              type: boolean
+              required: true
+            origin_district_not_quarantined:
+              field: origin_district_not_quarantined
+              type: boolean
+              required: true
+            destination_district_open:
+              field: destination_district_open
+              type: boolean
+              required: true
+            no_conflicting_open_movement_permit:
+              field: no_conflicting_open_movement_permit
+              type: boolean
+              required: true
+            manual_review_required:
+              field: manual_review_required
+              type: boolean
+              required: true
+            reason_code:
+              field: reason_code
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: "source.livestock_snapshot.registered_livestock_holder == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: registered-herd
+      title: Registered herd
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *livestock_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.livestock_snapshot.registered_herd == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: herd-vaccination-current
+      title: Herd vaccination current
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *livestock_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.livestock_snapshot.herd_vaccination_current == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: origin-district-not-quarantined
+      title: Origin district not quarantined
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *livestock_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.livestock_snapshot.origin_district_not_quarantined == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: destination-district-open
+      title: Destination district open
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *livestock_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.livestock_snapshot.destination_district_open == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: no-conflicting-open-movement-permit
+      title: No conflicting open movement permit
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *livestock_snapshot_binding
+      rule:
+        type: cel
+        expression: "source.livestock_snapshot.no_conflicting_open_movement_permit == true"
+      disclosure: *predicate_disclosure
+      formats: *json_formats
+    - id: livestock-movement-reason-code
+      title: Livestock movement reason code
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings: *livestock_snapshot_binding
+      rule:
+        type: extract
+        source: livestock_snapshot
+        field: reason_code
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats: *json_formats
+    - id: eligible-for-livestock-movement-permit
+      title: Eligible for livestock movement permit
+      version: 2026-05
+      subject_type: herd
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      depends_on:
+        - registered-livestock-holder
+        - registered-herd
+        - herd-vaccination-current
+        - origin-district-not-quarantined
+        - destination-district-open
+        - no-conflicting-open-movement-permit
+      rule:
+        type: cel
+        expression: "claims.registered_livestock_holder.satisfied && claims.registered_herd.satisfied && claims.herd_vaccination_current.satisfied && claims.origin_district_not_quarantined.satisfied && claims.destination_district_open.satisfied && claims.no_conflicting_open_movement_permit.satisfied"
+        bindings:
+          claims:
+            registered_livestock_holder:
+              claim: registered-livestock-holder
+            registered_herd:
+              claim: registered-herd
+            herd_vaccination_current:
+              claim: herd-vaccination-current
+            origin_district_not_quarantined:
+              claim: origin-district-not-quarantined
+            destination_district_open:
+              claim: destination-district-open
+            no_conflicting_open_movement_permit:
+              claim: no-conflicting-open-movement-permit
+      operations:
+        evaluate:
+          enabled: true
+        batch_evaluate:
+          enabled: true
+          max_subjects: 10
+      disclosure: *predicate_disclosure
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: livestock_movement_permit_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/nagdi/livestock-movement-permit
+      credential_profiles:
+        - livestock_movement_sd_jwt

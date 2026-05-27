@@ -116,6 +116,59 @@ just citizen-oid4vci-token # optional OID4VCI endpoint probe with exported token
 just live-stories    # print narrated discovery queries and write artifacts
 ```
 
+Run the NAgDI agricultural registries demo:
+
+```bash
+just agri-generate  # write agricultural XLSX fixtures, AGRI_* secrets, and static metadata
+just agri-build     # build the agricultural Relay, Witness, and metadata publisher
+just agri-up        # start the agricultural profile
+just agri-smoke     # API-level agricultural smoke and narrated client assertions
+just agri-client    # narrated agricultural client flow only
+just agri-down      # stop agricultural services
+```
+
+The agricultural flow expects:
+
+- `agri-registry-relay` on host port `4341`
+- `nagdi-agriculture-witness` on host port `4342`
+- `agri-static-metadata-publisher` on host port `4343`
+- credentials in `.env` named with the `AGRI_*` prefix, including
+  `AGRI_METADATA_CLIENT_RAW`, `AGRI_EVIDENCE_ONLY_RAW`,
+  `AGRI_ROW_READER_RAW`, `AGRI_AGGREGATE_READER_RAW`, and
+  `AGRI_EVIDENCE_CLIENT_BEARER`
+
+The default agricultural smoke/client paths follow the NAgDI spec:
+
+- purpose: `https://demo.example.gov/purpose/nagdi/climate-smart-input-support`
+- voucher claim: `eligible-for-climate-smart-input-voucher`
+- positive subject: `FARMER-1001`
+- negative subjects: `FARMER-1002`, `FARMER-1003`, `FARMER-1004`
+- manual-review subject: `FARMER-1005`
+- livestock subjects: `HERD-2001` eligible, `HERD-2002` vaccination denial,
+  `HERD-2003` quarantine denial
+- default farmer row route:
+  `/datasets/agri_registry/farmer?limit=1`
+- default market-sizing aggregate:
+  `/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input`
+- default livestock herd aggregate:
+  `/datasets/agri_registry/aggregates/livestock_herds_by_species_district`
+
+Agricultural metadata discovery should distinguish the two evidence surfaces:
+voucher and livestock eligibility are Registry Witness offerings, while market
+sizing and livestock herd planning are Registry Relay aggregate offerings served
+from the default aggregate paths above.
+The narrated agricultural client also proves demo-grade holder-bound SD-JWT
+credential issuance from the successful voucher evaluation. Full wallet or
+OID4VCI ceremonies are outside the default agricultural smoke path.
+
+Use environment overrides such as `AGRI_RELAY_URL`, `AGRI_WITNESS_URL`,
+`AGRI_STATIC_METADATA_URL`, `AGRI_FARMER_DATASET`, `AGRI_FARMER_ENTITY`,
+`AGRI_INPUT_VOUCHER_CLAIM`, `AGRI_MARKET_SIZING_PATH`,
+`AGRI_LIVESTOCK_AGGREGATE_PATH`, or `AGRI_SUPPRESSED_AGGREGATE_PATH` if the
+agricultural Relay config names differ.
+`just agri-smoke` writes artifacts to `output/agri-smoke/` and also runs the
+narrated client, which writes to `output/agri-client/`.
+
 Re-open explainability artifacts from `just live-stories`:
 
 ```bash
@@ -493,9 +546,14 @@ Every client request sends `x-request-id` using
 
 ## Notes
 
-The Relay demo image is built by `Dockerfile.registry-relay` with
+The Relay demo image is built by `Dockerfile.registry-relay` with configurable
+Cargo features. The `just` recipes default to
 `spdci-api-standards,standards-cel-mapping,ogcapi-edr` so DCI source routes and
-the aggregate-only OGC EDR `/area` surface are available.
+the aggregate-only OGC EDR `/area` surface are available when using the sibling
+`../registry-relay` checkout. Plain Docker Compose defaults to
+`spdci-api-standards,standards-cel-mapping`, which keeps the vendored fallback
+buildable even though that older Relay source does not define `ogcapi-edr`.
+Set `REGISTRY_RELAY_FEATURES` explicitly when using a different Relay source.
 
 The social protection walkthrough uses the dataset-scoped aggregate endpoint at
 `/datasets/social_protection_registry/aggregates/households_by_eligibility_band`

@@ -41,4 +41,66 @@ if [[ -f "${out_dir}/dcat.bregdcat-ap.jsonld" ]]; then
   cp "${out_dir}/dcat.bregdcat-ap.jsonld" "${out_dir}/dcat/bregdcat-ap"
 fi
 
+python3 - "${out_dir}/policies.jsonld" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(0)
+
+body = json.loads(path.read_text(encoding="utf-8"))
+graph = body.setdefault("@graph", [])
+agri_policy_id = "#policy-agricultural_registry-offer"
+controls_id = "#policy-nagdi-agriculture-governance-controls"
+controls = {
+    "@id": controls_id,
+    "@type": "odrl:Policy",
+    "dcterms:title": "NAgDI agricultural governance controls",
+    "registry_manifest:lawfulBasis": [
+        "program_rule",
+        "public_task",
+        "permit_condition",
+    ],
+    "registry_manifest:allowedPurposes": [
+        "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
+        "https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review",
+        "https://demo.example.gov/purpose/nagdi/agricultural-market-sizing",
+    ],
+    "registry_manifest:allowedRecipientTypes": [
+        "government_program",
+        "extension_authority",
+        "animal_health_authority",
+        "licensed_service_provider",
+        "planning_unit",
+    ],
+    "registry_manifest:allowedDisclosureModes": [
+        "predicate",
+        "redacted_result",
+        "aggregate",
+    ],
+    "registry_manifest:retentionDays": {
+        "climate_smart_input_support": 365,
+        "livestock_movement_permit_review": 730,
+        "agricultural_market_sizing": 90,
+    },
+    "registry_manifest:minimumCellCount": 5,
+    "registry_manifest:geographyFloor": "district",
+    "registry_manifest:suppressionPolicy": "suppress_cells_below_minimum_or_below_geography_floor",
+    "registry_manifest:rareCategorySuppression": True,
+    "registry_manifest:onwardSharingAllowed": False,
+    "registry_manifest:automatedDecisionAllowed": False,
+    "registry_manifest:auditRequired": True,
+    "registry_manifest:appealOrReviewRoute": "https://demo.example.gov/services/nagdi/review",
+}
+graph[:] = [item for item in graph if item.get("@id") != controls_id]
+graph.append(controls)
+for item in graph:
+    if item.get("@id") == agri_policy_id:
+        item["registry_manifest:governanceControls"] = {"@id": controls_id}
+        break
+path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
 echo "published static metadata bundle to ${out_dir}"

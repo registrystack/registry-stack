@@ -5,6 +5,7 @@ relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", "../registry-relay"
 witness_src := env_var_or_default("REGISTRY_WITNESS_SOURCE_DIR", "../registry-witness")
 openfn_witness_src := env_var_or_default("REGISTRY_OPENFN_WITNESS_SOURCE_DIR", "../registry-witness")
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", "../registry-platform")
+relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
 export REGISTRY_WITNESS_SOURCE_DIR := witness_src
@@ -12,6 +13,7 @@ export REGISTRY_OPENFN_WITNESS_SOURCE_DIR := openfn_witness_src
 export REGISTRY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_WITNESS_PLATFORM_SOURCE_DIR := platform_src
+export REGISTRY_RELAY_FEATURES := relay_features
 
 # List available demo commands.
 default:
@@ -267,6 +269,34 @@ citizen-oid4vci-report:
 # Run live-service stories with narrated discovery queries and generated artifacts.
 live-stories:
     scripts/demo-live-stories.sh
+
+# Generate agricultural fixtures, demo secrets, and static metadata.
+agri-generate:
+    uv run scripts/generate-agri-fixtures.py
+    scripts/generate-demo-secrets.py
+    scripts/publish-static-metadata.sh
+
+# Build the agricultural NAgDI profile.
+agri-build:
+    docker compose -f compose.yaml --profile agri build agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+
+# Start the agricultural NAgDI profile.
+agri-up:
+    docker compose -f compose.yaml --profile agri up -d agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+
+# Stop the agricultural NAgDI profile and remove demo volumes.
+agri-down:
+    docker compose -f compose.yaml --profile agri stop agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri rm -f -v agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+    docker volume rm registry-lab_agri-registry-cache 2>/dev/null || true
+
+# Run the agricultural NAgDI smoke.
+agri-smoke:
+    scripts/smoke-agri.sh
+
+# Run the narrated agricultural NAgDI client flow.
+agri-client:
+    docker compose -f compose.yaml --profile agri --profile agri-client run --rm agri-demo-client
 
 # Open the generated live story briefing in the terminal.
 briefing:
