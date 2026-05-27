@@ -130,6 +130,9 @@ datasets:
             - name: subject_id
               type: string
               nullable: false
+            - name: subject_scope
+              type: string
+              nullable: false
             - name: subject_type
               type: string
               nullable: false
@@ -151,6 +154,76 @@ datasets:
             - name: valid_until
               type: date
               nullable: true
+      - id: farmer_identifiers_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farmer-registry.xlsx
+          format:
+            xlsx:
+              sheet: FarmerIdentifiers
+              header_row: 1
+        primary_key: identifier_id
+        schema:
+          strict: false
+          fields:
+            - name: identifier_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: identifier_type
+              type: string
+              nullable: false
+            - name: identifier_value
+              type: string
+              nullable: false
+              sensitive: true
+            - name: issuing_authority
+              type: string
+              nullable: false
+            - name: active
+              type: boolean
+              nullable: false
+            - name: recorded_on
+              type: date
+              nullable: false
+      - id: farmer_groups_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farmer-registry.xlsx
+          format:
+            xlsx:
+              sheet: FarmerGroups
+              header_row: 1
+        primary_key: membership_id
+        schema:
+          strict: false
+          fields:
+            - name: membership_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: group_id
+              type: string
+              nullable: false
+            - name: group_name
+              type: string
+              nullable: false
+            - name: group_type
+              type: string
+              nullable: false
+            - name: role
+              type: string
+              nullable: false
+            - name: active
+              type: boolean
+              nullable: false
+            - name: joined_on
+              type: date
+              nullable: false
       - id: holdings_table
         source:
           type: file
@@ -304,6 +377,9 @@ datasets:
             - name: currency
               type: string
               nullable: false
+            - name: valid_from
+              type: date
+              nullable: false
             - name: issued_on
               type: date
               nullable: false
@@ -431,6 +507,9 @@ datasets:
               type: string
               nullable: false
             - name: district
+              type: string
+              nullable: false
+            - name: district_code
               type: string
               nullable: false
             - name: market_name
@@ -583,13 +662,28 @@ datasets:
             - name: permit_id
               type: string
               nullable: false
+            - name: application_id
+              type: string
+              nullable: false
             - name: herd_id
+              type: string
+              nullable: false
+            - name: origin_premises_code
+              type: string
+              nullable: false
+            - name: destination_premises_code
               type: string
               nullable: false
             - name: origin_district
               type: string
               nullable: false
+            - name: origin_district_code
+              type: string
+              nullable: false
             - name: destination_district
+              type: string
+              nullable: false
+            - name: destination_district_code
               type: string
               nullable: false
             - name: permit_status
@@ -922,7 +1016,7 @@ datasets:
         title: Farmer
         description: Registered farmer projection with personal fields minimized for row and evidence workflows.
         table: farmers_table
-        concept_uri: nagdi:Farmer
+        concept_uri: https://publicschema.org/Person
         fields:
           - name: id
             from: farmer_id
@@ -977,6 +1071,7 @@ datasets:
           - name: id
             from: authorization_id
           - name: subject_id
+          - name: subject_scope
           - name: subject_type
           - name: purpose_code
           - name: lawful_basis_code
@@ -999,11 +1094,69 @@ datasets:
               ops: [eq, in]
             - field: authorization_status
               ops: [eq, in]
+      - name: farmer_identifier
+        title: Farmer Identifier
+        description: Identifier rows linked to farmer Persons without treating local farmer IDs as the person model.
+        table: farmer_identifiers_table
+        concept_uri: https://publicschema.org/Identifier
+        fields:
+          - name: id
+            from: identifier_id
+          - name: farmer_id
+          - name: identifier_type
+          - name: identifier_value
+            sensitive: true
+          - name: issuing_authority
+          - name: active
+          - name: recorded_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: identifier_type
+              ops: [eq, in]
+            - field: active
+              ops: [eq]
+      - name: farmer_group_membership
+        title: Farmer Group Membership
+        description: Membership between farmer Persons and producer groups or cooperatives.
+        table: farmer_groups_table
+        concept_uri: https://publicschema.org/GroupMembership
+        fields:
+          - name: id
+            from: membership_id
+          - name: farmer_id
+          - name: group_id
+          - name: group_name
+          - name: group_type
+          - name: role
+          - name: active
+          - name: joined_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: group_id
+              ops: [eq, in]
+            - field: active
+              ops: [eq]
       - name: holding
         title: Farm Holding
         description: Farm holding projection from land or farm services records.
         table: holdings_table
-        concept_uri: nagdi:FarmHolding
+        concept_uri: https://publicschema.org/Farm
         fields:
           - name: id
             from: holding_id
@@ -1125,6 +1278,7 @@ datasets:
           - name: package_code
           - name: max_value
           - name: currency
+          - name: valid_from
           - name: issued_on
           - name: expires_on
         access: *agri_entity_access
@@ -1240,6 +1394,7 @@ datasets:
           - name: id
             from: price_id
           - name: district
+          - name: district_code
           - name: market_name
           - name: commodity
           - name: price_date
@@ -1255,6 +1410,8 @@ datasets:
             - field: id
               ops: [eq, in]
             - field: district
+              ops: [eq, in]
+            - field: district_code
               ops: [eq, in]
             - field: commodity
               ops: [eq, in]
@@ -1398,9 +1555,14 @@ datasets:
         fields:
           - name: id
             from: permit_id
+          - name: application_id
           - name: herd_id
+          - name: origin_premises_code
+          - name: destination_premises_code
           - name: origin_district
+          - name: origin_district_code
           - name: destination_district
+          - name: destination_district_code
           - name: permit_status
           - name: issued_on
           - name: valid_until

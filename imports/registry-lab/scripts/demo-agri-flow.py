@@ -406,6 +406,8 @@ def resolve_service_base_url(metadata_url: str, transport_override: str | None) 
     local_hosts = {"127.0.0.1", "localhost", "::1"}
     if metadata.hostname in compose_names and override.hostname in local_hosts:
         return transport_override.rstrip("/")
+    if metadata.hostname == override.hostname and metadata.hostname in compose_names:
+        return transport_override.rstrip("/")
     return metadata_base
 
 

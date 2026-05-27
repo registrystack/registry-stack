@@ -100,10 +100,19 @@ Run the default API-key demo:
 
 ```bash
 just smoke       # API-level smoke for Relay and Witness
+just federation  # signed Witness-to-Witness delegated evaluation smoke
 just openfn      # OpenFn sidecar-backed Witness smoke
 just client      # narrated default client flow
 just quick       # generate, build, up, smoke, openfn, client
 ```
+
+`just federation` proves the default non-agricultural federation slice. A demo
+benefits peer signs compact JWS requests to the civil and social protection
+Witnesses, verifies their signed responses, composes a local benefit-screen
+artifact from `age-band`, `person-is-alive`, `beneficiary-active`, and
+`household-eligibility-band`, and writes artifacts to `output/federation/`. It
+also proves replay and unsupported-purpose denials without embedding raw
+registry rows.
 
 Run the live-service demos:
 
@@ -125,6 +134,7 @@ just agri-generate  # write agricultural XLSX fixtures, AGRI_* secrets, and stat
 just agri-build     # build the agricultural Relay, Witness, and metadata publisher
 just agri-up        # start the agricultural profile
 just agri-smoke     # API-level agricultural smoke and narrated client assertions
+just agri-federation # signed Witness-to-Witness delegated evaluation smoke
 just agri-client    # narrated agricultural client flow only
 just agri-down      # stop agricultural services
 ```
@@ -163,6 +173,15 @@ The narrated agricultural client also proves demo-grade holder-bound SD-JWT
 credential issuance from the successful voucher evaluation. Full wallet or
 OID4VCI ceremonies are outside the default agricultural smoke path.
 
+`just agri-federation` proves the first Registry Witness federation slice. The
+demo benefits peer signs compact JWS requests to
+`POST /federation/v1/evaluations` on `nagdi-agriculture-witness`, verifies the
+signed responses, composes a local benefits decision from the returned
+predicates, and writes artifacts to `output/agri-federation/`. It also proves a
+replay denial and an unsupported-purpose denial. This is delegated evaluation
+only: it does not enable open federation, outbound Witness composition, or
+federated credential issuance.
+
 Use environment overrides such as `AGRI_RELAY_URL`, `AGRI_WITNESS_URL`,
 `AGRI_STATIC_METADATA_URL`, `AGRI_FARMER_DATASET`, `AGRI_FARMER_ENTITY`,
 `AGRI_INPUT_VOUCHER_CLAIM`, `AGRI_MARKET_SIZING_PATH`,
@@ -195,9 +214,10 @@ running for inspection.
 
 The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
 `REGISTRY_WITNESS_SOURCE_DIR`, `REGISTRY_OPENFN_WITNESS_SOURCE_DIR`, and
-`REGISTRY_PLATFORM_SOURCE_DIR` to sibling checkouts when present. Override those
-variables when you want to build from the pinned `vendor/` submodules or another
-local path.
+`REGISTRY_PLATFORM_SOURCE_DIR` to sibling checkouts when present. It also
+defaults `CEL_MAPPING_SOURCE_DIR` to `../cel-mapping`, because current Relay and
+Witness builds use the Crosswalk crates from that checkout. Override those
+variables when you want to build from pinned sources or another local path.
 
 ## Live Relay Scenarios
 
@@ -446,6 +466,7 @@ used without changing `compose.yaml`:
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
 REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
+CEL_MAPPING_SOURCE_DIR=../cel-mapping \
 just build
 ```
 

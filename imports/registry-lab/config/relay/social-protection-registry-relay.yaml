@@ -309,7 +309,7 @@ datasets:
           evidence_verification_scope: social_protection_registry:evidence_verification
         api:
           default_limit: 25
-          max_limit: 100
+          max_limit: 10000
           require_purpose_header: false
           allowed_filters:
             - field: id

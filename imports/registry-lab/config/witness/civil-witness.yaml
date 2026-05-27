@@ -20,6 +20,50 @@ audit:
   sink: stdout
   hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
+federation:
+  enabled: true
+  node_id: did:web:civil-witness.demo.example.gov
+  issuer: https://civil-witness.demo.example.gov
+  jwks_uri: https://civil-witness.demo.example.gov/federation/jwks.json
+  federation_api: https://civil-witness.demo.example.gov/federation/v1
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
+  signing:
+    kid: did:web:civil-witness.demo.example.gov#federation-response-1
+    key_env: CIVIL_FEDERATION_RESPONSE_JWK
+    alg: EdDSA
+  pairwise_subject_hash:
+    secret_env: CIVIL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
+  response_shaping:
+    minimum_denial_latency_ms: 250
+  peers:
+    - node_id: did:web:benefits.demo.example.gov
+      issuer: https://benefits.demo.example.gov
+      jwks_uri: http://static-metadata-publisher:8080/federation/default-benefits-jwks.json
+      allow_insecure_private_network: true
+      allowed_protocol_versions:
+        - registry-witness-federation/v0.1
+      allowed_purposes:
+        - https://demo.example.gov/purpose/decentralized-evidence-demo
+      allowed_profiles:
+        - civil_age_band_value
+        - civil_alive_predicate
+      source_scopes:
+        - civil_registry:evidence_verification
+  evaluation_profiles:
+    - id: civil_age_band_value
+      ruleset: civil-age-band-v1
+      claim_id: age-band
+      subject_id_type: national_id
+      disclosure: value
+      max_source_observed_age_seconds: 86400
+    - id: civil_alive_predicate
+      ruleset: person-is-alive-v1
+      claim_id: person-is-alive
+      subject_id_type: national_id
+      disclosure: predicate
+      max_source_observed_age_seconds: 86400
+
 evidence:
   enabled: true
   service_id: civil-witness
@@ -50,6 +94,7 @@ evidence:
       allowed_claims:
         - date-of-birth
         - civil-status
+        - age-band
         - person-is-alive
       holder_binding:
         mode: did
@@ -132,6 +177,49 @@ evidence:
         type: extract
         source: civil
         field: civil_status
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - civil_status_sd_jwt
+    - id: age-band
+      title: Age band
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "date_age_on(source.civil.birth_date, vars.as_of_date) < 18 ? 'child' : (date_age_on(source.civil.birth_date, vars.as_of_date) >= 65 ? 'elderly' : 'adult')"
+        bindings:
+          vars:
+            as_of_date: "2026-05-27"
       disclosure:
         default: value
         allowed:

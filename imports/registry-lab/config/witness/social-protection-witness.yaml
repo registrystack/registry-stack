@@ -20,6 +20,50 @@ audit:
   sink: stdout
   hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
+federation:
+  enabled: true
+  node_id: did:web:social-protection-witness.demo.example.gov
+  issuer: https://social-protection-witness.demo.example.gov
+  jwks_uri: https://social-protection-witness.demo.example.gov/federation/jwks.json
+  federation_api: https://social-protection-witness.demo.example.gov/federation/v1
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
+  signing:
+    kid: did:web:social-protection-witness.demo.example.gov#federation-response-1
+    key_env: SOCIAL_FEDERATION_RESPONSE_JWK
+    alg: EdDSA
+  pairwise_subject_hash:
+    secret_env: SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
+  response_shaping:
+    minimum_denial_latency_ms: 250
+  peers:
+    - node_id: did:web:benefits.demo.example.gov
+      issuer: https://benefits.demo.example.gov
+      jwks_uri: http://static-metadata-publisher:8080/federation/default-benefits-jwks.json
+      allow_insecure_private_network: true
+      allowed_protocol_versions:
+        - registry-witness-federation/v0.1
+      allowed_purposes:
+        - https://demo.example.gov/purpose/decentralized-evidence-demo
+      allowed_profiles:
+        - beneficiary_active_predicate
+        - household_eligibility_band_value
+      source_scopes:
+        - social_protection_registry:evidence_verification
+  evaluation_profiles:
+    - id: beneficiary_active_predicate
+      ruleset: beneficiary-active-v1
+      claim_id: beneficiary-active
+      subject_id_type: national_id
+      disclosure: predicate
+      max_source_observed_age_seconds: 86400
+    - id: household_eligibility_band_value
+      ruleset: household-eligibility-band-v1
+      claim_id: household-eligibility-band
+      subject_id_type: national_id
+      disclosure: value
+      max_source_observed_age_seconds: 86400
+
 evidence:
   enabled: true
   service_id: social-protection-witness

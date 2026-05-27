@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import os
 import re
 import zipfile
 from pathlib import Path
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data" / "agriculture"
 EVALUATION_AS_OF = dt.date(2026, 5, 1)
 SEASON = "2026A"
+FIXTURE_SCALE = os.environ.get("AGRI_FIXTURE_SCALE", "golden").strip().lower()
 FIXED_TIMESTAMP = dt.datetime(2026, 1, 1, 0, 0, 0)
 FIXED_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 CORE_XML_MODIFIED_RE = re.compile(
@@ -334,6 +336,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-1001-VOUCHER",
         "subject_id": "FARMER-1001",
+        "subject_scope": "individual",
         "subject_type": "farmer",
         "purpose_code": "climate-smart-input-support",
         "lawful_basis_code": "program_rule",
@@ -349,6 +352,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-1002-VOUCHER",
         "subject_id": "FARMER-1002",
+        "subject_scope": "program",
         "subject_type": "farmer",
         "purpose_code": "climate-smart-input-support",
         "lawful_basis_code": "public_task",
@@ -364,6 +368,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-1003-VOUCHER",
         "subject_id": "FARMER-1003",
+        "subject_scope": "individual",
         "subject_type": "farmer",
         "purpose_code": "climate-smart-input-support",
         "lawful_basis_code": "program_rule",
@@ -379,6 +384,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-1004-VOUCHER",
         "subject_id": "FARMER-1004",
+        "subject_scope": "individual",
         "subject_type": "farmer",
         "purpose_code": "climate-smart-input-support",
         "lawful_basis_code": "program_rule",
@@ -394,6 +400,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-1005-VOUCHER",
         "subject_id": "FARMER-1005",
+        "subject_scope": "individual",
         "subject_type": "farmer",
         "purpose_code": "climate-smart-input-support",
         "lawful_basis_code": "consent",
@@ -409,6 +416,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-2001-MOVE",
         "subject_id": "FARMER-2001",
+        "subject_scope": "program",
         "subject_type": "farmer",
         "purpose_code": "livestock-movement-permit-review",
         "lawful_basis_code": "permit_condition",
@@ -424,6 +432,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-2002-MOVE",
         "subject_id": "FARMER-2002",
+        "subject_scope": "universal",
         "subject_type": "farmer",
         "purpose_code": "livestock-movement-permit-review",
         "lawful_basis_code": "legal_mandate",
@@ -439,6 +448,7 @@ DATA_USE_AUTHORIZATIONS = [
     {
         "authorization_id": "AUTH-2003-MOVE",
         "subject_id": "FARMER-2003",
+        "subject_scope": "universal",
         "subject_type": "farmer",
         "purpose_code": "livestock-movement-permit-review",
         "lawful_basis_code": "vital_public_interest",
@@ -759,6 +769,7 @@ VOUCHER_ENTITLEMENTS = [
         "package_code": "PKG-MAIZE-DRT-10KG",
         "max_value": 75,
         "currency": "USD",
+        "valid_from": d("2026-04-01"),
         "issued_on": d("2026-04-01"),
         "expires_on": d("2026-06-30"),
     },
@@ -774,6 +785,7 @@ VOUCHER_ENTITLEMENTS = [
         "package_code": "PKG-MAIZE-DRT-10KG",
         "max_value": 75,
         "currency": "USD",
+        "valid_from": d("2026-04-02"),
         "issued_on": d("2026-04-02"),
         "expires_on": d("2026-06-30"),
     },
@@ -789,6 +801,7 @@ VOUCHER_ENTITLEMENTS = [
         "package_code": "PKG-MAIZE-DRT-10KG",
         "max_value": 75,
         "currency": "USD",
+        "valid_from": d("2026-04-01"),
         "issued_on": d("2026-04-01"),
         "expires_on": d("2026-06-30"),
     },
@@ -804,6 +817,7 @@ VOUCHER_ENTITLEMENTS = [
         "package_code": "PKG-MAIZE-DRT-10KG",
         "max_value": 75,
         "currency": "USD",
+        "valid_from": d("2026-04-03"),
         "issued_on": d("2026-04-03"),
         "expires_on": d("2026-06-30"),
     },
@@ -819,6 +833,7 @@ VOUCHER_ENTITLEMENTS = [
         "package_code": "PKG-MAIZE-DRT-10KG",
         "max_value": 75,
         "currency": "USD",
+        "valid_from": d("2026-04-04"),
         "issued_on": d("2026-04-04"),
         "expires_on": d("2026-06-30"),
     },
@@ -1024,6 +1039,7 @@ RAINFALL_OBSERVATIONS = [
     {
         "observation_id": "RAIN-NORTH-2026-04-01",
         "district": "North Valley",
+        "district_code": "D-NORTH",
         "station_id": "WX-NORTH-01",
         "observed_on": d("2026-04-01"),
         "rainfall_mm": 12.5,
@@ -1032,6 +1048,7 @@ RAINFALL_OBSERVATIONS = [
     {
         "observation_id": "RAIN-WEST-2026-04-01",
         "district": "West Basin",
+        "district_code": "D-WEST",
         "station_id": "WX-WEST-01",
         "observed_on": d("2026-04-01"),
         "rainfall_mm": 15.0,
@@ -1043,6 +1060,7 @@ MARKET_PRICES = [
     {
         "price_id": "PRICE-NORTH-MAIZE-2026-04-30",
         "district": "North Valley",
+        "district_code": "D-NORTH",
         "market_name": "North Depot Market",
         "commodity": "maize",
         "price_date": d("2026-04-30"),
@@ -1053,6 +1071,7 @@ MARKET_PRICES = [
     {
         "price_id": "PRICE-WEST-MAIZE-2026-04-30",
         "district": "West Basin",
+        "district_code": "D-WEST",
         "market_name": "Lowland Market",
         "commodity": "maize",
         "price_date": d("2026-04-30"),
@@ -1066,6 +1085,7 @@ CROP_CALENDAR = [
     {
         "calendar_id": "CAL-NORTH-MAIZE-2026A",
         "district": "North Valley",
+        "district_code": "D-NORTH",
         "crop": "maize",
         "season": SEASON,
         "planting_window_start": d("2026-03-01"),
@@ -1076,6 +1096,7 @@ CROP_CALENDAR = [
     {
         "calendar_id": "CAL-WEST-MAIZE-2026A",
         "district": "West Basin",
+        "district_code": "D-WEST",
         "crop": "maize",
         "season": SEASON,
         "planting_window_start": d("2026-03-10"),
@@ -1089,6 +1110,7 @@ ADVISORY_RULES = [
     {
         "rule_id": "ADV-NORTH-MAIZE-HIGH",
         "district": "North Valley",
+        "district_code": "D-NORTH",
         "season": SEASON,
         "crop": "maize",
         "risk_level": "high",
@@ -1099,6 +1121,7 @@ ADVISORY_RULES = [
     {
         "rule_id": "ADV-WEST-MAIZE-HIGH",
         "district": "West Basin",
+        "district_code": "D-WEST",
         "season": SEASON,
         "crop": "maize",
         "risk_level": "high",
@@ -1392,6 +1415,7 @@ QUARANTINE_ZONES = [
         "zone_id": "QZ-NORTH-FMD-2026",
         "district": "North Valley",
         "disease_code": "FMD",
+        "species": "cattle",
         "status": "active",
         "effective_from": d("2026-04-01"),
         "effective_until": d("2026-06-15"),
@@ -1402,6 +1426,7 @@ QUARANTINE_ZONES = [
         "zone_id": "QZ-CENTRAL-FMD-2025",
         "district": "Central Grazing",
         "disease_code": "FMD",
+        "species": "cattle",
         "status": "expired",
         "effective_from": d("2025-08-01"),
         "effective_until": d("2025-09-01"),
@@ -1449,9 +1474,14 @@ MOVEMENT_APPLICATIONS = [
 MOVEMENT_PERMITS = [
     {
         "permit_id": "MP-OLD-2001",
+        "application_id": "MAPP-2001",
         "herd_id": "HERD-2001",
+        "origin_premises_code": "PREM-2001",
+        "destination_premises_code": "PREM-DEST-01",
         "origin_district": "Central Grazing",
+        "origin_district_code": "D-CENTRAL",
         "destination_district": "South Plains",
+        "destination_district_code": "D-SOUTH",
         "permit_status": "expired",
         "issued_on": d("2026-03-01"),
         "valid_until": d("2026-03-20"),
@@ -1588,12 +1618,14 @@ ADMIN_AREAS = [
 
 CROP_CODES = [
     {"crop_code": "maize", "crop_name": "Maize", "active": True},
+    {"crop_code": "rice", "crop_name": "Rice", "active": True},
     {"crop_code": "sorghum", "crop_name": "Sorghum", "active": True},
     {"crop_code": "teff", "crop_name": "Teff", "active": True},
 ]
 
 COMMODITY_CODES = [
-    {"commodity_code": "maize", "commodity_name": "Maize grain", "unit": "kg", "active": True}
+    {"commodity_code": "maize", "commodity_name": "Maize grain", "unit": "kg", "active": True},
+    {"commodity_code": "rice", "commodity_name": "Rice grain", "unit": "kg", "active": True},
 ]
 
 INPUT_CATALOG = [
@@ -1602,16 +1634,33 @@ INPUT_CATALOG = [
         "input_name": "Climate-smart seed",
         "unit": "kg",
         "active": True,
+    },
+    {
+        "input_code": "soil_moisture_extension",
+        "input_name": "Soil moisture extension package",
+        "unit": "visit",
+        "active": True,
     }
 ]
 
 DISEASE_CODES = [
-    {"disease_code": "FMD", "disease_name": "Foot and mouth disease", "species": "cattle", "active": True}
+    {"disease_code": "FMD", "disease_name": "Foot and mouth disease", "species": "cattle", "active": True},
+    {"disease_code": "BRU", "disease_name": "Brucellosis", "species": "cattle", "active": True},
 ]
 
 VACCINE_CODES = [
     {"vaccine_code": "FMD-6M", "disease_code": "FMD", "validity_days": 181, "active": True},
     {"vaccine_code": "BRU-12M", "disease_code": "BRU", "validity_days": 365, "active": True},
+]
+
+SEASONS = [
+    {
+        "season": SEASON,
+        "season_name": "2026 main agricultural season",
+        "starts_on": d("2026-01-01"),
+        "ends_on": d("2026-12-31"),
+        "active": True,
+    }
 ]
 
 SERVICE_PROVIDERS = [
@@ -1629,6 +1678,8 @@ PURPOSE_POLICIES = [
         "purpose_code": "climate-smart-input-support",
         "public_service_code": "climate_smart_input_voucher",
         "lawful_basis_code": "program_rule",
+        "published_by_authority": "National Agricultural Data Infrastructure Governance Body",
+        "approval_status": "approved",
         "allowed_recipient_types": "government_program,extension_authority",
         "allowed_disclosure_modes": "predicate,redacted_result",
         "retention_days": 365,
@@ -1645,6 +1696,8 @@ PURPOSE_POLICIES = [
         "purpose_code": "livestock-movement-permit-review",
         "public_service_code": "livestock_movement_permit",
         "lawful_basis_code": "permit_condition",
+        "published_by_authority": "National Animal Health Authority",
+        "approval_status": "approved",
         "allowed_recipient_types": "animal_health_authority",
         "allowed_disclosure_modes": "predicate,redacted_result",
         "retention_days": 730,
@@ -1661,6 +1714,8 @@ PURPOSE_POLICIES = [
         "purpose_code": "agricultural-market-sizing",
         "public_service_code": "agricultural_market_sizing",
         "lawful_basis_code": "public_task",
+        "published_by_authority": "National Agricultural Data Infrastructure Governance Body",
+        "approval_status": "approved",
         "allowed_recipient_types": "licensed_service_provider,planning_unit",
         "allowed_disclosure_modes": "aggregate",
         "retention_days": 90,
@@ -1944,6 +1999,365 @@ SNAPSHOT_MARKET_SIZING_CELLS = [
     }
 ]
 
+
+PHILIPPINES_AREAS = [
+    {
+        "code": "D-PH-ILOCOS-NORTE",
+        "name": "Ilocos Norte",
+        "municipality_code": "V-PH-LAOAG",
+        "municipality": "Laoag City",
+        "lat": 18.1978,
+        "lon": 120.5932,
+        "crop": "rice",
+        "risk_band": "medium",
+    },
+    {
+        "code": "D-PH-CAGAYAN",
+        "name": "Cagayan",
+        "municipality_code": "V-PH-TUGUEGARAO",
+        "municipality": "Tuguegarao City",
+        "lat": 17.6132,
+        "lon": 121.7270,
+        "crop": "maize",
+        "risk_band": "high",
+    },
+    {
+        "code": "D-PH-NUEVA-ECIJA",
+        "name": "Nueva Ecija",
+        "municipality_code": "V-PH-PALAYAN",
+        "municipality": "Palayan City",
+        "lat": 15.5415,
+        "lon": 121.0848,
+        "crop": "rice",
+        "risk_band": "low",
+    },
+    {
+        "code": "D-PH-CAMARINES-SUR",
+        "name": "Camarines Sur",
+        "municipality_code": "V-PH-NAGA",
+        "municipality": "Naga City",
+        "lat": 13.6218,
+        "lon": 123.1948,
+        "crop": "rice",
+        "risk_band": "high",
+    },
+    {
+        "code": "D-PH-ILOILO",
+        "name": "Iloilo",
+        "municipality_code": "V-PH-ILOILO-CITY",
+        "municipality": "Iloilo City",
+        "lat": 10.7202,
+        "lon": 122.5621,
+        "crop": "rice",
+        "risk_band": "medium",
+    },
+    {
+        "code": "D-PH-SOUTH-COTABATO",
+        "name": "South Cotabato",
+        "municipality_code": "V-PH-KORONADAL",
+        "municipality": "Koronadal City",
+        "lat": 6.5031,
+        "lon": 124.8469,
+        "crop": "maize",
+        "risk_band": "medium",
+    },
+]
+
+
+def planning_farmer(index: int, area: dict[str, object]) -> dict[str, object]:
+    suffix = f"{index:04d}"
+    birth_year = 1970 + (index % 28)
+    return {
+        "farmer_id": f"FARMER-P-{suffix}",
+        "national_id": f"PH-NID-P-{suffix}",
+        "given_name": f"Planning{suffix}",
+        "family_name": f"Farmer{(index % 97) + 1:02d}",
+        "sex": "female" if index % 2 else "male",
+        "birth_date": dt.date(birth_year, (index % 12) + 1, (index % 27) + 1),
+        "district": area["name"],
+        "district_code": area["code"],
+        "village": area["municipality"],
+        "village_code": area["municipality_code"],
+        "phone_present": index % 5 != 0,
+        "registration_status": "active",
+        "registered_on": d("2025-11-15"),
+        "smallholder_status": "smallholder",
+        "household_id": f"AG-HH-P-{suffix}",
+        "role_in_household": "head",
+        "age_band": "35-44",
+        "youth_status": "not_youth",
+        "disability_status": "none",
+        "vulnerability_category": "climate_exposed" if index % 3 == 0 else "standard",
+        "producer_type": "crop",
+        "contactable_by_sms": index % 5 != 0,
+        "preferred_language": "fil",
+        "data_quality_status": "verified",
+        "source_submission_id": "SUB-PH-PLANNING-2026",
+        "last_verified_on": d("2026-04-01"),
+        "source_office": f"{area['name']} Agriculture Office",
+    }
+
+
+def append_planning_scale_rows() -> None:
+    if FIXTURE_SCALE not in {"planning", "large"}:
+        return
+
+    ADMIN_AREAS.append(
+        {
+            "admin_code": "COUNTRY-PH",
+            "admin_level": "country",
+            "admin_name": "Philippines",
+            "parent_admin_code": "",
+            "active": True,
+            "valid_from": d("2020-01-01"),
+            "valid_until": None,
+        }
+    )
+    for area in PHILIPPINES_AREAS:
+        ADMIN_AREAS.append(
+            {
+                "admin_code": area["code"],
+                "admin_level": "district",
+                "admin_name": area["name"],
+                "parent_admin_code": "COUNTRY-PH",
+                "active": True,
+                "valid_from": d("2020-01-01"),
+                "valid_until": None,
+            }
+        )
+        ADMIN_AREAS.append(
+            {
+                "admin_code": area["municipality_code"],
+                "admin_level": "village",
+                "admin_name": area["municipality"],
+                "parent_admin_code": area["code"],
+                "active": True,
+                "valid_from": d("2020-01-01"),
+                "valid_until": None,
+            }
+        )
+
+    SOURCE_SUBMISSIONS.append(
+        {
+            "source_submission_id": "SUB-PH-PLANNING-2026",
+            "source_office": "Philippines planning fixture generator",
+            "submitted_by_role": "synthetic_planning_fixture",
+            "submitted_on": d("2026-04-20"),
+            "source_file_label": "philippines-planning-scale.xlsx",
+            "record_count": 336,
+            "validation_status": "accepted",
+        }
+    )
+
+    for index in range(1, 301):
+        area = PHILIPPINES_AREAS[(index - 1) % len(PHILIPPINES_AREAS)]
+        suffix = f"{index:04d}"
+        farmer = planning_farmer(index, area)
+        FARMERS.append(farmer)
+        FARMER_IDENTIFIERS.append(
+            {
+                "identifier_id": f"FID-P-{suffix}",
+                "farmer_id": farmer["farmer_id"],
+                "identifier_type": "synthetic_philippines_planning_id",
+                "identifier_value": farmer["national_id"],
+                "issuing_authority": "Demo Philippines Agriculture Registry Authority",
+                "active": True,
+                "recorded_on": farmer["registered_on"],
+            }
+        )
+        FARMER_GROUPS.append(
+            {
+                "membership_id": f"MEM-P-{suffix}",
+                "farmer_id": farmer["farmer_id"],
+                "group_id": f"GRP-P-{area['code'].replace('D-PH-', '')}",
+                "group_name": f"{area['name']} Planning Cooperative",
+                "group_type": "producer_cooperative",
+                "registration_number": f"PH-COOP-P-{(index % len(PHILIPPINES_AREAS)) + 1:02d}",
+                "role": "member",
+                "active": True,
+                "joined_on": d("2026-01-15"),
+            }
+        )
+        DATA_USE_AUTHORIZATIONS.append(
+            {
+                "authorization_id": f"AUTH-P-{suffix}-VOUCHER",
+                "subject_id": farmer["farmer_id"],
+                "subject_scope": "program",
+                "subject_type": "farmer",
+                "purpose_code": "climate-smart-input-support",
+                "lawful_basis_code": "public_task",
+                "legal_instrument_reference": "PH-AGRI-PLANNING-2026",
+                "grantee_type": "government_program",
+                "disclosure_mode": "predicate",
+                "status": "active",
+                "valid_from": d("2026-01-01"),
+                "valid_until": d("2026-12-31"),
+                "captured_by": f"{area['name']} Agriculture Office",
+                "withdrawal_allowed": False,
+            }
+        )
+        HOLDINGS.append(
+            {
+                "holding_id": f"HOLD-P-{suffix}",
+                "farmer_id": farmer["farmer_id"],
+                "district": area["name"],
+                "district_code": area["code"],
+                "village": area["municipality"],
+                "village_code": area["municipality_code"],
+                "holding_status": "active",
+                "total_area_ha": round(0.7 + ((index % 17) * 0.08), 2),
+                "primary_livelihood": area["crop"],
+                "last_verified_on": d("2026-04-01"),
+                "data_quality_status": "verified",
+                "source_submission_id": "SUB-PH-PLANNING-2026",
+            }
+        )
+        PARCELS.append(
+            {
+                "parcel_id": f"PAR-P-{suffix}",
+                "holding_id": f"HOLD-P-{suffix}",
+                "plot_reference": f"PH-PLOT-P-{suffix}",
+                "district": area["name"],
+                "district_code": area["code"],
+                "area_ha": round(0.5 + ((index % 11) * 0.05), 2),
+                "irrigation_type": "rainfed" if index % 4 else "irrigated",
+                "soil_zone": "alluvial",
+                "geometry_wkt": f"POINT ({area['lon']} {area['lat']})",
+                "active": True,
+                "last_surveyed_on": d("2026-04-01"),
+            }
+        )
+        CROP_DECLARATIONS.append(
+            {
+                "crop_declaration_id": f"CROP-P-{suffix}-{str(area['crop']).upper()}",
+                "parcel_id": f"PAR-P-{suffix}",
+                "season": SEASON,
+                "crop": area["crop"],
+                "planted_area_ha": round(0.4 + ((index % 9) * 0.05), 2),
+                "declared_on": d("2026-03-20"),
+                "declaration_status": "accepted",
+            }
+        )
+
+    for area_index, area in enumerate(PHILIPPINES_AREAS, start=1):
+        DISTRICT_CLIMATE_RISK.append(
+            {
+                "risk_id": f"RISK-P-{area_index:02d}-2026A",
+                "district": area["name"],
+                "district_code": area["code"],
+                "season": SEASON,
+                "drought_risk_level": area["risk_band"],
+                "flood_risk_level": "medium" if area_index % 2 else "low",
+                "rainfall_percentile": 20 + area_index * 7,
+                "recommended_input_type": "climate_smart_seed",
+                "updated_on": d("2026-04-15"),
+            }
+        )
+        MARKET_PRICES.append(
+            {
+                "price_id": f"PRICE-P-{area_index:02d}-{str(area['crop']).upper()}-2026-04-30",
+                "district": area["name"],
+                "district_code": area["code"],
+                "market_name": f"{area['municipality']} Planning Market",
+                "commodity": area["crop"],
+                "price_date": d("2026-04-30"),
+                "unit": "kg",
+                "price": round(0.38 + area_index * 0.03, 2),
+                "currency": "PHP",
+            }
+        )
+        for cell_index in range(1, 7):
+            SNAPSHOT_MARKET_SIZING_CELLS.append(
+                {
+                    "cell_id": f"CELL-P-{area_index:02d}-{cell_index:02d}",
+                    "district": area["name"],
+                    "district_code": area["code"],
+                    "season": SEASON,
+                    "crop": area["crop"],
+                    "risk_band": area["risk_band"],
+                    "input_type": "climate_smart_seed",
+                    "eligible_opportunity_count": 8 + area_index + cell_index,
+                    "estimated_area_ha": round(4.5 + area_index + (cell_index * 0.25), 2),
+                    "cell_farmer_count": 42 + area_index,
+                    "recipient_authorization_required": True,
+                    "geography_floor": "district",
+                }
+            )
+
+    suppressed_area = PHILIPPINES_AREAS[-1]
+    SNAPSHOT_MARKET_SIZING_CELLS.append(
+        {
+            "cell_id": "CELL-P-SUPPRESSED-SOUTH-COTABATO-MAIZE",
+            "district": suppressed_area["name"],
+            "district_code": suppressed_area["code"],
+            "season": SEASON,
+            "crop": "maize",
+            "risk_band": "high",
+            "input_type": "climate_smart_seed",
+            "eligible_opportunity_count": 1,
+            "estimated_area_ha": 0.35,
+            "cell_farmer_count": 1,
+            "recipient_authorization_required": True,
+            "geography_floor": "district",
+        }
+    )
+
+    for index in range(1, 37):
+        area = PHILIPPINES_AREAS[(index - 1) % len(PHILIPPINES_AREAS)]
+        suffix = f"{index:04d}"
+        farmer_id = f"FARMER-P-L-{suffix}"
+        FARMERS.append(
+            {
+                **planning_farmer(300 + index, area),
+                "farmer_id": farmer_id,
+                "national_id": f"PH-LIVESTOCK-P-{suffix}",
+                "producer_type": "livestock",
+                "smallholder_status": "not_applicable",
+                "household_id": f"AG-HH-P-L-{suffix}",
+            }
+        )
+        LIVESTOCK_HOLDINGS.append(
+            {
+                "livestock_holding_id": f"LH-P-{suffix}",
+                "farmer_id": farmer_id,
+                "district": area["name"],
+                "district_code": area["code"],
+                "village": area["municipality"],
+                "village_code": area["municipality_code"],
+                "holding_status": "active",
+                "premises_code": f"PREM-P-{suffix}",
+                "last_verified_on": d("2026-04-05"),
+            }
+        )
+        PREMISES.append(
+            {
+                "premises_code": f"PREM-P-{suffix}",
+                "district_code": area["code"],
+                "village_code": area["municipality_code"],
+                "premises_type": "farm",
+                "registration_status": "active",
+                "last_verified_on": d("2026-04-05"),
+            }
+        )
+        HERDS.append(
+            {
+                "herd_id": f"HERD-P-{suffix}",
+                "farmer_id": farmer_id,
+                "livestock_holding_id": f"LH-P-{suffix}",
+                "district": area["name"],
+                "district_code": area["code"],
+                "village_code": area["municipality_code"],
+                "species": "cattle" if index % 2 else "goat",
+                "count": 5 + (index % 12),
+                "production_system": "backyard",
+                "registration_status": "registered",
+                "updated_on": d("2026-04-05"),
+            }
+        )
+
+
+append_planning_scale_rows()
+
 WORKBOOKS = {
     "farmer-registry.xlsx": [
         ("Farmers", FARMERS),
@@ -2000,6 +2414,7 @@ WORKBOOKS = {
         ("InputCatalog", INPUT_CATALOG),
         ("DiseaseCodes", DISEASE_CODES),
         ("VaccineCodes", VACCINE_CODES),
+        ("Seasons", SEASONS),
         ("ServiceProviders", SERVICE_PROVIDERS),
         ("PurposePolicies", PURPOSE_POLICIES),
         ("SourceSubmissions", SOURCE_SUBMISSIONS),
@@ -2138,6 +2553,9 @@ def one(rows: list[dict[str, object]], key: str, value: object) -> dict[str, obj
 
 
 def validate_fixtures() -> None:
+    if FIXTURE_SCALE not in {"golden", "planning", "large"}:
+        raise ValueError("AGRI_FIXTURE_SCALE must be one of: golden, planning, large")
+
     for rows, key in [
         (FARMERS, "farmer_id"),
         (FARMER_IDENTIFIERS, "identifier_id"),
@@ -2178,6 +2596,7 @@ def validate_fixtures() -> None:
         (VALIDATION_ISSUES, "issue_id"),
         (DUPLICATE_CANDIDATES, "candidate_id"),
         (CORRECTION_REQUESTS, "correction_request_id"),
+        (SEASONS, "season"),
         (VOUCHER_ELIGIBILITY_SNAPSHOTS, "farmer_id"),
         (LIVESTOCK_MOVEMENT_SNAPSHOTS, "movement_snapshot_id"),
         (SNAPSHOT_MARKET_SIZING_CELLS, "cell_id"),
@@ -2198,6 +2617,13 @@ def validate_fixtures() -> None:
     herd_ids = {row["herd_id"] for row in HERDS}
     animal_ids = {row["animal_id"] for row in ANIMALS}
     permit_ids = {row["permit_id"] for row in MOVEMENT_PERMITS}
+    application_ids = {row["application_id"] for row in MOVEMENT_APPLICATIONS}
+    seasons = {row["season"] for row in SEASONS}
+    crop_codes = {row["crop_code"] for row in CROP_CODES if row["active"]}
+    commodity_codes = {row["commodity_code"] for row in COMMODITY_CODES if row["active"]}
+    input_codes = {row["input_code"] for row in INPUT_CATALOG if row["active"]}
+    disease_codes = {row["disease_code"] for row in DISEASE_CODES if row["active"]}
+    vaccine_codes = {row["vaccine_code"] for row in VACCINE_CODES if row["active"]}
 
     require_refs(FARMER_IDENTIFIERS, "farmer_id", farmer_ids, "Farmers.farmer_id")
     require_refs(FARMER_GROUPS, "farmer_id", farmer_ids, "Farmers.farmer_id")
@@ -2228,6 +2654,9 @@ def validate_fixtures() -> None:
     require_refs(MOVEMENT_APPLICATIONS, "origin_premises_code", premises_codes, "Premises.premises_code")
     require_refs(MOVEMENT_APPLICATIONS, "destination_premises_code", premises_codes, "Premises.premises_code")
     require_refs(MOVEMENT_PERMITS, "herd_id", herd_ids, "Herds.herd_id")
+    require_refs(MOVEMENT_PERMITS, "application_id", application_ids, "MovementApplications.application_id")
+    require_refs(MOVEMENT_PERMITS, "origin_premises_code", premises_codes, "Premises.premises_code")
+    require_refs(MOVEMENT_PERMITS, "destination_premises_code", premises_codes, "Premises.premises_code")
     require_refs(MOVEMENT_EVENTS, "permit_id", permit_ids, "MovementPermits.permit_id")
     require_refs(VALIDATION_ISSUES, "source_submission_id", source_submission_ids, "SourceSubmissions.source_submission_id")
     require_refs(DUPLICATE_CANDIDATES, "farmer_id", farmer_ids, "Farmers.farmer_id")
@@ -2236,27 +2665,59 @@ def validate_fixtures() -> None:
     require_refs(LIVESTOCK_MOVEMENT_SNAPSHOTS, "farmer_id", farmer_ids, "Farmers.farmer_id")
     require_refs(LIVESTOCK_MOVEMENT_SNAPSHOTS, "herd_id", herd_ids, "Herds.herd_id")
 
-    for row in FARMERS + HOLDINGS + SUPPLIERS + LIVESTOCK_HOLDINGS + PREMISES:
+    for row in FARMERS + HOLDINGS + SUPPLIERS + LIVESTOCK_HOLDINGS + PREMISES + DISTRICT_CLIMATE_RISK + RAINFALL_OBSERVATIONS + MARKET_PRICES + CROP_CALENDAR + ADVISORY_RULES + QUARANTINE_ZONES:
         if "district_code" in row and row["district_code"] not in district_codes:
             raise ValueError(f"{row['district_code']} must reference an AdminAreas district")
     for row in FARMERS + HOLDINGS:
         require_refs([row], "source_submission_id", source_submission_ids, "SourceSubmissions.source_submission_id")
     for row in PROGRAMS:
         require_window(row["program_code"], row["starts_on"], row["ends_on"])
+        if row["season"] not in seasons:
+            raise ValueError(f"program season {row['season']} must reference Seasons.season")
     for row in DATA_USE_AUTHORIZATIONS:
+        if row["subject_scope"] not in {"individual", "program", "universal"}:
+            raise ValueError(f"{row['authorization_id']} has invalid subject_scope {row['subject_scope']!r}")
         if row["status"] == "active":
             require_window(row["authorization_id"], row["valid_from"], row["valid_until"])
     for row in VOUCHER_ENTITLEMENTS:
+        if row["season"] not in seasons:
+            raise ValueError(f"entitlement season {row['season']} must reference Seasons.season")
         if row["entitlement_status"] == "issued":
-            require_window(row["entitlement_id"], row["issued_on"], row["expires_on"])
+            require_window(row["entitlement_id"], row["valid_from"], row["expires_on"])
+            if row["issued_on"] < row["valid_from"]:
+                raise ValueError(f"{row['entitlement_id']} issued before valid_from")
+    for row in CROP_DECLARATIONS + CROP_CALENDAR:
+        if row["season"] not in seasons:
+            raise ValueError(f"crop season {row['season']} must reference Seasons.season")
+        if row["crop"] not in crop_codes:
+            raise ValueError(f"crop {row['crop']} must reference CropCodes.crop_code")
+    for row in MARKET_PRICES:
+        if row["commodity"] not in commodity_codes:
+            raise ValueError(f"commodity {row['commodity']} must reference CommodityCodes.commodity_code")
+    for row in DISTRICT_CLIMATE_RISK + ADVISORY_RULES:
+        if row["season"] not in seasons:
+            raise ValueError(f"risk/advisory season {row['season']} must reference Seasons.season")
+        if row["recommended_input_type"] not in input_codes and row["recommended_input_type"] != "none":
+            raise ValueError(f"input {row['recommended_input_type']} must reference InputCatalog.input_code")
     for row in VACCINATIONS:
+        if row["vaccine_code"] not in vaccine_codes:
+            raise ValueError(f"vaccine {row['vaccine_code']} must reference VaccineCodes.vaccine_code")
         if row["status"] == "valid":
             require_window(row["vaccination_id"], row["vaccinated_on"], row["valid_until"])
         if row["animal_id"]:
             require_refs([row], "animal_id", animal_ids, "Animals.animal_id")
     for row in QUARANTINE_ZONES:
+        if row["disease_code"] not in disease_codes:
+            raise ValueError(f"disease {row['disease_code']} must reference DiseaseCodes.disease_code")
         if row["status"] == "active":
             require_window(row["zone_id"], row["effective_from"], row["effective_until"])
+    for row in SNAPSHOT_MARKET_SIZING_CELLS:
+        if row["season"] not in seasons:
+            raise ValueError(f"market sizing season {row['season']} must reference Seasons.season")
+        if row["crop"] not in crop_codes:
+            raise ValueError(f"market sizing crop {row['crop']} must reference CropCodes.crop_code")
+        if row["input_type"] not in input_codes:
+            raise ValueError(f"market sizing input {row['input_type']} must reference InputCatalog.input_code")
 
     assert_crop_subject("FARMER-1001", "eligible")
     for farmer_id in ["FARMER-1002", "FARMER-1003", "FARMER-1004"]:
@@ -2283,6 +2744,20 @@ def validate_fixtures() -> None:
         raise ValueError("program data must include a duplicate redemption attempt")
     if not any(row["license_status"] == "expired" for row in SUPPLIERS):
         raise ValueError("program data must include an expired supplier license control")
+    if FIXTURE_SCALE in {"planning", "large"}:
+        planning_farmers = [row for row in FARMERS if str(row["farmer_id"]).startswith("FARMER-P-")]
+        planning_admins = [row for row in ADMIN_AREAS if str(row["admin_code"]).startswith("D-PH-")]
+        if len(planning_farmers) < 250:
+            raise ValueError("planning fixtures must include at least 250 FARMER-P-* rows")
+        if len(planning_admins) < 4:
+            raise ValueError("planning fixtures must include at least four Philippines district geographies")
+        publishable_ph_cells = [
+            row
+            for row in SNAPSHOT_MARKET_SIZING_CELLS
+            if str(row["district_code"]).startswith("D-PH-")
+        ]
+        if len(publishable_ph_cells) < 30:
+            raise ValueError("planning fixtures must include publishable Philippines market-sizing cells")
 
 
 def canonicalize_xlsx(raw: bytes) -> bytes:

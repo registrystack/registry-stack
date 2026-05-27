@@ -69,6 +69,11 @@ def env_line(key: str, value: str) -> str:
 
 def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_witness_issuer_jwk()
+    default_federation_client_jwk = generate_registry_witness_issuer_jwk()
+    civil_federation_response_jwk = generate_registry_witness_issuer_jwk()
+    social_federation_response_jwk = generate_registry_witness_issuer_jwk()
+    agri_federation_client_jwk = generate_registry_witness_issuer_jwk()
+    agri_federation_response_jwk = generate_registry_witness_issuer_jwk()
     openfn_sidecar_token = generate_raw_key()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_raw_key(),
@@ -78,6 +83,14 @@ def generate_env() -> dict[str, str]:
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
+        "DEFAULT_FEDERATION_CLIENT_JWK": default_federation_client_jwk,
+        "CIVIL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
+        "CIVIL_FEDERATION_RESPONSE_JWK": civil_federation_response_jwk,
+        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
+        "SOCIAL_FEDERATION_RESPONSE_JWK": social_federation_response_jwk,
+        "AGRI_FEDERATION_CLIENT_JWK": agri_federation_client_jwk,
+        "AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
+        "AGRI_FEDERATION_RESPONSE_JWK": agri_federation_response_jwk,
         "OPENFN_SIDECAR_TOKEN_RAW": openfn_sidecar_token,
         "OPENFN_SIDECAR_TOKEN_HASH": fingerprint(openfn_sidecar_token),
         "OPENFN_MOCK_REGISTRY_TOKEN_RAW": generate_raw_key(),
@@ -148,6 +161,11 @@ def main() -> int:
             ),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
             "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
+            "default_federation_client_jwk": "DEFAULT_FEDERATION_CLIENT_JWK",
+            "civil_federation_response_jwk": "CIVIL_FEDERATION_RESPONSE_JWK",
+            "social_federation_response_jwk": "SOCIAL_FEDERATION_RESPONSE_JWK",
+            "agri_federation_client_jwk": "AGRI_FEDERATION_CLIENT_JWK",
+            "agri_federation_response_jwk": "AGRI_FEDERATION_RESPONSE_JWK",
             "binding_key": "CLAIM_VERIFICATION_BINDING_KEY",
         }
         print(json.dumps(summary, indent=2, sort_keys=True))

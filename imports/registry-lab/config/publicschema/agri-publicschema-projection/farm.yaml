@@ -1,0 +1,39 @@
+version: "0.2"
+id: nagdi-agri-farm-v1
+source: nagdi-agri-relay
+target: publicschema
+runtime:
+  bindings: publicschema-v1
+property_mappings:
+  - rule_id: farm-id
+    source: /id
+    target: /id
+    required: true
+  - rule_id: source-holding-id
+    source: /source_holding_id
+    target: /source_holding_id
+    required: true
+  - rule_id: name
+    source: /name
+    target: /name
+  - rule_id: group-type
+    source: /group_type
+    target: /group_type
+    required: true
+  - rule_id: farm-area-hectares
+    source: /farm_area_hectares
+    target: /farm_area_hectares
+  - rule_id: primary-crop
+    source: /primary_crop
+    target: /primary_crop
+  - rule_id: location-id
+    source: /location_id
+    target: /location_id
+  - rule_id: operator-person-id
+    source: /operator_person_id
+    target: /operator_person_id
+    required: true
+  - rule_id: concept-uri
+    source: /concept_uri
+    target: /concept_uri
+    required: true

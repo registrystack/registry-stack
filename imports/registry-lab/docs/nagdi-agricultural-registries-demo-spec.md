@@ -70,6 +70,7 @@ Recommended recipes:
 
 ```text
 just agri-generate
+just agri-generate-planning
 just agri-build
 just agri-up
 just agri-smoke
@@ -100,6 +101,16 @@ AGRI_SUPPRESSED_AGGREGATE_PATH=/datasets/agri_registry/aggregates/voucher_opport
 The scripts should consume only `AGRI_*` credentials from `.env` and must not
 print raw token values in terminal output or artifacts.
 
+`just agri-generate` must write agricultural XLSX fixtures, agricultural demo
+secrets, and static metadata needed by `just agri-smoke`. Shared baseline
+secrets, including `REGISTRY_WITNESS_ISSUER_JWK`, must exist before Wave 0
+validation starts.
+
+`just agri-down` may stop the named agricultural services rather than the full
+Compose profile so it does not disturb the baseline lab. Keep that deviation
+documented in the README and smoke instructions if the recipe remains
+service-name based.
+
 ## Actors
 
 - Farmer or livestock keeper: beneficiary, applicant, or permit requester.
@@ -128,6 +139,8 @@ Subject identifiers:
 - Farmer registry lookup: `farmer_id`.
 - Holding and program lookup: `farmer_id`.
 - Livestock lookup: `farmer_id` plus `herd_id` for herd-specific claims.
+- Livestock movement snapshot lookup: `movement_snapshot_id`, which must equal
+  `herd_id` in the fixture rows used by Witness.
 - Synthetic national identifiers may exist in `FarmerIdentifiers`, but should
   not be required for the main demo path and should not be exposed in ordinary
   evidence outputs.
@@ -142,6 +155,14 @@ season = 2026A
 All freshness, entitlement, redemption, vaccination, permit, and quarantine
 checks should be evaluated against this date so smoke tests remain
 deterministic.
+
+Administrative codes:
+
+- `district_code` in operational sheets equals `AdminAreas.admin_code` where
+  `admin_level = district`.
+- `village_code` in operational sheets equals `AdminAreas.admin_code` where
+  `admin_level = village`.
+- `season` values such as `2026A` must exist in the `Seasons` reference sheet.
 
 ## Workbook Set
 
@@ -224,6 +245,7 @@ joined_on
 authorization_id
 subject_id
 subject_type
+subject_scope
 purpose_code
 lawful_basis_code
 legal_instrument_reference
@@ -260,6 +282,11 @@ Realism notes:
 - Use `DataUseAuthorizations` for consent, public task, legal mandate,
   program-rule, and permit-condition cases. Consent is one possible basis, not
   the default for government eligibility and animal-health controls.
+- `subject_scope` must be one of `individual`, `program`, or `universal`.
+  Individual consent or authorization rows use `individual`; program-level legal
+  mandates or public-task authorizations use `program` or `universal` so the
+  Witness rule can establish lawful basis without requiring a per-farmer consent
+  row.
 
 ### `farm-holdings-registry.xlsx`
 
@@ -339,6 +366,9 @@ Realism notes:
 
 - Use `geometry_wkt` for simple polygons or centroids, because workbooks often
   carry geometry as copied text rather than a native geospatial type.
+- Treat `geometry_wkt` as `sensitive_location`. Ordinary row projections should
+  omit raw parcel WKT unless the credential, purpose, and audience explicitly
+  allow holding-level location access.
 - Include duplicate or retired parcel references only if Relay config can
   safely avoid using them as primary keys.
 - Prefer `parcel_id` and `holding_id` as stable synthetic keys.
@@ -419,6 +449,7 @@ eligible_input_type
 package_code
 max_value
 currency
+valid_from
 issued_on
 expires_on
 ```
@@ -533,12 +564,14 @@ Sheets:
 - `MarketPrices`
 - `CropCalendar`
 - `AdvisoryRules`
+- `VoucherMarketSizingCells`
 
 `DistrictClimateRisk` columns:
 
 ```text
 risk_id
 district
+district_code
 season
 drought_risk_level
 flood_risk_level
@@ -552,6 +585,7 @@ updated_on
 ```text
 observation_id
 district
+district_code
 station_id
 observed_on
 rainfall_mm
@@ -563,6 +597,7 @@ source_quality
 ```text
 price_id
 district
+district_code
 market_name
 commodity
 price_date
@@ -576,6 +611,7 @@ currency
 ```text
 calendar_id
 district
+district_code
 crop
 season
 planting_window_start
@@ -589,12 +625,32 @@ harvest_window_end
 ```text
 rule_id
 district
+district_code
 season
 crop
 risk_level
 recommended_input_type
 advisory_text_code
 active
+```
+
+`VoucherMarketSizingCells` columns:
+
+```text
+cell_id
+district_code
+district
+village_code
+crop
+risk_band
+input_type
+season
+eligible_count
+minimum_cell_count
+suppression_status
+suppression_reason
+recipient_type
+purpose_code
 ```
 
 Realism notes:
@@ -605,6 +661,9 @@ Realism notes:
   farmer and parcel records remain personal or sensitive.
 - Market-sizing outputs should enforce minimum cell counts, geography floors,
   rare-category suppression, and recipient/purpose checks.
+- Pre-materialized market-sizing cells should be designed to avoid simple
+  differencing attacks. Do not publish paired totals and complements that allow
+  a suppressed cell to be recovered by subtraction.
 
 ### `livestock-registry.xlsx`
 
@@ -692,6 +751,7 @@ status
 ```text
 zone_id
 district
+district_code
 disease_code
 status
 effective_from
@@ -704,9 +764,12 @@ district_code
 
 ```text
 permit_id
+application_id
 herd_id
-origin_district
-destination_district
+origin_premises_code
+destination_premises_code
+origin_district_code
+destination_district_code
 permit_status
 issued_on
 valid_until
@@ -747,9 +810,16 @@ Realism notes:
 - Make vaccination valid at herd level for most rows and individual-animal
   level for a small traceability edge case.
 - Include one active quarantine zone and one expired quarantine zone.
+- Movement permits must link back to `MovementApplications.application_id`.
 - Movement eligibility should consider origin premises, destination premises,
   species-specific disease rules, requested movement date, animal count, and
   conflicting open permits.
+- Quarantine checks are species-aware. The fixture should include at least one
+  quarantine disease affecting the requested species and one disease that does
+  not affect it, so `origin-district-not-quarantined-for-species` can be tested.
+- `MovementEvents` is a traceability record for post-permit movement
+  confirmation. It is not part of the default movement permit eligibility claim
+  unless a later wave adds a `movement-confirmed-at-destination` claim.
 
 ### `nagdi-reference-data.xlsx`
 
@@ -758,6 +828,7 @@ Owner: NAgDI governance or standards unit.
 Sheets:
 
 - `AdminAreas`
+- `Seasons`
 - `CropCodes`
 - `CommodityCodes`
 - `InputCatalog`
@@ -780,6 +851,60 @@ parent_admin_code
 active
 valid_from
 valid_until
+```
+
+`Seasons` columns:
+
+```text
+season
+season_name
+starts_on
+ends_on
+active
+```
+
+`CropCodes` columns:
+
+```text
+crop_code
+crop_name
+active
+```
+
+`CommodityCodes` columns:
+
+```text
+commodity_code
+commodity_name
+unit
+active
+```
+
+`InputCatalog` columns:
+
+```text
+input_code
+input_name
+unit
+active
+```
+
+`DiseaseCodes` columns:
+
+```text
+disease_code
+disease_name
+species
+active
+```
+
+`VaccineCodes` columns:
+
+```text
+vaccine_code
+disease_code
+validity_days
+active
 ```
 
 `SourceSubmissions` columns:
@@ -824,6 +949,31 @@ onward_sharing_allowed
 automated_decision_allowed
 appeal_contact
 audit_required
+published_by_authority
+approval_status
+```
+
+`DuplicateCandidates` columns:
+
+```text
+candidate_id
+source_submission_id
+farmer_id
+matched_farmer_id
+match_basis
+match_score
+status
+```
+
+`CorrectionRequests` columns:
+
+```text
+correction_request_id
+issue_id
+requested_from_office
+requested_on
+status
+resolution_note
 ```
 
 Realism notes:
@@ -832,6 +982,84 @@ Realism notes:
   for deterministic joins and policy rules.
 - Include one unresolved duplicate or validation issue that produces a
   `manual_review` outcome rather than a clean yes/no eligibility result.
+- Include one `PurposePolicies` row with `approval_status = pending_approval`
+  to show that policies are governed records, not only static lookup values.
+- `ChangeLog` sheets use the same schema in every workbook. `ChangeLog` records
+  manual edits or publication events, while `ValidationIssues` records detected
+  data quality problems that may block or route a case to manual review.
+
+### `nagdi-evidence-snapshots.xlsx`
+
+Owner: NAgDI governance or evidence orchestration unit.
+
+Sheets:
+
+- `VoucherEligibilitySnapshots`
+- `LivestockMovementSnapshots`
+- `MarketSizingCells`
+
+`VoucherEligibilitySnapshots` columns:
+
+```text
+farmer_id
+season
+purpose_code
+farmer_registered
+lawful_basis_established
+active_smallholder_farmer
+active_farm_parcel
+crop_declared_for_season
+district_climate_risk_active
+voucher_entitlement_current
+voucher_not_redeemed
+supplier_license_active
+manual_review_required
+reason_code
+evaluation_as_of
+```
+
+`LivestockMovementSnapshots` columns:
+
+```text
+movement_snapshot_id
+farmer_id
+herd_id
+registered_livestock_holder
+registered_herd
+herd_vaccination_current
+origin_district_not_quarantined_for_species
+destination_district_open
+no_conflicting_open_movement_permit
+manual_review_required
+reason_code
+evaluation_as_of
+```
+
+`MarketSizingCells` columns:
+
+```text
+cell_id
+district
+district_code
+season
+crop
+risk_band
+input_type
+eligible_opportunity_count
+estimated_area_ha
+cell_farmer_count
+recipient_authorization_required
+geography_floor
+```
+
+Realism notes:
+
+- This workbook contains materialized evidence and aggregate projections used to
+  keep the first demo inside currently proven Relay and Witness patterns.
+- Snapshot rows are generated outputs. They are not authoritative source
+  registry records.
+- `MarketSizingCells` is the preferred source for aggregate planning evidence
+  until cross-workbook Relay aggregates are explicitly validated.
 
 ## Registry Relay Surface
 
@@ -846,6 +1074,7 @@ Recommended datasets:
 - `agroclimate_market_registry`
 - `livestock_registry`
 - `nagdi_reference_data`
+- `nagdi_evidence_snapshots`
 
 Recommended entities:
 
@@ -880,10 +1109,15 @@ Recommended aggregates:
 - eligible voucher entitlements by district and input type
 - redemptions by supplier and status
 - drought-risk districts by season
-- livestock herd counts by species and district
+- pre-materialized livestock herd counts by species and district
 - vaccination coverage by species and district
 - pre-materialized voucher market-sizing cells by district, crop, risk band,
   and input type
+
+Aggregate ids must be unique across dataset-level and entity-level aggregate
+configuration. Define `voucher_opportunities_by_district_crop_risk_input` in
+one place only, preferably on the pre-materialized market-sizing source used by
+the smoke path.
 
 Access model:
 
@@ -908,10 +1142,14 @@ Each Relay entity added for the demo must specify:
 
 Phase 0 should use materialized one-row evidence projections where needed.
 For example, `voucher_eligibility_snapshot` can summarize whether the farmer is
-registered, authorized for the purpose, has an active parcel, has a current
-entitlement, and has a recorded redemption. Later phases can replace this with
-multi-source Witness bindings if product support and demo complexity justify
-it.
+registered, has an established lawful basis for the purpose, has an active
+parcel, has a current entitlement, and has a recorded redemption. Later phases
+can replace this with multi-source Witness bindings if product support and demo
+complexity justify it.
+
+Do not make the first herd aggregate depend on a cross-table Relay join unless
+the wave explicitly validates that feature. Prefer a pre-materialized
+district-level herd planning snapshot for the demo path.
 
 ## Registry Witness Surface
 
@@ -920,7 +1158,7 @@ it.
 Claims:
 
 - `farmer-registered`
-- `data-use-authorized-for-purpose`
+- `lawful-basis-established-for-purpose`
 - `active-smallholder-farmer`
 - `active-farm-parcel`
 - `crop-declared-for-season`
@@ -935,7 +1173,7 @@ Composite rule:
 ```text
 eligible-for-climate-smart-input-voucher =
   farmer-registered
-  and data-use-authorized-for-purpose
+  and lawful-basis-established-for-purpose
   and active-smallholder-farmer
   and active-farm-parcel
   and crop-declared-for-season
@@ -959,7 +1197,7 @@ Claims:
 - `registered-livestock-holder`
 - `registered-herd`
 - `herd-vaccination-current`
-- `origin-district-not-quarantined`
+- `origin-district-not-quarantined-for-species`
 - `destination-district-open`
 - `no-conflicting-open-movement-permit`
 - `eligible-for-livestock-movement-permit`
@@ -971,7 +1209,7 @@ eligible-for-livestock-movement-permit =
   registered-livestock-holder
   and registered-herd
   and herd-vaccination-current
-  and origin-district-not-quarantined
+  and origin-district-not-quarantined-for-species
   and destination-district-open
   and no-conflicting-open-movement-permit
 ```
@@ -999,7 +1237,7 @@ Minimum supported outputs:
 Reason code examples:
 
 - `farmer.registration_status:not_active`
-- `data_use_authorization:missing_or_expired`
+- `lawful_basis:missing_or_expired`
 - `parcel.status:not_active`
 - `climate.risk:not_targeted`
 - `voucher.redemption:already_redeemed`
@@ -1017,7 +1255,7 @@ controls.
 `FARMER-1001`
 
 - registered farmer
-- valid data-use authorization for the purpose
+- valid lawful basis established for the purpose
 - active smallholder
 - active maize parcel in drought-risk district
 - current voucher entitlement
@@ -1039,8 +1277,13 @@ controls.
 
 `FARMER-1004`
 
-- pending farmer registration or stale verification
+- pending farmer registration
 - expected result: not eligible
+
+`FARMER-1006` (optional if the fixture needs a separate freshness control)
+
+- active farmer registration but stale verification
+- expected result: not eligible with a freshness reason code
 
 `FARMER-1005`
 
@@ -1146,7 +1389,7 @@ Public services:
 Requirements:
 
 - farmer identity and registration requirement
-- data-use authorization or lawful-basis requirement
+- lawful-basis requirement
 - active parcel requirement
 - crop declaration requirement
 - climate-risk targeting requirement
@@ -1255,13 +1498,17 @@ Use spreadsheet features and imperfections carefully:
 
 ## Implementation Phases
 
+Consumer-facing MIS, GIS, and semantic projection improvements are specified in
+[`nagdi-consumer-integration-demo-spec.md`](nagdi-consumer-integration-demo-spec.md).
+
 ### Phase 0: Feasibility Slice
 
 Build:
 
 - one combined `agri-registry-relay`
 - one `nagdi-agriculture-witness`
-- one generated XLSX workbook or a small subset of the workbooks
+- the minimum generated XLSX workbook set, including
+  `nagdi-evidence-snapshots.xlsx` when materialized snapshot entities are used
 - materialized one-row evidence snapshot for input voucher review
 - one positive subject and one negative subject
 - one static metadata offering
@@ -1271,7 +1518,10 @@ Done when:
 
 - `FARMER-1001` evaluates eligible.
 - one negative farmer evaluates not eligible.
-- a row-read denial and a Witness evaluation success are both captured.
+- a row-read denial artifact is captured under `output/agri-smoke/`.
+- a Witness evaluation success artifact is captured under `output/agri-smoke/`.
+- one audit artifact for an evaluation or denial is captured under
+  `output/agri-smoke/`.
 - fixture generation validates primary keys and references.
 
 ### Phase 1: Crop/Input Voucher Bounded Slice
@@ -1291,10 +1541,9 @@ Done when:
 - `FARMER-1002`, `FARMER-1003`, and `FARMER-1004` evaluate not eligible with
   clear reason codes.
 - metadata discovery leads to the Witness endpoint for eligibility evidence.
-- at least two access-denial controls pass.
-- aggregate-only market sizing is represented by a Registry Relay aggregate
-  offering over a simple or pre-materialized aggregate source without personal
-  row access.
+- the evidence-only row-read denial, aggregate-only row-read denial,
+  row-reader aggregate denial, and missing-purpose row-read denial all pass.
+- `FARMER-1005` returns manual review and is not auto-eligible.
 
 ### Phase 1b: Market-Sizing Controls
 
@@ -1311,6 +1560,9 @@ Done when:
 - aggregate-only access cannot read farmer, parcel, entitlement, or redemption
   rows.
 - suppressed cells are not emitted.
+- the suppressed-cell artifact is captured under
+  `output/agri-smoke/agri-suppressed-aggregate.json` or the narrated client
+  equivalent under `output/agri-client/`.
 - the narrated client explains that private actors receive planning evidence,
   not farmer lists.
 
@@ -1329,15 +1581,20 @@ Done when:
 - `HERD-2001` evaluates eligible.
 - `HERD-2002` fails on vaccination.
 - `HERD-2003` fails on quarantine.
-- a herd aggregate is available without individual animal row access.
+- a pre-materialized or explicitly validated herd aggregate is available
+  without individual animal row access.
 
 ### Phase 3: Credential And Wallet Story
+
+Keep this in the core demo as a lightweight credential and OID4VCI/wallet
+probe. The demo should prove holder-bound credential issuance after successful
+voucher evidence, without expanding into a full production wallet ceremony.
 
 Build:
 
 - SD-JWT VC profile for successful input voucher eligibility.
 - Optional SD-JWT VC profile for livestock movement eligibility.
-- OID4VCI or wallet interop probe only if it adds clear demo value.
+- Lightweight OID4VCI or wallet interop probe for the agriculture credential.
 
 Done when:
 
@@ -1395,18 +1652,17 @@ Agricultural demo verification should include:
 
 ## Definition Of Done
 
-The NAgDI agricultural registries demo is complete only when every applicable
-item below is true. A wave is not complete if any item is only partly
-implemented, hidden behind manual data edits, or dependent on undocumented
-setup.
+The NAgDI agricultural registries demo is complete only when every item required
+by the implemented wave is true. A wave is not complete if any item is only
+partly implemented, hidden behind manual data edits, or dependent on
+undocumented setup.
 
-Current completion stance: the near-term 95% demo target is Phases 1, 1b, and
-2 with deterministic fixtures, Registry Witness voucher and livestock evidence,
-Registry Relay aggregate market sizing, denial artifacts, and narrated client
-artifacts. Demo-grade Witness credential issuance for a successful voucher
-evaluation is included in the validation surface. Full wallet or OID4VCI
-journeys remain optional and should not block calling the agricultural
-registries demo complete unless they are explicitly added to the release scope.
+Current completion stance: the near-term 95% demo target is Phases 1, 1b, 2,
+and a lightweight Phase 3 with deterministic fixtures, Registry Witness voucher
+and livestock evidence, Registry Relay aggregate market sizing, denial
+artifacts, narrated client artifacts, holder-bound voucher credential issuance,
+and a scripted OID4VCI or wallet probe. Full production wallet ceremonies remain
+out of scope.
 
 Functional acceptance:
 
@@ -1476,16 +1732,21 @@ Verification acceptance:
 - The closest focused generator checks pass.
 - `just agri-smoke` passes.
 - `just agri-client` passes.
-- Existing baseline smoke or release-fast checks are run when the agricultural
-  changes touch shared scripts, Compose topology, static metadata publication,
-  Dockerfiles, or secret generation.
+- `git diff --name-only main...HEAD` is reviewed for every wave. If the diff
+  touches `justfile`, `compose.yaml`, `scripts/generate-*`,
+  `static-metadata/`, Dockerfiles, or shared secret generation, baseline
+  `just smoke` and `just release-fast` are run, or the skipped command and
+  reason are recorded in the review.
 - Any skipped check is documented with the exact reason and residual risk.
 
 Review acceptance:
 
-- Each implementation wave receives a code review before the next wave starts.
+- Each implementation wave receives named staff-engineer and domain or privacy
+  review before the next wave starts.
 - Review findings are resolved or explicitly moved to a later wave with a
   named reason.
+- No wave is marked done until the named reviewer approval and the validation
+  command output are recorded in the PR, change note, or review artifact.
 - The final self-review confirms no unrelated dirty files were reverted,
   reformatted, or mixed into the change.
 - No "partially implemented" item remains in the completed wave.
@@ -1495,6 +1756,11 @@ Review acceptance:
 Implement the demo in waves. Workers run in parallel only when their write
 scopes are disjoint, and every wave ends with integration review, smoke
 evidence, and a short retrospective before the next wave begins.
+
+Each wave has exactly one infrastructure owner for shared files such as
+`justfile`, `compose.yaml`, README files, Dockerfiles, `.env` generation, and
+static metadata publication wiring. Other workers may propose interface
+requirements, but they do not edit those shared files directly.
 
 ### Wave 0: Feasibility Slice
 
@@ -1508,8 +1774,8 @@ Parallel worker ownership:
   scopes, and purpose requirements.
 - Worker C owns `nagdi-agriculture-witness` claims for one eligible and one
   denied input-voucher subject.
-- Worker D owns `just agri-*` recipes, Compose profile wiring, and smoke
-  script scaffolding.
+- Worker D is the infrastructure owner and owns `just agri-*` recipes, Compose
+  profile wiring, README updates, and smoke script scaffolding.
 
 Review gate:
 
@@ -1527,7 +1793,7 @@ Validation gate:
 
 Wave 0 is done only when metadata discovery, one positive evaluation, one
 negative evaluation, one row-read denial, and one audit artifact are all
-captured.
+captured under `output/agri-smoke/`, and named reviewer approval is recorded.
 
 ### Wave 1: Crop And Input Voucher Demo
 
@@ -1543,8 +1809,9 @@ Parallel worker ownership:
   and manual-review behavior.
 - Worker D owns static metadata for services, requirements, evidence types,
   policies, purpose IRIs, and access services.
-- Worker E owns narrated client artifacts, smoke assertions, and README/demo
-  documentation.
+- Worker E is the infrastructure owner and owns narrated client artifacts,
+  smoke assertions, README/demo documentation, and any `justfile` or Compose
+  edits needed by the wave.
 
 Review gate:
 
@@ -1564,7 +1831,9 @@ Validation gate:
 
 Wave 1 is done only when `FARMER-1001` is eligible, `FARMER-1002`,
 `FARMER-1003`, and `FARMER-1004` are denied with stable reason codes,
-`FARMER-1005` returns manual review, and all denial controls pass.
+`FARMER-1005` returns manual review, evidence-only row denial,
+aggregate-only row denial, row-reader aggregate denial, and missing-purpose
+row denial all pass, and named reviewer approval is recorded.
 
 ### Wave 1b: Market-Sizing Controls
 
@@ -1576,8 +1845,9 @@ Parallel worker ownership:
 - Worker B owns Relay aggregate config and aggregate-only access controls.
 - Worker C owns static metadata and policy descriptions for market-sizing
   recipients, disclosure modes, and suppression rules.
-- Worker D owns smoke and narrated client assertions for allowed and suppressed
-  aggregates.
+- Worker D is the infrastructure owner and owns smoke and narrated client
+  assertions for allowed and suppressed aggregates plus any shared recipe or
+  README updates.
 
 Review gate:
 
@@ -1594,7 +1864,8 @@ Validation gate:
 
 Wave 1b is done only when aggregate-only clients cannot read personal rows,
 allowed aggregate outputs pass, and a rare-cell or village-level aggregate is
-suppressed or denied with a stable artifact.
+suppressed or denied with a stable artifact under `output/agri-smoke/` or
+`output/agri-client/`, and named reviewer approval is recorded.
 
 ### Wave 2: Livestock Movement Permit
 
@@ -1608,8 +1879,8 @@ Parallel worker ownership:
   aggregate routes.
 - Worker C owns livestock Witness claims, species/date checks, quarantine
   checks, and conflicting-permit checks.
-- Worker D owns livestock static metadata, narrated client flow, smoke checks,
-  and docs.
+- Worker D is the infrastructure owner and owns livestock static metadata,
+  narrated client flow, smoke checks, docs, and any shared recipe updates.
 
 Review gate:
 
@@ -1625,19 +1896,21 @@ Validation gate:
 - `just agri-client`
 
 Wave 2 is done only when `HERD-2001` evaluates eligible, `HERD-2002` fails for
-vaccination, `HERD-2003` fails for quarantine, and a herd aggregate is available
-without individual animal row access.
+vaccination, `HERD-2003` fails for species-aware quarantine, and a
+pre-materialized or explicitly validated herd aggregate is available without
+individual animal row access, and named reviewer approval is recorded.
 
 ### Wave 3: Credential And Wallet Story
 
-Goal: keep demo-grade credential issuance proven and add a fuller wallet story
-only after the evidence flows are stable.
+Goal: keep demo-grade credential issuance proven and add a lightweight wallet or
+OID4VCI probe after the evidence flows are stable.
 
 Parallel worker ownership:
 
 - Worker A owns credential profile config and issuer material wiring.
 - Worker B owns holder-binding smoke and negative controls.
-- Worker C owns narrated client credential artifacts and docs.
+- Worker C is the infrastructure owner and owns narrated client credential
+  artifacts, docs, and shared recipe updates.
 
 Review gate:
 
@@ -1653,6 +1926,6 @@ Validation gate:
 - any existing credential or OID4VCI probe if that surface is touched
 
 Wave 3 is done for the current demo when a successful evaluation can issue a
-bound credential and raw source rows remain out of credential outputs. It is
-done for a future wallet release only when wallet/OID4VCI negative controls
-also fail closed.
+bound credential, the lightweight wallet or OID4VCI probe passes, raw source
+rows remain out of credential outputs, and wallet/OID4VCI negative controls
+fail closed.

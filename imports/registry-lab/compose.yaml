@@ -8,6 +8,7 @@ x-relay-common: &relay-common
     additional_contexts:
       registry_relay_src: ${REGISTRY_RELAY_SOURCE_DIR:-./vendor/registry-relay}
       registry_platform_src: ${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+      cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     args:
       REGISTRY_RELAY_FEATURES: ${REGISTRY_RELAY_FEATURES:-spdci-api-standards,standards-cel-mapping}
   env_file:
@@ -29,6 +30,7 @@ x-witness-common: &witness-common
     additional_contexts:
       witness_src: ${REGISTRY_WITNESS_SOURCE_DIR:-./vendor/registry-witness}
       registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+      cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
   env_file:
     - .env
   environment:
@@ -155,6 +157,9 @@ services:
       - "4321:8080"
     volumes:
       - ./config/witness/civil-witness.yaml:/etc/registry-witness/civil-witness.yaml:ro
+    depends_on:
+      - civil-registry-relay
+      - static-metadata-publisher
 
   social-protection-witness:
     <<: *witness-common
@@ -163,6 +168,9 @@ services:
       - "4322:8080"
     volumes:
       - ./config/witness/social-protection-witness.yaml:/etc/registry-witness/social-protection-witness.yaml:ro
+    depends_on:
+      - social-protection-registry-relay
+      - static-metadata-publisher
 
   shared-eligibility-witness:
     <<: *witness-common
@@ -180,6 +188,7 @@ services:
       additional_contexts:
         witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
         registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
       - |
@@ -209,6 +218,7 @@ services:
       additional_contexts:
         witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
         registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     env_file:
       - .env
     environment:
@@ -245,6 +255,7 @@ services:
       additional_contexts:
         witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
         registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     command: ["--config", "/etc/registry-witness/openfn-civil-witness.yaml"]
     environment:
       RUST_LOG: info
@@ -291,6 +302,7 @@ services:
       - ./config/witness/nagdi-agriculture-witness.yaml:/etc/registry-witness/nagdi-agriculture-witness.yaml:ro
     depends_on:
       - agri-registry-relay
+      - agri-static-metadata-publisher
 
   agri-static-metadata-publisher:
     image: python:3.12.3-slim-bookworm

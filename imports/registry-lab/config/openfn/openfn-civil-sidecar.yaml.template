@@ -38,8 +38,12 @@ sources:
   civil_openfn:
     dataset: civil_registry
     entity: civil_person
-    job: /opt/openfn/jobs/http-person-lookup.js
-    adaptor: "@openfn/language-http@7.2.0"
+    workflow:
+      steps:
+        - id: lookup
+          expression: /opt/openfn/jobs/http-person-lookup.js
+          adaptors:
+            - "@openfn/language-http@7.2.0"
     credential_env: OPENFN_HTTP_DEMO_CREDENTIAL_JSON
     allowed_base_urls:
       - http://openfn-mock-registry:8080

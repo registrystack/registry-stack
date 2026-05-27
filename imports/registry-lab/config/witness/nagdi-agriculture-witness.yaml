@@ -20,6 +20,59 @@ audit:
   sink: stdout
   hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
 
+federation:
+  enabled: true
+  node_id: did:web:nagdi-agriculture-witness.demo.example.gov
+  issuer: https://nagdi-agriculture-witness.demo.example.gov
+  jwks_uri: https://nagdi-agriculture-witness.demo.example.gov/federation/jwks.json
+  federation_api: https://nagdi-agriculture-witness.demo.example.gov/federation/v1
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
+  inbound_body_limit_bytes: 16384
+  max_request_lifetime_seconds: 300
+  clock_leeway_seconds: 60
+  signing:
+    kid: did:web:nagdi-agriculture-witness.demo.example.gov#federation-response-1
+    key_env: AGRI_FEDERATION_RESPONSE_JWK
+    alg: EdDSA
+  pairwise_subject_hash:
+    secret_env: AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
+  replay:
+    storage: in_process_single_instance_only
+    max_entries: 10000
+    eviction: expire_oldest
+  response_shaping:
+    minimum_denial_latency_ms: 250
+  emergency_denylist:
+    node_ids: []
+    kids: []
+  peers:
+    - node_id: did:web:nagdi-benefits.demo.example.gov
+      issuer: https://nagdi-benefits.demo.example.gov
+      jwks_uri: http://agri-static-metadata-publisher:8080/federation/benefits-jwks.json
+      allow_insecure_private_network: true
+      allowed_protocol_versions:
+        - registry-witness-federation/v0.1
+      allowed_purposes:
+        - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+        - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
+      allowed_profiles:
+        - climate_smart_input_voucher_predicate
+        - livestock_movement_permit_predicate
+      source_scopes:
+        - agri_registry:evidence_verification
+  evaluation_profiles:
+    - id: climate_smart_input_voucher_predicate
+      ruleset: eligible-for-input-voucher-v1
+      claim_id: eligible-for-climate-smart-input-voucher
+      subject_id_type: farmer_id
+      max_source_observed_age_seconds: 3600
+    - id: livestock_movement_permit_predicate
+      ruleset: eligible-for-livestock-movement-v1
+      claim_id: eligible-for-livestock-movement-permit
+      subject_id_type: herd_id
+      max_source_observed_age_seconds: 3600
+
 evidence:
   enabled: true
   service_id: nagdi-agriculture-witness

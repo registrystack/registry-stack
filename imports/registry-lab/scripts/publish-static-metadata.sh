@@ -7,6 +7,7 @@ demo_dir="$(cd "${script_dir}/.." && pwd)"
 manifest="${1:-"${demo_dir}/config/static-metadata/metadata.yaml"}"
 out_dir="${2:-"${demo_dir}/static-metadata/metadata"}"
 public_root="$(dirname "${out_dir}")"
+env_file="${REGISTRY_LAB_ENV_FILE:-"${demo_dir}/.env"}"
 
 if [[ ! -f "${manifest}" ]]; then
   echo "static metadata manifest not found: ${manifest}" >&2
@@ -101,6 +102,50 @@ for item in graph:
         item["registry_manifest:governanceControls"] = {"@id": controls_id}
         break
 path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+python3 - "${env_file}" "${public_root}/federation/benefits-jwks.json" "${public_root}/federation/default-benefits-jwks.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+env_path = Path(sys.argv[1])
+agri_out_path = Path(sys.argv[2])
+default_out_path = Path(sys.argv[3])
+values = {}
+if env_path.exists():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+
+def write_public_jwks(env_name, kid, out_path):
+    raw_jwk = values.get(env_name)
+    if not raw_jwk:
+        raise SystemExit(f"{env_name} missing; run scripts/generate-demo-secrets.py first")
+    jwk = json.loads(raw_jwk)
+    public_jwk = {
+        "kty": jwk["kty"],
+        "crv": jwk["crv"],
+        "x": jwk["x"],
+        "alg": "EdDSA",
+        "kid": kid,
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({"keys": [public_jwk]}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+write_public_jwks(
+    "AGRI_FEDERATION_CLIENT_JWK",
+    "did:web:nagdi-benefits.demo.example.gov#federation-client-1",
+    agri_out_path,
+)
+write_public_jwks(
+    "DEFAULT_FEDERATION_CLIENT_JWK",
+    "did:web:benefits.demo.example.gov#federation-client-1",
+    default_out_path,
+)
 PY
 
 echo "published static metadata bundle to ${out_dir}"

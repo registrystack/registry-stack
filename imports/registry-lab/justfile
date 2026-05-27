@@ -5,6 +5,7 @@ relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", "../registry-relay"
 witness_src := env_var_or_default("REGISTRY_WITNESS_SOURCE_DIR", "../registry-witness")
 openfn_witness_src := env_var_or_default("REGISTRY_OPENFN_WITNESS_SOURCE_DIR", "../registry-witness")
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", "../registry-platform")
+cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "../cel-mapping")
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
@@ -13,6 +14,7 @@ export REGISTRY_OPENFN_WITNESS_SOURCE_DIR := openfn_witness_src
 export REGISTRY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_WITNESS_PLATFORM_SOURCE_DIR := platform_src
+export CEL_MAPPING_SOURCE_DIR := cel_mapping_src
 export REGISTRY_RELAY_FEATURES := relay_features
 
 # List available demo commands.
@@ -52,6 +54,10 @@ logs *services:
 # Run the API-key Relay/Witness smoke.
 smoke:
     scripts/smoke.sh
+
+# Run the default signed Witness-to-Witness delegated-evaluation smoke.
+federation:
+    scripts/smoke-federation.sh
 
 # Run the narrated default client flow.
 client:
@@ -275,6 +281,14 @@ agri-generate:
     uv run scripts/generate-agri-fixtures.py
     scripts/generate-demo-secrets.py
     scripts/publish-static-metadata.sh
+    @if docker compose -f compose.yaml --profile agri ps -q agri-registry-relay 2>/dev/null | grep -q .; then just agri-down && just agri-up; fi
+
+# Generate planning-scale agricultural fixtures and refresh running agri services when present.
+agri-generate-planning:
+    AGRI_FIXTURE_SCALE=planning uv run scripts/generate-agri-fixtures.py
+    scripts/generate-demo-secrets.py
+    scripts/publish-static-metadata.sh
+    @if docker compose -f compose.yaml --profile agri ps -q agri-registry-relay 2>/dev/null | grep -q .; then just agri-down && just agri-up; fi
 
 # Build the agricultural NAgDI profile.
 agri-build:
@@ -294,9 +308,52 @@ agri-down:
 agri-smoke:
     scripts/smoke-agri.sh
 
+# Run the agricultural federated delegated-evaluation smoke.
+agri-federation:
+    scripts/smoke-agri-federation.sh
+
 # Run the narrated agricultural NAgDI client flow.
 agri-client:
     docker compose -f compose.yaml --profile agri --profile agri-client run --rm agri-demo-client
+
+# Run the voucher MIS agriculture consumer demo.
+agri-voucher-mis:
+    uv run scripts/demo-voucher-mis.py
+
+# Run the QGIS-ready aggregate agriculture planner demo.
+agri-qgis-planner:
+    uv run scripts/demo-qgis-planner.py
+
+# Run the PublicSchema-shaped agriculture projection demo.
+agri-publicschema-integrator:
+    uv run scripts/demo-publicschema-integrator.py
+
+# Build the local Crosswalk Python binding used by the strict PublicSchema projection check.
+agri-crosswalk-python:
+    cd ../cel-mapping/crates/crosswalk-python && test -d .venv || uv venv --python 3.13 .venv
+    cd ../cel-mapping/crates/crosswalk-python && . .venv/bin/activate && uv pip install maturin pytest && maturin develop --release && pytest -q
+
+# Run the PublicSchema projection and require executable Crosswalk mappings.
+agri-publicschema-integrator-strict:
+    bash -lc 'source ../cel-mapping/crates/crosswalk-python/.venv/bin/activate && python scripts/demo-publicschema-integrator.py --require-crosswalk'
+
+# Run the agriculture wallet-holder credential demo.
+agri-wallet:
+    uv run scripts/demo-agri-wallet.py
+
+# Run every agriculture consumer demo.
+agri-consumers: agri-voucher-mis agri-qgis-planner agri-publicschema-integrator agri-wallet
+
+# Run every agriculture consumer demo and require Crosswalk-backed PublicSchema output.
+agri-consumers-strict: agri-voucher-mis agri-qgis-planner agri-crosswalk-python agri-publicschema-integrator-strict agri-wallet agri-verify-consumer-artifacts-strict
+
+# Validate agriculture consumer artifacts after the demos run.
+agri-verify-consumer-artifacts:
+    uv run scripts/check-agri-consumer-artifacts.py
+
+# Validate agriculture consumer artifacts and require Crosswalk-backed PublicSchema output.
+agri-verify-consumer-artifacts-strict:
+    bash -lc 'source ../cel-mapping/crates/crosswalk-python/.venv/bin/activate && python scripts/check-agri-consumer-artifacts.py --require-crosswalk'
 
 # Open the generated live story briefing in the terminal.
 briefing:

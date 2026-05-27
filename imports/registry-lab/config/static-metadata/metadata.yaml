@@ -62,6 +62,84 @@ authorities:
     iri: did:web:static-metadata.demo.example.gov
     name: Interoperability Metadata Publisher
     spatial: https://demo.example.gov/jurisdictions/ZZ
+federation:
+  node_id: did:web:static-metadata.demo.example.gov
+  issuer: https://static-metadata.demo.example.gov
+  jwks_uri: https://static-metadata.demo.example.gov/.well-known/jwks.json
+  federation_api: https://static-metadata.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
+evaluation_profiles:
+  - id: civil-child-status-v1
+    ruleset: civil-child-status-v1
+    claim_id: civil_child_status
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: civil-age-band-v1
+    ruleset: civil-age-band-v1
+    claim_id: age_band
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: person-is-alive-v1
+    ruleset: person-is-alive-v1
+    claim_id: person_is_alive
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: program-enrollment-status-v1
+    ruleset: program-enrollment-status-v1
+    claim_id: program_enrollment_status
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: beneficiary-active-v1
+    ruleset: beneficiary-active-v1
+    claim_id: beneficiary_active
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: household-eligibility-band-v1
+    ruleset: household-eligibility-band-v1
+    claim_id: household_eligibility_band
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+  - id: health-service-availability-v1
+    ruleset: health-service-availability-v1
+    claim_id: health_service_availability
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: farmer-registered-v1
+    ruleset: farmer-registered-v1
+    claim_id: farmer_registered
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: active-farm-parcel-v1
+    ruleset: active-farm-parcel-v1
+    claim_id: active_farm_parcel
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: climate-risk-district-v1
+    ruleset: climate-risk-district-v1
+    claim_id: climate_risk_district
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: voucher-redemption-status-v1
+    ruleset: voucher-redemption-status-v1
+    claim_id: voucher_redemption_status
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: eligible-for-input-voucher-v1
+    ruleset: eligible-for-input-voucher-v1
+    claim_id: eligible_for_input_voucher
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: eligible-for-livestock-movement-v1
+    ruleset: eligible-for-livestock-movement-v1
+    claim_id: eligible_for_livestock_movement
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: eligible-for-combined-support-v1
+    ruleset: eligible-for-combined-support-v1
+    claim_id: eligible_for_combined_support
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
 requirements:
   - id: child_identity_requirement
     iri: https://demo.example.gov/requirements/child-identity
@@ -465,13 +543,14 @@ datasets:
           - health_linked_child_support
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://civil-witness:8080
-          discovery_url: http://civil-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://civil-witness:8080
+          discovery_url: https://civil-witness:8080/.well-known/evidence-service
           ruleset: civil-child-status-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/child-support-eligibility
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
     entities:
       - name: civil_person
         title: Civil Person
@@ -525,13 +604,14 @@ datasets:
           - health_linked_child_support
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://social-protection-witness:8080
-          discovery_url: http://social-protection-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://social-protection-witness:8080
+          discovery_url: https://social-protection-witness:8080/.well-known/evidence-service
           ruleset: program-enrollment-status-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/social-protection-review
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
     entities:
       - name: program_enrollment
         title: Program Enrollment
@@ -580,9 +660,9 @@ datasets:
           - health_linked_child_support
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://shared-eligibility-witness:8080
-          discovery_url: http://shared-eligibility-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://shared-eligibility-witness:8080
+          discovery_url: https://shared-eligibility-witness:8080/.well-known/evidence-service
           ruleset: health-service-availability-v1
         policy:
           purpose:
@@ -659,9 +739,9 @@ datasets:
           - climate_smart_input_voucher
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://nagdi-agriculture-witness:8080
-          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-witness:8080
+          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
           ruleset: farmer-registered-v1
         policy:
           purpose:
@@ -685,9 +765,9 @@ datasets:
           - climate_smart_input_voucher
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://nagdi-agriculture-witness:8080
-          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-witness:8080
+          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
           ruleset: active-farm-parcel-v1
         policy:
           purpose:
@@ -712,9 +792,9 @@ datasets:
           - agricultural_market_sizing
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://nagdi-agriculture-witness:8080
-          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-witness:8080
+          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
           ruleset: climate-risk-district-v1
         policy:
           purpose:
@@ -739,9 +819,9 @@ datasets:
           - climate_smart_input_voucher
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://nagdi-agriculture-witness:8080
-          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-witness:8080
+          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
           ruleset: voucher-redemption-status-v1
         policy:
           purpose:
@@ -766,9 +846,9 @@ datasets:
           - climate_smart_input_voucher
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://nagdi-agriculture-witness:8080
-          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-witness:8080
+          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
           ruleset: eligible-for-input-voucher-v1
         policy:
           purpose:
@@ -793,9 +873,9 @@ datasets:
           - livestock_movement_permit
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://nagdi-agriculture-witness:8080
-          discovery_url: http://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-witness:8080
+          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
           ruleset: eligible-for-livestock-movement-v1
         policy:
           purpose:
@@ -1085,9 +1165,9 @@ datasets:
           - health_linked_child_support
         access:
           kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
-          endpoint_url: http://shared-eligibility-witness:8080
-          discovery_url: http://shared-eligibility-witness:8080/.well-known/evidence-service
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://shared-eligibility-witness:8080
+          discovery_url: https://shared-eligibility-witness:8080/.well-known/evidence-service
           ruleset: eligible-for-combined-support-v1
         policy:
           purpose:

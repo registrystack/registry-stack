@@ -180,6 +180,9 @@ datasets:
           - name: subject_id
             type: string
             required: true
+          - name: subject_scope
+            type: string
+            required: true
           - name: subject_type
             type: string
             required: true
@@ -201,6 +204,65 @@ datasets:
           - name: valid_until
             type: date
             required: false
+      - name: farmer_identifier
+        title: Farmer Identifier
+        description: Identifier rows linked to farmer Persons for PublicSchema-shaped projection.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: identifier_type
+            type: string
+            required: true
+          - name: identifier_value
+            type: string
+            required: true
+          - name: issuing_authority
+            type: string
+            required: true
+          - name: active
+            type: boolean
+            required: true
+          - name: recorded_on
+            type: date
+            required: true
+      - name: farmer_group_membership
+        title: Farmer Group Membership
+        description: Membership rows linking farmers to cooperatives or producer groups.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: group_id
+            type: string
+            required: true
+          - name: group_name
+            type: string
+            required: true
+          - name: group_type
+            type: string
+            required: true
+          - name: role
+            type: string
+            required: true
+          - name: active
+            type: boolean
+            required: true
+          - name: joined_on
+            type: date
+            required: true
       - name: holding
         title: Farm Holding
         description: Farm holding projection from land or farm services records.
@@ -349,6 +411,9 @@ datasets:
           - name: currency
             type: string
             required: true
+          - name: valid_from
+            type: date
+            required: true
           - name: issued_on
             type: date
             required: true
@@ -456,6 +521,9 @@ datasets:
             type: string
             required: true
           - name: district
+            type: string
+            required: true
+          - name: district_code
             type: string
             required: true
           - name: market_name
@@ -603,13 +671,28 @@ datasets:
           - name: id
             type: string
             required: true
+          - name: application_id
+            type: string
+            required: true
           - name: herd_id
+            type: string
+            required: true
+          - name: origin_premises_code
+            type: string
+            required: true
+          - name: destination_premises_code
             type: string
             required: true
           - name: origin_district
             type: string
             required: true
+          - name: origin_district_code
+            type: string
+            required: true
           - name: destination_district
+            type: string
+            required: true
+          - name: destination_district_code
             type: string
             required: true
           - name: permit_status
