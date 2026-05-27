@@ -1,5 +1,7 @@
 # Registry Legend
 
+> **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
+
 Registry Legend is the canonical documentation website for the registry project
 family.
 
