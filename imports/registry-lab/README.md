@@ -1,5 +1,7 @@
 # registry-lab
 
+> **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
+
 This demo runs three independent Registry Relay authorities, four Registry
 Witness verifiers, a live Postgres source, a live Zitadel IdP, a default OpenFn
 sidecar scenario, a static metadata publisher, and a narrated client. It uses
