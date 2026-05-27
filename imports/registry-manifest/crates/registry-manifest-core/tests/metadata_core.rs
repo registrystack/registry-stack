@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 #[test]
 fn as_needed_update_frequency_maps_to_eu_as_needed_iri() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -49,11 +49,11 @@ fn fixture(path: &str) -> MetadataManifest {
         "example-benefits-sync" => EXAMPLE_BENEFITS_SYNC_FIXTURE,
         other => panic!("unknown fixture: {other}"),
     };
-    serde_yml::from_str(raw).expect("fixture parses")
+    serde_yaml_ng::from_str(raw).expect("fixture parses")
 }
 
 fn service_first_fixture() -> MetadataManifest {
-    serde_yml::from_str(include_str!(
+    serde_yaml_ng::from_str(include_str!(
         "../../../fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses")
@@ -356,7 +356,7 @@ fn validation_rejects_duplicate_entities() {
 
 #[test]
 fn validation_rejects_duplicate_evidence_offering_ids_globally() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -431,7 +431,7 @@ datasets:
 
 #[test]
 fn validation_rejects_blank_issuing_authority_country() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -487,7 +487,7 @@ datasets:
 
 #[test]
 fn validation_allows_portable_evidence_access_kinds() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -534,7 +534,7 @@ datasets:
 
 #[test]
 fn evidence_server_offerings_publish_endpoint_metadata() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -618,7 +618,7 @@ datasets:
 }
 
 fn federated_evaluation_manifest() -> MetadataManifest {
-    serde_yml::from_str(
+    serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1198,7 +1198,7 @@ fn breg_dcat_preserves_active_adms_status() {
 
 #[test]
 fn breg_dcat_omits_empty_cccev_predicates_on_requirements() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1251,7 +1251,7 @@ datasets:
 
 #[test]
 fn validation_rejects_grouped_evidence_list_that_does_not_prove_requirement() {
-    let manifest: MetadataManifest = serde_yml::from_str(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
 catalog:

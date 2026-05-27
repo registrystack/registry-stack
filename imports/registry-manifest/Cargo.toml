@@ -15,6 +15,11 @@ repository = "https://github.com/jeremi/registry-manifest"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+serde_yaml_ng = { version = "0.10.0" }
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

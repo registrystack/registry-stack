@@ -13,7 +13,7 @@ use sophia_term::ArcTerm;
 
 #[test]
 fn cpsv_ap_service_first_fixture_satisfies_jsonld_rdf_contract() {
-    let manifest: MetadataManifest = serde_yml::from_str(include_str!(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(include_str!(
         "../../../fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses");
@@ -28,7 +28,7 @@ fn cpsv_ap_service_first_fixture_satisfies_jsonld_rdf_contract() {
 
 #[test]
 fn cpsv_ap_jsonld_parser_rejects_broken_context() {
-    let manifest: MetadataManifest = serde_yml::from_str(include_str!(
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(include_str!(
         "../../../fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses");
