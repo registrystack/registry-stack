@@ -1,0 +1,240 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry Witness config for testing the OpenSPP Disability Registry DCI API.
+# Keep the upstream token out of this file and provide it through OPENSPP_DCI_TOKEN.
+# This is a demo integration config. The VC profile is intentionally
+# unholder-bound, and the DCI signature is intentionally empty because the
+# current OpenSPP test server accepts that shape. Do not use either setting for
+# production or wallet-bound credentials without adding real DCI signing and
+# holder proof-of-possession.
+
+server:
+  bind: 127.0.0.1:4255
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: local_tester
+      hash_env: REGISTRY_WITNESS_API_KEY_HASH
+      scopes:
+        - disability_registry:evidence_verification
+
+audit:
+  sink: file
+  path: demo/var/openspp-disability-registry-witness-audit.jsonl
+  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: openspp-disability.registry-witness
+  api_base_url: http://127.0.0.1:4255
+  credential_profiles:
+    openspp_disability_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:openspp-disability.demo.example.gov
+      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_kid: did:web:openspp-disability.demo.example.gov#registry-witness-demo-key-1
+      vct: https://demo.example.gov/credentials/openspp-disability/v1
+      validity_seconds: 86400
+      allowed_claims:
+        - disability-registry-record-exists
+        - disability-has-disability
+        - disability-review-category
+        - disability-severity-code
+        - disability-next-review
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+  source_connections:
+    openspp_disability:
+      base_url: https://openspp-dci-demo-dr.genete.acn.fr
+      token_env: OPENSPP_DCI_TOKEN
+      bulk_mode: none
+      dci:
+        search_path: /dci_api/v1/disability/registry/sync/search
+        sender_id: registry-witness
+        receiver_id: openspp
+        signature: ""
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
+  claims:
+    - id: disability-registry-record-exists
+      title: Disability registry record exists
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        disability_record:
+          connector: dci
+          connection: openspp_disability
+          required_scope: disability_registry:evidence_verification
+          dataset: disability_registry
+          entity: registrant
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+      rule:
+        type: exists
+        source: disability_record
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openspp_disability_sd_jwt
+    - id: disability-has-disability
+      title: Has disability
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        disability_record:
+          connector: dci
+          connection: openspp_disability
+          required_scope: disability_registry:evidence_verification
+          dataset: disability_registry
+          entity: registrant
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            has_disability:
+              field: has_disability
+              type: boolean
+              required: true
+      rule:
+        type: extract
+        source: disability_record
+        field: has_disability
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openspp_disability_sd_jwt
+    - id: disability-review-category
+      title: Disability review category
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        disability_record:
+          connector: dci
+          connection: openspp_disability
+          required_scope: disability_registry:evidence_verification
+          dataset: disability_registry
+          entity: registrant
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            disability_review_category:
+              field: disability_review_category
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: disability_record
+        field: disability_review_category
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openspp_disability_sd_jwt
+    - id: disability-severity-code
+      title: Disability severity code
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        disability_record:
+          connector: dci
+          connection: openspp_disability
+          required_scope: disability_registry:evidence_verification
+          dataset: disability_registry
+          entity: registrant
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            disability_severity_code:
+              field: disability_severity_code
+              type: string
+              required: false
+      rule:
+        type: extract
+        source: disability_record
+        field: disability_severity_code
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openspp_disability_sd_jwt
+    - id: disability-next-review
+      title: Disability next review
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      source_bindings:
+        disability_record:
+          connector: dci
+          connection: openspp_disability
+          required_scope: disability_registry:evidence_verification
+          dataset: disability_registry
+          entity: registrant
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            disability_next_review:
+              field: disability_next_review
+              type: date
+              required: false
+      rule:
+        type: extract
+        source: disability_record
+        field: disability_next_review
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-witness.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openspp_disability_sd_jwt

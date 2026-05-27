@@ -98,8 +98,12 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
-    job: {job}
-    adaptor: "@openfn/language-http@7.2.0"
+    workflow:
+      steps:
+        - id: lookup
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
     credential_env: {credential_env}
     smoke_lookup:
       field: national_id
@@ -130,6 +134,19 @@ fn yaml_path(path: &Path) -> String {
 
 fn yaml_string(value: &str) -> String {
     serde_json::to_string(value).expect("string serializes")
+}
+
+fn single_step_workflow_yaml(job: &Path) -> String {
+    format!(
+        r#"    workflow:
+      steps:
+        - id: lookup
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
+"#,
+        job = yaml_path(job)
+    )
 }
 
 async fn authorized_lookup(server: &TestServer, lookup_value: &str) -> TestResponse {
@@ -490,7 +507,7 @@ async fn credential_material_is_not_disclosed_on_worker_error_path() {
 }
 
 #[tokio::test]
-async fn startup_rejects_missing_adaptor_pin_before_readiness() {
+async fn startup_rejects_missing_adaptor_version_pin_before_readiness() {
     std::env::set_var(
         CREDENTIAL_ENV,
         r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
@@ -500,17 +517,41 @@ async fn startup_rejects_missing_adaptor_pin_before_readiness() {
         &HarnessOptions::default(),
         &tmp.path().join("attempts.jsonl"),
     )
-    .replace(
-        "@openfn/language-http@7.2.0",
-        "@openfn/language-missing@0.0.1",
-    );
+    .replace("@openfn/language-http@7.2.0", "@openfn/language-http");
     let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
     let error = match sidecar_router(config).await {
-        Ok(_) => panic!("router should reject a manifest with a missing adaptor pin"),
+        Ok(_) => panic!("router should reject a manifest with an unpinned adaptor"),
         Err(error) => error.to_string(),
     };
 
-    assert!(error.contains("@openfn/language-missing@0.0.1"));
+    assert!(error.contains("must include a version pin"));
+    assert!(error.contains("@openfn/language-http"));
+    assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_rejects_missing_expression_file_before_readiness() {
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let job = fixtures.join("jobs/opencrvs-person-lookup.js");
+    let missing_job = tmp.path().join("missing-expression.js");
+    let manifest = manifest_yaml(
+        &HarnessOptions::default(),
+        &tmp.path().join("attempts.jsonl"),
+    )
+    .replace(&yaml_path(&job), &yaml_path(&missing_job));
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+    let error = match sidecar_router(config).await {
+        Ok(_) => panic!("router should reject a missing expression file"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("expression"));
+    assert!(error.contains("is missing"));
     assert!(!error.contains("fixture-token"));
 }
 
@@ -648,7 +689,7 @@ async fn configured_smoke_lookup_runs_before_readiness() {
             .lines()
             .count(),
         1,
-        "startup smoke executes the configured job before readiness"
+        "startup smoke executes the configured workflow before readiness"
     );
 }
 
@@ -663,22 +704,21 @@ async fn workflow_source_config_sends_multi_step_execution_plan() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let job = fixtures.join("jobs/opencrvs-person-lookup.js");
     let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log).replace(
-        &format!(
-            "    job: {}\n    adaptor: \"@openfn/language-http@7.2.0\"\n",
-            yaml_path(&job)
-        ),
+        &single_step_workflow_yaml(&job),
         &format!(
             r#"    workflow:
       start: prepare_lookup
       steps:
         - id: prepare_lookup
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             return_rda: true
         - id: return_rda
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
 "#,
             job = yaml_path(&job)
         ),
@@ -727,22 +767,21 @@ async fn startup_rejects_workflow_cycle_before_readiness() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let job = fixtures.join("jobs/opencrvs-person-lookup.js");
     let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log).replace(
-        &format!(
-            "    job: {}\n    adaptor: \"@openfn/language-http@7.2.0\"\n",
-            yaml_path(&job)
-        ),
+        &single_step_workflow_yaml(&job),
         &format!(
             r#"    workflow:
       start: prepare_lookup
       steps:
         - id: prepare_lookup
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             return_rda: true
         - id: return_rda
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             prepare_lookup: true
 "#,
@@ -770,33 +809,34 @@ async fn startup_rejects_workflow_merge_before_readiness() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let job = fixtures.join("jobs/opencrvs-person-lookup.js");
     let manifest = manifest_yaml(&HarnessOptions::default(), &attempt_log).replace(
-        &format!(
-            "    job: {}\n    adaptor: \"@openfn/language-http@7.2.0\"\n",
-            yaml_path(&job)
-        ),
+        &single_step_workflow_yaml(&job),
         &format!(
             r#"    workflow:
       start: choose_path
       steps:
         - id: choose_path
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             path_a: true
             path_b: true
         - id: path_a
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             return_rda: true
         - id: path_b
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             return_rda: true
         - id: return_rda
-          job: {job}
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
 "#,
             job = yaml_path(&job)
         ),
@@ -808,6 +848,7 @@ async fn startup_rejects_workflow_merge_before_readiness() {
     };
 
     assert!(error.contains("multiple input steps"));
+    assert!(error.contains("is not a join"));
     assert!(!error.contains("fixture-token"));
 }
 

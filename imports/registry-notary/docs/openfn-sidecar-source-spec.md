@@ -70,8 +70,8 @@ to per-request disk files. If a disk-backed fallback is ever added, it must use
 mode `0600`, a per-request directory, and best-effort cleanup on timeout and
 crash.
 
-OpenFn jobs, adaptor versions, and credential schemas are declared in a sidecar
-manifest bundled into the sidecar image:
+OpenFn workflow expression files, adaptor versions, and credential schemas are
+declared in a sidecar manifest bundled into the sidecar image:
 
 ```yaml
 openfn:
@@ -89,31 +89,36 @@ sources:
       start: prepare_request
       steps:
         - id: prepare_request
-          job: jobs/prepare-person-request.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: jobs/prepare-person-request.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
           next:
             fetch_person: true
         - id: fetch_person
-          job: jobs/fetch-person.js
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: jobs/fetch-person.js
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             normalize_response: true
         - id: normalize_response
-          job: jobs/normalize-person-response.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: jobs/normalize-person-response.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
     credential_env: OPENCRVS_READER_CREDENTIAL_JSON
 ```
 
 At startup, the sidecar verifies the installed OpenFn compiler/build tool,
-runtime, and adaptor versions against the manifest. A source may still use the
-single `job`/`adaptor` shape, but multi-step examples should use
+runtime, and adaptor versions against the manifest. Each source uses
 `workflow.steps` so the worker runs an actual OpenFn execution plan. The `next`
 field is the OpenFn runtime edge map, including boolean and conditional edges.
-The pinned runtime does not support merge nodes, and the sidecar response
-contract still requires a single final state that normalizes to one RDA `data`
-array. Readiness fails on any mismatch, missing job, missing credential, missing
-smoke lookup, or failed smoke lookup. Runtime execution must not fetch packages
-from the network.
+Linear flows and mutually exclusive branches are supported when each lookup
+produces exactly one final leaf state. Join/merge aggregation is not automatic:
+Lightning-style merge runs the target once per incoming path, so aggregation
+must be encoded in a normal OpenFn step. The pinned runtime does not support
+merge nodes, and the sidecar response contract still requires a single final
+state that normalizes to one RDA `data` array. Readiness fails on any mismatch,
+missing expression file, missing credential, missing smoke lookup, or failed
+smoke lookup. Runtime execution must not fetch packages from the network.
 
 ## Requirements
 
@@ -174,8 +179,8 @@ from the network.
 Done means all items below are satisfied in one reviewed change set:
 
 - A runnable sidecar exposes one RDA-shaped source endpoint backed by a pinned
-  OpenFn job and returns only the documented `{ "data": [...] }` success shape.
-- A manifest pins the OpenFn build tool, runtime, job files, adaptor versions,
+  OpenFn workflow and returns only the documented `{ "data": [...] }` success shape.
+- A manifest pins the OpenFn build tool, runtime, expression files, adaptor versions,
   source-route bindings, timeout, worker memory limit, output byte limit,
   request byte limit, query-parameter length limit, and `max_workers`; startup
   rejects missing or mismatched entries.

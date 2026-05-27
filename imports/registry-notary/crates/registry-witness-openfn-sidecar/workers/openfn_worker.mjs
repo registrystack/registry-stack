@@ -99,14 +99,21 @@ async function compiledWorkflow(request) {
     const cacheKeys = [];
 
     for (const requestedStep of request.workflow.steps) {
-      const compiled = await compiledJob(requestedStep.job, requestedStep.adaptor);
-      modules[compiled.adaptor.name] = { path: compiled.adaptor.path };
+      const compiled = await compiledExpression(
+        requestedStep.expression,
+        requestedStep.adaptors,
+      );
+      for (const adaptor of compiled.adaptors) {
+        modules[adaptor.name] = { path: adaptor.path };
+      }
       cacheKeys.push(compiled.cacheKey);
 
       const step = {
         id: requestedStep.id,
         expression: compiled.code,
-        adaptors: [`${compiled.adaptor.name}=${compiled.adaptor.path}`],
+        adaptors: compiled.adaptors.map(
+          (adaptor) => `${adaptor.name}=${adaptor.path}`,
+        ),
       };
       if (requestedStep.next) {
         step.next = normalizeNext(requestedStep.next);
@@ -122,21 +129,7 @@ async function compiledWorkflow(request) {
     };
   }
 
-  const compiled = await compiledJob(request.job, request.adaptor);
-  return {
-    steps: [
-      {
-        id: 'lookup',
-        expression: compiled.code,
-        adaptors: [`${compiled.adaptor.name}=${compiled.adaptor.path}`],
-      },
-    ],
-    start: 'lookup',
-    modules: {
-      [compiled.adaptor.name]: { path: compiled.adaptor.path },
-    },
-    cacheKey: compiled.cacheKey,
-  };
+  throw new Error('request.workflow.steps must be configured');
 }
 
 function normalizeNext(next) {
@@ -146,29 +139,33 @@ function normalizeNext(next) {
   return next;
 }
 
-async function compiledJob(job, adaptorSpecifier) {
-  const cacheKey = `${job}\u0000${adaptorSpecifier}`;
+async function compiledExpression(expressionPath, adaptorSpecifiers = []) {
+  const cacheKey = `${expressionPath}\u0000${adaptorSpecifiers.join('\u0000')}`;
   const cached = compiledJobs.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const adaptor = resolveAdaptor(adaptorSpecifier);
-  const expression = await readFile(job, 'utf8');
-  const adaptorExports = await preloadAdaptorExports(adaptor.path);
+  const adaptors = adaptorSpecifiers.map((adaptorSpecifier) =>
+    resolveAdaptor(adaptorSpecifier),
+  );
+  const expression = await readFile(expressionPath, 'utf8');
+  const adaptorImports = [];
+  for (const adaptor of adaptors) {
+    const adaptorExports = await preloadAdaptorExports(adaptor.path);
+    adaptorImports.push({
+      name: adaptor.name,
+      exports: adaptorExports,
+      exportAll: true,
+    });
+  }
   const { code } = compile(expression, {
     'add-imports': {
-      adaptors: [
-        {
-          name: adaptor.name,
-          exports: adaptorExports,
-          exportAll: true,
-        },
-      ],
+      adaptors: adaptorImports,
     },
   });
   const compiled = {
-    adaptor,
+    adaptors,
     code,
     cacheKey: `compiled-${++runCounter}`,
   };

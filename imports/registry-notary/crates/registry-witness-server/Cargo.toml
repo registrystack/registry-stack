@@ -10,7 +10,7 @@ publish = false
 
 [features]
 default = ["registry-witness-cel"]
-registry-witness-cel = ["dep:cel-mapper-core"]
+registry-witness-cel = ["dep:crosswalk-core"]
 
 [dependencies]
 registry-witness-core.workspace = true
@@ -24,7 +24,7 @@ registry-platform-oidc.workspace = true
 registry-platform-sdjwt.workspace = true
 axum.workspace = true
 base64.workspace = true
-cel-mapper-core = { workspace = true, optional = true }
+crosswalk-core = { workspace = true, optional = true }
 getrandom.workspace = true
 jsonwebtoken.workspace = true
 reqwest.workspace = true

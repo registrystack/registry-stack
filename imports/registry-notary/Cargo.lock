@@ -343,29 +343,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cel-mapper-core"
-version = "0.1.1"
-source = "git+https://github.com/PublicSchema/cel-mapping?rev=32679bb78c969b8f33129113e31465dbe54b0ea0#32679bb78c969b8f33129113e31465dbe54b0ea0"
-dependencies = [
- "base64",
- "cel",
- "chrono",
- "chrono-tz",
- "hex",
- "indexmap",
- "once_cell",
- "phonenumber",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "thiserror 1.0.69",
- "unicode-normalization",
- "uuid",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -624,6 +601,95 @@ name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "crosswalk-cel"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "cel",
+ "crosswalk-functions",
+ "crosswalk-functions-cel",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "crosswalk-core"
+version = "0.1.1"
+dependencies = [
+ "base64",
+ "cel",
+ "chrono",
+ "chrono-tz",
+ "crosswalk-cel",
+ "crosswalk-functions",
+ "crosswalk-functions-cel",
+ "crosswalk-publicschema",
+ "hex",
+ "indexmap",
+ "once_cell",
+ "phonenumber",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "crosswalk-functions"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "hex",
+ "phonenumber",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "crosswalk-functions-cel"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "cel",
+ "chrono",
+ "chrono-tz",
+ "crosswalk-functions",
+ "hex",
+ "regex",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "crosswalk-publicschema"
+version = "0.1.0"
+dependencies = [
+ "crosswalk-cel",
+ "crosswalk-functions",
+ "hex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "crunchy"
@@ -2387,6 +2453,7 @@ version = "0.1.2"
 dependencies = [
  "base64",
  "ed25519-dalek",
+ "hmac 0.13.0",
  "jsonwebtoken",
  "serde",
  "serde_json",
@@ -2545,8 +2612,8 @@ dependencies = [
  "axum",
  "axum-test",
  "base64",
- "cel-mapper-core",
  "criterion",
+ "crosswalk-core",
  "getrandom 0.4.2",
  "jsonwebtoken",
  "registry-platform-audit",

@@ -11,6 +11,8 @@ renderers, and credential issuance wiring.
 - API-key and bearer-token auth through `registry-platform` primitives.
 - Redacted audit event emission.
 - JSON, SD-JWT VC, and credential response renderers.
+- Static-peer federated delegated evaluation at `/federation/v1/evaluations`
+  when federation is enabled in config.
 - OpenAPI document generation.
 
 ## Typical Use
@@ -28,7 +30,7 @@ fn app(config: StandaloneRegistryWitnessConfig) -> Result<axum::Router, Standalo
 
 - Default: `registry-witness-cel`.
 - `registry-witness-cel`: enables CEL-backed claim expression evaluation through
-  `cel-mapper-core`.
+  `crosswalk-core`.
 
 Run server tests without default features when checking the non-CEL binary
 shape:
@@ -40,6 +42,12 @@ cargo test -p registry-witness-server --no-default-features
 ## Security Notes
 
 - The server starts fail-closed when credentials are missing or invalid.
+- Federated evaluation routes are not mounted unless `federation.enabled` is
+  true, and accepted requests must be signed compact JWS bodies from configured
+  peers.
+- The MVP replay store is `in_process_single_instance_only`; active-active
+  deployments need a shared replay store before privileged federation traffic is
+  enabled.
 - Source connectors send explicit purpose headers and use configured source
   tokens.
 - Replay persistence and deployment-grade retention remain consumer and

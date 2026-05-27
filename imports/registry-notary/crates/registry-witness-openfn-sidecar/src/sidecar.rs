@@ -95,12 +95,7 @@ pub struct WorkerProcessConfig {
 pub struct SourceConfig {
     pub dataset: String,
     pub entity: String,
-    #[serde(default)]
-    pub job: Option<PathBuf>,
-    #[serde(default)]
-    pub adaptor: Option<String>,
-    #[serde(default)]
-    pub workflow: Option<SourceWorkflowConfig>,
+    pub workflow: SourceWorkflowConfig,
     pub credential_env: String,
     #[serde(default)]
     pub allowed_base_urls: Vec<String>,
@@ -118,8 +113,8 @@ pub struct SourceWorkflowConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SourceWorkflowStepConfig {
     pub id: String,
-    pub job: PathBuf,
-    pub adaptor: String,
+    pub expression: PathBuf,
+    pub adaptors: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<SourceWorkflowNextConfig>,
 }
@@ -370,19 +365,7 @@ fn validate_config(config: &SidecarConfig) -> Result<(), SidecarError> {
 }
 
 fn validate_source_execution(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
-    match (&source.job, &source.adaptor, &source.workflow) {
-        (Some(job), Some(adaptor), None) => {
-            validate_source_job(source_id, "job", job)?;
-            validate_source_adaptor(source_id, "adaptor", adaptor)?;
-        }
-        (None, None, Some(workflow)) => validate_source_workflow(source_id, workflow)?,
-        _ => {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} must configure either job/adaptor or workflow.steps"
-            )));
-        }
-    }
-    Ok(())
+    validate_source_workflow(source_id, &source.workflow)
 }
 
 fn validate_source_workflow(
@@ -408,16 +391,24 @@ fn validate_source_workflow(
                 step.id
             )));
         }
-        validate_source_job(
+        validate_source_expression(
             source_id,
-            &format!("workflow step {} job", step.id),
-            &step.job,
+            &format!("workflow step {} expression", step.id),
+            &step.expression,
         )?;
-        validate_source_adaptor(
-            source_id,
-            &format!("workflow step {} adaptor", step.id),
-            &step.adaptor,
-        )?;
+        if step.adaptors.is_empty() {
+            return Err(SidecarError::Config(format!(
+                "source {source_id} workflow step {} adaptors must not be empty",
+                step.id
+            )));
+        }
+        for (index, adaptor) in step.adaptors.iter().enumerate() {
+            validate_source_adaptor(
+                source_id,
+                &format!("workflow step {} adaptors[{index}]", step.id),
+                adaptor,
+            )?;
+        }
     }
 
     if let Some(start) = &workflow.start {
@@ -448,27 +439,19 @@ fn validate_source_workflow(
     }
     if let Some((step_id, _count)) = incoming_counts.iter().find(|(_step_id, count)| **count > 1) {
         return Err(SidecarError::Config(format!(
-            "source {source_id} workflow step {step_id} has multiple input steps, which is not supported by the pinned OpenFn runtime"
+            "source {source_id} workflow step {step_id} has multiple input steps; Lightning-style merge runs a target once per incoming path and is not a join, so aggregation must be encoded in an explicit OpenFn step"
         )));
     }
     let mut visited = BTreeSet::new();
+    let mut path = BTreeSet::new();
     for start_step in &workflow.steps {
-        if visited.contains(start_step.id.as_str()) {
-            continue;
-        }
-        let mut path = BTreeSet::new();
-        let current = start_step.id.as_str();
-        if !path.insert(current) {
-            return Err(SidecarError::Config(format!(
-                "source {source_id} workflow contains a cycle at step {current}"
-            )));
-        }
-        if let Some(next_steps) = next_by_step.get(current) {
-            for next in next_steps {
-                detect_workflow_cycle(source_id, &next_by_step, next, &mut path, &visited)?;
-            }
-        }
-        visited.extend(path);
+        detect_workflow_cycle(
+            source_id,
+            &next_by_step,
+            start_step.id.as_str(),
+            &mut path,
+            &mut visited,
+        )?;
     }
 
     Ok(())
@@ -479,29 +462,35 @@ fn detect_workflow_cycle<'a>(
     next_by_step: &BTreeMap<&'a str, Vec<&'a str>>,
     current: &'a str,
     path: &mut BTreeSet<&'a str>,
-    visited: &BTreeSet<&'a str>,
+    visited: &mut BTreeSet<&'a str>,
 ) -> Result<(), SidecarError> {
-    if visited.contains(current) {
-        return Ok(());
-    }
-    if !path.insert(current) {
+    if path.contains(current) {
         return Err(SidecarError::Config(format!(
             "source {source_id} workflow contains a cycle at step {current}"
         )));
     }
+    if !visited.insert(current) {
+        return Ok(());
+    }
+    path.insert(current);
     if let Some(next_steps) = next_by_step.get(current) {
         for next in next_steps {
             detect_workflow_cycle(source_id, next_by_step, next, path, visited)?;
         }
     }
+    path.remove(current);
     Ok(())
 }
 
-fn validate_source_job(source_id: &str, label: &str, job: &FsPath) -> Result<(), SidecarError> {
-    if !job.is_file() {
+fn validate_source_expression(
+    source_id: &str,
+    label: &str,
+    expression: &FsPath,
+) -> Result<(), SidecarError> {
+    if !expression.is_file() {
         return Err(SidecarError::Config(format!(
             "source {source_id} {label} {} is missing",
-            job.display()
+            expression.display()
         )));
     }
     Ok(())
@@ -519,7 +508,7 @@ fn validate_source_adaptor(
     }
     adaptor_pin_version(adaptor).ok_or_else(|| {
         SidecarError::Config(format!(
-            "source {source_id} {label} must include a version pin"
+            "source {source_id} {label} {adaptor} must include a version pin"
         ))
     })?;
     Ok(())
@@ -629,36 +618,19 @@ async fn verify_openfn_runtime(config: &SidecarConfig) -> Result<(), SidecarErro
 }
 
 fn source_adaptors(source: &SourceConfig) -> Vec<&str> {
-    if let Some(workflow) = &source.workflow {
-        workflow
-            .steps
-            .iter()
-            .map(|step| step.adaptor.as_str())
-            .collect()
-    } else {
-        source.adaptor.as_deref().into_iter().collect()
-    }
+    source
+        .workflow
+        .steps
+        .iter()
+        .flat_map(|step| step.adaptors.iter().map(String::as_str))
+        .collect()
 }
 
 fn add_source_execution(request: &mut Value, source: &SourceConfig) {
     let Some(object) = request.as_object_mut() else {
         return;
     };
-    if let Some(workflow) = &source.workflow {
-        object.insert("workflow".to_string(), json!(workflow));
-    } else {
-        object.insert(
-            "job".to_string(),
-            json!(source.job.as_ref().expect("source job is validated")),
-        );
-        object.insert(
-            "adaptor".to_string(),
-            json!(source
-                .adaptor
-                .as_ref()
-                .expect("source adaptor is validated")),
-        );
-    }
+    object.insert("workflow".to_string(), json!(source.workflow));
 }
 
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {

@@ -10,7 +10,9 @@ permissions:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
+  REGISTRY_PLATFORM_REF: 2e3e0b1ae0a3dc07af194790baf1f5dfedf4f9ea
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 defaults:
   run:
@@ -33,6 +35,12 @@ jobs:
           ref: ${{ env.REGISTRY_PLATFORM_REF }}
           path: registry-platform
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: cel-mapping
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -76,6 +84,12 @@ jobs:
           ref: ${{ env.REGISTRY_PLATFORM_REF }}
           path: registry-platform
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: cel-mapping
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: rustfmt, clippy
@@ -91,4 +105,4 @@ jobs:
       - run: cargo run -p registry-witness-bin -- openapi > target/registry-witness.openapi.json
       - name: Build Docker image
         working-directory: ${{ github.workspace }}
-        run: docker build --build-context registry-platform=registry-platform --file registry-witness/Dockerfile --tag registry-witness:ci registry-witness
+        run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --file registry-witness/Dockerfile --tag registry-witness:ci registry-witness

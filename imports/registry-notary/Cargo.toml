@@ -20,7 +20,7 @@ base64 = { version = "0.22" }
 clap = { version = "4", features = ["derive", "env"] }
 registry-witness-core = { version = "0.3.0", path = "crates/registry-witness-core" }
 registry-witness-server = { version = "0.3.0", path = "crates/registry-witness-server", default-features = false }
-cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", rev = "32679bb78c969b8f33129113e31465dbe54b0ea0" }
+crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-core" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 registry-platform-audit = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-audit" }

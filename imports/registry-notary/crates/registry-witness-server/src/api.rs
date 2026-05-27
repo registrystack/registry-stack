@@ -25,11 +25,11 @@ use registry_witness_core::sd_jwt;
 use registry_witness_core::{
     AccessMode, BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimSet,
     ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest,
-    EvidenceConfig, EvidenceError, EvidencePrincipal, Hashed, HolderRequest, Oid4vciConfig,
-    Oid4vciCredentialConfigurationConfig, PolicyIdentifier, RateLimitBucket, RenderRequest,
-    SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy, SourceCapability,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    EvidenceConfig, EvidenceError, EvidencePrincipal, FederationConfig, Hashed, HolderRequest,
+    Oid4vciConfig, Oid4vciCredentialConfigurationConfig, PolicyIdentifier, RateLimitBucket,
+    RenderRequest, SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy,
+    SourceCapability, StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue,
+    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -47,6 +47,8 @@ const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const ADMIN_SCOPE: &str = "registry_witness:admin";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
+
+pub use crate::federation::federation_router;
 
 pub fn router<S>() -> Router<S>
 where
@@ -195,13 +197,15 @@ pub trait EvidenceIssuerResolver: Send + Sync {
 
 #[derive(Clone)]
 pub struct RegistryWitnessApiState {
-    evidence: Arc<EvidenceConfig>,
+    pub(crate) evidence: Arc<EvidenceConfig>,
     self_attestation: Arc<SelfAttestationConfig>,
     oid4vci: Arc<Oid4vciConfig>,
+    pub(crate) federation: Arc<FederationConfig>,
+    pub(crate) federation_runtime: Option<Arc<crate::federation::FederationRuntimeState>>,
     self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
-    self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
-    source: Arc<dyn SourceReader>,
-    store: Arc<EvidenceStore>,
+    pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    pub(crate) source: Arc<dyn SourceReader>,
+    pub(crate) store: Arc<EvidenceStore>,
     issuers: Arc<dyn EvidenceIssuerResolver>,
 }
 
@@ -290,6 +294,66 @@ impl RegistryWitnessApiState {
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
+        Self::new_with_runtime_blocks(
+            evidence,
+            self_attestation,
+            oid4vci,
+            Arc::new(FederationConfig::default()),
+            None,
+            audit_hasher,
+            source,
+            store,
+            issuers,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_federation(
+        evidence: Arc<EvidenceConfig>,
+        self_attestation: Arc<SelfAttestationConfig>,
+        oid4vci: Arc<Oid4vciConfig>,
+        federation: Arc<FederationConfig>,
+        audit_hasher: AuditKeyHasher,
+        federation_audit: Option<crate::standalone::AuditPipeline>,
+        source: Arc<dyn SourceReader>,
+        store: Arc<EvidenceStore>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+    ) -> Result<Self, crate::standalone::StandaloneServerError> {
+        let federation_runtime = federation
+            .enabled
+            .then(|| {
+                crate::federation::FederationRuntimeState::from_config(
+                    &federation,
+                    federation_audit,
+                )
+            })
+            .transpose()?
+            .map(Arc::new);
+        Ok(Self::new_with_runtime_blocks(
+            evidence,
+            self_attestation,
+            oid4vci,
+            federation,
+            federation_runtime,
+            audit_hasher,
+            source,
+            store,
+            issuers,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_runtime_blocks(
+        evidence: Arc<EvidenceConfig>,
+        self_attestation: Arc<SelfAttestationConfig>,
+        oid4vci: Arc<Oid4vciConfig>,
+        federation: Arc<FederationConfig>,
+        federation_runtime: Option<Arc<crate::federation::FederationRuntimeState>>,
+        audit_hasher: AuditKeyHasher,
+        source: Arc<dyn SourceReader>,
+        store: Arc<EvidenceStore>,
+        issuers: Arc<dyn EvidenceIssuerResolver>,
+    ) -> Self {
         let self_attestation_rate_limiter = Arc::new(SelfAttestationRateLimiter::new(
             self_attestation.rate_limits.clone(),
         ));
@@ -298,6 +362,8 @@ impl RegistryWitnessApiState {
             evidence,
             self_attestation,
             oid4vci,
+            federation,
+            federation_runtime,
             self_attestation_rate_limiter,
             self_attestation_rate_keys,
             source,
@@ -306,7 +372,7 @@ impl RegistryWitnessApiState {
         }
     }
 
-    fn enabled_evidence(&self) -> Result<&EvidenceConfig, EvidenceError> {
+    pub(crate) fn enabled_evidence(&self) -> Result<&EvidenceConfig, EvidenceError> {
         if self.evidence.enabled {
             Ok(&self.evidence)
         } else {
@@ -2692,7 +2758,7 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
     }
 }
 
-fn evidence_claim_hash(claim_ids: &[String]) -> String {
+pub(crate) fn evidence_claim_hash(claim_ids: &[String]) -> String {
     let mut hasher = Sha256::new();
     for claim_id in claim_ids {
         hasher.update(claim_id.as_bytes());

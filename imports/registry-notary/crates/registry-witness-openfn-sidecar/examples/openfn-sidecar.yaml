@@ -35,18 +35,21 @@ sources:
       start: prepare_lookup
       steps:
         - id: prepare_lookup
-          job: ./crates/registry-witness-openfn-sidecar/examples/jobs/common-prepare-lookup.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: ./crates/registry-witness-openfn-sidecar/examples/jobs/common-prepare-lookup.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
           next:
             filter_records: true
         - id: filter_records
-          job: ./crates/registry-witness-openfn-sidecar/examples/jobs/common-filter-records.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: ./crates/registry-witness-openfn-sidecar/examples/jobs/common-filter-records.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
           next:
             return_rda: true
         - id: return_rda
-          job: ./crates/registry-witness-openfn-sidecar/examples/jobs/common-return-rda.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: ./crates/registry-witness-openfn-sidecar/examples/jobs/common-return-rda.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
     credential_env: EXAMPLE_PERSON_LOOKUP_CREDENTIAL_JSON
     smoke_lookup:
       field: national_id

@@ -5,13 +5,16 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
+use registry_platform_crypto::validate_did_web_https_issuer_binding;
 use registry_platform_oid4vci::{
     CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK, PKCE_METHOD_S256,
     SD_JWT_VC_FORMAT as OID4VCI_SD_JWT_VC_FORMAT,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::model::{FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG};
+use crate::model::{
+    DisclosureProfile, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +29,8 @@ pub struct StandaloneRegistryWitnessConfig {
     pub self_attestation: SelfAttestationConfig,
     #[serde(default, skip_serializing_if = "oid4vci_config_is_default")]
     pub oid4vci: Oid4vciConfig,
+    #[serde(default, skip_serializing_if = "federation_config_is_default")]
+    pub federation: FederationConfig,
 }
 
 impl StandaloneRegistryWitnessConfig {
@@ -190,6 +195,7 @@ impl StandaloneRegistryWitnessConfig {
         }
         self.self_attestation.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
+        self.federation.validate(&self.evidence)?;
         Ok(())
     }
 
@@ -197,6 +203,368 @@ impl StandaloneRegistryWitnessConfig {
         self.oid4vci
             .validate(&self.self_attestation, &self.evidence)
     }
+}
+
+pub const FEDERATION_PROTOCOL_V0_1: &str = "registry-witness-federation/v0.1";
+pub const FEDERATION_REQUEST_JWT_TYP: &str = "registry-witness-request+jwt";
+pub const FEDERATION_RESPONSE_JWT_TYP: &str = "registry-witness-response+jwt";
+pub const FEDERATION_SIGNING_ALG_EDDSA: &str = "EdDSA";
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub issuer: String,
+    #[serde(default)]
+    pub jwks_uri: String,
+    #[serde(default)]
+    pub federation_api: String,
+    #[serde(default)]
+    pub supported_protocol_versions: Vec<String>,
+    #[serde(default = "default_federation_inbound_body_limit_bytes")]
+    pub inbound_body_limit_bytes: usize,
+    #[serde(default = "default_federation_max_request_lifetime_seconds")]
+    pub max_request_lifetime_seconds: u64,
+    #[serde(default = "default_federation_clock_leeway_seconds")]
+    pub clock_leeway_seconds: u64,
+    #[serde(default)]
+    pub signing: FederationSigningConfig,
+    #[serde(default)]
+    pub pairwise_subject_hash: FederationPairwiseSubjectHashConfig,
+    #[serde(default)]
+    pub replay: FederationReplayConfig,
+    #[serde(default)]
+    pub response_shaping: FederationResponseShapingConfig,
+    #[serde(default)]
+    pub emergency_denylist: FederationEmergencyDenylistConfig,
+    #[serde(default)]
+    pub peers: Vec<FederationPeerConfig>,
+    #[serde(default)]
+    pub evaluation_profiles: Vec<FederationEvaluationProfileConfig>,
+}
+
+impl Default for FederationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            node_id: String::new(),
+            issuer: String::new(),
+            jwks_uri: String::new(),
+            federation_api: String::new(),
+            supported_protocol_versions: Vec::new(),
+            inbound_body_limit_bytes: default_federation_inbound_body_limit_bytes(),
+            max_request_lifetime_seconds: default_federation_max_request_lifetime_seconds(),
+            clock_leeway_seconds: default_federation_clock_leeway_seconds(),
+            signing: FederationSigningConfig::default(),
+            pairwise_subject_hash: FederationPairwiseSubjectHashConfig::default(),
+            replay: FederationReplayConfig::default(),
+            response_shaping: FederationResponseShapingConfig::default(),
+            emergency_denylist: FederationEmergencyDenylistConfig::default(),
+            peers: Vec::new(),
+            evaluation_profiles: Vec::new(),
+        }
+    }
+}
+
+fn federation_config_is_default(config: &FederationConfig) -> bool {
+    config == &FederationConfig::default()
+}
+
+const fn default_federation_inbound_body_limit_bytes() -> usize {
+    16 * 1024
+}
+
+const fn default_federation_max_request_lifetime_seconds() -> u64 {
+    300
+}
+
+const fn default_federation_clock_leeway_seconds() -> u64 {
+    60
+}
+
+impl FederationConfig {
+    fn validate(&self, evidence: &EvidenceConfig) -> Result<(), EvidenceConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        validate_federation_non_empty("federation.node_id", &self.node_id)?;
+        validate_federation_non_empty("federation.issuer", &self.issuer)?;
+        validate_federation_https_url("federation.issuer", &self.issuer)?;
+        validate_federation_https_url("federation.jwks_uri", &self.jwks_uri)?;
+        validate_federation_https_url("federation.federation_api", &self.federation_api)?;
+        validate_did_web_https_issuer_binding(&self.node_id, &self.issuer).map_err(|error| {
+            EvidenceConfigError::InvalidFederationConfig {
+                reason: format!("federation.node_id must bind to federation.issuer: {error}"),
+            }
+        })?;
+        if !self
+            .supported_protocol_versions
+            .iter()
+            .any(|version| version == FEDERATION_PROTOCOL_V0_1)
+        {
+            return invalid_federation("federation.supported_protocol_versions must include registry-witness-federation/v0.1");
+        }
+        if self.inbound_body_limit_bytes == 0 {
+            return invalid_federation(
+                "federation.inbound_body_limit_bytes must be greater than zero",
+            );
+        }
+        if self.max_request_lifetime_seconds == 0 {
+            return invalid_federation(
+                "federation.max_request_lifetime_seconds must be greater than zero",
+            );
+        }
+        if self.signing.alg != FEDERATION_SIGNING_ALG_EDDSA {
+            return invalid_federation("federation.signing.alg must be EdDSA");
+        }
+        validate_federation_non_empty("federation.signing.kid", &self.signing.kid)?;
+        validate_federation_non_empty("federation.signing.key_env", &self.signing.key_env)?;
+        validate_federation_non_empty(
+            "federation.pairwise_subject_hash.secret_env",
+            &self.pairwise_subject_hash.secret_env,
+        )?;
+        if self.replay.storage != FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY {
+            return invalid_federation(
+                "federation.replay.storage must be in_process_single_instance_only for the MVP",
+            );
+        }
+        if self.replay.max_entries == 0 {
+            return invalid_federation("federation.replay.max_entries must be greater than zero");
+        }
+        if self.replay.eviction != FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST {
+            return invalid_federation("federation.replay.eviction must be expire_oldest");
+        }
+        if self.peers.is_empty() {
+            return invalid_federation("federation.peers must list at least one peer");
+        }
+        if self.evaluation_profiles.is_empty() {
+            return invalid_federation(
+                "federation.evaluation_profiles must list at least one profile",
+            );
+        }
+        let claim_ids: HashSet<&str> = evidence
+            .claims
+            .iter()
+            .map(|claim| claim.id.as_str())
+            .collect();
+        let mut profile_ids = HashSet::new();
+        for profile in &self.evaluation_profiles {
+            validate_federation_non_empty("federation.evaluation_profiles[].id", &profile.id)?;
+            if !profile_ids.insert(profile.id.as_str()) {
+                return invalid_federation("federation.evaluation_profiles contains duplicate id");
+            }
+            validate_federation_non_empty(
+                "federation.evaluation_profiles[].ruleset",
+                &profile.ruleset,
+            )?;
+            validate_federation_non_empty(
+                "federation.evaluation_profiles[].claim_id",
+                &profile.claim_id,
+            )?;
+            if !claim_ids.contains(profile.claim_id.as_str()) {
+                return invalid_federation(
+                    "federation.evaluation_profiles[].claim_id must reference an evidence claim",
+                );
+            }
+            validate_federation_non_empty(
+                "federation.evaluation_profiles[].subject_id_type",
+                &profile.subject_id_type,
+            )?;
+            if let Some(disclosure) = profile.disclosure.as_deref() {
+                if DisclosureProfile::parse(disclosure).is_none() {
+                    return invalid_federation(
+                        "federation.evaluation_profiles[].disclosure must be value, predicate, or redacted",
+                    );
+                }
+            }
+        }
+        let mut peer_nodes = HashSet::new();
+        for peer in &self.peers {
+            validate_federation_non_empty("federation.peers[].node_id", &peer.node_id)?;
+            validate_federation_non_empty("federation.peers[].issuer", &peer.issuer)?;
+            validate_federation_https_url("federation.peers[].issuer", &peer.issuer)?;
+            if peer.allow_insecure_private_network {
+                validate_federation_http_or_https_url(
+                    "federation.peers[].jwks_uri",
+                    &peer.jwks_uri,
+                )?;
+            } else if peer.allow_insecure_localhost {
+                validate_federation_localhost_or_https_url(
+                    "federation.peers[].jwks_uri",
+                    &peer.jwks_uri,
+                )?;
+            } else {
+                validate_federation_https_url("federation.peers[].jwks_uri", &peer.jwks_uri)?;
+            }
+            validate_did_web_https_issuer_binding(&peer.node_id, &peer.issuer).map_err(
+                |error| EvidenceConfigError::InvalidFederationConfig {
+                    reason: format!("federation.peers[].node_id must bind to issuer: {error}"),
+                },
+            )?;
+            if !peer_nodes.insert(peer.node_id.as_str()) {
+                return invalid_federation("federation.peers contains duplicate node_id");
+            }
+            if !peer
+                .allowed_protocol_versions
+                .iter()
+                .any(|version| version == FEDERATION_PROTOCOL_V0_1)
+            {
+                return invalid_federation(
+                    "federation.peers[].allowed_protocol_versions must include registry-witness-federation/v0.1",
+                );
+            }
+            for purpose in &peer.allowed_purposes {
+                validate_federation_https_url("federation.peers[].allowed_purposes[]", purpose)?;
+            }
+            for profile in &peer.allowed_profiles {
+                if !profile_ids.contains(profile.as_str()) {
+                    return invalid_federation(
+                        "federation.peers[].allowed_profiles must reference an evaluation profile",
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationSigningConfig {
+    pub kid: String,
+    pub key_env: String,
+    #[serde(default = "default_federation_signing_alg")]
+    pub alg: String,
+}
+
+impl Default for FederationSigningConfig {
+    fn default() -> Self {
+        Self {
+            kid: String::new(),
+            key_env: String::new(),
+            alg: default_federation_signing_alg(),
+        }
+    }
+}
+
+fn default_federation_signing_alg() -> String {
+    FEDERATION_SIGNING_ALG_EDDSA.to_string()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationPairwiseSubjectHashConfig {
+    #[serde(default)]
+    pub secret_env: String,
+}
+
+pub const FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY: &str =
+    "in_process_single_instance_only";
+pub const FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST: &str = "expire_oldest";
+
+/// Replay protection settings for the federation MVP.
+///
+/// `in_process_single_instance_only` is deliberately named as an operator
+/// warning. It is not safe for active-active serving Witness deployments
+/// because a replay accepted by one process is invisible to another process.
+/// Production multi-instance federation needs a shared replay store before
+/// privileged federation routes are enabled.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationReplayConfig {
+    #[serde(default = "default_federation_replay_storage")]
+    pub storage: String,
+    #[serde(default = "default_federation_replay_max_entries")]
+    pub max_entries: usize,
+    #[serde(default = "default_federation_replay_eviction")]
+    pub eviction: String,
+}
+
+impl Default for FederationReplayConfig {
+    fn default() -> Self {
+        Self {
+            storage: default_federation_replay_storage(),
+            max_entries: default_federation_replay_max_entries(),
+            eviction: default_federation_replay_eviction(),
+        }
+    }
+}
+
+fn default_federation_replay_storage() -> String {
+    FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY.to_string()
+}
+
+const fn default_federation_replay_max_entries() -> usize {
+    10_000
+}
+
+fn default_federation_replay_eviction() -> String {
+    FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST.to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationResponseShapingConfig {
+    #[serde(default = "default_minimum_denial_latency_ms")]
+    pub minimum_denial_latency_ms: u64,
+}
+
+impl Default for FederationResponseShapingConfig {
+    fn default() -> Self {
+        Self {
+            minimum_denial_latency_ms: default_minimum_denial_latency_ms(),
+        }
+    }
+}
+
+const fn default_minimum_denial_latency_ms() -> u64 {
+    250
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationEmergencyDenylistConfig {
+    #[serde(default)]
+    pub node_ids: Vec<String>,
+    #[serde(default)]
+    pub kids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationPeerConfig {
+    pub node_id: String,
+    pub issuer: String,
+    pub jwks_uri: String,
+    #[serde(default)]
+    pub allow_insecure_localhost: bool,
+    #[serde(default)]
+    pub allow_insecure_private_network: bool,
+    #[serde(default)]
+    pub allowed_protocol_versions: Vec<String>,
+    #[serde(default)]
+    pub allowed_purposes: Vec<String>,
+    #[serde(default)]
+    pub allowed_profiles: Vec<String>,
+    #[serde(default)]
+    pub source_scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FederationEvaluationProfileConfig {
+    pub id: String,
+    pub ruleset: String,
+    pub claim_id: String,
+    pub subject_id_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disclosure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_source_observed_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1666,6 +2034,71 @@ fn default_audit_sink() -> String {
     "stdout".to_string()
 }
 
+fn invalid_federation<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidFederationConfig {
+        reason: reason.into(),
+    })
+}
+
+fn validate_federation_non_empty(field: &str, value: &str) -> Result<(), EvidenceConfigError> {
+    if value.trim().is_empty() {
+        return invalid_federation(format!("{field} must not be empty"));
+    }
+    Ok(())
+}
+
+fn validate_federation_https_url(field: &str, value: &str) -> Result<(), EvidenceConfigError> {
+    validate_federation_non_empty(field, value)?;
+    let Some(rest) = value.strip_prefix("https://") else {
+        return invalid_federation(format!("{field} must be an HTTPS URL"));
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if host.is_empty() || host.contains('@') {
+        return invalid_federation(format!("{field} must include a valid host"));
+    }
+    Ok(())
+}
+
+fn validate_federation_localhost_or_https_url(
+    field: &str,
+    value: &str,
+) -> Result<(), EvidenceConfigError> {
+    if value.starts_with("https://") {
+        return validate_federation_https_url(field, value);
+    }
+    let Some(rest) = value.strip_prefix("http://") else {
+        return invalid_federation(format!("{field} must be HTTPS or localhost HTTP"));
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if host.starts_with("127.0.0.1:")
+        || host == "127.0.0.1"
+        || host.starts_with("localhost:")
+        || host == "localhost"
+    {
+        Ok(())
+    } else {
+        invalid_federation(format!("{field} permits HTTP only for localhost"))
+    }
+}
+
+fn validate_federation_http_or_https_url(
+    field: &str,
+    value: &str,
+) -> Result<(), EvidenceConfigError> {
+    validate_federation_non_empty(field, value)?;
+    let Some(rest) = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return invalid_federation(format!("{field} must be an HTTP or HTTPS URL"));
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if host.is_empty() || host.contains('@') {
+        return invalid_federation(format!("{field} must include a valid host"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvidenceConfigError {
     #[error("evidence.enabled must be true for the standalone Registry Witness")]
@@ -1682,6 +2115,8 @@ pub enum EvidenceConfigError {
     InvalidSelfAttestationConfig { reason: String },
     #[error("invalid oid4vci config: {reason}")]
     InvalidOid4vciConfig { reason: String },
+    #[error("invalid federation config: {reason}")]
+    InvalidFederationConfig { reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
     #[error("each standalone source binding must reference a configured source connection")]
@@ -1993,6 +2428,8 @@ pub struct DciSourceConnectionConfig {
     pub search_path: String,
     #[serde(default = "default_dci_sender_id")]
     pub sender_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_id: Option<String>,
     #[serde(default = "default_dci_query_type")]
     pub query_type: String,
     #[serde(default = "default_dci_records_path")]
@@ -2012,6 +2449,8 @@ pub struct DciSourceConnectionConfig {
     pub record_type: Option<String>,
     #[serde(default)]
     pub field_paths: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl Default for DciSourceConnectionConfig {
@@ -2019,6 +2458,7 @@ impl Default for DciSourceConnectionConfig {
         Self {
             search_path: default_dci_search_path(),
             sender_id: default_dci_sender_id(),
+            receiver_id: None,
             query_type: default_dci_query_type(),
             records_path: default_dci_records_path(),
             bulk_records_path: default_dci_bulk_records_path(),
@@ -2026,6 +2466,7 @@ impl Default for DciSourceConnectionConfig {
             registry_type: None,
             record_type: None,
             field_paths: BTreeMap::new(),
+            signature: None,
         }
     }
 }
@@ -2515,6 +2956,137 @@ credential_configurations:
             EvidenceConfigError::InvalidOid4vciConfig { reason } => reason,
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    fn expect_federation_error(config: &StandaloneRegistryWitnessConfig) -> String {
+        match config
+            .validate()
+            .expect_err("federation config must fail validation")
+        {
+            EvidenceConfigError::InvalidFederationConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    fn valid_federation_config() -> StandaloneRegistryWitnessConfig {
+        let mut config = minimal_config();
+        config
+            .evidence
+            .claims
+            .push(minimal_claim("disability-status"));
+        config.federation = FederationConfig {
+            enabled: true,
+            node_id: "did:web:agency-a.example.gov".to_string(),
+            issuer: "https://agency-a.example.gov".to_string(),
+            jwks_uri: "https://agency-a.example.gov/federation/jwks.json".to_string(),
+            federation_api: "https://agency-a.example.gov/federation/v1".to_string(),
+            supported_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
+            signing: FederationSigningConfig {
+                kid: "agency-a-fed-1".to_string(),
+                key_env: "FEDERATION_SIGNING_KEY".to_string(),
+                alg: FEDERATION_SIGNING_ALG_EDDSA.to_string(),
+            },
+            pairwise_subject_hash: FederationPairwiseSubjectHashConfig {
+                secret_env: "FEDERATION_PAIRWISE_SECRET".to_string(),
+            },
+            peers: vec![FederationPeerConfig {
+                node_id: "did:web:agency-b.example.gov".to_string(),
+                issuer: "https://agency-b.example.gov".to_string(),
+                jwks_uri: "https://agency-b.example.gov/federation/jwks.json".to_string(),
+                allowed_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
+                allowed_purposes: vec![
+                    "https://purpose.example.gov/social-protection/service-delivery".to_string(),
+                ],
+                allowed_profiles: vec!["disability_status_predicate".to_string()],
+                source_scopes: vec!["civil_registry:evidence_verification".to_string()],
+                ..FederationPeerConfig::default()
+            }],
+            evaluation_profiles: vec![FederationEvaluationProfileConfig {
+                id: "disability_status_predicate".to_string(),
+                ruleset: "disability-status-v1".to_string(),
+                claim_id: "disability-status".to_string(),
+                subject_id_type: "national_id".to_string(),
+                disclosure: Some("predicate".to_string()),
+                max_source_observed_age_seconds: Some(300),
+            }],
+            ..FederationConfig::default()
+        };
+        config
+    }
+
+    #[test]
+    fn federation_config_validates_enabled_mvp_shape() {
+        valid_federation_config()
+            .validate()
+            .expect("federation config validates");
+    }
+
+    #[test]
+    fn federation_peer_private_network_jwks_escape_hatch_deserializes_and_validates() {
+        let mut config = valid_federation_config();
+        let peer: FederationPeerConfig = serde_norway::from_str(
+            r#"
+node_id: did:web:agency-b.example.gov
+issuer: https://agency-b.example.gov
+jwks_uri: http://federation-peer-jwks:8080/jwks.json
+allow_insecure_private_network: true
+allowed_protocol_versions:
+  - registry-witness-federation/v0.1
+allowed_purposes:
+  - https://purpose.example.gov/social-protection/service-delivery
+allowed_profiles:
+  - disability_status_predicate
+source_scopes:
+  - civil_registry:evidence_verification
+"#,
+        )
+        .expect("private-network peer YAML parses");
+        assert!(peer.allow_insecure_private_network);
+        config.federation.peers = vec![peer];
+        config
+            .validate()
+            .expect("private-network peer JWKS is accepted only with explicit opt-in");
+    }
+
+    #[test]
+    fn federation_peer_http_private_network_jwks_requires_escape_hatch() {
+        let mut config = valid_federation_config();
+        config.federation.peers[0].jwks_uri =
+            "http://federation-peer-jwks:8080/jwks.json".to_string();
+        let reason = expect_federation_error(&config);
+        assert!(reason.contains("jwks_uri must be an HTTPS URL"));
+    }
+
+    #[test]
+    fn federation_config_rejects_bad_did_issuer_binding() {
+        let mut config = valid_federation_config();
+        config.federation.issuer = "https://other-agency.example.gov".to_string();
+        let reason = expect_federation_error(&config);
+        assert!(reason.contains("node_id must bind"));
+    }
+
+    #[test]
+    fn federation_config_rejects_missing_protocol_and_bad_profile_reference() {
+        let mut missing_protocol = valid_federation_config();
+        missing_protocol
+            .federation
+            .supported_protocol_versions
+            .clear();
+        let reason = expect_federation_error(&missing_protocol);
+        assert!(reason.contains("supported_protocol_versions"));
+
+        let mut bad_profile = valid_federation_config();
+        bad_profile.federation.evaluation_profiles[0].claim_id = "unknown".to_string();
+        let reason = expect_federation_error(&bad_profile);
+        assert!(reason.contains("claim_id must reference"));
+    }
+
+    #[test]
+    fn federation_profile_disclosure_must_be_known_profile() {
+        let mut config = valid_federation_config();
+        config.federation.evaluation_profiles[0].disclosure = Some("raw".to_string());
+        let reason = expect_federation_error(&config);
+        assert!(reason.contains("disclosure must be value, predicate, or redacted"));
     }
 
     // -----------------------------------------------------------------------

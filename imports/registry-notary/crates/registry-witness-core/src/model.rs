@@ -773,6 +773,18 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<AccessMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_peer_id_hash: Option<Hashed<PrincipalIdentifier>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_purpose: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_request_jti: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation_subject_ref_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial_code: Option<SelfAttestationDenialCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_claim_name: Option<ConfigMetadata>,
@@ -882,6 +894,12 @@ mod tests {
             row_count: None,
             error_code: Some("self_attestation.denied".to_string()),
             access_mode: Some(AccessMode::SelfAttestation),
+            federation_peer_id_hash: None,
+            federation_issuer: None,
+            federation_profile: None,
+            federation_purpose: None,
+            federation_request_jti: None,
+            federation_subject_ref_hash: None,
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
             token_claim_name: Some(bounded("national_id")),
             correlation_id: Some(bounded("req-123")),

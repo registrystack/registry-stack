@@ -108,8 +108,12 @@ sources:
   openfn_crvs:
     dataset: civil_registry
     entity: civil_person
-    job: {job}
-    adaptor: "@openfn/language-http@7.2.0"
+    workflow:
+      steps:
+        - id: lookup
+          expression: {job}
+          adaptors:
+            - "@openfn/language-http@7.2.0"
     credential_env: {credential_env}
     smoke_lookup:
       field: national_id

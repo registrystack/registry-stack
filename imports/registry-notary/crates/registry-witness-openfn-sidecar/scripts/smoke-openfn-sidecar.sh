@@ -61,8 +61,25 @@ sources:
   example_people:
     dataset: civil_registry
     entity: civil_person
-    job: "$crate_dir/examples/jobs/common-person-lookup.js"
-    adaptor: "@openfn/language-common@3.2.3"
+    workflow:
+      start: prepare_lookup
+      steps:
+        - id: prepare_lookup
+          expression: "$crate_dir/examples/jobs/common-prepare-lookup.js"
+          adaptors:
+            - "@openfn/language-common@3.2.3"
+          next:
+            filter_records: true
+        - id: filter_records
+          expression: "$crate_dir/examples/jobs/common-filter-records.js"
+          adaptors:
+            - "@openfn/language-common@3.2.3"
+          next:
+            return_rda: true
+        - id: return_rda
+          expression: "$crate_dir/examples/jobs/common-return-rda.js"
+          adaptors:
+            - "@openfn/language-common@3.2.3"
     credential_env: EXAMPLE_PERSON_LOOKUP_CREDENTIAL_JSON
     smoke_lookup:
       field: national_id

@@ -2,6 +2,7 @@
 //! Standalone Registry Witness runtime.
 
 pub mod api;
+pub(crate) mod federation;
 pub mod openapi;
 pub mod runtime;
 pub mod self_attestation_rate_limit;

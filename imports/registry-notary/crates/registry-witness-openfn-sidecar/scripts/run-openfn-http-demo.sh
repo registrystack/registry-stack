@@ -104,18 +104,21 @@ sources:
       start: prepare_request
       steps:
         - id: prepare_request
-          job: "$crate_dir/examples/jobs/http-prepare-person-request.js"
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: "$crate_dir/examples/jobs/http-prepare-person-request.js"
+          adaptors:
+            - "@openfn/language-common@3.2.3"
           next:
             fetch_person: true
         - id: fetch_person
-          job: "$crate_dir/examples/jobs/http-fetch-person.js"
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: "$crate_dir/examples/jobs/http-fetch-person.js"
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             normalize_response: true
         - id: normalize_response
-          job: "$crate_dir/examples/jobs/http-normalize-person-response.js"
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: "$crate_dir/examples/jobs/http-normalize-person-response.js"
+          adaptors:
+            - "@openfn/language-common@3.2.3"
     credential_env: OPENFN_HTTP_DEMO_CREDENTIAL_JSON
     allowed_base_urls:
       - "http://127.0.0.1:$registry_port"

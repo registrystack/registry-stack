@@ -72,18 +72,21 @@ sources:
       start: prepare_request
       steps:
         - id: prepare_request
-          job: /opt/openfn/jobs/prepare-person-request.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: /opt/openfn/jobs/prepare-person-request.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
           next:
             fetch_person: true
         - id: fetch_person
-          job: /opt/openfn/jobs/fetch-person.js
-          adaptor: "@openfn/language-http@7.2.0"
+          expression: /opt/openfn/jobs/fetch-person.js
+          adaptors:
+            - "@openfn/language-http@7.2.0"
           next:
             normalize_response: true
         - id: normalize_response
-          job: /opt/openfn/jobs/normalize-person-response.js
-          adaptor: "@openfn/language-common@3.2.3"
+          expression: /opt/openfn/jobs/normalize-person-response.js
+          adaptors:
+            - "@openfn/language-common@3.2.3"
     credential_env: OPENCRVS_READER_CREDENTIAL_JSON
     allowed_base_urls:
       - https://example.test
@@ -95,7 +98,7 @@ sources:
 ```
 
 At startup the sidecar checks that bearer-token fingerprints are loaded from
-`hash_env`, the job file exists, credentials are present as JSON in
+`hash_env`, expression files exist, credentials are present as JSON in
 `credential_env`, configured credential `baseUrl` values match
 `allowed_base_urls` when present, the worker version output contains the exact
 configured OpenFn compiler/build tool, runtime, and adaptor pins, and every
@@ -112,11 +115,14 @@ version exactly matches the configured pin.
 The production worker script is [workers/openfn_worker.mjs](workers/openfn_worker.mjs).
 Install its pinned dependencies from [workers/package.json](workers/package.json)
 inside the sidecar image and preinstall each configured adaptor in the same
-Node package root. A source may use the original single `job`/`adaptor` shape,
-or a `workflow.steps` plan for a multi-step OpenFn runtime workflow. Workflow
-steps use the OpenFn runtime `next` edge map, including boolean and conditional
-edges. The pinned runtime does not support merge nodes, and the sidecar still
-requires a single final state that normalizes to one RDA `data` array. A runnable
+Node package root. Each source uses a `workflow.steps` plan for an OpenFn runtime
+workflow. Workflow steps use the OpenFn runtime `next` edge map, including
+boolean and conditional edges. Linear flows and mutually exclusive branches are
+supported when each lookup produces exactly one final leaf state. Join/merge
+aggregation is not automatic: Lightning-style merge runs the target once per
+incoming path, so aggregation must be encoded in a normal OpenFn step. The
+pinned runtime does not support merge nodes, and the sidecar still requires a
+single final state that normalizes to one RDA `data` array. A runnable
 local manifest is available at
 [examples/openfn-sidecar.yaml](examples/openfn-sidecar.yaml), backed by a
 three-step fixture workflow in [examples/jobs](examples/jobs). There is also a
@@ -126,7 +132,7 @@ three-step HTTP adaptor sample workflow using
 [examples/jobs/http-normalize-person-response.js](examples/jobs/http-normalize-person-response.js),
 which can be run against the local mock registry in
 [examples/mock-registry-server.mjs](examples/mock-registry-server.mjs).
-The worker compiles the configured OpenFn job or workflow steps, injects
+The worker compiles the configured OpenFn workflow steps, injects
 `state.configuration` from the Rust sidecar request, runs the plan with
 `@openfn/runtime`, and returns only an RDA-shaped `{ "data": [...] }` envelope
 to the Rust HTTP boundary.

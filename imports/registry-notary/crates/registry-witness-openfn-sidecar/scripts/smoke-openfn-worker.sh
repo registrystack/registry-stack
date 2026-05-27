@@ -44,24 +44,24 @@ request="$(jq -nc \
     steps: [
       {
         id: "prepare_lookup",
-        job: $prepare_job,
-        adaptor: "@openfn/language-common@3.2.3",
+        expression: $prepare_job,
+        adaptors: ["@openfn/language-common@3.2.3"],
         next: {
           filter_records: true
         }
       },
       {
         id: "filter_records",
-        job: $filter_job,
-        adaptor: "@openfn/language-common@3.2.3",
+        expression: $filter_job,
+        adaptors: ["@openfn/language-common@3.2.3"],
         next: {
           return_rda: true
         }
       },
       {
         id: "return_rda",
-        job: $return_job,
-        adaptor: "@openfn/language-common@3.2.3"
+        expression: $return_job,
+        adaptors: ["@openfn/language-common@3.2.3"]
       }
     ]
   },
@@ -110,5 +110,13 @@ cycle_output="$(
 )"
 printf '%s\n' "$cycle_output" |
   jq -e '.error.code == "openfn_execution"' >/dev/null
+
+multi_leaf_request="$(printf '%s\n' "$request" | jq -c '.workflow.steps[0].next = {filter_records: true, return_rda: true} | .workflow.steps[1].next = null')"
+multi_leaf_output="$(
+  printf '%s\n' "$multi_leaf_request" |
+    node --experimental-vm-modules "$worker"
+)"
+printf '%s\n' "$multi_leaf_output" |
+  jq -e '.error.code == "invalid_job_result"' >/dev/null
 
 printf 'OpenFn worker smoke passed\n'

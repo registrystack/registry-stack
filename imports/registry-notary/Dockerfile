@@ -8,6 +8,8 @@ FROM rust:1-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d
 WORKDIR /workspace/registry-witness
 COPY --from=registry-platform Cargo.toml README.md LICENSE /workspace/registry-platform/
 COPY --from=registry-platform crates /workspace/registry-platform/crates
+COPY --from=cel-mapping Cargo.toml /workspace/cel-mapping/
+COPY --from=cel-mapping crates /workspace/cel-mapping/crates
 COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

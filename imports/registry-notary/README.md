@@ -1,12 +1,16 @@
 # Registry Witness
 
-Standalone Registry Witness workspace, claim evaluation, credential issuance, and attestation service.
+> **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
+
+Standalone Registry Witness workspace, claim evaluation, federated delegated
+evaluation, credential issuance, and attestation service.
 
 This repository owns claim configuration, claim evaluation, disclosure policy,
-Registry Witness API routes, credential issuance primitives, HTTP source
-connectors, fail-closed API key and bearer-token auth, and redacted audit event
-emission. Registry Relay may publish metadata that points to a Registry Witness,
-but Registry Witness does not import or link Registry Relay code.
+Registry Witness API routes, credential issuance primitives, static-peer
+federation, HTTP source connectors, fail-closed API key and bearer-token auth,
+and redacted audit event emission. Registry Relay or Registry Manifest may
+publish metadata that points to a Registry Witness, but Registry Witness does
+not import or link Registry Relay code.
 
 ## Layout
 
@@ -25,6 +29,22 @@ but Registry Witness does not import or link Registry Relay code.
   jobs behind Registry Witness source lookups.
 - `demo/config/registry-witness.yaml`: split demo config used by
   `registry-relay`'s narrated Registry Witness walkthrough.
+- [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
+  OpenSPP Disability Registry DCI demo backend setup, known interop boundaries,
+  and demo SD-JWT VC caveats.
+- [`docs/federated-witness-manifest-spec.md`](docs/federated-witness-manifest-spec.md):
+  Registry Manifest-backed federation, peer discovery, trust, delegated
+  evaluation, credential issuance, and audit checkpoint design.
+- [`docs/federated-evaluation-mvp-spec.md`](docs/federated-evaluation-mvp-spec.md):
+  first practical federation slice for static-peer, signed delegated
+  evaluation.
+- [`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md):
+  minimal static-peer setup, env vars, replay limitation, and verification
+  checklist for the MVP.
+- [`docs/witness-scenario-catalog.md`](docs/witness-scenario-catalog.md):
+  scenario catalog for where Witness helps, who is involved, current support
+  status, and the gaps surfaced by local evaluation, federation, proof, issuance,
+  and audit workflows.
 
 ## Credential Conformance
 
@@ -32,6 +52,29 @@ Registry Witness currently issues SD-JWT VC credentials using
 `application/dc+sd-jwt`, EdDSA over Ed25519 issuer keys, and `did:jwk` holder
 binding. The supported wire contract and explicit non-support list are defined
 in [`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
+
+## Federated Evaluation
+
+Registry Witness includes a first federation slice for static-peer delegated
+evaluation. When `federation.enabled` is true, the standalone router mounts:
+
+```text
+POST /federation/v1/evaluations
+```
+
+The endpoint accepts a compact JWS request with
+`typ = registry-witness-request+jwt`, verifies the trusted peer and local
+policy before any source read, evaluates one configured profile, emits audit,
+and returns a compact JWS response with
+`typ = registry-witness-response+jwt`.
+
+The MVP is deliberately scoped to delegated evaluation. It does not implement
+open federation, dynamic trust chains, audit checkpoint exchange, or federated
+credential issuance. See
+[`docs/federated-evaluation-mvp-spec.md`](docs/federated-evaluation-mvp-spec.md)
+and
+[`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md)
+for the wire profile, config shape, replay limitation, and rollout checklist.
 
 ## Local Run
 
@@ -65,8 +108,8 @@ running Cargo jobs. Private platform checkouts require a repository secret named
 `REGISTRY_PLATFORM_TOKEN`.
 
 CEL is enabled by default through the `registry-witness-cel` feature and is
-implemented through `cel-mapper-core`, pinned to the published
-`cel-mapper-core-v0.1.1` tag in `PublicSchema/cel-mapping`.
+implemented through the local `crosswalk-core` crate at
+`../cel-mapping/crates/crosswalk-core`.
 
 ## Docker
 

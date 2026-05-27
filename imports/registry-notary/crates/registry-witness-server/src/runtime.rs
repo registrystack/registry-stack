@@ -173,7 +173,7 @@ fn cache_key_for_binding(
 }
 
 #[cfg(feature = "registry-witness-cel")]
-use cel_mapper_core::{
+use crosswalk_core::{
     MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
 };
 use registry_platform_audit::AuditKeyHasher;

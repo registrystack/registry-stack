@@ -10,6 +10,8 @@ and downstream tooling.
 
 - Standalone Registry Witness configuration types and validation.
 - Claim, subject, source binding, disclosure, and evaluation models.
+- Static-peer federation config models, validation constants, and audit fields
+  for delegated evaluation.
 - Error types used across the workspace.
 - SD-JWT VC issuance helpers for claim views.
 - OpenAPI-compatible schema derives for public contract types.

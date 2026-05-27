@@ -351,6 +351,45 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
+            "/federation/v1/evaluations": {
+                "post": {
+                    "summary": "Evaluate one configured federation profile for a trusted peer",
+                    "operationId": "federatedEvaluate",
+                    "description": "Accepts a compact JWS request with typ registry-witness-request+jwt. This route is mounted only when federation is enabled and uses body-JWT authentication instead of API key or bearer authentication.",
+                    "security": [],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/jwt": {
+                                "schema": {
+                                    "type": "string",
+                                    "description": "Compact JWS signed federation evaluation request"
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Compact JWS signed federation evaluation response",
+                            "content": {
+                                "application/jwt": {
+                                    "schema": {
+                                        "type": "string",
+                                        "description": "Compact JWS with typ registry-witness-response+jwt"
+                                    }
+                                }
+                            }
+                        },
+                        "400": { "description": "Invalid federation request" },
+                        "401": { "description": "Invalid federation token" },
+                        "403": { "description": "Peer, profile, purpose, or subject id type is not allowed" },
+                        "409": { "description": "Request replay detected" },
+                        "413": { "description": "Request body is too large" },
+                        "415": { "description": "Content type is not application/jwt" },
+                        "503": { "description": "Source service or peer key service is unavailable" }
+                    }
+                }
+            },
             "/claims/batch-evaluate": {
                 "post": {
                     "summary": "Evaluate claims for multiple subjects inline",
@@ -1680,6 +1719,7 @@ mod tests {
             "/claims/{claim_id}",
             "/formats",
             "/claims/evaluate",
+            "/federation/v1/evaluations",
             "/claims/batch-evaluate",
             "/evidence/render",
             "/credentials/issue",
@@ -1714,6 +1754,10 @@ mod tests {
         );
         assert_eq!(
             doc["paths"]["/oid4vci/nonce"]["post"]["security"],
+            json!([])
+        );
+        assert_eq!(
+            doc["paths"]["/federation/v1/evaluations"]["post"]["security"],
             json!([])
         );
         assert_eq!(
