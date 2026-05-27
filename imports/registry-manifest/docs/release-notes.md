@@ -1,5 +1,9 @@
 # Release Notes
 
+## 0.1.1
+
+- Added CPSV-AP renderer, federated evaluation manifest schema, and API catalog discovery publication.
+
 ## 0.1.0
 
 - Cut Registry Manifest into an independent Cargo workspace with `registry-manifest-core` and `registry-manifest-cli`.

@@ -4,7 +4,7 @@
 
 Registry Manifest is a portable Rust workspace for modeling, validating, and rendering standards-facing registry metadata without running Registry Relay.
 
-It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, OGC API Records item bodies, policy documents, evidence-offering metadata, and public federation metadata for Registry Witness delegated evaluation.
+It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, form JSON Schema, OGC API Records item bodies, policy documents, evidence-offering metadata, and public federation metadata for Registry Witness delegated evaluation.
 
 ## Workspace
 
@@ -94,6 +94,7 @@ cargo build --workspace --all-targets
 - `cpsv-ap`
 - `shacl`
 - `json-schema` with `--dataset <id> --entity <name>`
+- `form-json-schema` with `--form <id>`
 - `ogc-records`
 
 ## Registry Witness Federation Metadata
