@@ -20,6 +20,7 @@ security, SD-JWT VC support, crypto primitives, and integration-test fixtures.
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 7807 responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
+| [`registry-platform-replay`](crates/registry-platform-replay/README.md) | Shared replay-store trait, scoped one-time keys, and in-memory TTL store for nonce and JWT `jti` rejection. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
 
@@ -108,6 +109,10 @@ This repository contains reusable primitives, not a complete application securit
 boundary. Consumers remain responsible for service authorization, tenant
 isolation, replay storage, audit retention, secret provisioning, and deployment
 configuration.
+
+The in-memory replay store is for tests and single-process development. Services
+that require replay protection across restarts or active-active deployments need
+a durable shared backend.
 
 Report security-sensitive issues privately before opening a public issue.
 

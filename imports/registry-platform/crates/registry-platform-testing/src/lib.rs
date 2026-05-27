@@ -18,7 +18,12 @@ use registry_platform_audit::{
 };
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use registry_platform_oid4vci::{CREDENTIAL_SIGNING_ALG_EDDSA, PROOF_JWT_TYPE};
+use registry_platform_replay::{
+    ReplayInsertOutcome, ReplayKey, ReplayScope, ReplayStore, ReplayStoreError,
+};
 use serde_json::{json, Map, Value};
+use thiserror::Error;
+use time::OffsetDateTime;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use wiremock::{
     matchers::{method, path},
@@ -473,6 +478,34 @@ pub fn assert_chain_integrity_with_anchors(
     verify_chain_with_anchors(envelopes, anchors).map(|_| ())
 }
 
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ReplayAssertionError {
+    #[error("first replay insert did not succeed; got {0:?}")]
+    FirstInsert(ReplayInsertOutcome),
+    #[error("duplicate replay insert was not rejected; got {0:?}")]
+    DuplicateInsert(ReplayInsertOutcome),
+    #[error("replay store failed: {0}")]
+    Store(#[from] ReplayStoreError),
+}
+
+pub async fn assert_replay_duplicate_rejected(
+    store: &dyn ReplayStore,
+    scope: &ReplayScope,
+    key: &ReplayKey,
+    expires_at: OffsetDateTime,
+) -> Result<(), ReplayAssertionError> {
+    match store.insert_once(scope, key, expires_at).await? {
+        ReplayInsertOutcome::Inserted => {}
+        outcome => return Err(ReplayAssertionError::FirstInsert(outcome)),
+    }
+
+    match store.insert_once(scope, key, expires_at).await? {
+        ReplayInsertOutcome::AlreadySeen => Ok(()),
+        outcome => Err(ReplayAssertionError::DuplicateInsert(outcome)),
+    }
+}
+
 #[must_use]
 pub fn oidc_verifier_config(
     issuer: String,
@@ -504,6 +537,7 @@ mod tests {
         fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
         TokenVerifier,
     };
+    use registry_platform_replay::{InMemoryReplayStore, ReplayKey, ReplayScope};
 
     use super::*;
 
@@ -729,6 +763,19 @@ mod tests {
             ChainAssertionAnchors::from_trusted_last_hash(second.record_hash),
         )
         .expect("anchored chain verifies");
+    }
+
+    #[tokio::test]
+    async fn replay_duplicate_assertion_checks_store_behavior() {
+        let store = InMemoryReplayStore::new();
+        let scope =
+            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
+        let key = ReplayKey::new("nonce-1").expect("valid key");
+        let expires_at = OffsetDateTime::now_utc() + Duration::from_secs(60);
+
+        assert_replay_duplicate_rejected(&store, &scope, &key, expires_at)
+            .await
+            .expect("duplicate rejection asserted");
     }
 
     fn jwt_claims(token: &str) -> Value {

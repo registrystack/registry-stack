@@ -19,8 +19,11 @@ registry-platform-httpsec = { version = "0.1.2", path = "../registry-platform-ht
 registry-platform-httputil = { version = "0.1.2", path = "../registry-platform-httputil" }
 registry-platform-oid4vci = { version = "0.1.2", path = "../registry-platform-oid4vci" }
 registry-platform-oidc = { version = "0.1.2", path = "../registry-platform-oidc" }
+registry-platform-replay = { version = "0.1.2", path = "../registry-platform-replay" }
 reqwest.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 tower.workspace = true
 wiremock.workspace = true

@@ -11,6 +11,7 @@ Shared fixtures and assertions for registry-platform consumers.
 - `assert_chain_integrity` for internally consistent audit envelope assertions.
 - `assert_chain_integrity_with_anchors` for retained chains or checks that must
   be bound to a trusted start or tail hash.
+- `assert_replay_duplicate_rejected` for reusable replay-store duplicate checks.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
 - Federation fixture helpers for building signed Witness request/response JWTs.
 - `sign_openid4vci_proof_jwt` for building OID4VCI holder proof JWTs in tests.
@@ -70,6 +71,12 @@ Also tracks request body size (used by `assert_max_request_bytes`).
 Type aliases for `registry_platform_audit::ChainVerificationError` and
 `registry_platform_audit::ChainVerificationAnchors`. Exported here so test
 code only needs to import from this crate.
+
+### `ReplayAssertionError`
+
+Error type returned by `assert_replay_duplicate_rejected`. It lets downstream
+integration tests assert a `ReplayStore` accepts the first scoped key and rejects
+the duplicate with `AlreadySeen`.
 
 ### JWT signing helpers
 
