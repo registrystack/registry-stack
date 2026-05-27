@@ -1409,6 +1409,20 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         );
     }
 
+    if manifest.federation.is_none()
+        && manifest.datasets.iter().any(|dataset| {
+            dataset
+                .evidence_offerings
+                .iter()
+                .any(|offering| offering.access.kind == "registry-witness")
+        })
+    {
+        errors.push(ValidationError::new(
+            "federation",
+            "registry-witness access requires a top-level federation block",
+        ));
+    }
+
     let mut dataset_ids = BTreeSet::new();
     let mut offering_ids = BTreeSet::new();
     for (dataset_index, dataset) in manifest.datasets.iter().enumerate() {
@@ -1471,7 +1485,6 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &path,
             &evidence_type_ids,
             &evaluation_profile_rulesets,
-            manifest.federation.as_ref(),
             &mut offering_ids,
             &manifest.vocabularies,
             &mut errors,
@@ -2975,16 +2988,14 @@ fn validate_entities(
 
 // Validates every evidence offering on a dataset against the manifest's
 // cross-cutting context (catalog-wide id table, evidence-type allowlist,
-// evaluation-profile rulesets, federation peers, vocabulary prefixes). Each
-// argument is load-bearing for at least one validation rule, so collapsing them
-// into a context struct would only rename the dependency, not remove it.
-#[allow(clippy::too_many_arguments)]
+// evaluation-profile rulesets, vocabulary prefixes). Each argument is
+// load-bearing for at least one validation rule, so collapsing them into a
+// context struct would only rename the dependency, not remove it.
 fn validate_evidence_offerings(
     dataset: &DatasetManifest,
     path: &str,
     evidence_type_ids: &BTreeSet<&str>,
     evaluation_profile_rulesets: &BTreeSet<&str>,
-    federation: Option<&FederationManifest>,
     offering_ids: &mut BTreeSet<String>,
     vocabularies: &BTreeMap<String, String>,
     errors: &mut Vec<ValidationError>,
@@ -3121,7 +3132,6 @@ fn validate_evidence_offerings(
                 offering,
                 &offering_path,
                 evaluation_profile_rulesets,
-                federation,
                 errors,
             );
         } else {
@@ -3160,15 +3170,8 @@ fn validate_registry_witness_access(
     offering: &EvidenceOfferingManifest,
     offering_path: &str,
     evaluation_profile_rulesets: &BTreeSet<&str>,
-    federation: Option<&FederationManifest>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if federation.is_none() {
-        errors.push(ValidationError::new(
-            "federation",
-            "registry-witness access requires a top-level federation block",
-        ));
-    }
     if offering.access.conforms_to.as_deref() != Some(REGISTRY_WITNESS_FEDERATION_PROTOCOL) {
         errors.push(ValidationError::new(
             format!("{offering_path}.access.conforms_to"),
@@ -5428,6 +5431,8 @@ fn url_host(value: &str) -> Option<String> {
         .and_then(url_host_after_scheme)
 }
 
+// Returns the full authority (host plus port when present), lower-cased, so that
+// did:web bindings can match the issuer URL on origin boundary, not just host.
 fn url_host_after_scheme(remainder: &str) -> Option<String> {
     let authority = remainder
         .split(['/', '?', '#'])
@@ -5436,10 +5441,6 @@ fn url_host_after_scheme(remainder: &str) -> Option<String> {
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.split_once(']').map(|(host, _)| host))
-        .unwrap_or_else(|| host.split_once(':').map_or(host, |(host, _)| host));
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
@@ -5448,10 +5449,13 @@ fn did_web_host(node_id: &str) -> Option<String> {
         .strip_prefix("did:web:")
         .and_then(|method_id| method_id.split(':').next())
         .filter(|host| !host.is_empty())
-        .map(|host| host.replace("%3A", ":").replace("%3a", ":"))
         .map(|host| {
-            host.split_once(':')
-                .map_or(host.as_str(), |(host, _)| host)
+            host.replace("%3A", ":")
+                .replace("%3a", ":")
+                .replace("%5B", "[")
+                .replace("%5b", "[")
+                .replace("%5D", "]")
+                .replace("%5d", "]")
                 .to_ascii_lowercase()
         })
 }

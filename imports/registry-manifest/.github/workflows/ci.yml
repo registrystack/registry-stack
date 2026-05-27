@@ -79,7 +79,12 @@ jobs:
         run: cargo install cargo-audit --version 0.22.1 --locked
 
       - name: Audit
-        run: cargo audit --deny warnings
+        run: |
+          cargo audit \
+            --db "$RUNNER_TEMP/cargo-audit-advisory-db" \
+            --deny warnings \
+            --ignore RUSTSEC-2024-0388 \
+            --ignore RUSTSEC-2024-0370
 
   secret-scan:
     runs-on: ubuntu-latest

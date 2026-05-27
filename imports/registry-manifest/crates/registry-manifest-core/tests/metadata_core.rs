@@ -779,6 +779,120 @@ fn validation_rejects_invalid_federation_urls_and_did_web_binding() {
 }
 
 #[test]
+fn validation_rejects_did_web_port_mismatch_against_issuer() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test:9090".to_string();
+    federation.jwks_uri = "https://registry.example.test:9090/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test:9090/federation".to_string();
+    federation.node_id = "did:web:registry.example.test%3A8080".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("port mismatch rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.node_id"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected DID:web port mismatch to be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_did_web_with_port_against_default_port_issuer() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test".to_string();
+    federation.jwks_uri = "https://registry.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test/federation".to_string();
+    federation.node_id = "did:web:registry.example.test%3A8443".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("asymmetric port rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.node_id"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected DID:web port-vs-default-port asymmetry to be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_default_port_did_web_against_issuer_with_port() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test:8443".to_string();
+    federation.jwks_uri = "https://registry.example.test:8443/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test:8443/federation".to_string();
+    federation.node_id = "did:web:registry.example.test".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("asymmetric port rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.node_id"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected DID:web default-vs-explicit-port asymmetry to be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn validation_accepts_did_web_port_match_against_issuer() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test:8443".to_string();
+    federation.jwks_uri = "https://registry.example.test:8443/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test:8443/federation".to_string();
+    federation.node_id = "did:web:registry.example.test%3A8443".to_string();
+
+    validate_manifest(&manifest).expect("matching port binds");
+}
+
+#[test]
+fn validation_reports_missing_federation_block_once_across_offerings() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest.federation = None;
+    let template = manifest.datasets[0].evidence_offerings[0].clone();
+    for index in 1..3 {
+        let mut copy = template.clone();
+        copy.id = format!("age_witness_{index}");
+        manifest.datasets[0].evidence_offerings.push(copy);
+    }
+
+    let error = validate_manifest(&manifest).expect_err("missing federation rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    let federation_errors = errors
+        .iter()
+        .filter(|error| {
+            error.path == "federation"
+                && error
+                    .message
+                    .contains("registry-witness access requires a top-level federation block")
+        })
+        .count();
+    assert_eq!(
+        federation_errors, 1,
+        "expected exactly one federation-missing error, got {federation_errors}: {errors:?}"
+    );
+}
+
+#[test]
 fn policy_manifest_validates_and_renders_odrl_offer() {
     let mut manifest = fixture("example-civil-registration");
     manifest.catalog.participant_id = Some("did:web:civil-registration.example.gov".to_string());
