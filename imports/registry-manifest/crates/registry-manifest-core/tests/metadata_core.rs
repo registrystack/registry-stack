@@ -617,6 +617,167 @@ datasets:
     );
 }
 
+fn federated_evaluation_manifest() -> MetadataManifest {
+    serde_yml::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: federated-evaluation
+  base_url: https://registry.example.test
+  title: Federated Evaluation
+  publisher:
+    name: Example Registry
+federation:
+  node_id: did:web:registry.example.test
+  issuer: https://registry.example.test
+  jwks_uri: https://registry.example.test/.well-known/jwks.json
+  federation_api: https://registry.example.test/federation
+  supported_protocol_versions:
+    - registry-witness-federation/v0.1
+evaluation_profiles:
+  - id: age_eligibility_profile
+    ruleset: age-eligibility-v1
+    claim_id: age_eligibility
+    subject_id_type: national_id
+    max_source_observed_age_seconds: 86400
+requirements:
+  - id: age_requirement
+    title: Age requirement
+evidence_types:
+  - id: age_evidence
+    title: Age evidence
+    proves: [age_requirement]
+datasets:
+  - id: residents
+    title: Residents
+    evidence_offerings:
+      - id: age_witness
+        title: Age witness
+        evidence_type: age_evidence
+        issuing_authority:
+          id: civil_registry
+          name: Civil Registry
+        entity: resident
+        lookup_keys: [national_id]
+        access:
+          kind: registry-witness
+          conforms_to: registry-witness-federation/v0.1
+          endpoint_url: https://witness.example.test/evaluate
+          discovery_url: https://witness.example.test/.well-known/registry-witness
+          ruleset: age-eligibility-v1
+    entities:
+      - name: resident
+        fields:
+          - name: national_id
+            type: string
+"#,
+    )
+    .expect("federated evaluation manifest parses")
+}
+
+#[test]
+fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
+    let manifest = federated_evaluation_manifest();
+
+    validate_manifest(&manifest).expect("federated manifest validates");
+    let compiled = compile_manifest(&manifest).expect("federated manifest compiles");
+    let catalog = render_catalog(&compiled);
+
+    assert_eq!(
+        catalog["federation"]["supported_protocol_versions"][0],
+        json!("registry-witness-federation/v0.1")
+    );
+    assert_eq!(
+        catalog["evaluation_profiles"][0]["id"],
+        json!("age_eligibility_profile")
+    );
+    assert_eq!(
+        catalog["evidence_offerings"][0]["access"]["ruleset"],
+        json!("age-eligibility-v1")
+    );
+}
+
+#[test]
+fn validation_rejects_registry_witness_unresolved_ruleset() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest.datasets[0].evidence_offerings[0].access.ruleset = "missing_profile".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("unresolved ruleset rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path == "datasets[0].evidence_offerings[0].access.ruleset"
+            && error
+                .message
+                .contains("must reference a known evaluation profile")
+    }));
+}
+
+#[test]
+fn validation_rejects_registry_witness_bad_conforms_to() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest.datasets[0].evidence_offerings[0]
+        .access
+        .conforms_to = Some("registry_relay:evidence-server-v1".to_string());
+
+    let error = validate_manifest(&manifest).expect_err("bad protocol rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path == "datasets[0].evidence_offerings[0].access.conforms_to"
+            && error.message.contains("registry-witness-federation/v0.1")
+    }));
+}
+
+#[test]
+fn validation_rejects_duplicate_evaluation_profile_ids() {
+    let mut manifest = federated_evaluation_manifest();
+    manifest
+        .evaluation_profiles
+        .push(manifest.evaluation_profiles[0].clone());
+
+    let error = validate_manifest(&manifest).expect_err("duplicate profile rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| {
+        error.path == "evaluation_profiles[1].id"
+            && error
+                .message
+                .contains("evaluation profile id must be unique")
+    }));
+}
+
+#[test]
+fn validation_rejects_invalid_federation_urls_and_did_web_binding() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "http://registry.example.test".to_string();
+    federation.jwks_uri = "http://registry.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "http://registry.example.test/federation".to_string();
+    federation.node_id = "did:web:other.example.test".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("bad federation rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(errors.iter().any(|error| error.path == "federation.issuer"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "federation.jwks_uri"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "federation.federation_api"));
+    assert!(errors.iter().any(|error| {
+        error.path == "federation.node_id"
+            && error
+                .message
+                .contains("must bind to federation issuer host")
+    }));
+}
+
 #[test]
 fn policy_manifest_validates_and_renders_odrl_offer() {
     let mut manifest = fixture("example-civil-registration");
