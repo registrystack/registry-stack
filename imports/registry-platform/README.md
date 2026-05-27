@@ -16,7 +16,7 @@ security, SD-JWT VC support, crypto primitives, and integration-test fixtures.
 | --- | --- |
 | [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
-| [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, signing, verification, DID validation, and JSON canonicalization. |
+| [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 7807 responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
@@ -40,7 +40,8 @@ security, SD-JWT VC support, crypto primitives, and integration-test fixtures.
 - Publication: crates are private to this workspace (`publish = false`).
 - Versioning: all crates currently share the workspace version `0.1.2`.
 - Signing support: v0.1.2 supports EdDSA/Ed25519 for platform-owned signing and
-  verification. OIDC JWT verification is caller-configurable for provider
+  verification, including a provider abstraction for local JWKs and external
+  signing adapters. OIDC JWT verification is caller-configurable for provider
   compatibility, but consumers should keep algorithm allowlists as narrow as
   their provider supports.
 

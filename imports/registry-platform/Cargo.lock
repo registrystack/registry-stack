@@ -1496,6 +1496,7 @@ dependencies = [
 name = "registry-platform-crypto"
 version = "0.1.2"
 dependencies = [
+ "async-trait",
  "base64",
  "ed25519-dalek",
  "hmac 0.13.0",
@@ -1505,6 +1506,7 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
  "thiserror",
+ "tokio",
  "url",
  "zeroize",
 ]
@@ -1578,6 +1580,7 @@ dependencies = [
 name = "registry-platform-sdjwt"
 version = "0.1.2"
 dependencies = [
+ "async-trait",
  "base64",
  "getrandom 0.4.2",
  "jsonwebtoken",
@@ -1586,6 +1589,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
+ "tokio",
  "ulid",
 ]
 

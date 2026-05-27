@@ -3,7 +3,10 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use registry_platform_crypto::{sign, verify, JwkError, PrivateJwk, PublicJwk};
+use registry_platform_crypto::{
+    verify, JwkError, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm, SigningError,
+    SigningProvider,
+};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -14,26 +17,34 @@ use ulid::Ulid;
 
 #[derive(Clone)]
 pub struct SdJwtIssuer {
-    jwk: Arc<PrivateJwk>,
+    signer: Arc<dyn SigningProvider>,
 }
 
 impl fmt::Debug for SdJwtIssuer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SdJwtIssuer")
-            .field("alg", &"EdDSA")
-            .field("kid", &self.jwk.kid)
+            .field("alg", &self.signer.algorithm())
+            .field("kid", &self.signer.key_id())
             .finish_non_exhaustive()
     }
 }
 
 impl SdJwtIssuer {
     pub fn from_jwk(jwk: PrivateJwk) -> Result<Self, SdJwtError> {
-        jwk.algorithm().map_err(map_jwk_algorithm_error)?;
-        Ok(Self { jwk: Arc::new(jwk) })
+        let signer = LocalJwkSigner::new(jwk).map_err(map_signing_error)?;
+        Ok(Self::from_signing_provider(Arc::new(signer)))
     }
 
-    pub fn issue(&self, input: SdJwtIssuanceInput) -> Result<SignedSdJwt, SdJwtError> {
+    #[must_use]
+    pub fn from_signing_provider(signer: Arc<dyn SigningProvider>) -> Self {
+        Self { signer }
+    }
+
+    pub async fn issue(&self, input: SdJwtIssuanceInput) -> Result<SignedSdJwt, SdJwtError> {
         input.validate()?;
+        if self.signer.key_id().trim().is_empty() {
+            return Err(SdJwtError::Signing(SigningError::MissingKeyId));
+        }
         let credential_id = format!("urn:ulid:{}", Ulid::new());
 
         let mut payload = Map::new();
@@ -69,11 +80,11 @@ impl SdJwtIssuer {
         );
 
         let header = json!({
-            "alg": "EdDSA",
+            "alg": signing_algorithm_jwa(self.signer.algorithm()),
             "typ": "dc+sd-jwt",
-            "kid": input.signing_kid,
+            "kid": self.signer.key_id(),
         });
-        let jwt = sign_jwt(header, Value::Object(payload), &self.jwk)?;
+        let jwt = sign_jwt(header, Value::Object(payload), self.signer.as_ref()).await?;
         Ok(SignedSdJwt {
             credential_id: credential_id.clone(),
             jti: credential_id,
@@ -101,7 +112,6 @@ pub struct SdJwtIssuanceInput {
     pub iat: i64,
     pub exp: i64,
     pub vct: String,
-    pub signing_kid: String,
     pub cnf: Option<HolderConfirmation>,
     pub disclosures: Vec<Disclosure>,
 }
@@ -111,7 +121,6 @@ impl SdJwtIssuanceInput {
         if self.iss.is_empty()
             || self.sub_ref.is_empty()
             || self.vct.is_empty()
-            || self.signing_kid.is_empty()
             || self.exp <= self.iat
         {
             return Err(SdJwtError::InvalidInput);
@@ -235,6 +244,8 @@ pub enum SdJwtError {
     InvalidKey(#[from] JwkError),
     #[error("cryptographic operation failed: {0}")]
     Crypto(#[from] registry_platform_crypto::CryptoError),
+    #[error("signing operation failed: {0}")]
+    Signing(#[from] SigningError),
     #[error("JSON serialization failed: {0}")]
     Json(#[from] serde_json::Error),
     #[error("randomness failed: {0}")]
@@ -243,10 +254,19 @@ pub enum SdJwtError {
     HolderProofInvalid,
 }
 
-fn map_jwk_algorithm_error(err: JwkError) -> SdJwtError {
+fn map_signing_error(err: SigningError) -> SdJwtError {
     match err {
-        JwkError::UnsupportedAlgorithm => SdJwtError::UnsupportedAlgorithm,
-        err => SdJwtError::InvalidKey(err),
+        SigningError::InvalidKey(JwkError::UnsupportedAlgorithm) => {
+            SdJwtError::UnsupportedAlgorithm
+        }
+        SigningError::InvalidKey(err) => SdJwtError::InvalidKey(err),
+        err => SdJwtError::Signing(err),
+    }
+}
+
+fn signing_algorithm_jwa(algorithm: SigningAlgorithm) -> &'static str {
+    match algorithm {
+        SigningAlgorithm::EdDsa => "EdDSA",
     }
 }
 
@@ -264,14 +284,24 @@ fn issue_disclosure(name: &str, value: Value) -> Result<IssuedDisclosure, SdJwtE
     Ok(IssuedDisclosure { encoded, digest })
 }
 
-/// Internal JWS serialiser. Runs synchronously on the calling thread; the
-/// Ed25519 sign cost is inherited from `registry_platform_crypto::sign`
-/// (~15 µs/op on Apple M5 Max; see its doc comment for details).
-fn sign_jwt(header: Value, payload: Value, jwk: &PrivateJwk) -> Result<String, SdJwtError> {
+/// Internal JWS serialiser. Local Ed25519 sign cost is inherited from
+/// `registry_platform_crypto::sign` (~15 µs/op on Apple M5 Max; see its doc
+/// comment for details), while external providers may add network latency.
+async fn sign_jwt(
+    header: Value,
+    payload: Value,
+    signer: &dyn SigningProvider,
+) -> Result<String, SdJwtError> {
     let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
     let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
     let signing_input = format!("{header_b64}.{payload_b64}");
-    let signature = sign(signing_input.as_bytes(), jwk)?;
+    let public_jwk = signer.public_jwk();
+    if public_jwk.kid.as_deref() != Some(signer.key_id()) {
+        return Err(SdJwtError::Signing(SigningError::KeyIdMismatch));
+    }
+    let signature = signer.sign(signing_input.as_bytes()).await?;
+    verify(signing_input.as_bytes(), &signature, &public_jwk)
+        .map_err(|err| SdJwtError::Signing(SigningError::Crypto(err)))?;
     Ok(format!(
         "{}.{}",
         signing_input,
@@ -329,7 +359,13 @@ fn required_audience(value: &Value, expected: &str) -> Result<String, SdJwtError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use registry_platform_crypto::{
+        sign as sign_with_private_jwk, LocalJwkSigner, SigningAlgorithm, SigningError,
+        SigningProvider,
+    };
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
     const HOLDER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:jwk:holder#key-1"}"#;
@@ -348,8 +384,8 @@ mod tests {
         assert!(debug.contains("SdJwtIssuer"));
     }
 
-    #[test]
-    fn sd_jwt_issuance_writes_vct_cnf_jwk_cnf_kid_and_header_kid() {
+    #[tokio::test]
+    async fn sd_jwt_issuance_writes_vct_cnf_jwk_cnf_kid_and_provider_header_kid() {
         let issuer =
             SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
         let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
@@ -360,7 +396,6 @@ mod tests {
                 iat: 1_700_000_000,
                 exp: 1_700_000_600,
                 vct: "https://vct.example/test".to_string(),
-                signing_kid: "did:web:issuer.test#key-1".to_string(),
                 cnf: Some(HolderConfirmation {
                     jwk: holder.public(),
                     kid: Some("did:jwk:holder#key-1".to_string()),
@@ -370,6 +405,7 @@ mod tests {
                     value: json!({"ok": true}),
                 }],
             })
+            .await
             .expect("issues");
 
         assert_eq!(signed.credential_id, signed.jti);
@@ -389,17 +425,17 @@ mod tests {
         assert!(payload["cnf"]["jwk"].get("d").is_none());
     }
 
-    #[test]
-    fn sd_jwt_issuance_omits_cnf_when_unbound() {
+    #[tokio::test]
+    async fn sd_jwt_issuance_omits_cnf_when_unbound() {
         let issuer =
             SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
-        let signed = issuer.issue(issue_input(None)).expect("issues");
+        let signed = issuer.issue(issue_input(None)).await.expect("issues");
 
         assert!(jwt_payload(&signed.jwt).get("cnf").is_none());
     }
 
-    #[test]
-    fn issued_sd_digests_are_sorted_by_digest() {
+    #[tokio::test]
+    async fn issued_sd_digests_are_sorted_by_digest() {
         let issuer =
             SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
         let signed = issuer
@@ -420,6 +456,7 @@ mod tests {
                 ],
                 ..issue_input(None)
             })
+            .await
             .expect("issues");
         let payload = jwt_payload(&signed.jwt);
         let sd = payload["_sd"]
@@ -438,6 +475,87 @@ mod tests {
         disclosure_digests.sort_unstable();
 
         assert_eq!(sd, disclosure_digests);
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuer_accepts_provider_without_private_jwk_at_call_site() {
+        let private = PrivateJwk::parse(RAW_JWK).expect("jwk");
+        let provider = Arc::new(CountingProvider {
+            signer: LocalJwkSigner::new(private).expect("local signer builds"),
+            calls: AtomicUsize::new(0),
+        });
+        let issuer = SdJwtIssuer::from_signing_provider(provider.clone());
+
+        let signed = issuer.issue(issue_input(None)).await.expect("issues");
+        let header = jwt_header(&signed.jwt);
+
+        assert_eq!(header["kid"], provider.key_id());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuer_maps_provider_signing_failures_without_payload_leakage() {
+        let issuer = SdJwtIssuer::from_signing_provider(Arc::new(FailingProvider));
+
+        let err = issuer
+            .issue(SdJwtIssuanceInput {
+                sub_ref: "sensitive-subject".to_string(),
+                ..issue_input(None)
+            })
+            .await
+            .expect_err("provider failure propagates");
+        let rendered = err.to_string();
+
+        assert!(matches!(err, SdJwtError::Signing(_)));
+        assert!(!rendered.contains("sensitive-subject"));
+        assert!(!rendered.contains("signature"));
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuer_rejects_provider_with_empty_key_id() {
+        let issuer = SdJwtIssuer::from_signing_provider(Arc::new(EmptyKidProvider));
+
+        let err = issuer
+            .issue(issue_input(None))
+            .await
+            .expect_err("empty provider kid rejects");
+
+        assert!(matches!(
+            err,
+            SdJwtError::Signing(SigningError::MissingKeyId)
+        ));
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuer_rejects_provider_signature_that_does_not_verify() {
+        let issuer = SdJwtIssuer::from_signing_provider(Arc::new(BadSignatureProvider));
+
+        let err = issuer
+            .issue(issue_input(None))
+            .await
+            .expect_err("bad provider signature rejects");
+
+        assert!(matches!(
+            err,
+            SdJwtError::Signing(SigningError::Crypto(
+                registry_platform_crypto::CryptoError::InvalidSignature
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuer_rejects_provider_public_jwk_kid_mismatch() {
+        let issuer = SdJwtIssuer::from_signing_provider(Arc::new(MismatchedPublicKidProvider));
+
+        let err = issuer
+            .issue(issue_input(None))
+            .await
+            .expect_err("public jwk kid mismatch rejects");
+
+        assert!(matches!(
+            err,
+            SdJwtError::Signing(SigningError::KeyIdMismatch)
+        ));
     }
 
     #[test]
@@ -541,7 +659,7 @@ mod tests {
         let claim_set = claim_set();
         let bindings = bindings(&claim_set);
 
-        let wrong_typ = sign_jwt(
+        let wrong_typ = sign_jwt_with_private(
             json!({"alg": "EdDSA", "typ": "JWT", "kid": "did:jwk:holder#key-1"}),
             proof_payload(now, "proof-jti-6"),
             &holder,
@@ -557,8 +675,8 @@ mod tests {
                 "kid": "did:jwk:holder#key-1"
             });
             header[forbidden] = json!("forbidden");
-            let proof =
-                sign_jwt(header, proof_payload(now, "proof-jti-7"), &holder).expect("proof signs");
+            let proof = sign_jwt_with_private(header, proof_payload(now, "proof-jti-7"), &holder)
+                .expect("proof signs");
             validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
                 .expect_err("dangerous holder-proof header is rejected");
         }
@@ -571,9 +689,135 @@ mod tests {
             iat: 1_700_000_000,
             exp: 1_700_000_600,
             vct: "https://vct.example/test".to_string(),
-            signing_kid: "did:web:issuer.test#key-1".to_string(),
             cnf,
             disclosures: Vec::new(),
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingProvider {
+        signer: LocalJwkSigner,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SigningProvider for CountingProvider {
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.signer.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.signer.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.signer.public_jwk()
+        }
+
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.signer.sign(payload).await
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingProvider;
+
+    #[async_trait]
+    impl SigningProvider for FailingProvider {
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::EdDsa
+        }
+
+        fn key_id(&self) -> &str {
+            "did:web:issuer.test#failing"
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            let mut public = PrivateJwk::parse(RAW_JWK).expect("jwk").public();
+            public.kid = Some(self.key_id().to_string());
+            public
+        }
+
+        async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            Err(SigningError::external(
+                "external signer unavailable; payload redacted",
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct EmptyKidProvider;
+
+    #[async_trait]
+    impl SigningProvider for EmptyKidProvider {
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::EdDsa
+        }
+
+        fn key_id(&self) -> &str {
+            " "
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            let mut public = PrivateJwk::parse(RAW_JWK).expect("jwk").public();
+            public.kid = Some(self.key_id().to_string());
+            public
+        }
+
+        async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            Ok(vec![0; 64])
+        }
+    }
+
+    #[derive(Debug)]
+    struct BadSignatureProvider;
+
+    #[async_trait]
+    impl SigningProvider for BadSignatureProvider {
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::EdDsa
+        }
+
+        fn key_id(&self) -> &str {
+            "did:web:issuer.test#bad-signature"
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            let mut public = PrivateJwk::parse(RAW_JWK).expect("jwk").public();
+            public.kid = Some(self.key_id().to_string());
+            public
+        }
+
+        async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            Ok(vec![0; 64])
+        }
+    }
+
+    #[derive(Debug)]
+    struct MismatchedPublicKidProvider;
+
+    #[async_trait]
+    impl SigningProvider for MismatchedPublicKidProvider {
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::EdDsa
+        }
+
+        fn key_id(&self) -> &str {
+            "did:web:issuer.test#key-1"
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            let mut public = PrivateJwk::parse(RAW_JWK).expect("jwk").public();
+            public.kid = Some("did:web:issuer.test#old".to_string());
+            public
+        }
+
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            LocalJwkSigner::new(PrivateJwk::parse(RAW_JWK).expect("jwk"))
+                .expect("signer")
+                .sign(payload)
+                .await
         }
     }
 
@@ -617,12 +861,28 @@ mod tests {
     }
 
     fn sign_holder_proof(holder: &PrivateJwk, payload: Value) -> String {
-        sign_jwt(
+        sign_jwt_with_private(
             json!({"alg": "EdDSA", "typ": "kb+jwt", "kid": "did:jwk:holder#key-1"}),
             payload,
             holder,
         )
         .expect("proof signs")
+    }
+
+    fn sign_jwt_with_private(
+        header: Value,
+        payload: Value,
+        jwk: &PrivateJwk,
+    ) -> Result<String, SdJwtError> {
+        let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
+        let signing_input = format!("{header_b64}.{payload_b64}");
+        let signature = sign_with_private_jwk(signing_input.as_bytes(), jwk)?;
+        Ok(format!(
+            "{}.{}",
+            signing_input,
+            URL_SAFE_NO_PAD.encode(signature)
+        ))
     }
 
     fn jwt_header(sd_jwt: &str) -> Value {

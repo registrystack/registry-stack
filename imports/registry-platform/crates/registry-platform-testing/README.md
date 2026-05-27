@@ -14,6 +14,8 @@ Shared fixtures and assertions for registry-platform consumers.
 - `assert_replay_duplicate_rejected` for reusable replay-store duplicate checks.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
 - Federation fixture helpers for building signed Witness request/response JWTs.
+- Provider-backed Ed25519 signer and JWKS helpers for tests that exercise the
+  production signing abstraction.
 - `sign_openid4vci_proof_jwt` for building OID4VCI holder proof JWTs in tests.
 
 ## Typical Use
@@ -84,8 +86,14 @@ the duplicate with `AlreadySeen`.
   string then sign a compact JWT with the given `typ` and `kid`.
 - `sign_ed25519_compact_jwt_with_key(private, typ, kid, claims)` — sign with
   an already-parsed `PrivateJwk`.
+- `sign_ed25519_compact_jwt_with_provider(signer, typ, claims)` — sign with a
+  `SigningProvider`; the JWT header `kid` is taken from the provider.
 - `jwks_from_private_jwk(private)` — return `{"keys": [public]}` as a
   `serde_json::Value`; useful for mocking a JWKS endpoint.
+- `jwks_from_signing_provider(signer)` — return a JWKS from provider public
+  metadata, without private JWK members.
+- `fixtures::ed25519_signer()` — return a `LocalJwkSigner` backed by the
+  primary Ed25519 fixture key.
 - `sign_openid4vci_proof_jwt(private_jwk, audience, nonce, now_unix_seconds)` —
   build an OID4VCI holder proof JWT (`typ = openid4vci-proof+jwt`) with the
   holder's `did:jwk` inline in the `jwk` header. For use in credential endpoint

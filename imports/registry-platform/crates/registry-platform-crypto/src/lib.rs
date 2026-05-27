@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Crypto primitives shared by Registry Platform consumers.
 
+use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -10,6 +11,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::net::IpAddr;
+use std::sync::Arc;
 use thiserror::Error;
 use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
@@ -83,6 +85,75 @@ pub struct PublicJwk {
     pub n: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e: Option<String>,
+}
+
+/// A key-backed signer that can produce detached signatures and publish
+/// verification metadata without exposing private key material.
+#[async_trait]
+pub trait SigningProvider: Send + Sync {
+    /// Signing algorithm advertised by this provider.
+    fn algorithm(&self) -> SigningAlgorithm;
+    /// Stable key identifier to publish in JWT/JWS headers.
+    fn key_id(&self) -> &str;
+    /// Public verification JWK for this provider.
+    fn public_jwk(&self) -> PublicJwk;
+    /// Sign the exact bytes supplied by the caller.
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError>;
+}
+
+/// Local `PrivateJwk`-backed signer for tests, demos, and mounted secret files.
+#[derive(Clone)]
+pub struct LocalJwkSigner {
+    jwk: Arc<PrivateJwk>,
+    key_id: String,
+    public_jwk: PublicJwk,
+}
+
+impl LocalJwkSigner {
+    /// Build a local signer from an Ed25519 private JWK with a non-empty `kid`.
+    pub fn new(jwk: PrivateJwk) -> Result<Self, SigningError> {
+        jwk.validate_private().map_err(SigningError::InvalidKey)?;
+        let key_id = jwk
+            .kid
+            .as_deref()
+            .filter(|kid| !kid.trim().is_empty())
+            .ok_or(SigningError::MissingKeyId)?
+            .to_string();
+        let public_jwk = jwk.public();
+        Ok(Self {
+            jwk: Arc::new(jwk),
+            key_id,
+            public_jwk,
+        })
+    }
+}
+
+impl fmt::Debug for LocalJwkSigner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalJwkSigner")
+            .field("alg", &self.algorithm())
+            .field("kid", &self.key_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl SigningProvider for LocalJwkSigner {
+    fn algorithm(&self) -> SigningAlgorithm {
+        SigningAlgorithm::EdDsa
+    }
+
+    fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    fn public_jwk(&self) -> PublicJwk {
+        self.public_jwk.clone()
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+        sign(payload, self.jwk.as_ref()).map_err(SigningError::Crypto)
+    }
 }
 
 impl PrivateJwk {
@@ -203,6 +274,38 @@ pub enum CryptoError {
     InvalidBase64(#[from] base64::DecodeError),
     #[error("invalid signature")]
     InvalidSignature,
+}
+
+/// Errors from local and external signing providers.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SigningError {
+    #[error("invalid signing key: {0}")]
+    InvalidKey(JwkError),
+    #[error("signing key is missing kid")]
+    MissingKeyId,
+    #[error("signing key kid does not match public JWK")]
+    KeyIdMismatch,
+    #[error("cryptographic signing failed: {0}")]
+    Crypto(CryptoError),
+    #[error("external signer failed: {message}")]
+    External { message: String },
+}
+
+impl SigningError {
+    #[must_use]
+    pub fn external(message: impl AsRef<str>) -> Self {
+        const MAX_SAFE_CHARS: usize = 160;
+        let mut chars = message
+            .as_ref()
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch });
+        let mut bounded = chars.by_ref().take(MAX_SAFE_CHARS).collect::<String>();
+        if chars.next().is_some() {
+            bounded.push_str("...");
+        }
+        Self::External { message: bounded }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -640,6 +743,70 @@ mod tests {
 
         verify(payload, &signature, &public).expect("signature verifies");
         assert!(verify(b"tampered", &signature, &public).is_err());
+    }
+
+    #[tokio::test]
+    async fn local_jwk_signer_signs_and_exposes_public_metadata() {
+        let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        let signer = LocalJwkSigner::new(private).expect("local signer builds");
+        let payload = b"registry-platform-provider";
+        let signature = signer.sign(payload).await.expect("payload signs");
+
+        assert_eq!(signer.algorithm(), SigningAlgorithm::EdDsa);
+        assert_eq!(signer.key_id(), "did:web:issuer.test#key-1");
+        let public = signer.public_jwk();
+        verify(payload, &signature, &public).expect("signature verifies");
+        let public_json = serde_json::to_value(public).expect("public jwk serializes");
+        assert!(public_json.get("d").is_none());
+    }
+
+    #[test]
+    fn local_jwk_signer_requires_non_empty_key_id() {
+        let mut private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        private.kid = None;
+        assert!(matches!(
+            LocalJwkSigner::new(private),
+            Err(SigningError::MissingKeyId)
+        ));
+
+        let mut private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        private.kid = Some(String::new());
+        assert!(matches!(
+            LocalJwkSigner::new(private),
+            Err(SigningError::MissingKeyId)
+        ));
+    }
+
+    #[test]
+    fn local_jwk_signer_validates_private_material_at_construction() {
+        let mut private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        private.d = Some("not-base64url".to_string());
+
+        assert!(matches!(
+            LocalJwkSigner::new(private),
+            Err(SigningError::InvalidKey(JwkError::Invalid("d")))
+        ));
+    }
+
+    #[test]
+    fn local_jwk_signer_debug_redacts_private_material() {
+        let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        let signer = LocalJwkSigner::new(private).expect("local signer builds");
+        let debug = format!("{signer:?}");
+
+        assert!(debug.contains("LocalJwkSigner"));
+        assert!(debug.contains("did:web:issuer.test#key-1"));
+        assert!(!debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
+    }
+
+    #[test]
+    fn external_signing_error_messages_are_bounded_and_single_line() {
+        let message = format!("{}{}", "provider unavailable\n", "x".repeat(512));
+        let err = SigningError::external(message);
+        let rendered = err.to_string();
+
+        assert!(!rendered.contains('\n'));
+        assert!(rendered.len() <= 220, "{rendered}");
     }
 
     #[test]

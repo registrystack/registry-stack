@@ -4,9 +4,9 @@ SD-JWT VC issuance and holder-proof validation helpers.
 
 ## What It Provides
 
-- `SdJwtIssuer` for EdDSA-backed SD-JWT VC issuance.
+- `SdJwtIssuer` for provider-backed EdDSA SD-JWT VC issuance.
 - `SdJwtIssuanceInput` with issuer, subject reference, validity, profile,
-  signing key id, holder confirmation, and disclosures.
+  holder confirmation, and disclosures.
 - Disclosure digest sorting for deterministic `_sd` payload ordering.
 - Holder-proof validation with signature, audience, lifetime, subject, replay id,
   disclosure hash, evaluation id, credential profile, and claim-set bindings.
@@ -20,7 +20,7 @@ use registry_platform_sdjwt::{
 };
 use serde_json::json;
 
-fn issue_credential() -> Result<(), Box<dyn std::error::Error>> {
+async fn issue_credential() -> Result<(), Box<dyn std::error::Error>> {
 let issuer_key = PrivateJwk::parse(r#"{
   "kty": "OKP",
   "crv": "Ed25519",
@@ -37,13 +37,12 @@ let signed = issuer.issue(SdJwtIssuanceInput {
     iat: 1_700_000_000,
     exp: 1_700_000_600,
     vct: "https://issuer.example/vct/registry-credential".to_string(),
-    signing_kid: "did:web:issuer.example#key-1".to_string(),
     cnf: None::<HolderConfirmation>,
     disclosures: vec![Disclosure {
         name: "claim".to_string(),
         value: json!({"allowed": true}),
     }],
-})?;
+}).await?;
 
 let _ = signed;
 Ok(())
@@ -52,8 +51,14 @@ Ok(())
 
 ## Security Notes
 
-- This crate currently signs with EdDSA/Ed25519 through
-  `registry-platform-crypto`.
+- This crate currently signs with EdDSA/Ed25519 through a
+  `registry-platform-crypto` `SigningProvider`.
+- `SdJwtIssuer::from_jwk` is intended for local development, tests, and simple
+  deployments using mounted private JWK material. Production deployments that
+  require key isolation should pass an external signer implementation with
+  `SdJwtIssuer::from_signing_provider`.
+- The SD-JWT header `kid` is always taken from the signing provider. Issuance
+  input cannot override it.
 - Holder-proof validation returns `jti` so consumers can perform replay
   detection in their own storage.
 - `HolderProofPolicy::default` uses a 5-minute max lifetime and an empty

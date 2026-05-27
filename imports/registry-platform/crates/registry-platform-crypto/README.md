@@ -6,6 +6,8 @@ Crypto primitives shared by registry services.
 
 - `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519 JWKs.
 - EdDSA signing and verification helpers.
+- `SigningProvider` and `LocalJwkSigner` for code that should sign without
+  depending directly on in-process private JWK ownership.
 - Public JWK thumbprints through `PublicJwk::jkt`.
 - DID validation for allowed `did:web` and `did:key` inputs.
 - JSON Canonicalization Scheme style byte output for `serde_json::Value`.
@@ -33,6 +35,27 @@ Ok(())
 }
 ```
 
+Provider-backed callers can wrap the same key material:
+
+```rust
+use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+
+async fn sign_with_provider() -> Result<(), Box<dyn std::error::Error>> {
+let private = PrivateJwk::parse(r#"{
+  "kty": "OKP",
+  "crv": "Ed25519",
+  "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
+  "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+  "alg": "EdDSA",
+  "kid": "did:web:issuer.example#key-1"
+}"#)?;
+
+let signer = LocalJwkSigner::new(private)?;
+let _signature = signer.sign(b"registry-platform").await?;
+Ok(())
+}
+```
+
 ## Supported Algorithms
 
 This crate currently supports EdDSA with OKP/Ed25519 keys. Unsupported JWK
@@ -43,6 +66,14 @@ consumer needs them and can define the interoperability and security policy.
 
 - `PrivateJwk` redacts private material in `Debug`.
 - `PrivateJwk::public` strips private members before serialization.
+- `LocalJwkSigner` requires a non-empty `kid`, stores local key material behind
+  shared ownership, and exposes only public JWK metadata through
+  `SigningProvider`.
+- Production deployments that require key isolation should implement
+  `SigningProvider` over an external service such as Vault Transit or a cloud
+  KMS. Adapters must bound timeouts and error messages, avoid secret-bearing
+  logs, and provide configured public JWK metadata when the backing service
+  cannot export it directly.
 - `did:web` validation rejects IP literals, localhost, obvious metadata hosts,
   empty labels, and path traversal.
 - Signing helpers validate key material before use.

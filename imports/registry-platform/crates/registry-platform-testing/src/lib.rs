@@ -16,7 +16,7 @@ use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
     verify_chain, verify_chain_with_anchors, AuditEnvelope, ChainVerificationAnchors,
 };
-use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
+use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider};
 use registry_platform_oid4vci::{CREDENTIAL_SIGNING_ALG_EDDSA, PROOF_JWT_TYPE};
 use registry_platform_replay::{
     ReplayInsertOutcome, ReplayKey, ReplayScope, ReplayStore, ReplayStoreError,
@@ -214,9 +214,32 @@ pub fn sign_ed25519_compact_jwt_with_key(
     format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
 }
 
+pub async fn sign_ed25519_compact_jwt_with_provider(
+    signer: &dyn SigningProvider,
+    typ: &str,
+    claims: Value,
+) -> String {
+    let header = json!({
+        "alg": "EdDSA",
+        "typ": typ,
+        "kid": signer.key_id(),
+    });
+    let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
+    let signature = signer
+        .sign(signing_input.as_bytes())
+        .await
+        .expect("fixture provider signs JWT");
+    format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
+}
+
 #[must_use]
 pub fn jwks_from_private_jwk(private: &PrivateJwk) -> Value {
     json!({ "keys": [private.public()] })
+}
+
+#[must_use]
+pub fn jwks_from_signing_provider(signer: &dyn SigningProvider) -> Value {
+    json!({ "keys": [signer.public_jwk()] })
 }
 
 #[must_use]
@@ -457,6 +480,11 @@ pub mod fixtures {
         pair(ED25519_PRIVATE_JWK)
     }
 
+    pub fn ed25519_signer() -> LocalJwkSigner {
+        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("fixture private JWK parses");
+        LocalJwkSigner::new(private).expect("fixture signer builds")
+    }
+
     fn pair(jwk: &str) -> (PrivateJwk, PublicJwk) {
         let private = PrivateJwk::parse(jwk).expect("fixture private JWK parses");
         let public = private.public();
@@ -557,6 +585,31 @@ mod tests {
             .expect("rotated fixture parses");
         assert_ne!(first["d"], rotated["d"]);
         assert_ne!(first["x"], rotated["x"]);
+    }
+
+    #[tokio::test]
+    async fn provider_backed_jwt_fixture_signs_with_provider_kid_and_jwks() {
+        let signer = fixtures::ed25519_signer();
+        let token = sign_ed25519_compact_jwt_with_provider(
+            &signer,
+            FEDERATION_REQUEST_JWT_TYPE,
+            federation_request_fixture_claims(
+                "https://agency-a.example.gov",
+                "did:web:agency-a.example.gov",
+                "did:web:agency-b.example.gov",
+                now_unix_seconds(),
+            ),
+        )
+        .await;
+
+        let header = decode_header(&token).expect("header decodes");
+        assert_eq!(header.kid.as_deref(), Some(signer.key_id()));
+        assert_eq!(header.typ.as_deref(), Some(FEDERATION_REQUEST_JWT_TYPE));
+
+        let jwks = jwks_from_signing_provider(&signer);
+        let keys = jwks["keys"].as_array().expect("jwks keys");
+        assert_eq!(keys[0]["kid"], signer.key_id());
+        assert!(keys[0].get("d").is_none());
     }
 
     #[tokio::test]

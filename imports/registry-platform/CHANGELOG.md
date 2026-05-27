@@ -15,6 +15,9 @@
 
 ### Changed
 
+- (Issue #10) Added provider-backed EdDSA signing via
+  `SigningProvider`/`LocalJwkSigner`; SD-JWT issuance is now async and uses the
+  provider `kid` as the JWT header source of truth.
 - (F-oid4vci-1) Remove `pub const PKCE_METHOD_S256`. Callers use the
   literal `"S256"`; the constant added no value and implied ownership of
   the PKCE method name.
