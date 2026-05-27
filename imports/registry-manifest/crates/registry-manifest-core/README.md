@@ -10,7 +10,8 @@ share the same metadata model.
 ## What It Provides
 
 - Manifest structs for catalogs, datasets, entities, fields, policies,
-  codelists, requirements, profiles, and evidence offerings.
+  codelists, requirements, profiles, evidence offerings, federation metadata,
+  and evaluation profiles.
 - Strict validation with unknown-field rejection through Serde.
 - Manifest compilation into lookup-friendly metadata models.
 - Pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL,
@@ -33,6 +34,10 @@ fn render(manifest: &MetadataManifest) -> Result<serde_json::Value, registry_man
 This crate must remain portable. It must not depend on Registry Relay, Axum,
 DataFusion, Postgres, auth, audit, observability, runtime row access, secret
 handling, `utoipa`, or `clap`.
+
+Federation fields are metadata only. Runtime peer policy, request verification,
+replay storage, audit emission, and source reads remain Registry Witness
+responsibilities.
 
 ## Testing
 

@@ -4,7 +4,7 @@
 
 Registry Manifest is a portable Rust workspace for modeling, validating, and rendering standards-facing registry metadata without running Registry Relay.
 
-It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, OGC API Records item bodies, policy documents, and evidence-offering metadata.
+It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, OGC API Records item bodies, policy documents, evidence-offering metadata, and public federation metadata for Registry Witness delegated evaluation.
 
 ## Workspace
 
@@ -96,8 +96,27 @@ cargo build --workspace --all-targets
 - `json-schema` with `--dataset <id> --entity <name>`
 - `ogc-records`
 
+## Registry Witness Federation Metadata
+
+Registry Manifest can publish public metadata that helps a partner configure the
+Registry Witness delegated-evaluation MVP:
+
+- top-level `federation` metadata with `node_id`, `issuer`, `jwks_uri`,
+  `federation_api`, and `supported_protocol_versions`;
+- top-level `evaluation_profiles` that bind public profile IDs and `ruleset`
+  IDs to Witness claim IDs and subject ID types;
+- `registry-witness` evidence offerings whose `access.ruleset` references one
+  of those evaluation profile rulesets.
+
+This metadata is discovery and documentation only. It does not grant runtime
+access; the serving Witness still enforces its local `federation.peers` policy,
+request signature checks, purpose allowlist, replay protection, and audit
+behavior.
+
 ## Boundary
 
-This repository must stay portable. `registry-manifest-core` must not depend on Registry Relay, Evidence Server, Axum, DataFusion, Postgres, auth, audit, observability, runtime row access, secret handling, `utoipa`, or `clap`.
+This repository must stay portable. `registry-manifest-core` must not depend on
+Registry Relay, Registry Witness, Axum, DataFusion, Postgres, auth, audit,
+observability, runtime row access, secret handling, `utoipa`, or `clap`.
 
 Registry Relay may publish these artifacts over HTTP and scope them for callers, but those runtime concerns stay outside this repository.
