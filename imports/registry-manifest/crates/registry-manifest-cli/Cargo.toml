@@ -15,7 +15,7 @@ name = "registry-manifest"
 path = "src/main.rs"
 
 [dependencies]
-registry-manifest-core = { version = "0.1.1", path = "../registry-manifest-core" }
+registry-manifest-core = { version = "0.1.2", path = "../registry-manifest-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
