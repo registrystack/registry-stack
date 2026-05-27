@@ -1,5 +1,7 @@
 # Registry Manifest
 
+> **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
+
 Registry Manifest is a portable Rust workspace for modeling, validating, and rendering standards-facing registry metadata without running Registry Relay.
 
 It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, OGC API Records item bodies, policy documents, and evidence-offering metadata.
