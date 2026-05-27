@@ -67,11 +67,13 @@ federation:
       claim_id: eligible-for-climate-smart-input-voucher
       subject_id_type: farmer_id
       max_source_observed_age_seconds: 3600
+      disclosure: predicate
     - id: livestock_movement_permit_predicate
       ruleset: eligible-for-livestock-movement-v1
       claim_id: eligible-for-livestock-movement-permit
       subject_id_type: herd_id
       max_source_observed_age_seconds: 3600
+      disclosure: predicate
 
 evidence:
   enabled: true

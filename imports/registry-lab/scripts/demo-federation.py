@@ -23,6 +23,7 @@ from agri_demo_common import (
     DemoError,
     env,
     load_dotenv,
+    parse_dotenv_file,
     prepare_output_dir,
     save_json,
 )
@@ -44,16 +45,7 @@ ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
 def dotenv_value(name: str, path: Path = DEMO_ROOT / ".env") -> str | None:
-    if not path.exists():
-        return None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key == name:
-            return value
-    return None
+    return parse_dotenv_file(path).get(name)
 
 
 def secret_json_env(name: str) -> dict[str, Any]:

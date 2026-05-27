@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv_util import parse_dotenv_text
+
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "compose.yaml"
 SERVICE_FIRST_DEPS = ROOT / "scripts" / "check-service-first-deps.sh"
@@ -50,14 +52,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def parse_env_text(text: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key] = value
-    return values
+    return parse_dotenv_text(text)
 
 
 def env(name: str, values: dict[str, str], default: str | None = None) -> str:

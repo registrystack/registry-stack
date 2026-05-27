@@ -18,7 +18,7 @@ rm -rf "${out_dir}" "${public_root}/.well-known"
 mkdir -p "${out_dir}"
 
 manifest_repo="$("${script_dir}/check-service-first-deps.sh" manifest-path)"
-(cd "${manifest_repo}" && cargo run --quiet -p registry-manifest-cli -- publish "${manifest}" --out "${out_dir}")
+(cd "${manifest_repo}" && cargo run --quiet -p registry-manifest-cli -- publish "${manifest}" --out "${out_dir}" --site-root "${public_root}")
 
 if [[ ! -f "${out_dir}/index.json" ]]; then
   echo "registry-manifest publish did not produce ${out_dir}/index.json" >&2
@@ -104,14 +104,16 @@ for item in graph:
 path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 
-python3 - "${env_file}" "${public_root}/federation/benefits-jwks.json" "${public_root}/federation/default-benefits-jwks.json" <<'PY'
+python3 - "${env_file}" "${public_root}/federation/benefits-jwks.json" "${public_root}/federation/default-benefits-jwks.json" "${public_root}/.well-known/jwks.json" <<'PY'
 import json
+import shlex
 import sys
 from pathlib import Path
 
 env_path = Path(sys.argv[1])
 agri_out_path = Path(sys.argv[2])
 default_out_path = Path(sys.argv[3])
+static_metadata_out_path = Path(sys.argv[4])
 values = {}
 if env_path.exists():
     for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -119,6 +121,13 @@ if env_path.exists():
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
+        if value[:1] in ("'", '"'):
+            try:
+                parts = shlex.split(value, comments=False, posix=True)
+            except ValueError:
+                parts = []
+            if len(parts) == 1:
+                value = parts[0]
         values[key] = value
 
 def write_public_jwks(env_name, kid, out_path):
@@ -145,6 +154,11 @@ write_public_jwks(
     "DEFAULT_FEDERATION_CLIENT_JWK",
     "did:web:benefits.demo.example.gov#federation-client-1",
     default_out_path,
+)
+write_public_jwks(
+    "STATIC_METADATA_FEDERATION_JWK",
+    "did:web:static-metadata.demo.example.gov#federation-metadata-1",
+    static_metadata_out_path,
 )
 PY
 

@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -64,11 +65,12 @@ def fingerprint(raw: str) -> str:
 def env_line(key: str, value: str) -> str:
     if "\n" in value:
         raise ValueError(f"{key} contains a newline")
-    return f"{key}={value}"
+    return f"{key}={shlex.quote(value)}"
 
 
 def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_witness_issuer_jwk()
+    static_metadata_federation_jwk = generate_registry_witness_issuer_jwk()
     default_federation_client_jwk = generate_registry_witness_issuer_jwk()
     civil_federation_response_jwk = generate_registry_witness_issuer_jwk()
     social_federation_response_jwk = generate_registry_witness_issuer_jwk()
@@ -83,6 +85,7 @@ def generate_env() -> dict[str, str]:
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
+        "STATIC_METADATA_FEDERATION_JWK": static_metadata_federation_jwk,
         "DEFAULT_FEDERATION_CLIENT_JWK": default_federation_client_jwk,
         "CIVIL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
         "CIVIL_FEDERATION_RESPONSE_JWK": civil_federation_response_jwk,
@@ -161,6 +164,7 @@ def main() -> int:
             ),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
             "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
+            "static_metadata_federation_jwk": "STATIC_METADATA_FEDERATION_JWK",
             "default_federation_client_jwk": "DEFAULT_FEDERATION_CLIENT_JWK",
             "civil_federation_response_jwk": "CIVIL_FEDERATION_RESPONSE_JWK",
             "social_federation_response_jwk": "SOCIAL_FEDERATION_RESPONSE_JWK",

@@ -72,7 +72,33 @@ need() {
 restore_dotenv_value() {
   local key="$1"
   local value
-  value="$(grep -E "^${key}=" "${demo_dir}/.env" | tail -n 1 | cut -d= -f2- || true)"
+  value="$(
+    python3 - "${demo_dir}/.env" "${key}" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target = sys.argv[2]
+if not path.exists():
+    raise SystemExit(0)
+for raw_line in path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key != target:
+        continue
+    if value[:1] in ("'", '"'):
+        try:
+            parts = shlex.split(value, comments=False, posix=True)
+        except ValueError:
+            parts = []
+        if len(parts) == 1:
+            value = parts[0]
+    print(value)
+PY
+  )"
   if [[ -n "${value}" ]]; then
     export "${key}=${value}"
   fi

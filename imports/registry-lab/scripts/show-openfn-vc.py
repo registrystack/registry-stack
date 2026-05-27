@@ -14,6 +14,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from dotenv_util import load_dotenv_file
+
 DEMO_ROOT = Path(__file__).resolve().parents[1]
 PURPOSE = "https://demo.example.gov/purpose/openfn-sidecar-demo"
 SD_JWT_FORMAT = "application/dc+sd-jwt"
@@ -28,12 +30,7 @@ class DemoError(RuntimeError):
 def load_dotenv(path: Path) -> None:
     if not path.exists():
         raise DemoError(f"missing {path}; run scripts/generate-demo-secrets.py first")
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        os.environ.setdefault(key, value)
+    load_dotenv_file(path)
 
 
 def env(name: str) -> str:

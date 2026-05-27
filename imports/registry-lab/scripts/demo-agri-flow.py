@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv_util import load_dotenv_file
+
 PURPOSE = os.environ.get(
     "AGRI_DATA_PURPOSE",
     "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
@@ -532,14 +534,7 @@ def scenario_summary(
 
 
 def load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key, value)
+    load_dotenv_file(path)
 
 
 def main() -> int:
