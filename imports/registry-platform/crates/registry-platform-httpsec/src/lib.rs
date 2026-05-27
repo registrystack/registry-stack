@@ -397,6 +397,24 @@ mod tests {
     }
 
     #[test]
+    fn problem_response_serialises_type_title_status_and_detail() {
+        let value = serde_json::to_value(
+            Problem::new(
+                "https://registry-platform.dev/problems/test",
+                "Test Error",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )
+            .detail("something was wrong"),
+        )
+        .expect("problem serializes");
+
+        assert_eq!(value["type"], "https://registry-platform.dev/problems/test");
+        assert_eq!(value["title"], "Test Error");
+        assert_eq!(value["status"], 422);
+        assert_eq!(value["detail"], "something was wrong");
+    }
+
+    #[test]
     fn cors_rejects_wildcard() {
         let policy = CorsPolicy {
             allowed_origins: vec!["*".to_string()],

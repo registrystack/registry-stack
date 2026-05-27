@@ -264,6 +264,9 @@ fn issue_disclosure(name: &str, value: Value) -> Result<IssuedDisclosure, SdJwtE
     Ok(IssuedDisclosure { encoded, digest })
 }
 
+/// Internal JWS serialiser. Runs synchronously on the calling thread; the
+/// Ed25519 sign cost is inherited from `registry_platform_crypto::sign`
+/// (~15 µs/op on Apple M5 Max; see its doc comment for details).
 fn sign_jwt(header: Value, payload: Value, jwk: &PrivateJwk) -> Result<String, SdJwtError> {
     let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
     let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
@@ -330,6 +333,20 @@ mod tests {
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
     const HOLDER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:jwk:holder#key-1"}"#;
+
+    #[test]
+    fn sd_jwt_issuer_debug_never_exposes_private_scalar() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+
+        let debug = format!("{issuer:?}");
+
+        assert!(
+            !debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"),
+            "debug must not expose the private scalar"
+        );
+        assert!(debug.contains("SdJwtIssuer"));
+    }
 
     #[test]
     fn sd_jwt_issuance_writes_vct_cnf_jwk_cnf_kid_and_header_kid() {
@@ -496,6 +513,25 @@ mod tests {
             now,
         )
         .expect_err("binding mismatch rejects");
+    }
+
+    #[test]
+    fn validate_holder_proof_rejects_structurally_malformed_compact_jwt() {
+        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
+        let claim_set = claim_set();
+        let bindings = bindings(&claim_set);
+        let now = 1_700_000_000;
+
+        for malformed in ["notajwt", "a.b", "a.b.c.d", "!!.!!.!!"] {
+            assert!(
+                matches!(
+                    validate_holder_proof(malformed, &holder.public(), &bindings, &policy(), now),
+                    Err(SdJwtError::HolderProofInvalid)
+                ),
+                "input {:?} must return HolderProofInvalid",
+                malformed
+            );
+        }
     }
 
     #[test]

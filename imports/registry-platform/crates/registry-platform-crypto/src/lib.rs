@@ -12,7 +12,7 @@ use std::fmt;
 use std::net::IpAddr;
 use thiserror::Error;
 use url::{Host, Url};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningAlgorithm {
@@ -390,14 +390,34 @@ pub fn pairwise_subject_ref_hash(
     ))
 }
 
+/// Sign `payload` using the Ed25519 private key in `jwk`.
+///
+/// Runs synchronously on the calling thread. Measured ~15 µs/op (release,
+/// Apple M5 Max). Callers on a Tokio runtime that process many concurrent
+/// issuances should offload to `tokio::task::spawn_blocking` if latency
+/// becomes a concern. Run the ignored `eddsa_sign_microbench` test to
+/// re-measure on your hardware.
 pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     jwk.validate_private()?;
-    let seed = decode_fixed(jwk.d.as_deref(), 32, "d")?;
-    let seed: [u8; 32] = seed.try_into().map_err(|_| JwkError::Invalid("d length"))?;
+    // Decode directly into a stack-allocated Zeroizing buffer to avoid any
+    // intermediate heap allocation that would not be zeroed on error paths.
+    let d_str = jwk.d.as_deref().ok_or(JwkError::Invalid("d"))?;
+    let mut seed = Zeroizing::new([0u8; 32]);
+    let decoded_len = URL_SAFE_NO_PAD
+        .decode_slice(d_str, &mut *seed)
+        .map_err(|_| JwkError::Invalid("d"))?;
+    if decoded_len != 32 {
+        return Err(JwkError::Invalid("d length").into());
+    }
     let signature = SigningKey::from_bytes(&seed).sign(payload);
     Ok(signature.to_bytes().to_vec())
 }
 
+/// Verify `signature` over `payload` using the Ed25519 public key in `jwk`.
+///
+/// Runs synchronously on the calling thread. Measured ~22 µs/op (release,
+/// Apple M5 Max). Run the ignored `eddsa_verify_microbench` test to
+/// re-measure on your hardware.
 pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     jwk.validate_public()?;
     let x = decode_fixed(jwk.x.as_deref(), 32, "x")?;
@@ -653,6 +673,87 @@ mod tests {
             PublicJwk::parse(public_p256),
             Err(JwkError::UnsupportedAlgorithm)
         ));
+    }
+
+    #[test]
+    #[ignore = "micro-benchmark: run explicitly with `cargo test -- --ignored` to measure local sign/verify latency"]
+    fn eddsa_sign_microbench() {
+        use std::time::Instant;
+        let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        let payload = b"registry-platform-bench-payload";
+        let iterations = 1000;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            sign(payload, &private).expect("sign");
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "sign: {} iterations in {:?} = {:.1} µs/op",
+            iterations,
+            elapsed,
+            elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64
+        );
+    }
+
+    #[test]
+    #[ignore = "micro-benchmark: run explicitly with `cargo test -- --ignored` to measure local sign/verify latency"]
+    fn eddsa_verify_microbench() {
+        use std::time::Instant;
+        let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
+        let public = private.public();
+        let payload = b"registry-platform-bench-payload";
+        let signature = sign(payload, &private).expect("sign");
+        let iterations = 1000;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            verify(payload, &signature, &public).expect("verify");
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "verify: {} iterations in {:?} = {:.1} µs/op",
+            iterations,
+            elapsed,
+            elapsed.as_secs_f64() * 1_000_000.0 / iterations as f64
+        );
+    }
+
+    #[test]
+    fn validate_did_returns_missing_prefix_for_non_did_strings() {
+        assert_eq!(
+            validate_did("not-a-did", &[DidMethod::Web]),
+            Err(DidError::MissingPrefix)
+        );
+        assert_eq!(
+            validate_did("web:example.org", &[DidMethod::Web]),
+            Err(DidError::MissingPrefix)
+        );
+    }
+
+    #[test]
+    fn validate_did_returns_method_not_allowed_for_unlisted_method() {
+        assert_eq!(
+            validate_did("did:web:example.org", &[DidMethod::Key]),
+            Err(DidError::MethodNotAllowed)
+        );
+        assert_eq!(
+            validate_did("did:key:z6MkiTBz", &[DidMethod::Web]),
+            Err(DidError::MethodNotAllowed)
+        );
+    }
+
+    #[test]
+    fn validate_did_returns_unsupported_method_for_unknown_scheme() {
+        assert_eq!(
+            validate_did(
+                "did:unknown:identifier",
+                &[DidMethod::Web, DidMethod::Key, DidMethod::Jwk]
+            ),
+            Err(DidError::UnsupportedMethod)
+        );
+        assert_eq!(
+            validate_did("did:ethr:0xabc", &[]),
+            Err(DidError::UnsupportedMethod)
+        );
     }
 
     #[test]

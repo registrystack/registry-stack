@@ -28,6 +28,15 @@ const MIN_RSA_MODULUS_BITS: usize = 2048;
 #[derive(Debug, Clone)]
 pub struct OidcDiscoveryConfig {
     pub issuer: String,
+    /// Override the JWKS URI instead of fetching `/.well-known/openid-configuration`.
+    ///
+    /// **Security warning:** when this field is set, the normal discovery flow is
+    /// skipped entirely. The `issuer` field in the returned `DiscoveryDocument` is
+    /// taken verbatim from `OidcDiscoveryConfig::issuer` without verifying that the
+    /// JWKS URI is bound to that issuer. JWT `iss` validation still happens at token
+    /// verification time, but the binding between issuer and key endpoint is not
+    /// checked here. Use this only for controlled deployments where the JWKS URI is
+    /// known and trusted out-of-band (e.g. same-cluster key server, test fixtures).
     pub jwks_uri_override: Option<String>,
     pub discovery_timeout: Duration,
     pub max_doc_bytes: u64,

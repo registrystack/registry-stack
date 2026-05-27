@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, HeaderValue, Method, Request, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use registry_platform_audit::{ChainState, JsonlFileSink};
@@ -26,8 +27,8 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
             "/echo",
             post(|body: Body| async move {
                 match to_bytes(body, usize::MAX).await {
-                    Ok(_) => StatusCode::OK,
-                    Err(_) => StatusCode::PAYLOAD_TOO_LARGE,
+                    Ok(_) => StatusCode::OK.into_response(),
+                    Err(_) => body_limit_problem_response(Request::new(Body::empty())).await,
                 }
             }),
         )
@@ -94,8 +95,26 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
         .await
         .expect("body limit layer returns a response");
     assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let problem = body_limit_problem_response(Request::new(Body::empty())).await;
-    assert_eq!(problem.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        oversized.headers().get("content-type").unwrap(),
+        "application/problem+json",
+        "oversized body must receive an application/problem+json response"
+    );
+    let oversized_bytes = to_bytes(oversized.into_body(), 1024)
+        .await
+        .expect("oversized body reads");
+    let oversized_value: serde_json::Value =
+        serde_json::from_slice(&oversized_bytes).expect("oversized body is json");
+    assert_eq!(oversized_value["status"], 413);
+    assert_eq!(
+        oversized_value["type"],
+        "https://registry-platform.dev/problems/request/body-too-large"
+    );
+    assert_eq!(oversized_value["title"], "Payload Too Large");
+    assert_eq!(
+        oversized_value["detail"],
+        "request body exceeds the configured limit"
+    );
 
     let idp = MockIdp::start().await;
     let discovery = fetch_discovery_with_policy(
@@ -151,10 +170,4 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
     assert_chain_integrity(&[first.clone(), second.clone()]).expect("chain verifies");
     second.record["event"] = json!("tampered");
     assert!(assert_chain_integrity(&[first, second]).is_err());
-
-    let body = to_bytes(problem.into_body(), 1024)
-        .await
-        .expect("problem body reads");
-    let value: serde_json::Value = serde_json::from_slice(&body).expect("problem body is json");
-    assert_eq!(value["status"], 413);
 }

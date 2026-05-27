@@ -16,7 +16,6 @@ pub const SD_JWT_VC_FORMAT: &str = "dc+sd-jwt";
 pub const CREDENTIAL_SIGNING_ALG_EDDSA: &str = "EdDSA";
 pub const CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK: &str = "did:jwk";
 pub const AUTHORIZATION_CODE_GRANT_TYPE: &str = "authorization_code";
-pub const PKCE_METHOD_S256: &str = "S256";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialIssuerMetadata {
@@ -242,6 +241,17 @@ pub enum ProofError {
     InvalidTime,
 }
 
+/// Validate an OID4VCI proof JWT presented at the credential endpoint.
+///
+/// Validates structure, `typ` (`openid4vci-proof+jwt`), EdDSA signature,
+/// audience, optional nonce, time bounds, and holder binding (`did:jwk` or
+/// inline `jwk` header). Returns the verified holder JWK, holder DID, and
+/// raw claims on success.
+///
+/// **Nonce replay is a caller responsibility.** This function validates that the
+/// nonce in the proof matches `policy.expected_nonce`, but it does NOT track
+/// nonce usage across calls. Callers must persist and reject already-used nonces.
+/// The `ValidatedProof::nonce` field carries the nonce back for this purpose.
 pub fn validate_proof_jwt(
     proof_jwt: &str,
     policy: &ProofValidationPolicy<'_>,
@@ -582,6 +592,85 @@ mod tests {
             json!({"credential_configuration_id":"person_is_alive_sd_jwt","subject":"NID-1002"})
         )
         .is_err());
+    }
+
+    #[test]
+    fn validate_proof_jwt_does_not_track_nonce_reuse_across_calls() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let proof = valid_proof(&key, "n-replay");
+        let p = policy(Some("n-replay"));
+
+        let first = validate_proof_jwt(&proof, &p, 1001).expect("first call accepts the proof");
+        let second =
+            validate_proof_jwt(&proof, &p, 1001).expect("second call also accepts the proof");
+
+        assert_eq!(first.nonce, Some("n-replay".to_string()));
+        assert_eq!(second.nonce, Some("n-replay".to_string()));
+        // Both calls succeed because replay prevention is the caller's responsibility;
+        // the caller must record `ValidatedProof::nonce` and reject it if seen before.
+    }
+
+    #[test]
+    fn credential_configuration_metadata_sd_jwt_vc_serialises_to_spec_shape() {
+        let metadata = CredentialConfigurationMetadata::sd_jwt_vc(
+            "identity_vc",
+            vec![CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK.to_string()],
+            "Identity Credential",
+            "https://vct.example/identity",
+        );
+        let value = serde_json::to_value(&metadata).expect("serializes");
+
+        assert_eq!(value["format"], SD_JWT_VC_FORMAT);
+        assert_eq!(value["scope"], "identity_vc");
+        assert_eq!(
+            value["proof_types_supported"][PROOF_TYPE_JWT]["proof_signing_alg_values_supported"][0],
+            CREDENTIAL_SIGNING_ALG_EDDSA
+        );
+        assert_eq!(
+            value["credential_signing_alg_values_supported"][0],
+            CREDENTIAL_SIGNING_ALG_EDDSA
+        );
+        assert_eq!(value["vct"], "https://vct.example/identity");
+
+        let round_tripped: CredentialConfigurationMetadata =
+            serde_json::from_value(value).expect("round-trip deserializes");
+        assert_eq!(round_tripped.format, SD_JWT_VC_FORMAT);
+        assert_eq!(
+            round_tripped.vct.as_deref(),
+            Some("https://vct.example/identity")
+        );
+        assert!(round_tripped
+            .proof_types_supported
+            .contains_key(PROOF_TYPE_JWT));
+    }
+
+    #[test]
+    fn credential_offer_authorization_code_serialises_to_spec_shape() {
+        let offer = CredentialOffer::authorization_code(
+            "https://issuer.example",
+            vec!["identity_vc".to_string()],
+            "state-xyz",
+            Some("https://as.example".to_string()),
+        );
+        let value = serde_json::to_value(&offer).expect("serializes");
+
+        assert_eq!(value["credential_issuer"], "https://issuer.example");
+        assert_eq!(value["credential_configuration_ids"][0], "identity_vc");
+        assert_eq!(
+            value["grants"][AUTHORIZATION_CODE_GRANT_TYPE]["issuer_state"],
+            "state-xyz"
+        );
+        assert_eq!(
+            value["grants"][AUTHORIZATION_CODE_GRANT_TYPE]["authorization_server"],
+            "https://as.example"
+        );
+
+        let round_tripped: CredentialOffer =
+            serde_json::from_value(value).expect("round-trip deserializes");
+        assert_eq!(round_tripped.credential_issuer, "https://issuer.example");
+        assert!(round_tripped
+            .grants
+            .contains_key(AUTHORIZATION_CODE_GRANT_TYPE));
     }
 
     fn policy(expected_nonce: Option<&str>) -> ProofValidationPolicy<'_> {

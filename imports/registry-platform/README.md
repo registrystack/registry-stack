@@ -58,6 +58,17 @@ The `registry-platform-httputil` crate uses `rustls` for outbound HTTPS.
 
 ## Development
 
+### Toolchain pins
+
+- Rust: pinned in [`rust-toolchain.toml`](rust-toolchain.toml) (currently `1.95.0`).
+- `cargo-deny`: install `0.19.7` or newer to match CI; older versions (≤ `0.14.x`) cannot parse the `[graph]` syntax used in [`deny.toml`](deny.toml).
+
+```sh
+cargo install --locked cargo-deny@0.19.7
+```
+
+### Common commands
+
 Run checks from the workspace root:
 
 ```sh

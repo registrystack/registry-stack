@@ -1118,6 +1118,23 @@ mod tests {
     }
 
     #[test]
+    fn audit_hash_secret_debug_never_exposes_raw_bytes() {
+        let raw_bytes = b"this-is-a-32-byte-secret-1234567";
+        let secret = AuditHashSecret::new(raw_bytes.to_vec()).expect("secret builds");
+
+        let debug = format!("{secret:?}");
+
+        assert!(
+            debug.contains("<redacted>"),
+            "debug must contain <redacted>"
+        );
+        assert!(
+            !debug.contains("this-is-a-32-byte-secret-1234567"),
+            "debug must not expose the raw secret bytes"
+        );
+    }
+
+    #[test]
     fn audit_envelope_debug_redacts_record() {
         let envelope = AuditEnvelope::new(
             json!({
