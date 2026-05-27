@@ -3,19 +3,19 @@
 
 use std::sync::Arc;
 
-use axum::Extension;
+use axum::{Extension, Router};
 use axum_test::TestServer;
 use datafusion::arrow::array::{Float64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use registry_relay::api::aggregates_router;
+use registry_relay::api::{aggregates_router, entity_router};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::ingest::table_name;
-use registry_relay::query::AggregateQueryEngine;
+use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -31,12 +31,7 @@ fn principal(scopes: &[&str]) -> Principal {
     }
 }
 
-async fn server_with_aggregates() -> TestServer {
-    let tmp = TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("aggregates_entity.yaml");
-    std::fs::write(
-        &config_path,
-        r#"
+const AGGREGATE_CONFIG: &str = r#"
 server:
   bind: 127.0.0.1:0
 
@@ -239,9 +234,13 @@ datasets:
 audit:
   sink: stdout
   format: jsonl
-"#,
-    )
-    .expect("write config");
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+"#;
+
+async fn server_with_aggregates() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    std::fs::write(&config_path, AGGREGATE_CONFIG).expect("write config");
     let cfg = Arc::new(config::load(&config_path).expect("config loads"));
     let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
     let ctx = Arc::new(SessionContext::new());
@@ -264,6 +263,40 @@ audit:
                 "social_registry:aggregate",
             ]))),
     )
+}
+
+async fn protected_router_with_aggregates() -> TestServer {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    std::fs::write(&config_path, AGGREGATE_CONFIG).expect("write config");
+    let cfg = Arc::new(config::load(&config_path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+
+    register_households(&ctx);
+    register_individuals(&ctx);
+
+    let entity_query = Arc::new(EntityQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+    ));
+    let aggregate_query = Arc::new(AggregateQueryEngine::new(
+        Arc::clone(&ctx),
+        Arc::clone(&registry),
+        Arc::clone(&cfg),
+    ));
+    let app = Router::new()
+        .merge(aggregates_router::<()>())
+        .merge(entity_router())
+        .layer(Extension(aggregate_query))
+        .layer(Extension(entity_query))
+        .layer(Extension(registry))
+        .layer(Extension(principal(&[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+        ])));
+
+    TestServer::new(app)
 }
 
 fn register_households(ctx: &SessionContext) {
@@ -467,6 +500,36 @@ async fn executes_single_entity_count_aggregate() {
 
     resp.assert_status_ok();
     let body: Value = resp.json();
+    assert_eq!(body["disclosure_control"]["suppressed_rows"], 0);
+    assert_eq!(
+        sorted_rows(&body),
+        vec![
+            json!({
+                "municipality_code": "mun-1",
+                "individual_count": 2,
+                "min_payment": 10.0,
+                "max_payment": 20.0
+            }),
+            json!({
+                "municipality_code": "mun-2",
+                "individual_count": 1,
+                "min_payment": 30.0,
+                "max_payment": 30.0
+            }),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn aggregate_detail_route_is_not_captured_by_entity_relationship() {
+    let resp = protected_router_with_aggregates()
+        .await
+        .get("/datasets/social_registry/aggregates/by_municipality")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    assert_eq!(body["aggregate_id"], "by_municipality");
     assert_eq!(body["disclosure_control"]["suppressed_rows"], 0);
     assert_eq!(
         sorted_rows(&body),

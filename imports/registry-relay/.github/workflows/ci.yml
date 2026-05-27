@@ -18,7 +18,9 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
+  REGISTRY_PLATFORM_REF: 15eaf911d478f0bb5bbe7ba9e94c069fa93306da
+  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
 
 # Default the GITHUB_TOKEN granted to each job to read-only on contents.
 # Individual jobs can widen this when they truly need write access.
@@ -55,6 +57,16 @@ jobs:
 
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout cel-mapping
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+
+      - name: Link cel-mapping path dependency
+        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable   # pinned to major stable channel
@@ -125,6 +137,16 @@ jobs:
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
+      - name: Checkout cel-mapping
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+
+      - name: Link cel-mapping path dependency
+        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+
       - name: Install cargo-deny
         run: cargo install cargo-deny --version 0.19.7 --locked
 
@@ -162,6 +184,16 @@ jobs:
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
 
+      - name: Checkout cel-mapping
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+
+      - name: Link cel-mapping path dependency
+        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -196,6 +228,13 @@ jobs:
           token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
           path: registry-platform
 
+      - name: Checkout cel-mapping
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+
       # Buildx + GHA cache backend persists the Dockerfile's
       # `RUN --mount=type=cache` cargo registry and target directories
       # across runs. First run is a cold compile; subsequent runs reuse
@@ -210,6 +249,7 @@ jobs:
           file: Dockerfile
           build-contexts: |
             registry-platform=./registry-platform
+            cel-mapping=./cel-mapping
           tags: registry-relay:ci
           load: false
           push: false

@@ -7,6 +7,8 @@ WORKDIR /workspace/registry_relay
 COPY Cargo.toml Cargo.lock ./
 COPY --from=registry-platform /Cargo.toml /Cargo.lock /workspace/registry-platform/
 COPY --from=registry-platform /crates /workspace/registry-platform/crates
+COPY --from=cel-mapping /Cargo.toml /Cargo.lock /workspace/cel-mapping/
+COPY --from=cel-mapping /crates /workspace/cel-mapping/crates
 COPY benches ./benches
 COPY resources ./resources
 COPY src ./src

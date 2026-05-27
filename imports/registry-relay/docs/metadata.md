@@ -290,11 +290,13 @@ profiles/<profile>.json
 
 The `index.json` file is the discovery entry point. A project can serve the
 bundle under `/metadata/`, link to `/metadata/index.json` with
-`rel="describedby"`, or expose `/.well-known/dcat-catalog` when a harvester
-expects that path.
+`rel="describedby"`, and expose `/.well-known/api-catalog` for standards-facing
+API and metadata discovery. `/.well-known/dcat-catalog` can remain a
+compatibility alias when a specific harvester expects that informal path.
 
-Do not use a custom well-known path for this project. The portable route is
-ordinary static web publishing plus standard links.
+Do not use a custom well-known path as the main discovery surface for this
+project. The portable route is ordinary static web publishing plus standard
+links.
 
 ## Relay Endpoints
 
@@ -302,6 +304,8 @@ When Relay loads a split manifest, authenticated callers can access scoped
 metadata through:
 
 ```text
+GET /.well-known/api-catalog
+HEAD /.well-known/api-catalog
 GET /metadata
 GET /metadata/catalog
 GET /metadata/dcat

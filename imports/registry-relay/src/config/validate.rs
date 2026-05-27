@@ -556,7 +556,7 @@ fn validate_spdci_response_mapping(
             ConfigError::ValidationError
         })?;
 
-        let rt = cel_mapper_core::MappingRuntime::new(cel_mapper_core::RuntimeOptions::default());
+        let rt = crosswalk_core::MappingRuntime::new(crosswalk_core::RuntimeOptions::default());
         rt.compile_mapping(&mapping_text).map_err(|err| {
             tracing::error!(
                 code = "spdci.config.mapping_compile_failed",

@@ -37,7 +37,7 @@ mod enabled {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use cel_mapper_core::{
+    use crosswalk_core::{
         CompiledPublicSchemaMapping, MappingRuntime, PrivacyMode, PublicSchemaEvaluateOptions,
         PublicSchemaEvaluationInput, RuntimeOptions,
     };

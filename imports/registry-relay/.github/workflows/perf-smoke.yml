@@ -15,7 +15,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: c4df74a825d468334c975aabc35947996a86ad15
+  REGISTRY_PLATFORM_REF: 15eaf911d478f0bb5bbe7ba9e94c069fa93306da
+  CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
+  CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
 
 # Smoke-checks the perf scaffolding without running any actual load.
 # It verifies:
@@ -43,6 +45,16 @@ jobs:
 
       - name: Link registry-platform path dependency
         run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout cel-mapping
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CEL_MAPPING_REPOSITORY }}
+          ref: ${{ env.CEL_MAPPING_REF }}
+          path: cel-mapping
+
+      - name: Link cel-mapping path dependency
+        run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

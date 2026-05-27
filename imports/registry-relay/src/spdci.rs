@@ -17,7 +17,7 @@ use crate::config::{Config, SpdciRegistryConfig};
 use crate::error::{ConfigError, Error};
 
 #[cfg(feature = "standards-cel-mapping")]
-use cel_mapper_core::{CompiledMapping, EvaluationInput, MappingRuntime, RuntimeOptions};
+use crosswalk_core::{CompiledMapping, EvaluationInput, MappingRuntime, RuntimeOptions};
 
 #[derive(Debug, Clone, Default)]
 pub struct SpdciResponseMapper {

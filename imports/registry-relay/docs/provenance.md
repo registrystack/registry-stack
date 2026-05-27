@@ -255,9 +255,9 @@ By default the issued VC uses:
 Operators may override those defaults with `context_url`, `schema_url`,
 and `credential_type` under the same `publicschema:` block.
 
-The mapper dependency is pinned to the public
-`https://github.com/PublicSchema/cel-mapping` repository in
-`Cargo.toml`, so release builds do not depend on a sibling checkout.
+The mapper dependency uses the local Crosswalk crate at
+`../cel-mapping/crates/crosswalk-core` in `Cargo.toml`, matching the
+workspace checkout used for release builds.
 Profile overrides do not bypass provenance audit: PublicSchema issuance
 still attaches the `provenance.vc.issued` block, with `claim_type`
 recording the overridden VC type such as `Person`.

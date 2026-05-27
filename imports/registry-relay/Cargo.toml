@@ -14,9 +14,9 @@ members = [
 
 [features]
 default = []
-cel-mapping-runtime = ["dep:cel-mapper-core"]
-standards-cel-mapping = ["cel-mapping-runtime"]
-publicschema-cel = ["cel-mapping-runtime", "dep:jsonschema"]
+crosswalk-runtime = ["dep:crosswalk-core"]
+standards-cel-mapping = ["crosswalk-runtime"]
+publicschema-cel = ["crosswalk-runtime", "dep:jsonschema"]
 spdci-api-standards = ["dep:jsonschema"]
 ogcapi-features = ["dep:ogcapi-types", "dep:geojson"]
 ogcapi-edr = ["dep:geo", "dep:geo-types", "dep:geojson", "dep:wkt"]
@@ -68,9 +68,9 @@ tokio-util = { version = "0.7" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 ryu = { version = "1" }
-# Optional PublicSchema.org entity-VC mapping support. Disabled by default so
-# the core VC path does not pull in the CEL mapper dependency graph.
-cel-mapper-core = { version = "0.1.1", git = "https://github.com/PublicSchema/cel-mapping", tag = "cel-mapper-core-v0.1.1", optional = true }
+# Optional Crosswalk CEL mapping support. Disabled by default so the core VC
+# path does not pull in the mapping dependency graph.
+crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-core", optional = true }
 jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }

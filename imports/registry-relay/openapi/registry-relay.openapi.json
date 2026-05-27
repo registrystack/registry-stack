@@ -1,0 +1,1893 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Registry Relay API",
+    "summary": "Read-only data gateway exposing entity records, catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.",
+    "description": "Abstract HTTP contract for Registry Relay v0.1. Paths use placeholders ({dataset_id}, {entity}, {id}, ...) because dataset and entity names are runtime configuration, not part of the contract. For the instance-specific document that lists the concrete datasets and entities exposed by one running gateway, fetch the auth-gated `GET /openapi.json` route on that deployment. Hand-authored from `docs/api.md`; keep both in sync.",
+    "version": "0.1.0",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "contact": {
+      "name": "Registry Relay maintainers"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://relay.example.gov",
+      "description": "Replace with the base URL of a deployed Registry Relay instance."
+    }
+  ],
+  "security": [
+    { "bearerAuth": [] },
+    { "apiKeyAuth": [] }
+  ],
+  "tags": [
+    { "name": "Service", "description": "Liveness, readiness, and the local Scalar API reference shell." },
+    { "name": "Catalog", "description": "Dataset discovery: catalog listing, dataset summaries, entity JSON Schemas." },
+    { "name": "Records", "description": "Entity collection, single record, and relationship reads. Field set, allowed filters, and required filters are per-entity configuration." },
+    { "name": "Aggregates", "description": "Pre-declared aggregate discovery and execution. Disclosure control is per-aggregate configuration. Indicator and dimension discovery routes are dataset-scoped and generated from the aggregate declarations: reused identifiers are merged into single records with `queryable_via` links. CSV output is available via `?f=csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel=\"describedby\"` to aggregate metadata. When built with `ogcapi-edr`, configured `admin_area` aggregates are also exposed as OGC EDR `/area` collections." },
+    { "name": "Metadata", "description": "Standards-facing metadata: catalog JSON, DCAT, BRegDCAT-AP, SHACL, JSON Schema, OGC Records bodies, dataset-scoped metadata. Filtered to the caller's metadata scopes." },
+    { "name": "Policies", "description": "ODRL access-policy documents." },
+    { "name": "Evidence offerings", "description": "Discovery records for Registry Witness. Relay publishes the metadata; claims and evidence are submitted to Registry Witness, not Relay." },
+    { "name": "OpenAPI", "description": "The auth-gated, metadata-filtered OpenAPI document for the running instance. Use this abstract document for the contract; fetch `/openapi.json` from a running gateway for the instance shape." },
+    { "name": "OGC API Features", "description": "Read-only GeoJSON Features over entities configured with a `spatial` block. Available only when the gateway is built with the `ogcapi-features` feature." },
+    { "name": "OGC API Records", "description": "Metadata-only catalog view conforming to OGC API - Records. The initial collection is `datasets`; each item describes a visible `dcat:Dataset`. Available only when built with the `ogcapi-records` feature." },
+    { "name": "OGC API EDR", "description": "Environmental Data Retrieval views over configured `admin_area` spatial aggregates. Available only when built with the `ogcapi-edr` feature." },
+    { "name": "SP DCI", "description": "SP DCI sync-search adapter. `sync/search` is generic across configured `standards.spdci.registries` entries; the disability-specific paths require `standards.spdci.disability_registry`. Available only when built with `spdci-api-standards` and the relevant config is set." },
+    { "name": "Provenance", "description": "Verifier-support routes (DID Web, JSON Schemas, JSON-LD contexts) used when callers opt in to VC-JWT responses with `Accept: application/vc+jwt`. Mounted only when `provenance.enabled: true`." }
+  ],
+  "x-tagGroups": [
+    { "name": "Core", "tags": ["Service", "Catalog", "Records", "Aggregates"] },
+    { "name": "Metadata and discovery", "tags": ["Metadata", "Policies", "Evidence offerings", "OpenAPI"] },
+    { "name": "Standards adapters", "tags": ["OGC API Features", "OGC API Records", "OGC API EDR", "SP DCI"] },
+    { "name": "Verifiable credentials", "tags": ["Provenance"] }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "get_health",
+        "summary": "Liveness probe",
+        "description": "Returns `200 OK` when the process is running. Unauthenticated. Use this for container liveness probes.",
+        "security": [],
+        "tags": ["Service"],
+        "responses": {
+          "200": {
+            "description": "Process is alive.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "get_ready",
+        "summary": "Readiness probe",
+        "description": "Returns `200 OK` once startup ingest and metadata compilation have completed. Unauthenticated. Use this for container readiness probes.",
+        "security": [],
+        "tags": ["Service"],
+        "responses": {
+          "200": {
+            "description": "Gateway has finished startup and is ready to serve traffic.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadinessResponse" }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway is still starting or has not yet completed initial ingest.",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "operationId": "get_docs",
+        "summary": "Local Scalar API reference shell",
+        "description": "Serves an HTML page that loads the auth-gated `GET /openapi.json` document after the caller pastes a bearer token. The HTML itself is unauthenticated and contains no catalog data.",
+        "security": [],
+        "tags": ["Service"],
+        "responses": {
+          "200": {
+            "description": "HTML page.",
+            "content": { "text/html": {} }
+          }
+        }
+      }
+    },
+    "/docs/scalar.js": {
+      "get": {
+        "operationId": "get_docs_scalar_js",
+        "summary": "Scalar viewer script bundle",
+        "description": "Static JavaScript bundle that powers the `/docs` Scalar viewer shell. Unauthenticated; contains no catalog data.",
+        "security": [],
+        "tags": ["Service"],
+        "responses": {
+          "200": {
+            "description": "JavaScript bundle.",
+            "content": { "application/javascript": {} }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "get_openapi_document",
+        "summary": "Instance-specific OpenAPI document",
+        "description": "Returns an OpenAPI 3.1 document that lists the operations and dataset/entity tags visible to the caller's metadata scopes. The shape depends on the gateway's configuration; this abstract document describes the contract, not any one deployment.",
+        "tags": ["OpenAPI"],
+        "responses": {
+          "200": {
+            "description": "OpenAPI document for the running instance, filtered to the caller's metadata scopes.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } },
+              "application/vnd.oai.openapi+json;version=3.1": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata": {
+      "get": {
+        "operationId": "get_metadata_landing",
+        "summary": "Metadata landing document",
+        "description": "Returns a JSON landing document with links to every metadata surface and an embedded scoped catalog. Filtered to the caller's metadata scopes.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Metadata landing JSON.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MetadataLanding" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/catalog": {
+      "get": {
+        "operationId": "get_metadata_catalog",
+        "summary": "Scoped catalog document",
+        "description": "Returns the JSON catalog filtered to the caller's metadata scopes.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Catalog JSON.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MetadataCatalogDocument" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/dcat": {
+      "get": {
+        "operationId": "get_metadata_dcat",
+        "summary": "Base DCAT catalog",
+        "description": "Returns a DCAT (Data Catalog Vocabulary) catalog as JSON-LD. Filtered to the caller's metadata scopes.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "DCAT catalog as JSON-LD.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/dcat/{profile}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DcatProfile" }
+      ],
+      "get": {
+        "operationId": "get_metadata_dcat_profile",
+        "summary": "Application-profile DCAT catalog",
+        "description": "Returns the requested DCAT application profile as JSON-LD. Profile examples include `bregdcat-ap` for BRegDCAT-AP.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Application-profile DCAT catalog as JSON-LD.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/profiles": {
+      "get": {
+        "operationId": "list_metadata_profiles",
+        "summary": "List available DCAT application profiles",
+        "description": "Lists the DCAT application profiles the gateway can render, filtered to the caller's metadata visibility.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Profile discovery payload.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/profiles/{profile}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DcatProfile" }
+      ],
+      "get": {
+        "operationId": "get_metadata_profile",
+        "summary": "Describe one DCAT application profile",
+        "description": "Returns the profile descriptor (identifier, label, conforming standards) for the named profile.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Profile descriptor.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/shacl": {
+      "get": {
+        "operationId": "get_metadata_shacl",
+        "summary": "SHACL node shapes",
+        "description": "Returns SHACL node shapes in JSON-LD, scoped to visible datasets and entities.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "SHACL shapes as JSON-LD.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/policies": {
+      "get": {
+        "operationId": "get_metadata_policies",
+        "summary": "ODRL policy statements",
+        "description": "Returns ODRL policy statements as JSON-LD. Filtered to the caller's metadata scopes.",
+        "tags": ["Policies"],
+        "responses": {
+          "200": {
+            "description": "ODRL policies as JSON-LD.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/datasets": {
+      "get": {
+        "operationId": "list_metadata_datasets",
+        "summary": "List metadata for visible datasets",
+        "description": "Returns the dataset-scoped metadata for every dataset visible to the caller.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Metadata dataset list.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MetadataDatasetList" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/datasets/{dataset_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "get_metadata_dataset",
+        "summary": "Dataset-scoped metadata",
+        "description": "Returns metadata for one dataset.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Dataset metadata.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/MetadataDataset" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/datasets/{dataset_id}/policy": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "get_metadata_dataset_policy",
+        "summary": "Dataset policy (ODRL JSON-LD)",
+        "description": "Returns the ODRL access-policy document for one visible dataset.",
+        "tags": ["Policies"],
+        "responses": {
+          "200": {
+            "description": "Dataset ODRL policy as JSON-LD.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/datasets/{dataset_id}/entities": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "list_metadata_entities",
+        "summary": "List entities under a dataset (metadata view)",
+        "description": "Returns the entity descriptors that belong to one dataset, filtered to the caller's metadata visibility.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Entity discovery list.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/datasets/{dataset_id}/entities/{entity}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" }
+      ],
+      "get": {
+        "operationId": "get_metadata_entity",
+        "summary": "Entity descriptor (metadata view)",
+        "description": "Returns metadata for one entity (declared fields, allowed filters, required filters, policy links).",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Entity metadata descriptor.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/datasets/{dataset_id}/entities/{entity}/schema": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" }
+      ],
+      "get": {
+        "operationId": "get_metadata_entity_schema",
+        "summary": "Entity JSON Schema (metadata view)",
+        "description": "Returns the Draft 2020-12 JSON Schema for one entity, scoped to the caller's metadata visibility.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Entity JSON Schema.",
+            "content": { "application/schema+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/datasets/{dataset_id}/entities/{entity}/shacl": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" }
+      ],
+      "get": {
+        "operationId": "get_metadata_entity_shacl",
+        "summary": "Entity SHACL shape (metadata view)",
+        "description": "Returns the SHACL node shape that constrains one entity, as JSON-LD.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Entity SHACL shape as JSON-LD.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/schema/{dataset_id}/{entity}/schema.json": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" }
+      ],
+      "get": {
+        "operationId": "get_metadata_schema_json",
+        "summary": "Entity JSON Schema (URL-stable variant)",
+        "description": "URL-stable JSON Schema endpoint for one entity, suitable for `$ref` from external SHACL or contract validators that pin schema URLs. Identical content to the entity schema metadata route.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "Entity JSON Schema.",
+            "content": { "application/schema+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/ogc/records": {
+      "get": {
+        "operationId": "list_metadata_ogc_records",
+        "summary": "List OGC Records bodies (metadata view)",
+        "description": "Returns the link-free OGC API - Records bodies for visible datasets. This is the metadata-side projection of the Records adapter and is always available, independent of the `ogcapi-records` runtime feature.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "OGC Records collection projection.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/ogc/records/{record_id}": {
+      "parameters": [
+        { "name": "record_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "OGC Records identifier (typically the dataset id)." }
+      ],
+      "get": {
+        "operationId": "get_metadata_ogc_record",
+        "summary": "Single OGC Record body (metadata view)",
+        "description": "Returns the link-free OGC API - Records body for one record.",
+        "tags": ["Metadata"],
+        "responses": {
+          "200": {
+            "description": "OGC Record body.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/metadata/evidence-offerings": {
+      "get": {
+        "operationId": "list_evidence_offerings",
+        "summary": "List evidence offerings",
+        "description": "Returns the discovery records for evidence offerings owned by datasets visible to the caller.",
+        "tags": ["Evidence offerings"],
+        "responses": {
+          "200": {
+            "description": "Evidence offering list.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EvidenceOfferingList" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/metadata/evidence-offerings/{offering_id}": {
+      "parameters": [
+        { "name": "offering_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Evidence offering identifier." }
+      ],
+      "get": {
+        "operationId": "get_evidence_offering",
+        "summary": "Get one evidence offering",
+        "description": "Returns one evidence-offering discovery record. Submitting claims and evidence is handled by Registry Witness, not by Relay.",
+        "tags": ["Evidence offerings"],
+        "responses": {
+          "200": {
+            "description": "Evidence offering record.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EvidenceOffering" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets": {
+      "get": {
+        "operationId": "list_datasets",
+        "summary": "List datasets",
+        "description": "Returns every dataset visible to the caller's metadata scopes.",
+        "tags": ["Catalog"],
+        "responses": {
+          "200": {
+            "description": "Dataset list.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DatasetList" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "get_dataset",
+        "summary": "Dataset summary",
+        "description": "Returns the dataset summary: entities, publishers, sensitivity, update frequency, and links to JSON, JSON-LD, and SHACL artifacts. Acts as Relay-native discovery for the standards adapters mounted under `/ogc/v1/*` and `/dci/*`.",
+        "tags": ["Catalog"],
+        "responses": {
+          "200": {
+            "description": "Dataset summary.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/DatasetSummary" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/{entity}/schema": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" }
+      ],
+      "get": {
+        "operationId": "get_entity_schema",
+        "summary": "Entity JSON Schema",
+        "description": "Returns the Draft 2020-12 JSON Schema for one entity, scoped to the caller's metadata visibility.",
+        "tags": ["Catalog"],
+        "responses": {
+          "200": {
+            "description": "Entity JSON Schema.",
+            "content": { "application/schema+json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/{entity}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" }
+      ],
+      "get": {
+        "operationId": "list_entity_records",
+        "summary": "List entity records",
+        "description": "Returns paginated entity records. Supports projection via `fields`, relationship expansion via `expand`, configured filters via `<field>[.<op>]` query parameters, opaque cursor pagination, and `If-None-Match` conditional requests. Entities with `require_purpose_header: true` require the `Data-Purpose` header. Entities with `required_filters` reject unfiltered enumeration.",
+        "tags": ["Records"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Fields" },
+          { "$ref": "#/components/parameters/Expand" },
+          { "$ref": "#/components/parameters/DataPurpose" },
+          { "$ref": "#/components/parameters/IfNoneMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of entity records.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EntityCollection" } }
+            }
+          },
+          "304": { "description": "Not modified; the validator in `If-None-Match` matches the current page." },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "410": { "$ref": "#/components/responses/CursorGone" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/{entity}/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" },
+        { "$ref": "#/components/parameters/RecordId" }
+      ],
+      "get": {
+        "operationId": "get_entity_record",
+        "summary": "Get one entity record",
+        "description": "Returns one entity record by primary key. `fields` projection, `expand` expansion, and the `Data-Purpose` header behave the same as on the collection route.",
+        "tags": ["Records"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Fields" },
+          { "$ref": "#/components/parameters/Expand" },
+          { "$ref": "#/components/parameters/DataPurpose" },
+          { "$ref": "#/components/parameters/IfNoneMatch" },
+          { "$ref": "#/components/parameters/AcceptVcJwt" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entity record.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EntityRecord" } },
+              "application/vc+jwt": {
+                "schema": { "type": "string" },
+                "examples": {
+                  "compact_jws": {
+                    "summary": "VC-JWT compact serialization",
+                    "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6cmVsYXkuZXhhbXBsZS5nb3YifQ.eyJ2YyI6eyJ0eXBlIjpbIlZlcmlmaWFibGVDcmVkZW50aWFsIiwiUmVjb3JkUmVzcG9uc2UiXX19.<signature>"
+                  }
+                }
+              }
+            }
+          },
+          "304": { "description": "Not modified." },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/{entity}/{id}/{relationship}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/EntityName" },
+        { "$ref": "#/components/parameters/RecordId" },
+        { "$ref": "#/components/parameters/RelationshipName" }
+      ],
+      "get": {
+        "operationId": "get_entity_relationship",
+        "summary": "Get records related to one entity",
+        "description": "Returns records reachable from one entity record via a declared relationship. Pagination, projection, filtering, and the `Data-Purpose` header behave the same as on the collection route.",
+        "tags": ["Records"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Fields" },
+          { "$ref": "#/components/parameters/DataPurpose" },
+          { "$ref": "#/components/parameters/IfNoneMatch" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of related entity records.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EntityCollection" } }
+            }
+          },
+          "304": { "description": "Not modified." },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "410": { "$ref": "#/components/responses/CursorGone" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/aggregates": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "list_dataset_aggregates",
+        "summary": "List aggregates for a dataset",
+        "description": "Returns every aggregate declared for the dataset, with their declared group-by columns, measures, and disclosure-control policy.",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Aggregate list.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/AggregateListResponse" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/aggregates/{aggregate_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/AggregateId" }
+      ],
+      "get": {
+        "operationId": "run_dataset_aggregate",
+        "summary": "Execute an aggregate (GET)",
+        "description": "Executes a declared aggregate with no body. Use the `POST .../query` variant when you need to pass dimension filters or temporal bounds.",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Aggregate result with disclosure-control applied to groups.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/AggregateResult" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/aggregates/{aggregate_id}/query": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/AggregateId" }
+      ],
+      "post": {
+        "operationId": "query_dataset_aggregate",
+        "summary": "Execute an aggregate with filters",
+        "description": "Executes a declared aggregate with dimension filters and optional temporal bounds. Temporal bounds are accepted only for aggregates that declare a `temporal_field`. CSV output is available with `?f=csv` or request body `\"format\": \"csv\"`; the response then carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers and a `Link: rel=\"describedby\"` to the aggregate metadata.",
+        "tags": ["Aggregates"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AggregateQueryRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Aggregate result with disclosure-control applied to groups. JSON by default; CSV when requested.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/AggregateResult" } },
+              "text/csv": { "schema": { "type": "string" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/AggregateId" }
+      ],
+      "get": {
+        "operationId": "get_dataset_aggregate_metadata",
+        "summary": "Aggregate metadata descriptor",
+        "description": "Returns descriptive metadata for one aggregate (group-by columns, measures, disclosure-control policy, optional temporal field, linked indicators and dimensions).",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Aggregate metadata descriptor.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/indicators": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "list_dataset_indicators",
+        "summary": "List indicators for a dataset",
+        "description": "Returns the indicators discovered from aggregate declarations. Reused indicator identifiers are merged into one record, with `queryable_via`, `valid_dimensions`, and links back to the aggregate routes that can compute them.",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Indicator discovery list.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/indicators/{indicator_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/IndicatorId" }
+      ],
+      "get": {
+        "operationId": "get_dataset_indicator",
+        "summary": "Describe one indicator",
+        "description": "Returns the merged discovery record for one indicator, including the aggregates that can compute it and the dimensions it accepts.",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Indicator descriptor.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/dimensions": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "list_dataset_dimensions",
+        "summary": "List dimensions for a dataset",
+        "description": "Returns the dimensions discovered from aggregate declarations. Reused dimension identifiers are merged into one record with `queryable_via` links back to the aggregate routes.",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Dimension discovery list.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/datasets/{dataset_id}/dimensions/{dimension_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/DimensionId" }
+      ],
+      "get": {
+        "operationId": "get_dataset_dimension",
+        "summary": "Describe one dimension",
+        "description": "Returns the merged discovery record for one dimension, including the aggregates that expose it.",
+        "tags": ["Aggregates"],
+        "responses": {
+          "200": {
+            "description": "Dimension descriptor.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/v1": {
+      "get": {
+        "operationId": "get_ogc_features_landing",
+        "summary": "OGC API Features landing page",
+        "description": "OGC API - Features landing page with links to `conformance`, `collections`, and `openapi`. Available only when the gateway is built with `ogcapi-features`.",
+        "tags": ["OGC API Features"],
+        "responses": {
+          "200": {
+            "description": "OGC landing page.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcLandingPage" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/v1/conformance": {
+      "get": {
+        "operationId": "get_ogc_features_conformance",
+        "summary": "OGC API Features conformance",
+        "description": "Conformance classes implemented by this gateway.",
+        "tags": ["OGC API Features"],
+        "responses": {
+          "200": {
+            "description": "Conformance document.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcConformance" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/v1/collections": {
+      "get": {
+        "operationId": "list_ogc_feature_collections",
+        "summary": "List spatial feature collections",
+        "description": "Returns every spatial collection visible to the caller across every dataset. Equivalent to the union of `/ogc/v1/datasets/{dataset_id}/collections`.",
+        "tags": ["OGC API Features"],
+        "responses": {
+          "200": {
+            "description": "Collections list.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcCollections" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/v1/datasets/{dataset_id}/collections": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" }
+      ],
+      "get": {
+        "operationId": "list_ogc_dataset_collections",
+        "summary": "List spatial collections for a dataset",
+        "description": "Returns every spatial collection declared on entities in this dataset.",
+        "tags": ["OGC API Features"],
+        "responses": {
+          "200": {
+            "description": "Collections list.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcCollections" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/CollectionId" }
+      ],
+      "get": {
+        "operationId": "get_ogc_dataset_collection",
+        "summary": "Describe a spatial collection",
+        "description": "Returns the collection metadata for one spatial entity.",
+        "tags": ["OGC API Features"],
+        "responses": {
+          "200": {
+            "description": "Collection description.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcCollection" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/CollectionId" }
+      ],
+      "get": {
+        "operationId": "list_ogc_features",
+        "summary": "List features",
+        "description": "Returns GeoJSON Features for one spatial entity. Item routes require the entity's row-read scope and preserve required filters, purpose headers, projection, audit, and opaque cursor pagination. `bbox-crs` accepts CRS84 only; `datetime` requires `spatial.datetime_field` on the entity.",
+        "tags": ["OGC API Features"],
+        "parameters": [
+          { "name": "bbox", "in": "query", "schema": { "type": "string" }, "description": "WGS84 bounding box `minLon,minLat,maxLon,maxLat`. Accepted for point geometry and for entities with precomputed bbox fields." },
+          { "name": "bbox-crs", "in": "query", "schema": { "type": "string", "enum": ["http://www.opengis.net/def/crs/OGC/1.3/CRS84"] }, "description": "CRS for `bbox`. Only CRS84 is supported." },
+          { "name": "datetime", "in": "query", "schema": { "type": "string" }, "description": "RFC 3339 instant or interval. Requires `spatial.datetime_field` on the entity." },
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/DataPurpose" }
+        ],
+        "responses": {
+          "200": {
+            "description": "GeoJSON Feature collection.",
+            "content": { "application/geo+json": { "schema": { "$ref": "#/components/schemas/GeoJsonFeatureCollection" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "410": { "$ref": "#/components/responses/CursorGone" }
+        }
+      }
+    },
+    "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DatasetId" },
+        { "$ref": "#/components/parameters/CollectionId" },
+        { "name": "feature_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Feature identifier (matches the entity's primary key)." }
+      ],
+      "get": {
+        "operationId": "get_ogc_feature",
+        "summary": "Get one feature",
+        "description": "Returns a single GeoJSON Feature by primary key.",
+        "tags": ["OGC API Features"],
+        "responses": {
+          "200": {
+            "description": "GeoJSON Feature.",
+            "content": { "application/geo+json": { "schema": { "$ref": "#/components/schemas/GeoJsonFeature" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/v1/records": {
+      "get": {
+        "operationId": "get_ogc_records_landing",
+        "summary": "OGC API Records landing page",
+        "description": "OGC API - Records landing page. Mounted only when built with `ogcapi-records`.",
+        "tags": ["OGC API Records"],
+        "responses": {
+          "200": {
+            "description": "OGC landing page.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcLandingPage" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/v1/records/conformance": {
+      "get": {
+        "operationId": "get_ogc_records_conformance",
+        "summary": "OGC API Records conformance",
+        "description": "Conformance classes implemented by the records adapter.",
+        "tags": ["OGC API Records"],
+        "responses": {
+          "200": {
+            "description": "Conformance document.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcConformance" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/v1/records/collections": {
+      "get": {
+        "operationId": "list_ogc_record_collections",
+        "summary": "List record collections",
+        "description": "Returns the available record collections. The initial Records surface has one collection, `datasets`.",
+        "tags": ["OGC API Records"],
+        "responses": {
+          "200": {
+            "description": "Record collections.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcCollections" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/v1/records/collections/{collection_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CollectionId" }
+      ],
+      "get": {
+        "operationId": "get_ogc_record_collection",
+        "summary": "Describe a record collection",
+        "description": "Returns the collection metadata for one record collection.",
+        "tags": ["OGC API Records"],
+        "responses": {
+          "200": {
+            "description": "Record collection description.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcRecordCollection" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/v1/records/collections/{collection_id}/items": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CollectionId" }
+      ],
+      "get": {
+        "operationId": "list_ogc_records",
+        "summary": "List records",
+        "description": "Returns records in one collection. The `datasets` collection supports `q` (case-insensitive text search across visible dataset and entity metadata), `limit` (1..1000), and `after` (opaque signed pagination cursor from a `rel=next` link). Unsupported spatial or search parameters return `400`.",
+        "tags": ["OGC API Records"],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" }, "description": "Case-insensitive text search across visible dataset and entity metadata." },
+          { "$ref": "#/components/parameters/Limit" },
+          { "name": "after", "in": "query", "schema": { "type": "string" }, "description": "Opaque signed pagination cursor from a `rel=next` link." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records page.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcRecordCollection" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/v1/records/collections/{collection_id}/items/{record_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CollectionId" },
+        { "name": "record_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Record identifier." }
+      ],
+      "get": {
+        "operationId": "get_ogc_record",
+        "summary": "Get one record",
+        "description": "Returns one record. In the `datasets` collection, the record describes a visible `dcat:Dataset`.",
+        "tags": ["OGC API Records"],
+        "responses": {
+          "200": {
+            "description": "Record.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcRecord" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/edr/v1": {
+      "get": {
+        "operationId": "get_ogc_edr_landing",
+        "summary": "OGC API EDR landing page",
+        "description": "OGC API - Environmental Data Retrieval landing page. Mounted only when built with `ogcapi-edr`.",
+        "tags": ["OGC API EDR"],
+        "responses": {
+          "200": {
+            "description": "OGC EDR landing page.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcLandingPage" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/edr/v1/conformance": {
+      "get": {
+        "operationId": "get_ogc_edr_conformance",
+        "summary": "OGC API EDR conformance",
+        "description": "Conformance classes implemented by the EDR adapter.",
+        "tags": ["OGC API EDR"],
+        "responses": {
+          "200": {
+            "description": "Conformance document.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcConformance" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/edr/v1/collections": {
+      "get": {
+        "operationId": "list_ogc_edr_collections",
+        "summary": "List EDR collections",
+        "description": "Returns every `admin_area` spatial aggregate exposed as an EDR collection.",
+        "tags": ["OGC API EDR"],
+        "responses": {
+          "200": {
+            "description": "EDR collections.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcCollections" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/ogc/edr/v1/collections/{collection_id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CollectionId" }
+      ],
+      "get": {
+        "operationId": "get_ogc_edr_collection",
+        "summary": "Describe an EDR collection",
+        "description": "Returns the EDR collection metadata for one `admin_area` aggregate.",
+        "tags": ["OGC API EDR"],
+        "responses": {
+          "200": {
+            "description": "EDR collection description.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OgcCollection" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/ogc/edr/v1/collections/{collection_id}/area": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CollectionId" }
+      ],
+      "get": {
+        "operationId": "get_ogc_edr_area_get",
+        "summary": "EDR area query (GET)",
+        "description": "Returns aggregate values for the area defined by `coords` (WKT polygon).",
+        "tags": ["OGC API EDR"],
+        "parameters": [
+          { "name": "coords", "in": "query", "required": true, "schema": { "type": "string" }, "description": "WKT polygon describing the query area." },
+          { "name": "datetime", "in": "query", "schema": { "type": "string" }, "description": "RFC 3339 instant or interval." },
+          { "name": "parameter-name", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated parameters to return." }
+        ],
+        "responses": {
+          "200": {
+            "description": "EDR area response.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "operationId": "get_ogc_edr_area_post",
+        "summary": "EDR area query (POST)",
+        "description": "POST variant of the area query for callers whose query polygons exceed practical URL lengths.",
+        "tags": ["OGC API EDR"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "coords": { "type": "string", "description": "WKT polygon describing the query area." },
+                  "datetime": { "type": "string", "description": "RFC 3339 instant or interval." },
+                  "parameter-name": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["coords"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "EDR area response.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/dci/{registry}/registry/sync/search": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DciRegistry" }
+      ],
+      "post": {
+        "operationId": "post_dci_sync_search",
+        "summary": "SP DCI sync search",
+        "description": "Generic SP DCI sync-search endpoint. Works against any registry configured under `standards.spdci.registries`. Supports `idtype-value` queries, expression `$and` with `eq`, `in`, `ge`, `le`, and predicate conditions joined with `and`.",
+        "tags": ["SP DCI"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SP DCI sync response.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/dci/{registry}/registry/sync/disabled": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DciRegistry" }
+      ],
+      "post": {
+        "operationId": "post_dci_disabled",
+        "summary": "SP DCI disability-status check (Disability Registry only)",
+        "description": "Returns whether the queried subject is recorded as disabled. Available only when `{registry}` resolves to the dataset/entity referenced by `standards.spdci.disability_registry`; other registries return an unknown-resource error.",
+        "tags": ["SP DCI"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SP DCI sync response.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/dci/{registry}/registry/sync/get-disability-details": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DciRegistry" }
+      ],
+      "post": {
+        "operationId": "post_dci_disability_details",
+        "summary": "SP DCI disability details (Disability Registry only)",
+        "description": "Returns disability-detail attributes for the queried subject. Available only when `{registry}` resolves to the dataset/entity referenced by `standards.spdci.disability_registry`.",
+        "tags": ["SP DCI"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SP DCI sync response.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/dci/{registry}/registry/sync/get-disability-support": {
+      "parameters": [
+        { "$ref": "#/components/parameters/DciRegistry" }
+      ],
+      "post": {
+        "operationId": "post_dci_disability_support",
+        "summary": "SP DCI disability support (Disability Registry only)",
+        "description": "Returns disability-support attributes for the queried subject. Available only when `{registry}` resolves to the dataset/entity referenced by `standards.spdci.disability_registry`.",
+        "tags": ["SP DCI"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SP DCI sync response.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/SpdciSyncResponse" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/.well-known/did.json": {
+      "get": {
+        "operationId": "get_did_document",
+        "summary": "DID Web document (provenance)",
+        "description": "Returns the gateway's W3C DID document, used by verifiers to resolve the signing key for VC-JWT responses. Mounted only when `provenance.enabled: true`. Unauthenticated.",
+        "security": [],
+        "tags": ["Provenance"],
+        "responses": {
+          "200": {
+            "description": "DID document.",
+            "content": { "application/did+ld+json": { "schema": { "type": "object" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/schemas/{claim_type}/{version}": {
+      "parameters": [
+        { "name": "claim_type", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Claim type the JSON Schema describes." },
+        { "name": "version", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Schema version identifier." }
+      ],
+      "get": {
+        "operationId": "get_claim_schema",
+        "summary": "Claim JSON Schema (provenance)",
+        "description": "Returns the Draft 2020-12 JSON Schema for one Verifiable Credential subject claim type. Mounted only when `provenance.enabled: true`. Unauthenticated.",
+        "security": [],
+        "tags": ["Provenance"],
+        "responses": {
+          "200": {
+            "description": "JSON Schema.",
+            "content": { "application/schema+json": { "schema": { "type": "object" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/contexts/{vocab}/{version}": {
+      "parameters": [
+        { "name": "vocab", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Vocabulary identifier." },
+        { "name": "version", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Context version identifier." }
+      ],
+      "get": {
+        "operationId": "get_jsonld_context",
+        "summary": "JSON-LD context (provenance)",
+        "description": "Returns a JSON-LD context referenced by VC-JWT responses. Mounted only when `provenance.enabled: true`. Unauthenticated.",
+        "security": [],
+        "tags": ["Provenance"],
+        "responses": {
+          "200": {
+            "description": "JSON-LD context.",
+            "content": { "application/ld+json": { "schema": { "type": "object" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Carries either an API key or an OIDC JWT, depending on the gateway's `auth.mode`. API-key deployments hash the bearer with SHA-256 and compare against `config.auth.api_keys[*].hash_env`. OIDC deployments verify the JWT against the configured `auth.oidc` block and its JWKS."
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Api-Key",
+        "description": "Compatibility header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present. Not accepted in OIDC mode."
+      }
+    },
+    "parameters": {
+      "DatasetId": {
+        "name": "dataset_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Configured dataset identifier (`config.datasets[*].id`)."
+      },
+      "EntityName": {
+        "name": "entity",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Configured entity name (`config.datasets[*].entities[*].name`). Entity names are not storage table ids."
+      },
+      "RecordId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Primary key of one entity record."
+      },
+      "RelationshipName": {
+        "name": "relationship",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Configured relationship name on the source entity."
+      },
+      "AggregateId": {
+        "name": "aggregate_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Pre-declared aggregate identifier (`config.datasets[*].aggregates[*].id`)."
+      },
+      "IndicatorId": {
+        "name": "indicator_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Indicator identifier discovered from aggregate declarations."
+      },
+      "DimensionId": {
+        "name": "dimension_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Dimension identifier discovered from aggregate declarations."
+      },
+      "CollectionId": {
+        "name": "collection_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "OGC collection identifier. Matches a spatial entity collection (`/ogc/v1`), the `datasets` record collection (`/ogc/v1/records`), or an EDR `admin_area` aggregate (`/ogc/edr/v1`)."
+      },
+      "DciRegistry": {
+        "name": "registry",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Registry key configured under `standards.spdci.registries`."
+      },
+      "DcatProfile": {
+        "name": "profile",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "DCAT application profile identifier (for example `bregdcat-ap`)."
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1 },
+        "description": "Maximum records to return on a single page. Capped by the entity's configured `max_limit`."
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "string" },
+        "description": "Opaque server-owned pagination cursor. Pass the value from a previous response's `pagination.next_cursor` field unchanged."
+      },
+      "Fields": {
+        "name": "fields",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "string" },
+        "description": "Comma-separated projection of fields to return. Only fields declared in `entities[*].fields` are addressable."
+      },
+      "Expand": {
+        "name": "expand",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "string" },
+        "description": "Comma-separated list of relationships to expand inline, drawn from `entities[*].api.allowed_expansions`."
+      },
+      "DataPurpose": {
+        "name": "Data-Purpose",
+        "in": "header",
+        "required": false,
+        "schema": { "type": "string", "format": "uri" },
+        "description": "Stable, reviewable purpose IRI. Required when the entity has `require_purpose_header: true`. Recorded in audit logs; never put secrets or personal data here."
+      },
+      "IfNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "schema": { "type": "string" },
+        "description": "Conditional-request validator. The gateway returns `304 Not Modified` when the validator matches the current page."
+      },
+      "AcceptVcJwt": {
+        "name": "Accept",
+        "in": "header",
+        "required": false,
+        "schema": { "type": "string", "enum": ["application/json", "application/vc+jwt"] },
+        "description": "Opt in to a VC-JWT compact serialization. Available only when `provenance.enabled: true`."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Request was rejected. Common codes: `entity.filter_required`, `entity.filter_value_invalid`, `auth.purpose_required`.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" },
+            "examples": {
+              "filter_required": {
+                "value": {
+                  "type": "https://registry-relay.dev/problems/entity/filter_required",
+                  "title": "Required filter missing",
+                  "status": 400,
+                  "code": "entity.filter_required",
+                  "detail": "entity requires at least one of the configured required_filters"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing or invalid credential.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" },
+            "examples": {
+              "missing": {
+                "value": {
+                  "type": "https://registry-relay.dev/problems/auth/missing_credential",
+                  "title": "Missing credential",
+                  "status": 401,
+                  "code": "auth.missing_credential",
+                  "detail": "no credential provided in Authorization or X-Api-Key header"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Caller is authenticated but lacks the required scope.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" },
+            "examples": {
+              "scope_denied": {
+                "value": {
+                  "type": "https://registry-relay.dev/problems/auth/scope_denied",
+                  "title": "Scope denied",
+                  "status": 403,
+                  "code": "auth.scope_denied",
+                  "detail": "required scope: <dataset_id>:rows"
+                }
+              }
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource was not found or is not visible to the caller.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+          }
+        }
+      },
+      "CursorGone": {
+        "description": "Pagination cursor refers to a snapshot that has been retired or rotated. Restart pagination from the first page.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "examples": [{ "status": "ok" }],
+        "properties": {
+          "status": { "type": "string", "examples": ["ok"] }
+        }
+      },
+      "ReadinessResponse": {
+        "type": "object",
+        "examples": [{ "status": "ready" }],
+        "properties": {
+          "status": { "type": "string", "examples": ["ready"] }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "description": "RFC 9457 Problem Details. The `code` field is the stable machine-readable error name; `detail` is operator-facing and not part of the contract.",
+        "additionalProperties": true,
+        "required": ["type", "title", "status", "code"],
+        "properties": {
+          "type": { "type": "string", "format": "uri" },
+          "title": { "type": "string" },
+          "status": { "type": "integer", "format": "int32" },
+          "code": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "description": "Opaque cursor-based pagination envelope.",
+        "required": ["has_more"],
+        "properties": {
+          "has_more": { "type": "boolean", "description": "True when more pages remain after this one." },
+          "next_cursor": { "type": ["string", "null"], "description": "Server-owned cursor for the next page; null when `has_more` is false." }
+        }
+      },
+      "DatasetList": {
+        "type": "object",
+        "description": "List of datasets visible to the caller.",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DatasetSummary" }
+          }
+        }
+      },
+      "DatasetSummary": {
+        "type": "object",
+        "description": "Dataset summary as returned by `GET /datasets/{dataset_id}`. The concrete shape (entity list, links, standards adapters) depends on the dataset's runtime configuration.",
+        "additionalProperties": true
+      },
+      "EntityRecord": {
+        "type": "object",
+        "description": "One entity record. The concrete property set comes from the entity's configured `fields`. This abstract spec only constrains the envelope; for the actual property set, fetch the entity's JSON Schema at `/datasets/{dataset_id}/{entity}/schema`.",
+        "additionalProperties": true
+      },
+      "EntityCollection": {
+        "type": "object",
+        "description": "Page of entity records.",
+        "required": ["data", "pagination"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EntityRecord" }
+          },
+          "pagination": { "$ref": "#/components/schemas/Pagination" }
+        }
+      },
+      "AggregateListResponse": {
+        "type": "object",
+        "description": "Declared aggregates for one dataset, with their group-by columns, measures, and disclosure-control policy.",
+        "additionalProperties": true,
+        "properties": {
+          "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "AggregateQueryRequest": {
+        "type": "object",
+        "description": "Optional dimension filters and temporal bounds for `POST /datasets/{dataset_id}/aggregates/{aggregate_id}/query`. Temporal bounds are accepted only when the aggregate declares a `temporal_field`.",
+        "additionalProperties": true,
+        "properties": {
+          "filters": { "type": "object", "additionalProperties": true },
+          "datetime": { "type": "string", "description": "RFC 3339 instant or interval." }
+        }
+      },
+      "AggregateResult": {
+        "type": "object",
+        "description": "Aggregate result with disclosure-control applied to groups.",
+        "additionalProperties": true,
+        "properties": {
+          "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "MetadataLanding": {
+        "type": "object",
+        "description": "Metadata landing document with links to every metadata surface and an embedded scoped catalog.",
+        "additionalProperties": true
+      },
+      "MetadataCatalogDocument": {
+        "type": "object",
+        "description": "Scoped JSON catalog document.",
+        "additionalProperties": true
+      },
+      "MetadataDatasetList": {
+        "type": "object",
+        "description": "Per-dataset metadata for every visible dataset.",
+        "additionalProperties": true,
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/MetadataDataset" } }
+        }
+      },
+      "MetadataDataset": {
+        "type": "object",
+        "description": "Dataset-scoped metadata document.",
+        "additionalProperties": true
+      },
+      "EvidenceOfferingList": {
+        "type": "object",
+        "description": "List of evidence-offering discovery records visible to the caller.",
+        "additionalProperties": true,
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvidenceOffering" } }
+        }
+      },
+      "EvidenceOffering": {
+        "type": "object",
+        "description": "One evidence-offering discovery record. Each offering points at a Registry Witness endpoint (`access.kind: registry-witness`) that performs the actual evidence check.",
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "access": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "kind": { "type": "string", "examples": ["registry-witness"] },
+              "endpoint": { "type": "string", "format": "uri" }
+            }
+          }
+        }
+      },
+      "OgcLandingPage": {
+        "type": "object",
+        "description": "OGC API landing page.",
+        "additionalProperties": true,
+        "properties": {
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "links": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/OgcLink" }
+          }
+        }
+      },
+      "OgcConformance": {
+        "type": "object",
+        "description": "OGC API conformance document.",
+        "properties": {
+          "conformsTo": {
+            "type": "array",
+            "items": { "type": "string", "format": "uri" }
+          }
+        }
+      },
+      "OgcCollections": {
+        "type": "object",
+        "description": "OGC API collections envelope.",
+        "properties": {
+          "collections": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/OgcCollection" }
+          },
+          "links": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/OgcLink" }
+          }
+        }
+      },
+      "OgcCollection": {
+        "type": "object",
+        "description": "OGC API collection description.",
+        "additionalProperties": true,
+        "required": ["id", "itemType"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "itemType": { "type": "string" },
+          "crs": { "type": "array", "items": { "type": "string" } },
+          "extent": { "type": "object", "additionalProperties": true },
+          "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } }
+        }
+      },
+      "OgcRecordCollection": {
+        "type": "object",
+        "description": "OGC API Records collection (feature collection style envelope with `dcat`-style records as items).",
+        "additionalProperties": true,
+        "properties": {
+          "type": { "type": "string", "examples": ["FeatureCollection"] },
+          "features": { "type": "array", "items": { "$ref": "#/components/schemas/OgcRecord" } },
+          "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } }
+        }
+      },
+      "OgcRecord": {
+        "type": "object",
+        "description": "OGC API Record describing one resource (for example, a visible `dcat:Dataset`).",
+        "additionalProperties": true
+      },
+      "OgcLink": {
+        "type": "object",
+        "description": "OGC API link object.",
+        "required": ["href", "rel"],
+        "properties": {
+          "href": { "type": "string", "format": "uri" },
+          "rel": { "type": "string" },
+          "type": { "type": "string" },
+          "title": { "type": "string" }
+        }
+      },
+      "GeoJsonFeature": {
+        "type": "object",
+        "description": "GeoJSON Feature returned by `/ogc/v1/.../items/{feature_id}`.",
+        "required": ["type", "geometry", "properties"],
+        "properties": {
+          "type": { "type": "string", "enum": ["Feature"] },
+          "id": { "type": ["string", "number"] },
+          "geometry": { "type": "object", "additionalProperties": true },
+          "properties": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "GeoJsonFeatureCollection": {
+        "type": "object",
+        "description": "GeoJSON Feature collection.",
+        "required": ["type", "features"],
+        "properties": {
+          "type": { "type": "string", "enum": ["FeatureCollection"] },
+          "features": { "type": "array", "items": { "$ref": "#/components/schemas/GeoJsonFeature" } },
+          "links": { "type": "array", "items": { "$ref": "#/components/schemas/OgcLink" } }
+        }
+      },
+      "SpdciSyncRequest": {
+        "type": "object",
+        "description": "SP DCI sync request envelope. The specific shape is defined by SP DCI; Relay validates it against the bundled JSON Schemas (`spdci-extensions-*`).",
+        "additionalProperties": true
+      },
+      "SpdciSyncResponse": {
+        "type": "object",
+        "description": "SP DCI sync response envelope.",
+        "additionalProperties": true
+      }
+    }
+  }
+}

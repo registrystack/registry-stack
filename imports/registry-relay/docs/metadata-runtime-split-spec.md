@@ -756,8 +756,10 @@ Prefer discovery mechanisms that already fit the web:
   an application landing page or relevant API responses.
 - Add an HTML `<link rel="describedby" href="/metadata/index.json">` on a
   landing page.
-- Optionally expose `/.well-known/dcat-catalog` for DCAT harvesters that look
-  for that informal convention.
+- Expose `/.well-known/api-catalog` for standards-facing API and metadata
+  discovery.
+- Optionally expose `/.well-known/dcat-catalog` as a compatibility alias for
+  DCAT harvesters that look for that informal convention.
 
 If a project-specific well-known URL is still needed, namespace it explicitly:
 
@@ -817,10 +819,11 @@ registries, PublicSchema indexes, donor interoperability portals, and similar
 systems.
 
 Harvesters should be able to discover DCAT through `rel="describedby"`, the
-metadata index, or `/.well-known/dcat-catalog`, then follow links to datasets,
+metadata index, or `/.well-known/api-catalog`, then follow links to datasets,
 distributions, schemas, SHACL shapes, profile claims, publisher metadata,
 contact metadata, licensing, version information, and application-profile
-outputs.
+outputs. `/.well-known/dcat-catalog` remains only a compatibility alias for
+harvesters that already expect it.
 
 ### Relay Publication
 
@@ -1095,8 +1098,8 @@ Done when:
 - Implement `registry-metadata render`.
 - Implement local static publication to `public/metadata/`.
 - Generate `metadata/index.json`.
-- Support `rel="describedby"` documentation and optional
-  `/.well-known/dcat-catalog`.
+- Support `rel="describedby"` documentation and `/.well-known/api-catalog`.
+- Optionally support `/.well-known/dcat-catalog` as a compatibility alias.
 
 Done when:
 
@@ -1412,7 +1415,7 @@ Worker lanes:
 - Publication lane: implement local artifact generation under
   `public/metadata/`.
 - Discovery lane: generate `metadata/index.json`, document `rel="describedby"`,
-  and optionally support `/.well-known/dcat-catalog`.
+  and support `/.well-known/api-catalog`.
 - Standards lane: validate DCAT as the primary harvestable catalog artifact.
 - Docs lane: document how applications can publish metadata without adopting
   Relay.
@@ -1429,8 +1432,8 @@ Verification:
 
 - Generated index links resolve within the bundle.
 - Static bundle contains no runtime-only fields.
-- A consumer can start from `metadata/index.json` or a describedby link and
-  discover DCAT, schemas, SHACL, and profile claims.
+- A consumer can start from `metadata/index.json`, `/.well-known/api-catalog`,
+  or a describedby link and discover DCAT, schemas, SHACL, and profile claims.
 - DCAT JSON-LD validates with the existing SHACL workflow where applicable.
 
 Exit gate:
