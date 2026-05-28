@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 480" role="img"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title>Registry Relay C4 system context</title>
+  <desc>C4-style system context diagram for Registry Relay. Program systems and metadata consumers call Registry Relay. Relay reads private registry sources, uses Registry Manifest metadata, writes audit records, and can point callers toward Registry Witness evidence offerings.</desc>
+
+  <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
+    <text x="24" y="34">C4 LEVEL 1</text>
+    <text x="118" y="34">SYSTEM CONTEXT</text>
+  </g>
+  <rect x="24" y="42" width="32" height="2" fill="#000091"/>
+
+  <rect x="262" y="150" width="236" height="150" fill="#ffffff" stroke="#000091" stroke-width="1.6"/>
+  <text x="290" y="190" fill="#161616" font-size="18" font-weight="700">Registry Relay</text>
+  <text x="290" y="212" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">[Software system]</text>
+  <text x="290" y="242" fill="#3a3a3a" font-size="12.5">Protected read APIs over</text>
+  <text x="290" y="260" fill="#3a3a3a" font-size="12.5">sensitive registry sources.</text>
+
+  <g fill="#ffffff" stroke="#e5e5e5" stroke-width="1">
+    <rect x="36" y="96" width="170" height="82"/>
+    <rect x="36" y="260" width="170" height="82"/>
+    <rect x="554" y="78" width="170" height="82"/>
+    <rect x="554" y="204" width="170" height="82"/>
+    <rect x="554" y="330" width="170" height="82"/>
+  </g>
+
+  <g fill="#161616" font-size="13" font-weight="700">
+    <text x="58" y="128">Program system</text>
+    <text x="58" y="292">Metadata consumer</text>
+    <text x="576" y="110">Registry source</text>
+    <text x="576" y="236">Registry Manifest</text>
+    <text x="576" y="362">Registry Witness</text>
+  </g>
+  <g fill="#6a6a6a" font-size="11.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="58" y="148">[External system]</text>
+    <text x="58" y="312">[External system]</text>
+    <text x="576" y="130">[External system]</text>
+    <text x="576" y="256">[External system]</text>
+    <text x="576" y="382">[External system]</text>
+  </g>
+  <g fill="#3a3a3a" font-size="12">
+    <text x="58" y="164">Reads entity APIs.</text>
+    <text x="58" y="328">Reads visible metadata.</text>
+    <text x="576" y="146">CSV, XLSX, Parquet, DB.</text>
+    <text x="576" y="272">Portable metadata.</text>
+    <text x="576" y="398">Evidence endpoint.</text>
+  </g>
+
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <path d="M206 137 C238 152 236 180 262 198"/>
+    <polyline points="254,197 262,198 258,191"/>
+    <path d="M206 301 C238 292 238 260 262 246"/>
+    <polyline points="254,247 262,246 256,240"/>
+    <path d="M498 190 C528 168 530 130 554 119"/>
+    <polyline points="546,119 554,119 549,113"/>
+    <path d="M554 244 C526 244 524 234 498 230"/>
+    <polyline points="506,226 498,230 505,234"/>
+    <path d="M498 278 C530 300 528 354 554 372"/>
+    <polyline points="546,371 554,372 550,365"/>
+  </g>
+
+  <g fill="#3a3a3a" font-size="11.5">
+    <text x="214" y="124">authorized rows</text>
+    <text x="214" y="324">scoped catalog</text>
+    <text x="504" y="158">source reads</text>
+    <text x="504" y="224">metadata bundle</text>
+    <text x="504" y="334">evidence offering</text>
+  </g>
+
+  <line x1="24" y1="444" x2="736" y2="444" stroke="#e5e5e5" stroke-width="1"/>
+</svg>

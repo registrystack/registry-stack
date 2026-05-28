@@ -1,7 +1,6 @@
 ---
 title: Registry Manifest overview
-description: Registry Manifest turns a single YAML metadata manifest into every
-  standards-facing artifact a registry needs to publish, validate, and share.
+description: Registry Manifest turns a single YAML metadata manifest into standards-facing artifacts and public Witness federation metadata a registry needs to publish, validate, and share.
 status: current
 owner: registry-manifest
 source_repos:
@@ -23,7 +22,8 @@ standards_referenced:
 
 Registry Manifest is a portable Rust workspace that takes one `metadata.yaml` file and
 derives every standards-facing artifact other systems need to find, understand, and connect
-to a registry.
+to a registry. It can also publish public Registry Witness federation metadata that helps
+partners configure static-peer delegated evaluation.
 It does not serve HTTP, does not talk to databases, and does not handle credentials.
 You can run it on a laptop, in a CI pipeline, or in a static hosting workflow with no
 server required.
@@ -50,6 +50,9 @@ No renderer makes network calls or reads files beyond the manifest input.
 | Per-dataset ODRL policy document JSON-LD | `policy` |
 | Evidence offerings collection JSON | `evidence-offerings` |
 | Single evidence offering JSON | `evidence-offering` |
+
+Federation metadata appears inside the catalog and evidence-offering JSON outputs. It is not a
+separate render format.
 
 Not yet implemented: GovStack DR BB, SP DCI, and standalone PROV-O.
 
@@ -113,8 +116,10 @@ forms: []
 ```
 
 A manifest must not contain runtime bindings such as source file paths, table names,
-database scopes, or backend credentials.
-Those live in Registry Relay configuration; the manifest is portable and Relay-independent.
+database scopes, backend credentials, peer allowlists, federation signing keys, replay stores,
+or pairwise subject hash secrets.
+Those live in Registry Relay or Registry Witness configuration; the manifest is portable and
+runtime-independent.
 
 A full working example is at
 `registry-manifest/profiles/example-civil-registration/fixtures/metadata.yaml`.
@@ -132,6 +137,15 @@ An `evidence_type_lists` entry under a requirement is one option group; all evid
 in that list are required together.
 Multiple lists on the same requirement are alternatives.
 
+Federated evaluation metadata is explicit too.
+The top-level `federation` block advertises the publishing Witness node id, issuer, JWKS URL,
+federation API URL, and supported protocol versions.
+The top-level `evaluation_profiles` list binds public profile ids and ruleset ids to Witness
+claim ids and subject id types.
+A `registry-witness` evidence offering must reference one of those ruleset ids through
+`access.ruleset`.
+Registry Manifest validates that link, but Registry Witness still decides which peers may call it.
+
 ## Validation
 
 When you run `validate` or `publish`, Registry Manifest performs multi-pass validation
@@ -147,6 +161,9 @@ before any rendering occurs:
 6. Validates per-dataset entities, fields, relationships, identifiers, codelists,
    cardinality strings, and ODRL policy terms.
 7. Validates evidence-offering references.
+8. Validates Registry Witness federation metadata when `registry-witness` access is declared:
+   HTTPS URLs, `did:web` issuer binding, protocol version, unique evaluation profile ids, unique
+   rulesets, and `access.ruleset` references.
 
 All errors are collected and returned together so a single run surfaces every problem in
 the file.

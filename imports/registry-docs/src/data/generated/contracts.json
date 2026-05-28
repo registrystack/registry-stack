@@ -28,7 +28,7 @@
     "name": "Registry Witness OpenAPI",
     "owner": "registry-witness",
     "status": "pinned-generated-snapshot",
-    "surface": "Claim discovery, claim evaluation, batch evaluation, rendering, JWKS, service metadata, and credential issuance.",
+    "surface": "Claim discovery, claim evaluation, batch evaluation, federated delegated evaluation, rendering, JWKS, service metadata, and credential issuance.",
     "source_of_truth": {
       "label": "Registry Witness OpenAPI generator",
       "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs"
@@ -48,16 +48,28 @@
     "consumer_note": "Wallet-compatible Draft 13 flow. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted at this version."
   },
   {
+    "id": "registry-witness.federated-evaluation",
+    "name": "Registry Witness Federated Evaluation MVP",
+    "owner": "registry-witness",
+    "status": "current-source",
+    "surface": "Static-peer delegated evaluation over `POST /federation/v1/evaluations`, compact JWS request and response JWTs, peer policy checks, pairwise subject handles, replay protection, and federation audit fields.",
+    "source_of_truth": {
+      "label": "Registry Witness federation module",
+      "url": "https://github.com/jeremi/registry-witness/tree/main/crates/registry-witness-server/src/federation"
+    },
+    "consumer_note": "This is delegated evaluation only. Open federation, trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are outside the MVP."
+  },
+  {
     "id": "registry-manifest.metadata-yaml",
     "name": "Metadata Manifest",
     "owner": "registry-manifest",
     "status": "current-source",
-    "surface": "Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, and evidence offering metadata.",
+    "surface": "Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, evidence offering metadata, public federation metadata, and evaluation profile metadata.",
     "source_of_truth": {
       "label": "Registry Manifest core",
       "url": "https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core"
     },
-    "consumer_note": "Runtime source paths, scopes, table names, and backend URLs belong in Relay config, not manifests."
+    "consumer_note": "Runtime source paths, scopes, table names, backend URLs, peer allowlists, replay storage, and federation secrets belong in runtime service config, not manifests."
   },
   {
     "id": "registry-manifest.cpsv-ap-service-catalogue",

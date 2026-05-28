@@ -7,7 +7,8 @@ family.
 
 It explains the map: which project owns which responsibility, which standards
 claims are supported by evidence, which machine contracts are stable enough for
-integrators, and how to run the smallest end-to-end demo.
+integrators, how Registry Witness federation fits into the stack, and how to run
+the smallest end-to-end demo.
 
 ## Develop
 

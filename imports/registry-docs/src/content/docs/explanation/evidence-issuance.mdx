@@ -1,6 +1,6 @@
 ---
 title: Evidence issuance, end to end
-description: Explains how Registry Witness turns a subject identifier and a configured claim into an SD-JWT VC credential, including the three paths to a credential and how the pipeline connects to Relay.
+description: Explains how Registry Witness turns a subject identifier and a configured claim into a signed evaluation or SD-JWT VC credential, including direct, wallet, federated, and receipt-only paths.
 status: current
 owner: registry-witness
 source_repos:
@@ -19,7 +19,7 @@ standards_referenced:
 ---
 
 This page describes how Registry Witness turns a subject identifier and a configured claim into a
-verifiable credential. It is an explanation, not a how-to: there are no commands here.
+signed evaluation or verifiable credential. It is an explanation, not a how-to: there are no commands here.
 For commands, see [Run Registry Witness locally](../../projects/registry-witness/run-locally/) and
 [Configure a claim](../../projects/registry-witness/configure-a-claim/).
 
@@ -58,9 +58,10 @@ The configuration that makes each stage concrete is the `ClaimDefinition` in
 Each `ClaimDefinition` names its `source_bindings`, declares its `rule`, sets its `disclosure`
 policy, and lists the `formats` it may emit.
 
-## Three ways to consume an evaluation
+## Four ways to consume an evaluation
 
-There is one claim model and three transports a caller can use to land a credential or a receipt.
+There is one claim model and four transports a caller can use to land a credential, delegated
+evaluation, or receipt.
 
 1. Direct API. The caller calls `POST /claims/evaluate` to evaluate the claim, then
    `POST /credentials/issue` to materialize an SD-JWT VC from the stored evaluation. The caller
@@ -80,6 +81,10 @@ There is one claim model and three transports a caller can use to land a credent
    `redacted`), and stores the audit-stamped result. Every evaluation, credential or not, is
    recorded in the JSONL audit log alongside `verification_id` and `claim_hash` for redacted
    results.
+4. Federated delegated evaluation. The caller is another configured Registry Witness. It posts a
+   compact signed JWT to `POST /federation/v1/evaluations`; the serving Witness verifies peer
+   policy, replay state, purpose, profile, and audience before source reads, then returns a compact
+   signed JWT response. This path returns a scoped evaluation result, not a credential.
 
 The [Registry Lab](../../projects/registry-lab/) citizen self-attestation scenario uses path 2: a
 host-side Witness on port `4325` runs against the lab's civil registry, eSignet provides the
@@ -115,6 +120,11 @@ offering on Relay learns where to call Witness; nothing in the Relay code path i
 credentials. For the publishing side, see
 [Publishing pipeline](../publishing-pipeline/).
 
+For delegated evaluation, Registry Manifest can also publish `federation` and
+`evaluation_profiles` metadata. That metadata helps a partner configure a static peer relationship.
+Runtime access still comes from the serving Witness `federation.peers` policy, signed request
+verification, and replay checks.
+
 ## Boundaries
 
 A few things Registry Witness is not.
@@ -128,6 +138,8 @@ A few things Registry Witness is not.
   the relationship to the relying party belong to the deployment, not to Registry Witness as a
   product. Registry Witness ships an engine and a wire shape; the trust comes from the
   deployment.
+- Not open federation. The MVP accepts only statically configured peers and delegated evaluation.
+  Federated credential issuance and dynamic trust-chain discovery are not implemented.
 
 ## Next
 

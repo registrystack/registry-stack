@@ -1,6 +1,6 @@
 ---
 title: Registry Witness overview
-description: Explains what Registry Witness is, how it evaluates eligibility claims, controls disclosure, issues SD-JWT VC credentials over a direct API and over OID4VCI, and how it relates to the rest of the registry stack.
+description: Explains what Registry Witness is, how it evaluates eligibility claims, controls disclosure, serves federated delegated evaluation, issues SD-JWT VC credentials over a direct API and over OID4VCI, and how it relates to the rest of the registry stack.
 status: draft
 owner: registry-witness
 source_repos:
@@ -19,11 +19,12 @@ standards_referenced:
   - oid4vci
 ---
 
-Registry Witness is the credential issuance product of the registry stack. It evaluates configured
-eligibility claims against your registry data and issues SD-JWT VC credentials with selective
-disclosure. It also issues wallet-compatible credentials over OpenID for Verifiable Credential
-Issuance (OID4VCI). The verification receipt Registry Witness produces is an evidence artifact, not
-an eligibility decision: the issuing program decides what an entitlement is.
+Registry Witness is the claim evaluation and credential issuance product of the registry stack.
+It evaluates configured eligibility claims against your registry data, serves signed delegated
+evaluation to trusted peer Witnesses, and issues SD-JWT VC credentials with selective disclosure.
+It also issues wallet-compatible credentials over OpenID for Verifiable Credential Issuance
+(OID4VCI). The verification receipt Registry Witness produces is an evidence artifact, not an
+eligibility decision: the issuing program decides what an entitlement is.
 
 **Stack commitments:** safeguards, reviewability.
 
@@ -130,6 +131,30 @@ issued credential. The route is exercised from the lab by
 runs on port `4325`. For the full request and response shapes, see
 [OID4VCI routes in the Witness reference](./reference/#oid4vci-routes).
 
+## Federated delegated evaluation
+
+Registry Witness can serve a static-peer federation MVP for one operation:
+`POST /federation/v1/evaluations`. A trusted Witness sends a compact signed JWT request with
+`typ = registry-witness-request+jwt`; the serving Witness verifies the peer, audience, time window,
+profile, purpose, replay key, and local policy before reading any source data. The response is a
+compact signed JWT with `typ = registry-witness-response+jwt`.
+
+Federation uses two config surfaces:
+
+- Registry Manifest publishes public discovery metadata: `federation`, `evaluation_profiles`, and
+  `registry-witness` evidence offerings whose `access.ruleset` matches a public evaluation profile
+  ruleset.
+- Registry Witness enforces private runtime policy: `federation.peers`,
+  `federation.evaluation_profiles`, signing key config, pairwise subject hash secret, replay
+  settings, response shaping, and emergency denylist entries.
+
+This is delegated evaluation only. The MVP does not implement open federation, dynamic trust-chain
+discovery, audit checkpoint exchange, shared replay storage, or federated credential issuance.
+The operator-facing contract is in the
+[federated evaluation MVP spec](https://github.com/jeremi/registry-witness/blob/main/docs/federated-evaluation-mvp-spec.md)
+and
+[federated evaluation operator guide](https://github.com/jeremi/registry-witness/blob/main/docs/federated-evaluation-operator-guide.md).
+
 ## CCCEV JSON-LD rendering
 
 When a caller requests `application/ld+json; profile="cccev"`, Registry Witness renders
@@ -212,6 +237,8 @@ Known limitations at this version:
   format directly, without a VC Data Model wrapper.
 - OID4VCI route shapes are Draft 13 compatible. No conformance test fixture is pinned at this
   version, so the broader spec claim level is `aligns_with`.
+- Federation is static-peer delegated evaluation only. Active-active deployments need shared replay
+  storage before privileged federation traffic is enabled across multiple serving instances.
 
 ## Next
 

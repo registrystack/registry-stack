@@ -31,7 +31,8 @@ The registry stack is organized around two layers: a portable metadata layer and
 The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
 exposes, without touching production sources.
 The runtime services layer (Registry Relay, Registry Witness) binds those artifacts to real data, enforces
-access control, evaluates claims, and issues credentials.
+access control, evaluates claims, serves delegated evaluation between trusted Witnesses, and issues
+credentials.
 Registry Platform provides shared Rust primitives consumed by both runtime services.
 Registry Atlas inspects the published artifacts.
 Registry Lab runs all services together in a local demo.
@@ -66,7 +67,10 @@ updated policy documents without touching deployment config.
 5. Registry Witness evaluates claims against configured HTTP sources (Registry Data API or SP DCI
    connectors). It renders results as `application/vnd.registry-witness.claim-result+json`,
    CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VCs (`application/dc+sd-jwt`).
-6. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them
+6. A trusted Registry Witness can call another trusted Registry Witness through
+   `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish
+   discovery metadata for that relationship, but local Witness peer policy grants access.
+7. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them
    by artifact kind, and runs strict capability queries over the indexed metadata terms.
 
 For what each project does and does not own, see [ownership boundaries and map](/map/boundaries-and-map/).
@@ -78,4 +82,4 @@ For what each project does and does not own, see [ownership boundaries and map](
 - [Consultation flow](/explanation/consultation-flow/) explains how Registry Relay serves authorized
   callers and scopes metadata by caller visibility.
 - [Evidence issuance](/explanation/evidence-issuance/) explains claim evaluation, disclosure policy,
-  and credential issuance in Registry Witness.
+  delegated evaluation, and credential issuance in Registry Witness.

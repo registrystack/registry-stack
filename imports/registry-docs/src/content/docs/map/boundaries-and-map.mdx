@@ -50,11 +50,12 @@ and to understand how the six repositories connect at runtime.
 Witness compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy,
 and testing.
 [Registry Manifest](../../projects/registry-manifest/) defines portable metadata and compiles it into
-standards-facing service, registry, schema, form, policy, and evidence artifacts.
+standards-facing service, registry, schema, form, policy, evidence, and public Witness federation
+artifacts.
 [Registry Relay](../../projects/registry-relay/) binds logical datasets and entities to protected runtime
 sources and exposes them as authorized read-only APIs.
-[Registry Witness](../../projects/registry-witness/) evaluates configured claims against registry sources
-and issues SD-JWT VC credentials.
+[Registry Witness](../../projects/registry-witness/) evaluates configured claims against registry sources,
+serves static-peer delegated evaluation, and issues SD-JWT VC credentials.
 [Registry Atlas](../../projects/registry-atlas/) inspects published discovery artifacts, parses service
 catalogues and registry metadata, and navigates service-first requirements, evidence options, providers,
 forms, and access routes.
@@ -69,7 +70,7 @@ a static metadata publisher, and narrated clients.
 | Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](../../projects/registry-platform/) |
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../projects/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](../../projects/registry-manifest/) |
-| How is a claim evaluated and turned into an attestation or credential? | [Registry Witness](../../projects/registry-witness/) |
+| How is a claim evaluated, delegated to a trusted Witness, or turned into an attestation or credential? | [Registry Witness](../../projects/registry-witness/) |
 | How are discovery artifacts inspected or matched against capability needs? | [Registry Atlas](../../projects/registry-atlas/) |
 | How do the services run together in a local demo? | [Registry Lab](../../projects/registry-lab/) |
 
@@ -99,6 +100,7 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 - Registry Relay runtime data access. Manifest doesn't serve HTTP, doesn't talk to databases, doesn't run inside a gateway. {/* Evidence: registry-manifest README lines 88-92, commit 77125ec. */}
 - Auth, audit, observability, or secret handling. These are intentionally excluded so the library can be used without running any runtime service. {/* Evidence: registry-manifest README lines 88-92. */}
 - Production source configuration. Source paths, table IDs, scopes, cache paths, and backend runtime details belong in Registry Relay configuration, not in portable manifests. {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
+- Runtime federation policy. Manifest can publish public Witness federation metadata, but peer allowlists, signing keys, replay stores, purpose policy, and source scopes belong in Registry Witness config.
 
 No HTTP serving, no database queries, no authorization scoping. The manifest compiles and renders only.
 
@@ -122,6 +124,7 @@ Registry Witness evaluates claims and issues SD-JWT VC credentials. It does not 
 - Registry Relay source code or runtime internals. Registry Witness calls Registry Relay over HTTP using a source connector; it does not import or link Registry Relay libraries. Both services can depend on Registry Platform. {/* Evidence: registry-witness README lines 5-9, commit b4128a3; platform dependency in current Cargo.toml. */}
 - Portable metadata renderers owned by Registry Manifest. Registry Witness does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. {/* Evidence: registry-witness evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives owned by Registry Platform. Registry Witness owns the claim service behavior that composes those primitives.
+- Open federation, dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, or federated credential issuance. The current federation implementation is static-peer delegated evaluation only.
 - Browser inspection workflows owned by Registry Atlas. Inspecting published discovery artifacts, parsing DCAT catalogs, and running capability queries are Atlas responsibilities.
 
 Registry Witness credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable

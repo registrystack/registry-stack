@@ -1,6 +1,6 @@
 ---
 title: Registry Witness reference
-description: Hand-maintained reference for the Registry Witness claim config schema, HTTP routes, disclosure modes, source connector types, and audit event shape.
+description: Hand-maintained reference for the Registry Witness claim config schema, HTTP routes, federation config, disclosure modes, source connector types, and audit event shape.
 status: draft
 owner: registry-witness
 source_repos:
@@ -19,7 +19,7 @@ standards_referenced:
   - oid4vci
 ---
 
-Use this page to look up the Registry Witness config schema, HTTP routes, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`.
+Use this page to look up the Registry Witness config schema, HTTP routes, federation config, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`.
 ([README](https://github.com/jeremi/registry-witness/blob/main/README.md))
 
 ## HTTP routes
@@ -45,6 +45,7 @@ Use this page to look up the Registry Witness config schema, HTTP routes, disclo
 | `GET` | `/oid4vci/credential-offer` | Return a `CredentialOffer` for one or more configured credential configurations. |
 | `POST` | `/oid4vci/nonce` | Mint a fresh `c_nonce` for the holder proof of possession JWT. |
 | `POST` | `/oid4vci/credential` | Issue an SD-JWT VC credential bound to the holder's `did:jwk`. |
+| `POST` | `/federation/v1/evaluations` | Evaluate one configured federation profile for a trusted peer. Mounted only when `federation.enabled` is true. |
 
 HTTP status codes used across routes:
 
@@ -54,6 +55,9 @@ HTTP status codes used across routes:
 - `403`: principal is not authorized for the requested claim, purpose, disclosure mode, or format.
 - `404`: claim ID or evaluation ID not found.
 - `503`: a source registry is unreachable. `POST /claims/evaluate` returns this with `code: source.unavailable` in the `application/problem+json` body.
+
+Federated evaluation uses `application/jwt` request and response bodies on success. Transport
+denials use `application/problem+json`.
 
 Example response body for `POST /claims/evaluate` (`200`):
 
@@ -269,6 +273,39 @@ Issues an SD-JWT VC credential bound to the holder's `did:jwk`.
 
 Proof JWT validation comes from Registry Platform OID4VCI helpers; the credential signing key is the same Ed25519 OKP JWK loaded by the credential profile that backs the configuration. Holder binding requires `did:jwk`; other DID methods are rejected at config validation.
 
+## Federated evaluation route
+
+`POST /federation/v1/evaluations` accepts one compact JWS request and returns one signed evaluation
+response. The route is not mounted unless `federation.enabled` is true.
+
+Request requirements:
+
+- Request media type: `application/jwt`.
+- Compact JWS serialization only.
+- Header fields: `typ = registry-witness-request+jwt`, `alg = EdDSA`, and a `kid` found in the
+  configured peer JWKS.
+- Required payload claims: `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `protocol`, `action`,
+  `profile`, `purpose`, and `request`.
+- `protocol` must be `registry-witness-federation/v0.1`.
+- `action` must be `evaluate`.
+- `purpose` must be an HTTPS URI allowed by the peer policy.
+- `jti` must be a ULID string and is retained in the replay store until `exp + clock_leeway`.
+
+Response shape:
+
+- Success media type: `application/jwt`.
+- Header fields: `typ = registry-witness-response+jwt`, `alg = EdDSA`, and serving Witness `kid`.
+- Payload fields include `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `request_jti`,
+  `protocol`, `action`, `profile`, and either `result` or `error`.
+- `result.subject_ref.hash` is a pairwise `hmac-sha256:` handle. The raw subject identifier is not
+  returned.
+- Stale source observations return HTTP `200` with a signed top-level `error` object.
+- Replay, policy, signature, body-limit, and audience failures return unsigned RFC 7807-style
+  denial bodies.
+
+The serving Witness validates the request before source reads. Audit write failure prevents a
+successful signed response.
+
 ## Audit event shape
 
 `EvidenceAuditEvent` fields.
@@ -287,6 +324,12 @@ Events are serialized as Registry Platform audit envelopes in JSON Lines (JSONL)
 | `claim_hash` | string or null | Hash of the evaluated claim set. May be omitted for redacted results. |
 | `row_count` | number or null | Number of source records read. |
 | `error_code` | string or null | Error code if the request failed. |
+| `federation_peer_id_hash` | string or null | Hashed peer node id for federated evaluation audit records. |
+| `federation_issuer` | string or null | Requesting peer issuer for federated evaluation audit records. |
+| `federation_profile` | string or null | Evaluation profile id used for federated evaluation. |
+| `federation_purpose` | string or null | Purpose URI accepted for federated evaluation. |
+| `federation_request_jti` | string or null | Request JWT `jti` for replay and audit correlation. |
+| `federation_subject_ref_hash` | string or null | Pairwise subject reference hash emitted in the signed response. |
 
 ## Top-level config sections
 
@@ -344,6 +387,57 @@ Fields under `auth.oidc`.
 | `claims` | `[]` | Array of claim definitions. |
 | `credential_profiles` | `{}` | Map of profile ID to `CredentialProfileConfig`. |
 | `source_connections` | `{}` | Map of connection ID to `SourceConnectionConfig`. |
+
+### `federation`
+
+Fields of `FederationConfig`.
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `enabled` | `false` | When true, mounts `/federation/v1/evaluations`. |
+| `node_id` | `""` | Serving Witness node id. MVP requires `did:web`. |
+| `issuer` | `""` | Serving Witness HTTPS issuer. Host must bind to `node_id`. |
+| `jwks_uri` | `""` | HTTPS JWKS URL for this Witness federation signing keys. |
+| `federation_api` | `""` | Public federation API base URL. |
+| `supported_protocol_versions` | `[]` | Must include `registry-witness-federation/v0.1` when enabled. |
+| `inbound_body_limit_bytes` | `16384` | Maximum compact JWS request body size. |
+| `max_request_lifetime_seconds` | `300` | Maximum `exp - iat` for request JWTs. |
+| `clock_leeway_seconds` | `60` | Clock skew tolerance for time checks and replay retention. |
+| `signing.kid` | `""` | Key id placed in signed response JWT headers. |
+| `signing.key_env` | `""` | Env var containing the Ed25519 OKP JWK used to sign responses. |
+| `signing.alg` | `EdDSA` | Only EdDSA is accepted for the MVP. |
+| `pairwise_subject_hash.secret_env` | `""` | Dedicated secret for pairwise subject handles. Do not reuse audit or signing secrets. |
+| `replay.storage` | `in_process_single_instance_only` | MVP replay store. Not safe for active-active serving deployments. |
+| `replay.max_entries` | `10000` | Maximum in-process replay entries before oldest-entry eviction. |
+| `replay.eviction` | `expire_oldest` | Expires old entries, then evicts oldest inserted entries when full. |
+| `response_shaping.minimum_denial_latency_ms` | `250` | Minimum latency floor for denied federation requests. |
+| `emergency_denylist.node_ids` | `[]` | Locally denied peer node ids. |
+| `emergency_denylist.kids` | `[]` | Locally denied request signing key ids. |
+| `peers` | `[]` | Static trusted peer policies. At least one is required when enabled. |
+| `evaluation_profiles` | `[]` | Local evaluation profiles. At least one is required when enabled. |
+
+Fields of `FederationPeerConfig`.
+
+| Key | Notes |
+| --- | --- |
+| `node_id` | Trusted peer node id. MVP requires `did:web`. |
+| `issuer` | Trusted peer HTTPS issuer. Host must bind to `node_id`. |
+| `jwks_uri` | Peer JWKS URL used by the request verifier. |
+| `allow_insecure_localhost` | Development-only opt-in for local JWKS URLs. |
+| `allowed_protocol_versions` | Must include `registry-witness-federation/v0.1`. |
+| `allowed_purposes` | HTTPS purpose URI allowlist. |
+| `allowed_profiles` | Evaluation profile IDs this peer may request. |
+| `source_scopes` | Internal source scopes granted to this peer after policy passes. |
+
+Fields of `FederationEvaluationProfileConfig`.
+
+| Key | Notes |
+| --- | --- |
+| `id` | Local profile id referenced by peer `allowed_profiles` and request `profile`. |
+| `ruleset` | Public ruleset id that can match Registry Manifest `evaluation_profiles[].ruleset`. |
+| `claim_id` | Evidence claim evaluated for this profile. |
+| `subject_id_type` | Required request subject id type. |
+| `max_source_observed_age_seconds` | Optional freshness limit; stale source observations return a signed evaluation error. |
 
 ### `evidence.source_connections`
 
