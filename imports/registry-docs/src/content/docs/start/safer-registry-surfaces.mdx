@@ -20,13 +20,15 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Registry Stack is infrastructure for safer registry interoperability.
-It helps human teams, exchange layers, workflow engines, and AI-assisted tools work against a
-clear registry surface instead of files, undocumented tables, broad APIs, or copied extracts.
+Registry Stack is infrastructure for safer registry interoperability. It gives human teams,
+exchange layers, workflow engines, and AI-assisted tools a registry surface to work against,
+instead of raw files, undocumented tables, broad APIs, or copied extracts.
 
-The goal is not to make registries available to AI.
-The goal is to make registry use more explicit, governed, and reviewable for every caller.
-AI and automation make that need more urgent because they make integration faster.
+The goal is not to make registries available to AI; it is to make registry use explicit,
+governed, and reviewable for every caller.
+AI and automation make that goal more urgent because they let teams build integrations faster
+than they can understand the data, the authority for access, the disclosure risk, or the
+meaning of each field.
 
 ## The existing problem
 
@@ -42,22 +44,6 @@ created.
 
 That is the gap Registry Stack targets: make registry use operational, not only documented.
 
-## What automation changes
-
-Automation makes integrations easier to create.
-AI-assisted tools can help teams read API documentation, draft client code, compare schemas,
-generate tests, and explain data models.
-Workflow engines can move data between systems with less custom code.
-
-That helps good interoperability.
-It also means weak contracts, broad routes, and wrong semantic assumptions can spread faster.
-A team may be able to build an integration faster than it can understand the data, the authority
-for access, the disclosure risk, and the meaning of each field.
-
-The answer is not to avoid automation.
-The answer is to give both people and automated tools a registry surface that is narrow, explicit,
-and enforceable by default.
-
 ## What Registry Stack enables
 
 Registry Stack provides registry-facing tools that make existing data usable and safer to depend on.
@@ -71,8 +57,8 @@ Registry Stack provides registry-facing tools that make existing data usable and
 - Semantic metadata makes meaning, sensitivity, and assumptions visible before integration code is
   written.
 
-These are useful for ordinary integrations today.
-They also give AI-assisted work and workflow automation safer material to operate on.
+These controls are useful for ordinary integrations today, and they give automated and AI-assisted
+integrations safer material to work from.
 
 ## From policy text to runtime checks
 
@@ -103,28 +89,6 @@ That requires a registry surface that can answer practical review questions.
 - Which fields or claims can leave the source boundary?
 - Which semantic definition is being used?
 - Which audit event records the access or evidence decision?
-
-## What remains outside Registry Stack
-
-Registry Stack does not provide chat interfaces, form-filling assistants, model governance,
-generated code review, or automated eligibility decisions.
-It also does not replace human escalation, appeal, correction, accessibility testing, or the
-governance needed around high-impact public services.
-
-If AI is part of a service design, the first question remains whether AI helps the public-service
-task.
-Responsible non-adoption is a valid outcome.
-
-AI remains one source of urgency for these docs, not a product pillar.
-The product focus remains Registry Relay, Registry Witness, and registry metadata.
-
-## How to read the rest
-
-Use this page as a reason to inspect the registry controls, not as a separate AI product track.
-For existing sources, start with Registry Relay and metadata.
-For over-sharing risk, start with Registry Witness and evidence issuance.
-For implementation review, inspect policy, scope, semantic metadata, and audit behavior before
-reviewing integration code or workflow automation.
 
 ## Next
 
