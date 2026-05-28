@@ -1,6 +1,6 @@
 ---
-title: Verify a business registry status without sharing the full record
-description: Return a narrow status fact about a registered company without disclosing the full business record.
+title: Verify a status fact about a registered entity without sharing the full record
+description: Return a narrow status fact (active, suspended, dissolved) about a registered entity without disclosing the full source record.
 status: current
 owner: registry-legend
 source_repos:
@@ -21,9 +21,11 @@ standards_referenced:
   - json-ld
 ---
 
-Use this pattern when a relying party needs to confirm one narrow fact about a registered
-company (active, suspended, dissolved) tied to a national business number or LEI, and the
-existing API returns the full record alongside the answer.
+Use this pattern when a relying party needs to confirm one narrow status fact about a registered
+entity (active, suspended, dissolved, registration class), and the existing API returns the full
+record alongside the answer.
+The worked example below uses a national business registry; the same shape fits any registry
+that publishes a status-coded record about a registered entity.
 
 ## Starting situation
 
@@ -69,6 +71,13 @@ and internal registry notes do not appear in the response.
 For a dissolved or suspended company, the predicate returns false.
 The specific legal-status code (suspended, dissolved, struck off) can be included as a separate
 configured disclosure if the governing policy permits it.
+
+## Related patterns
+
+The same Witness predicate pattern fits an eligibility or entitlement check against a different
+registry; see
+[Verify an eligibility or entitlement fact without sharing the full record](../eligibility-or-entitlement-evidence/)
+for a social-protection worked example.
 
 ## Next
 

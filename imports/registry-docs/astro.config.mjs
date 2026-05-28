@@ -66,7 +66,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'use-cases' },
             { label: 'Legacy API', slug: 'use-cases/legacy-registry-api' },
-            { label: 'Business status', slug: 'use-cases/business-registry-status' },
+            { label: 'Status fact', slug: 'use-cases/business-registry-status' },
             { label: 'Eligibility evidence', slug: 'use-cases/eligibility-or-entitlement-evidence' },
             { label: 'Publish metadata', slug: 'use-cases/publish-registry-metadata' },
             { label: 'Inspect before integrating', slug: 'use-cases/inspect-before-integrating' },

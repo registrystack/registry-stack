@@ -29,10 +29,10 @@ Ordered by how directly the case exercises the Stack's highest-impact capabiliti
 - [Expose a legacy registry as a protected API](./legacy-registry-api/): the source is an
   Access database refreshed nightly from district offices, a pension authority needs an
   authoritative vital-status answer, and the registrar will not hand out a database credential.
-- [Verify a business registry status without sharing the full record](./business-registry-status/):
-  the procurement platform needs to confirm one thing about a supplier (are they actively
+- [Verify a status fact about a registered entity without sharing the full record](./business-registry-status/):
+  a procurement platform needs to confirm one thing about a supplier (are they actively
   registered?), and the existing API returns the beneficial-ownership chain and filing history
-  with it.
+  with it. The same shape fits any status-coded registry.
 - [Verify an eligibility or entitlement fact without sharing the full record](./eligibility-or-entitlement-evidence/):
   a school-feeding programme needs to confirm that a child's household is enrolled in the
   cash-transfer programme run by a separate ministry, without receiving the household case
