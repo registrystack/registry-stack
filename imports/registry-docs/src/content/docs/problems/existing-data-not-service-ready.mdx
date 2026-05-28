@@ -1,0 +1,105 @@
+---
+title: Existing data is not service-ready
+description: Why registry-like data needs metadata, policy, API contracts, and audit behavior before other systems can depend on it.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - ogc-api-records
+  - openapi
+  - shacl
+  - json-schema
+  - odrl
+---
+
+Useful registry-like data often exists before a modern registry platform exists.
+This page explains why those files, extracts, databases, and vendor systems are not
+service-ready until their meaning, access rules, API shape, and review trail are explicit.
+
+## The problem
+
+A registry owner may already maintain the data that another service needs.
+The source might be a spreadsheet, a CSV export, a PostgreSQL table, a Parquet file, or a
+legacy application.
+Those sources can be operationally important while still lacking the properties an
+integrator needs: field descriptions, schema contracts, public entity names, access policy,
+stable read routes, and audit behavior.
+
+Without those surfaces, every downstream use depends on private knowledge of the source.
+That makes the first integration slow and makes the next integration fragile.
+
+## Why it matters
+
+Service readiness is not the same as data existence.
+A service team needs to know which entity a route returns, which fields are exposed, which
+filters are allowed, which policy applies, and what evidence exists that a request occurred.
+A security reviewer needs to inspect the same facts without reading private source tables.
+
+When those questions are answered only in meetings or implementation notes, the registry
+owner becomes the permanent integration bottleneck.
+The source owner also loses control because ad hoc exports and copied data are harder to
+scope, revoke, and audit than configured service routes.
+
+## Why common approaches stall
+
+Common approaches try to solve the problem at the wrong layer.
+A data warehouse can make analysis easier but can also move custody away from the source
+owner.
+A generic API wrapper can expose data quickly but may leak storage names, raw columns, or
+filter behavior that was never reviewed.
+A one-time export works for a pilot but becomes stale as soon as the source changes.
+
+These approaches can be useful in local contexts.
+They stall when the same registry must support multiple authorized callers with different
+purposes, field access, freshness expectations, and audit requirements.
+
+## What Registry Stack changes
+
+Registry Stack separates source ownership from service exposure.
+Registry Manifest describes datasets, entities, fields, policies, schemas, and evidence
+offerings as portable metadata.
+Registry Relay binds that metadata to selected source data and exposes protected,
+read-only, entity-shaped routes.
+Registry Atlas can inspect published metadata before an integration is written.
+
+The result is a service surface that callers can discover and reviewers can inspect while
+the source owner keeps custody of the underlying system.
+For the broader model, see the [architecture overview](../../explanation/architecture/).
+
+## What is built today
+
+Registry Manifest renders discovery artifacts for catalogues, JSON Schemas, SHACL shapes,
+policies, and evidence offerings.
+Registry Relay can read configured CSV, XLSX, Parquet, and PostgreSQL sources, project
+declared entity fields, enforce caller scopes, and write audit records.
+Registry Atlas is a supporting inspection tool for metadata and service-discovery review.
+
+The current surfaces are documented in the
+[Registry Manifest overview](../../projects/registry-manifest/),
+[Registry Relay overview](../../projects/registry-relay/), and
+[Registry Atlas overview](../../projects/registry-atlas/).
+
+## What is future-facing or out of scope
+
+Registry Stack does not replace the source registry, clean source data automatically, or
+provide a full master data management program.
+Write APIs, provisioning workflows, stream ingestion, and automated data repair are out of
+scope for the current Registry Relay pages.
+
+Registry Forge is future-facing preparation work for data readiness.
+It is not a current product promise on this site.
+
+## Next
+
+- [Consultation flow](../../explanation/consultation-flow/)
+- [Publishing pipeline](../../explanation/publishing-pipeline/)
+- [Registry Relay API reference](../../reference/apis/registry-relay/)
+- [Expose a legacy registry as a protected API](../../use-cases/legacy-registry-api/)

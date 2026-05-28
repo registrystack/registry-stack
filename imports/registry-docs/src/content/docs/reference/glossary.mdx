@@ -68,8 +68,14 @@ Product names are always in English, including on future translated pages.
   <dt>evidence offering</dt>
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. Can point to a Relay-native verification endpoint or to an external evidence service.</dd>
 
+  <dt>evidence claim</dt>
+  <dd>Registry Stack product term for a verifiable claim, attestation, credential claim, or status assertion that Registry Witness evaluates from configured sources.</dd>
+
   <dt>evidence type list</dt>
   <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest and Registry Atlas, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
+
+  <dt>executable safeguards</dt>
+  <dd>Registry Stack product term for runtime-enforced safeguards: scoped routes, disclosure policy, audit events, machine-readable metadata, and other policy enforcement point behavior that can be checked by software.</dd>
 
   <dt>historical docs</dt>
   <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance. Historical pages are visibly marked and linked only from the historical docs index.</dd>
@@ -83,6 +89,9 @@ Product names are always in English, including on future translated pages.
   <dt>metadata manifest</dt>
   <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, and evidence offerings. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
 
+  <dt>minimized evidence</dt>
+  <dd>Registry Stack product term for an evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern.</dd>
+
   <dt>ODRL</dt>
   <dd>Open Digital Rights Language. W3C recommendation. Relay and Manifest emit ODRL Offer documents for dataset-scoped policies.</dd>
 
@@ -94,6 +103,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>registry stack</dt>
   <dd>The six related projects: <a href="../../projects/registry-platform/">Registry Platform</a>, <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-witness/">Registry Witness</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
+
+  <dt>purpose-bound request</dt>
+  <dd>Registry Stack product term for a request that carries or is evaluated against purpose limitation, policy-based access control, or context-aware authorization. Relay records the `Data-Purpose` header in audit records where present.</dd>
 
   <dt>Registry Atlas</dt>
   <dd>Browser SPA with a Rust/WASM semantic analysis engine for inspecting published service catalogue, catalog, and registry discovery artifacts. Repo slug: `registry-atlas`.</dd>
@@ -136,6 +148,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>static publication bundle</dt>
   <dd>Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, evidence offering JSON, and policy JSON-LD. Can be hosted as static files without running Registry Relay.</dd>
+
+  <dt>standards-shaped metadata</dt>
+  <dd>Registry Stack product term for machine-readable metadata emitted through formats such as DCAT, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, and OGC API Records.</dd>
 </dl>
 
 ## Style notes

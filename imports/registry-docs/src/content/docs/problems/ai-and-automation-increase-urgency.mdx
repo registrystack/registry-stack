@@ -1,0 +1,104 @@
+---
+title: AI and automation increase urgency
+description: Why generated integration code and automated workflows make registry metadata, purpose-bound access, minimization, and audit more urgent.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-platform
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - openapi
+  - shacl
+  - json-schema
+  - odrl
+  - cccev
+  - sd-jwt-vc
+---
+
+AI and automation do not change the registry problem.
+They change the speed and scale at which unsafe integrations, accidental over-sharing,
+and unreviewed semantic assumptions can spread.
+
+## The problem
+
+Generated code, workflow tools, and AI-assisted development lower the cost of connecting
+systems.
+That helps teams move faster.
+It also lowers the cost of calling a broad API, copying unneeded fields, or encoding a
+wrong semantic assumption into production code.
+
+The risk is not that AI becomes the registry.
+The risk is that integration work accelerates before the registry surface has purpose,
+scope, minimization, metadata, and audit built in.
+
+## Why it matters
+
+Automation increases the value of explicit contracts.
+A human reviewer and an automated client both need to know which route exists, which
+fields are exposed, which purpose and scope apply, which evidence shape is available, and
+what audit event will be created.
+
+Without those controls, faster integration can mean faster propagation of bad assumptions.
+The same mistake can appear in generated code, workflow jobs, API clients, and test
+fixtures.
+
+## Why common approaches stall
+
+Prompt guidance and developer review are useful.
+They stall when the API remains broad, the metadata remains incomplete, or the source
+meaning is not visible to the tool or reviewer.
+
+Generic API gateways can enforce authentication and rate limits.
+They do not, by themselves, define registry semantics, evidence offerings, disclosure
+modes, or field-level meaning.
+
+## What Registry Stack changes
+
+Registry Stack provides concrete controls that automated clients can respect and
+reviewers can inspect.
+Registry metadata makes fields, schemas, policies, services, and evidence offerings
+visible before integration code is written.
+Registry Relay exposes configured, read-only routes that callers cannot widen at request
+time.
+Registry Witness can return configured evidence responses instead of forcing callers to
+retrieve full source records.
+Audit behavior records trust-critical requests and evidence events for review.
+
+AI remains context and urgency, not a product category.
+Registry Stack does not claim to automate governance or decide data meaning.
+
+## What is built today
+
+The current docs describe Manifest metadata rendering, Relay protected read routes,
+Witness configured evidence responses, Platform audit and security primitives, and Atlas
+inspection of published artifacts.
+Those surfaces are the concrete controls named in the v2 content architecture spec.
+
+See [architecture overview](../../explanation/architecture/),
+[consultation flow](../../explanation/consultation-flow/), and
+[evidence issuance](../../explanation/evidence-issuance/).
+
+## What is future-facing or out of scope
+
+Registry Stack is not an AI orchestration product.
+It does not generate integration code, approve access, decide eligibility, or infer legal
+meaning from data.
+
+Future ecosystem guidance can explain how registry-facing metadata and evidence routes
+fit with workflow engines and AI-assisted interoperability.
+That guidance will still depend on explicit policy, reviewed semantics, and accountable
+operation.
+
+## Next
+
+- [APIs over-share records](../apis-over-share-records/)
+- [Safeguards need technical enforcement](../safeguards-need-technical-enforcement/)
+- [Registry Atlas overview](../../projects/registry-atlas/)
+- [Why safer registry surfaces matter now](../../start/safer-registry-surfaces/)

@@ -1,0 +1,74 @@
+---
+title: Prepare existing data for a future registry platform
+description: Explains how to prepare data before a future platform migration.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-platform
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - json-schema
+  - shacl
+  - cccev
+  - odrl
+---
+
+Use this page when a registry operator is not ready to move to a new platform, but wants the
+current data estate to be easier to describe, validate, inspect, and migrate later.
+The preparation work produces metadata and quality evidence; it does not claim that the future
+platform already exists as a complete registry replacement.
+
+## Model
+
+Registry Manifest is the built tool for rendering metadata and validation artifacts from profile
+fixtures.
+Registry Atlas is the built inspection tool for checking what the published metadata exposes.
+Registry Platform contains shared primitives used by other registry family components, but a
+complete future registry platform is not the same thing as the current Manifest and Atlas
+workflow.
+
+The practical preparation layer is metadata-first.
+Teams describe entities, services, requirements, evidence types, schemas, shapes, policies, and
+publisher information before moving source records.
+
+## Preparation outputs
+
+- A catalog of existing registry surfaces and responsible organizations.
+- Entity schemas and SHACL shapes that make record expectations explicit.
+- Service, requirement, and evidence metadata for discovery and review.
+- Policy metadata that states intended access constraints.
+- Inspection reports that show gaps, ambiguous fields, and missing artifacts.
+- A migration map that separates source records from integration contracts.
+
+## Why this helps migration
+
+Future platform work is easier when the source estate is already described.
+Schemas and shapes expose inconsistent fields.
+Catalog metadata separates public discovery from protected records.
+Evidence and requirement metadata clarifies which facts a service needs, rather than moving full
+records by default.
+
+This preparation also helps non-migration work.
+The same metadata can support partner onboarding, API documentation, registry inspection, and
+governance review while the existing source system remains in place.
+
+## Boundaries
+
+This page is future-facing by design.
+It describes preparation that can be done with built Manifest and Atlas behavior.
+It does not claim that Registry Platform currently provides a complete production registry system,
+migration engine, or automatic data quality remediation service.
+
+## Next
+
+- [Registry Manifest overview](../../projects/registry-manifest/)
+- [Inspect a registry before integrating](../inspect-before-integrating/)
+- [Publishing pipeline](../../explanation/publishing-pipeline/)
+- [Registry Platform overview](../../projects/registry-platform/)

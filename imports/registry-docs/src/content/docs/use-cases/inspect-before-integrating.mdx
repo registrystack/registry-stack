@@ -1,0 +1,68 @@
+---
+title: Inspect a registry before integrating
+description: Explains how to inspect a registry surface before integration.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-atlas
+  - registry-manifest
+  - registry-relay
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - ogc-api-records
+  - json-schema
+  - shacl
+  - odrl
+  - cccev
+---
+
+Use this page when an integration team needs to understand a registry surface before committing
+to client code, data sharing agreements, or production onboarding.
+Inspection turns published metadata into a reviewable map of assets, gaps, and candidate routes.
+
+## Model
+
+Registry Atlas is the built inspection tool.
+It reads published metadata, follows linked artifacts, classifies discovered assets, and reports
+what it can recognize from the catalog, schema, shape, policy, and service documents.
+
+Registry Manifest and Registry Relay are common publishers of the metadata that Atlas inspects.
+Manifest can render static bundles.
+Relay can expose metadata at runtime next to protected registry services.
+
+## What inspection can reveal
+
+- The catalog, datasets, data services, and distributions that are visible through metadata.
+- The schema and SHACL artifacts linked from those assets.
+- The policies, evidence offerings, and requirement structures that are discoverable.
+- Candidate routes for an information need, with evidence references and gaps.
+- Missing or ambiguous metadata that needs human review before integration.
+
+## What inspection cannot prove
+
+Atlas does not authorize access to a protected service.
+It does not prove that the source registry will return production data for a caller.
+It does not replace a legal or operational integration review.
+
+Atlas reports what the published artifacts say and what the strict matcher can support from those
+artifacts.
+A candidate route is evidence for integration planning, not a production approval.
+
+## Built and future-facing parts
+
+Registry Atlas already implements the inspection behavior described on this page.
+Future registry platform work may publish additional metadata surfaces for Atlas to inspect, but
+the current use case works against published metadata from Relay, Manifest, or another compatible
+registry publisher.
+
+## Next
+
+- [Inspect a registry with Atlas](../../projects/registry-atlas/inspect-a-registry/)
+- [Registry Atlas reference](../../projects/registry-atlas/reference/)
+- [Publish registry metadata](../publish-registry-metadata/)
+- [Prepare existing data for a future registry platform](../prepare-for-future-registry-platform/)

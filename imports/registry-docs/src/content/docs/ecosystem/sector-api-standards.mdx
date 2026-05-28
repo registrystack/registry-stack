@@ -1,0 +1,74 @@
+---
+title: Sector API standards
+description: How Registry Stack fits with sector API standards that define domain-specific exchange contracts for social protection, geospatial discovery, and registries.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-witness
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sp-dci
+  - ogc-api-records
+  - ogc-api-features
+  - govstack-digital-registries
+  - openapi
+  - dcat
+  - bregdcat-ap
+---
+
+Sector API standards define domain-specific contracts, while Registry Stack wraps registry sources
+with metadata, protected read routes, evidence responses, and narrow adapters where the source repos
+document them.
+
+## Ecosystem role
+
+A sector API standard can define common resources, operations, message formats, or participant
+expectations for a domain.
+Registry Stack is complementary to those standards.
+It can expose or map selected surfaces, publish metadata about the registry contract, and keep
+source-specific access controls close to the registry service.
+
+## Where overlap exists
+
+The overlap appears when a sector standard already names a registry or data exchange API.
+Registry Stack does not claim conformance to every sector profile it mentions.
+It documents specific surfaces and claim levels: emits, maps to, aligns with, or compares against.
+
+That distinction matters for implementers.
+A route that maps to a sector sync contract is different from a certified implementation of a full
+sector platform specification.
+
+## Pattern
+
+Use sector API standards when they match the domain exchange.
+Use Registry Stack to make the registry boundary explicit:
+
+- Registry Manifest publishes metadata about datasets, entities, policies, and rendered standards
+  artifacts.
+- Registry Relay exposes protected entity routes and optional sector adapters where documented.
+- Registry Witness can use configured HTTP connectors when evidence evaluation needs sector-shaped
+  source calls.
+
+The registry contract stays explicit even when the caller enters through a sector-specific API.
+
+## Standards fit
+
+The current standards register includes SP DCI as a mapped surface for Registry Relay and Registry
+Witness.
+It includes OGC API Records as an emitted catalogue-discovery surface and OGC API Features as an
+alignment surface.
+It compares Registry Relay against the GovStack Digital Registries Building Block rather than
+claiming GovStack conformance.
+OpenAPI, DCAT, and BRegDCAT-AP provide general contract and metadata layers around those sector
+surfaces.
+
+## Next
+
+- [Standards positioning](../../explanation/standards-positioning/)
+- [Standards reference](../../reference/standards/)
+- [Exchange layers](../exchange-layers/)
+- [Expose protected APIs](../../capabilities/expose-protected-apis/)

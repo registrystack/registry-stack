@@ -1,0 +1,96 @@
+---
+title: Integrations become one-off negotiations
+description: Why registry integrations repeat discovery, mapping, access review, and testing unless contracts and metadata are reusable.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - cpsv-ap
+  - openapi
+  - shacl
+  - json-schema
+  - odrl
+  - cccev
+---
+
+One registry integration often repeats the same discovery, mapping, access, and testing
+work as the last one.
+This page explains how reusable metadata, protected routes, and evidence offerings reduce
+the amount of integration knowledge that lives only in bilateral negotiations.
+
+## The problem
+
+Each new caller asks similar questions: what data exists, what fields mean, how codes are
+defined, which endpoint to call, which policy applies, and which test data or expected
+responses prove that the integration works.
+
+Without reusable contracts, the registry owner answers those questions again for each
+partner.
+The answers drift across emails, issue trackers, API client code, and deployment notes.
+
+## Why it matters
+
+Repeated negotiation slows public-service delivery and increases inconsistency.
+Two partners can integrate with the same registry and still use different field meanings,
+freshness assumptions, or disclosure expectations.
+
+The registry owner also carries the support burden.
+Every future source change needs to be communicated across separate integration histories
+instead of through published metadata and versioned contracts.
+
+## Why common approaches stall
+
+Integration templates can accelerate a known partner pattern.
+They stall when the next caller has a different legal basis, different field needs, or a
+different evidence shape.
+
+Point-to-point middleware can move data between systems.
+It stalls when the registry needs an inspectable contract that outlives one workflow job
+and can be reviewed by security, data protection, and programme teams.
+
+## What Registry Stack changes
+
+Registry Stack turns repeated integration questions into reusable artifacts.
+Registry Manifest publishes metadata and schemas.
+Registry Relay exposes protected, read-only API contracts for configured entities.
+Registry Witness publishes and serves configured evidence responses where a caller needs a
+status, predicate, selected value, or credential-shaped artifact instead of a broad record.
+Registry Atlas helps review the published artifacts before code is written.
+
+The negotiation does not disappear.
+The negotiation starts from artifacts that can be inspected, tested, and updated.
+
+## What is built today
+
+The current site documents Registry Manifest render outputs, Registry Relay route shapes,
+Registry Witness claim definitions and response formats, and Registry Atlas inspection.
+OpenAPI references are published for Relay and Witness under the reference section.
+
+See [contracts](../../reference/contracts/),
+[Registry Relay API reference](../../reference/apis/registry-relay/), and
+[Registry Witness API reference](../../reference/apis/registry-witness/).
+
+## What is future-facing or out of scope
+
+Registry Stack does not automate institutional approval, legal review, or partner
+onboarding.
+It also does not replace workflow engines, exchange layers, or sector platforms.
+
+Planned ecosystem pages can explain how registry-facing contracts fit with workflow tools
+and exchange layers.
+Those pages are positioning guidance, not new runtime behavior.
+
+## Next
+
+- [Architecture overview](../../explanation/architecture/)
+- [Registry Atlas overview](../../projects/registry-atlas/)
+- [Standards positioning](../../explanation/standards-positioning/)
+- [Let a workflow tool call governed registry services](../../use-cases/workflow-tool-governed-services/)

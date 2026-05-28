@@ -1,0 +1,49 @@
+---
+title: Describe registries
+description: How Registry Manifest describes datasets, entities, policies, forms, evidence offerings, and standards artifacts without running a service.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - odrl
+  - ogc-api-records
+---
+
+Describe registries is the metadata capability.
+The primary implementation is Registry Manifest, which compiles a portable `metadata.yaml`
+manifest into catalogs, schemas, service descriptions, policy documents, evidence offerings,
+and an `index.json` discovery entry point.
+
+The old v1 term is Publish.
+In v2 language, Publish maps to metadata description rather than deployment or data release.
+Registry Manifest does not read registry records, open an HTTP listener, or grant credentials.
+Registry Relay can also serve Manifest-rendered metadata at runtime, filtered to the authenticated
+caller's metadata scopes.
+
+Use this capability when a registry needs a machine-readable declaration of what exists, which
+standards-shaped artifacts are emitted, which evidence offerings are advertised, and which runtime
+service is expected to enforce access.
+
+## Related docs
+
+- [Publishing pipeline](../../explanation/publishing-pipeline/): portable metadata and runtime
+  metadata split.
+- [Registry Manifest overview](../../projects/registry-manifest/): renderer, validation, and profile
+  fixture model.
+- [Registry Manifest reference](../../projects/registry-manifest/reference/): manifest schema and
+  publish output artifacts.
+- [Registry Relay overview](../../projects/registry-relay/): runtime metadata publication through
+  protected services.
+- [Standards reference](../../reference/standards/): standards named by the metadata surface.

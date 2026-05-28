@@ -1,0 +1,79 @@
+---
+title: Verify a business registry status without sharing the full record
+description: Explains how to verify a business status fact without a full record.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-witness
+  - registry-relay
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - bregdcat-ap
+  - dcat
+  - openapi
+  - cccev
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+  - json-ld
+---
+
+Use this page when a relying party needs to know whether a business has a registry status, but
+does not need the full business record.
+The pattern is about business registry verification: incorporation status, active status,
+registration class, or a similar narrow fact.
+
+## Model
+
+Registry Witness is the built component that evaluates configured claims and can return a signed
+evaluation, a redacted result, or an SD-JWT VC credential.
+Registry Relay can publish metadata that tells consumers where a relevant evidence offering lives.
+Registry Manifest can publish business registry metadata using BRegDCAT-AP-shaped artifacts.
+
+In this pattern, the relying party asks for a status fact.
+The registry-facing service evaluates the configured rule against the source record and returns
+only the allowed result.
+The full business profile, ownership details, filings, addresses, or internal registry notes do
+not need to move through the relying party workflow unless the governing policy permits them.
+
+## Example facts
+
+- The business registration exists.
+- The registration status is active.
+- The business is registered for a named category.
+- The business identifier matches the issuing registry's namespace.
+- The status was evaluated at a stated time by a stated issuer.
+
+The exact fields are deployment-specific.
+The common property is that each answer is narrower than the underlying business record.
+
+## Disclosure choices
+
+Registry Witness supports different disclosure modes for a configured claim.
+A status fact can be returned as a value, a predicate, or a redacted result, depending on the
+claim definition.
+For credential flows, SD-JWT VC lets a holder present selected disclosures while keeping
+unselected credential fields hidden.
+
+The disclosure mode belongs in governance and claim configuration.
+The implementation does not make the legal decision that a relying party is entitled to a full
+record.
+
+## Boundaries
+
+The registry subject is a business, and the relying party is verifying a business registry fact
+for an administrative, compliance, procurement, licensing, or commercial workflow.
+
+This page describes built Witness, Relay, and Manifest surfaces.
+It does not claim dynamic trust-chain discovery, open federation, or automatic legal-basis
+approval.
+
+## Next
+
+- [Evidence issuance, end to end](../../explanation/evidence-issuance/)
+- [Registry Witness overview](../../projects/registry-witness/)
+- [Publishing pipeline](../../explanation/publishing-pipeline/)
+- [Publish registry metadata](../publish-registry-metadata/)

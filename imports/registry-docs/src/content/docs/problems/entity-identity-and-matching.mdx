@@ -1,0 +1,101 @@
+---
+title: Entity identity and matching are unclear
+description: Why registry exchange must carry entity keys, subject identifiers, and matching assumptions without claiming to solve foundational identity.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - shacl
+  - cccev
+  - sd-jwt-vc
+---
+
+Registry interoperability depends on knowing which entity a request or evidence response
+refers to.
+This page explains how Registry Stack can carry identity and matching assumptions while
+leaving foundational identity, deduplication, and master data management to other systems.
+
+## The problem
+
+Two registries can describe the same person, company, facility, land parcel, or license
+with different local identifiers.
+They can also contain duplicates, stale links, or records that are similar enough to match
+operationally but not strong enough to prove identity.
+
+When an API route or evidence response omits the identifier basis, downstream systems may
+treat a weak match as a strong identity assertion.
+That mistake is hard to find later because the assumption disappears into integration code.
+
+## Why it matters
+
+Identity and matching errors change the meaning of registry exchange.
+A status response is useful only if the caller knows which subject was evaluated and what
+identifier or matching rule selected the source record.
+
+The same risk appears for organizations and assets.
+A business registry status, facility registration, or license validity check can be
+misleading if the request matched the wrong local record or if the registry never published
+the matching assumptions.
+
+## Why common approaches stall
+
+Common approaches hide matching behind integration glue.
+One system sends a local ID, another system searches by name or tax number, and the
+mapping rule is stored in code or an operations playbook.
+That can work for a single trusted pair.
+It stalls when reviewers, auditors, or additional partners need to inspect what happened.
+
+Another common approach is to expect a single foundational identifier to solve every
+linkage question.
+Some deployments have such identifiers for some entities.
+Many registry domains still need local keys, source identifiers, relationship metadata,
+and documented matching assumptions.
+
+## What Registry Stack changes
+
+Registry Stack makes the entity boundary visible.
+Registry Manifest can describe entity schemas and evidence offerings.
+Registry Relay exposes entity-shaped routes rather than raw storage tables.
+Registry Witness evaluates configured claims against named subject inputs and records
+claim results.
+
+Those surfaces can carry entity keys, subject identifiers, source identifiers, and
+matching assumptions as metadata or evidence.
+Registry Stack does not decide that two records are the same entity unless the deployment
+configures that behavior in an upstream source or claim rule.
+
+## What is built today
+
+Registry Relay documents public entity routes, configured identifiers, declared fields,
+and scope-controlled reads.
+Registry Witness documents claim definitions with subject types, inputs, source bindings,
+evaluation rules, and disclosure policy.
+Registry Manifest documents entity schemas and evidence-offering metadata.
+
+See [consultation flow](../../explanation/consultation-flow/) and
+[evidence issuance](../../explanation/evidence-issuance/) for the current runtime models.
+
+## What is future-facing or out of scope
+
+Registry Stack is not a foundational identity system.
+It does not provide national ID issuance, biometric deduplication, universal entity
+resolution, or master data management.
+
+Future pages can describe patterns for carrying resolution evidence and matching metadata.
+Those patterns will still depend on deployment-specific identity and data-governance
+decisions.
+
+## Next
+
+- [Registry Relay overview](../../projects/registry-relay/)
+- [Registry Witness overview](../../projects/registry-witness/)
+- [Glossary](../../reference/glossary/)
+- Planned explanation: federation boundaries

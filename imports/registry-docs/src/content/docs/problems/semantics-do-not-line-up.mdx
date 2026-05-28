@@ -1,0 +1,99 @@
+---
+title: Semantics do not line up
+description: Why similar field names and codes can carry different assumptions, coverage, freshness, and legal meaning across registries.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - shacl
+  - json-schema
+  - json-ld
+  - cccev
+  - odrl
+---
+
+Two systems can use the same label for fields or codes while meaning different things.
+This page explains why registry exchange needs explicit semantics before data, evidence,
+or automated workflows can be reviewed with confidence.
+
+## The problem
+
+A field named `status` may refer to registration status, licensing status, programme
+enrollment, operational status, or data quality.
+A code named `active` can mean legally active, recently updated, eligible for service, or
+not suspended.
+
+Those differences are not cosmetic.
+They decide whether a downstream service can rely on the value, whether a claim is true,
+and whether a reviewer can reconstruct the basis for an answer.
+
+## Why it matters
+
+Semantics define the boundary between an interoperable service and a data copy with
+unclear meaning.
+When meaning is explicit, implementers can map fields carefully, reviewers can identify
+assumptions, and evidence responses can preserve the source meaning that supported the
+answer.
+
+When meaning is implicit, integration code becomes the semantic record.
+That makes assumptions hard to audit and harder to update.
+
+## Why common approaches stall
+
+Field mapping spreadsheets are common and often necessary.
+They stall when the mapping is disconnected from the API contract, policy surface,
+evidence offering, and runtime behavior.
+
+Shared standards can reduce ambiguity.
+They do not remove the need to say which local field maps to which concept, which value
+set is used, what freshness applies, and what the deployment does not claim.
+
+## What Registry Stack changes
+
+Registry Stack makes semantic metadata part of the registry surface.
+Registry Manifest can publish schemas, shapes, catalog metadata, service metadata,
+policies, and evidence-offering descriptions.
+Registry Relay binds declared entities and fields to runtime sources.
+Registry Witness evaluates configured claims against named source bindings.
+Registry Atlas can inspect the published graph before integration code is written.
+
+The goal is not to invent new meanings.
+The goal is to make local meaning visible enough for mapping, review, and evidence use.
+
+## What is built today
+
+Registry Manifest documents renderers for JSON Schema, SHACL, DCAT, BRegDCAT-AP,
+CPSV-AP, ODRL policy JSON-LD, and CCCEV-shaped evidence metadata.
+Registry Relay documents entity fields, allowed filters, metadata routes, and scope
+behavior.
+Registry Witness documents claim definitions and response formats.
+Registry Atlas documents strict inspection of published assets.
+
+See [standards positioning](../../explanation/standards-positioning/) and
+[standards register](../../reference/standards/).
+
+## What is future-facing or out of scope
+
+Registry Stack does not guarantee that two registries use the same meaning.
+It also does not automatically reconcile value sets, translate legal definitions, or infer
+policy from field names.
+
+Semantic review remains a human and institutional responsibility.
+The technical surface exists to make that review possible and repeatable.
+
+## Next
+
+- [Publishing pipeline](../../explanation/publishing-pipeline/)
+- [Registry Manifest reference](../../projects/registry-manifest/reference/)
+- [Registry Atlas reference](../../projects/registry-atlas/reference/)
+- [Inspect published artifacts](../../capabilities/inspect-published-artifacts/)

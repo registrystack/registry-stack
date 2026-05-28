@@ -7,6 +7,8 @@
 :root[data-theme='light'],
 :root[data-theme='dark'] {
   --registry-blue: #000091;
+  --registry-teal: #0f766e;
+  --registry-amber: #855b00;
   --registry-ink: #161616;
   --registry-body: #3a3a3a;
   --registry-muted: #6a6a6a;
@@ -241,6 +243,264 @@ h1,
   block-size: 2px;
   margin-block-start: 12px;
   background: var(--registry-blue);
+}
+
+.home-hero,
+.home-band {
+  max-inline-size: 1180px;
+}
+
+.home-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 40px;
+  align-items: stretch;
+  margin-block-start: 0;
+  border-block: 1px solid var(--registry-rule);
+  padding-block: 32px;
+}
+
+.home-kicker,
+.home-section-label {
+  margin: 0 0 12px;
+  color: var(--registry-blue);
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.home-lede {
+  max-inline-size: 760px !important;
+  margin: 0;
+  color: var(--registry-ink);
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.home-summary {
+  max-inline-size: 680px !important;
+  margin-block: 24px 0;
+  color: var(--registry-body);
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.home-fit-line {
+  max-inline-size: 660px !important;
+  margin-block: 16px 0;
+  border-inline-start: 3px solid var(--registry-teal);
+  padding-inline-start: 14px;
+  color: var(--registry-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-block-start: 28px;
+}
+
+.home-action {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 42px;
+  border: 1px solid var(--registry-rule);
+  padding: 8px 14px;
+  color: var(--registry-ink) !important;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none !important;
+}
+
+.home-action:hover {
+  border-color: var(--registry-blue);
+  color: var(--registry-blue) !important;
+}
+
+.home-action-primary {
+  border-color: var(--registry-blue);
+  background: var(--registry-blue);
+  color: #ffffff !important;
+}
+
+.home-action-primary:hover {
+  background: #ffffff;
+}
+
+.home-signal-panel {
+  display: grid;
+  border: 1px solid var(--registry-rule);
+  background:
+    linear-gradient(90deg, rgba(0, 0, 145, 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(0, 0, 145, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.home-step {
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.home-step + .home-step {
+  border-top: 1px solid var(--registry-rule);
+}
+
+.home-step-index {
+  color: var(--registry-teal);
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+}
+
+.home-step strong {
+  color: var(--registry-ink);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.home-step span:last-child {
+  color: var(--registry-body);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.home-band {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.38fr) minmax(0, 1fr);
+  gap: 36px;
+  margin-block-start: 44px;
+  border-top: 1px solid var(--registry-rule);
+  padding-block-start: 30px;
+}
+
+.home-band h2 {
+  margin-block-start: 0;
+  max-inline-size: 390px;
+  font-size: 24px;
+}
+
+.home-band h2::after {
+  inline-size: 44px;
+}
+
+.home-problem-grid,
+.home-route-grid,
+.home-boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-problem-grid a,
+.home-route-grid a {
+  display: grid;
+  gap: 10px;
+  min-block-size: 150px;
+  border: 1px solid var(--registry-rule);
+  padding: 18px;
+  color: var(--registry-body) !important;
+  text-decoration: none !important;
+}
+
+.home-problem-grid a:hover,
+.home-route-grid a:hover {
+  border-color: var(--registry-blue);
+}
+
+.home-problem-grid span,
+.home-route-grid strong {
+  color: var(--registry-ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.home-problem-grid a:nth-child(2) span,
+.home-route-grid a:nth-child(2) strong {
+  color: var(--registry-teal);
+}
+
+.home-problem-grid a:nth-child(3) span,
+.home-route-grid a:nth-child(3) strong {
+  color: var(--registry-amber);
+}
+
+.home-sequence {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: home-sequence;
+  border-block: 1px solid var(--registry-rule);
+}
+
+.home-sequence li {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 150px;
+  gap: 20px;
+  align-items: start;
+  margin: 0;
+  padding: 18px 0;
+  counter-increment: home-sequence;
+}
+
+.home-sequence li + li {
+  border-top: 1px solid var(--registry-rule);
+}
+
+.home-sequence li::before {
+  content: counter(home-sequence, decimal-leading-zero);
+  color: var(--registry-blue);
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+}
+
+.home-sequence span {
+  color: var(--registry-ink);
+  font-weight: 700;
+}
+
+.home-sequence p {
+  margin: 0;
+  max-inline-size: none !important;
+  font-size: 14px;
+}
+
+.home-sequence a {
+  color: var(--registry-blue) !important;
+  font-size: 13px;
+  text-decoration: underline !important;
+  text-underline-offset: 3px;
+}
+
+.home-boundary-grid {
+  gap: 0;
+  border: 1px solid var(--registry-rule);
+}
+
+.home-boundary-grid > div {
+  padding: 20px;
+}
+
+.home-boundary-grid > div + div {
+  border-inline-start: 1px solid var(--registry-rule);
+}
+
+.home-boundary-grid h3 {
+  margin: 0 0 12px;
+  color: var(--registry-ink);
+  font-size: 16px;
+}
+
+.home-boundary-grid ul {
+  margin: 0;
 }
 
 .sl-markdown-content :where(a) {
@@ -683,6 +943,38 @@ mobile-starlight-toc summary {
     grid-column: 2;
   }
 
+  .home-hero,
+  .home-band,
+  .home-problem-grid,
+  .home-route-grid,
+  .home-boundary-grid,
+  .home-sequence li {
+    grid-template-columns: 1fr;
+  }
+
+  .home-hero {
+    gap: 24px;
+    padding-block: 24px;
+  }
+
+  .home-band {
+    gap: 18px;
+    margin-block-start: 32px;
+  }
+
+  .home-lede {
+    font-size: 30px;
+  }
+
+  .home-summary {
+    font-size: 16px;
+  }
+
+  .home-boundary-grid > div + div {
+    border-block-start: 1px solid var(--registry-rule);
+    border-inline-start: 0;
+  }
+
   .registry-footer {
     display: grid;
   }
@@ -959,4 +1251,3 @@ mobile-starlight-toc summary {
     grid-template-columns: 1fr;
   }
 }
-

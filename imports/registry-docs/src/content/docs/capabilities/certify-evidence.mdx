@@ -1,0 +1,48 @@
+---
+title: Certify evidence
+description: How Registry Witness evaluates configured claims, controls disclosure, and issues evidence artifacts or credentials.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-witness
+  - registry-platform
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - cccev
+  - json-ld
+  - sd-jwt-vc
+  - oid4vci
+  - openapi
+  - w3c-did
+  - sp-dci
+---
+
+Certify evidence is the claim evaluation and evidence artifact capability.
+The primary implementation is Registry Witness, which evaluates configured eligibility claims
+against registry data, applies disclosure policy, and returns structured results, CCCEV-shaped
+JSON-LD, or SD-JWT VC credentials.
+
+The old v1 term is Prove.
+In v2 language, Prove maps to evidence certification: a service can attest that a configured claim
+was evaluated and can package the result for a calling program or wallet flow.
+Registry Witness does not decide program entitlement; the caller decides what a verified claim
+means for a benefit, service, or workflow.
+
+Use this capability when a system needs a yes/no predicate, a redacted result, a value-bearing
+result, delegated evaluation from a trusted peer, or credential issuance without giving the caller
+the records that produced the result.
+
+## Related docs
+
+- [Evidence issuance](../../explanation/evidence-issuance/): claim evaluation, disclosure, delegated
+  evaluation, and credential issuance.
+- [Registry Witness overview](../../projects/registry-witness/): claim model, rule types, credential
+  issuance, and v0 caveats.
+- [Configure a claim](../../projects/registry-witness/configure-a-claim/): claim configuration
+  surface.
+- [Registry Witness reference](../../projects/registry-witness/reference/): routes, config, and audit
+  details.
+- [Registry Witness API reference](../../reference/apis/registry-witness/): HTTP contract.

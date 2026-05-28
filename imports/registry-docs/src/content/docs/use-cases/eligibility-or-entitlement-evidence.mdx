@@ -1,0 +1,74 @@
+---
+title: Verify an eligibility or entitlement fact without sharing the full record
+description: Explains how to verify a narrow eligibility or entitlement fact.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-witness
+  - registry-manifest
+  - registry-lab
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - cccev
+  - cpsv-ap
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+  - json-ld
+  - openapi
+---
+
+Use this page when a service needs to know whether a person, household, organization, or asset
+meets a rule, but the service does not need the source registry record.
+The pattern keeps the question narrow and makes the evidence artifact smaller than the record.
+
+## Model
+
+Registry Witness is the built evaluator and issuer.
+It takes a subject identifier, reads configured source data, evaluates a configured rule, applies
+the configured disclosure mode, and returns a signed evaluation or credential.
+
+Registry Manifest can publish service, requirement, and evidence metadata that describes what
+facts a consumer may request.
+Registry Lab demonstrates a wallet-facing issuance flow for a specific lab scenario, but the
+pattern does not require that every deployment use a wallet.
+
+## Example facts
+
+- The subject satisfies an age, residency, licensing, or registration rule.
+- The subject has a valid entitlement at the evaluation time.
+- The subject is associated with a registered asset or case.
+- The source registry can confirm the fact without releasing the full case file.
+
+These facts are examples of claim shape, not built-in policy.
+Each deployment defines the rule, source binding, disclosure mode, credential format, and issuer
+identity.
+
+## Why this differs from record sharing
+
+Traditional record sharing gives the relying service a copy of the source material and asks the
+service to interpret it.
+The Witness pattern evaluates the rule near the source and gives the relying service the result
+the policy allows.
+
+This reduces unnecessary disclosure, but it does not eliminate governance.
+The issuing institution still owns the rule, audit trail, correction process, appeal process, and
+terms under which the relying service may request the fact.
+
+## Built and future-facing parts
+
+Registry Witness already implements claim evaluation and issuance surfaces.
+Registry Manifest already publishes requirement and evidence metadata used for discovery.
+
+Future registry platform work may make more source systems available through common services.
+That future work is separate from the current ability to issue a narrow evaluation or credential
+from a configured source.
+
+## Next
+
+- [Evidence issuance, end to end](../../explanation/evidence-issuance/)
+- [Configure a claim](../../projects/registry-witness/configure-a-claim/)
+- [Registry Lab demo flow](../../projects/registry-lab/demo-flow/)
+- [Publish registry metadata](../publish-registry-metadata/)

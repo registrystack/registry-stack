@@ -1,0 +1,71 @@
+---
+title: Publish registry metadata
+description: Explains how registry metadata supports partner discovery.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - ogc-api-records
+  - json-schema
+  - shacl
+  - odrl
+  - openapi
+  - cccev
+---
+
+Use this page when a registry needs a public or partner-visible description of what it can offer
+before an integration team writes client code.
+The metadata layer describes the registry surface without granting record access.
+
+## Model
+
+Registry Manifest is the built renderer for static metadata bundles.
+It can publish catalog, service, schema, shape, policy, and evidence metadata from profile fixtures.
+
+Registry Relay is the built runtime publisher for registry metadata.
+It can expose metadata endpoints alongside protected API routes, including links to OpenAPI,
+JSON Schema, SHACL, ODRL, DCAT-shaped catalog material, and evidence offering documents.
+
+The metadata is not the registry record.
+It describes the available datasets, services, access constraints, schema expectations, and
+verification offerings that a consumer can inspect before requesting governed access.
+
+## What metadata answers
+
+- What registry or service is being described.
+- Which organization publishes or controls the registry surface.
+- Which data services or distributions are available.
+- Which schemas, shapes, and policy documents describe the service.
+- Which evidence or verification offerings are discoverable.
+- Which standards profiles the published artifacts align with or emit.
+
+## What metadata does not answer
+
+Published metadata does not authorize a caller, disclose protected records, or prove that a
+specific person, business, asset, or entitlement exists.
+Those answers require governed service calls, Registry Witness evaluations, or both.
+
+The metadata also does not remove the need for institutional review.
+Legal basis, data sharing agreements, operational ownership, and production security controls
+remain outside the metadata document.
+
+## Built and future-facing parts
+
+Manifest and Relay already cover the metadata publication behavior described on this page.
+Future registry platform work may reuse these metadata conventions, but the value of publishing
+metadata does not depend on replacing existing registries with a new platform.
+
+## Next
+
+- [Publishing pipeline](../../explanation/publishing-pipeline/)
+- [Registry Manifest overview](../../projects/registry-manifest/)
+- [Registry Relay overview](../../projects/registry-relay/)
+- [Inspect a registry before integrating](../inspect-before-integrating/)

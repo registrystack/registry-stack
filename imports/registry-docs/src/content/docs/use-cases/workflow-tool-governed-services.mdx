@@ -1,0 +1,70 @@
+---
+title: Let a workflow tool call governed registry services
+description: Explains how workflow tools can call governed registry services.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-witness
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - dcat
+  - odrl
+  - cccev
+  - sd-jwt-vc
+  - json-schema
+---
+
+Use this page when a workflow tool needs registry answers during a service process, but the tool
+must not become the registry of record.
+The workflow calls governed services and stores only the result its process is allowed to keep.
+
+## Model
+
+Registry Relay is the protected API boundary for source registry consultations.
+Registry Witness is the claim-evaluation and credential-issuance boundary for narrower facts.
+Registry Manifest publishes the metadata that lets workflow teams discover the service contract,
+schemas, policies, and evidence offerings before integration.
+
+The workflow tool remains a consumer.
+It sends an authorized request, receives the allowed response, records the workflow decision or
+receipt, and leaves source records in the source registry.
+
+## Service choices
+
+A workflow can use different registry family surfaces for different questions.
+
+- Use Registry Relay when the workflow needs an API response from a protected registry service.
+- Use Registry Witness when the workflow needs a signed fact, redacted result, or credential.
+- Use Registry Manifest metadata when the workflow team needs to discover requirements, schemas,
+  policies, or evidence offerings before making runtime calls.
+
+These surfaces can be combined.
+For example, metadata can point a workflow team to a Witness offering, while the actual runtime
+answer comes from Witness rather than the metadata catalog.
+
+## Governance controls
+
+The workflow integration still needs institutional controls outside the code.
+Those controls include caller identity, purpose limitation, data retention, audit review,
+incident handling, and rules for what the workflow may store.
+
+Registry family components help keep the integration contract narrow.
+They do not decide whether a workflow has authority to call a service.
+
+## Built and future-facing parts
+
+Relay, Witness, and Manifest provide the built behavior described on this page.
+Future registry platform services may become additional governed endpoints, but the workflow
+pattern does not depend on that future platform.
+
+## Next
+
+- [Consultation flow](../../explanation/consultation-flow/)
+- [Evidence issuance, end to end](../../explanation/evidence-issuance/)
+- [Registry Relay reference](../../projects/registry-relay/reference/)
+- [Publish registry metadata](../publish-registry-metadata/)

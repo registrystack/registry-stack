@@ -1,0 +1,99 @@
+---
+title: Safeguards need technical enforcement
+description: Why purpose, scope, disclosure limits, audit behavior, and contract visibility need runtime and metadata surfaces.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-witness
+  - registry-platform
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - odrl
+  - cccev
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+---
+
+Policy language is necessary, but policy language does not enforce registry exchange by
+itself.
+This page explains why safeguards need inspectable metadata, configured runtime behavior,
+and audit records that reviewers can use after a trust-critical request.
+
+## The problem
+
+Registry integrations often rely on policy documents, memoranda, or access approvals that
+sit outside the technical surface.
+The API may not know the caller purpose, allowed scope, disclosure limit, or audit
+requirement.
+
+When those controls are not enforced by the runtime path, a caller can receive more data
+than the approved purpose requires or make requests that are hard to reconstruct later.
+
+## Why it matters
+
+Safeguards are operational properties.
+They depend on what the service accepts, what the service returns, what the service logs,
+and what reviewers can inspect before and after integration.
+
+This matters for both registry-service readiness and evidence exchange.
+A protected read route needs scope checks and audit behavior.
+A claim or credential path needs disclosure rules, issuer configuration, and evidence of
+the evaluation event.
+
+## Why common approaches stall
+
+Governance-only approaches can state the intended control.
+They stall when the API does not carry enough structure to enforce or audit the control.
+
+Application-only controls can work inside one system.
+They stall across institutions when the registry surface, workflow tool, exchange layer,
+wallet, and reviewer cannot inspect the same contract.
+
+## What Registry Stack changes
+
+Registry Stack moves safeguards into metadata and runtime behavior.
+Registry Manifest can publish policy and evidence-offering metadata.
+Registry Relay enforces configured scopes and writes audit records for requests.
+Registry Witness enforces configured claim rules, disclosure modes, delegated-evaluation
+peer policy, and credential issuance paths.
+Registry Platform provides shared primitives for authentication, audit envelopes, HTTP
+safety, cryptography, OIDC, and SD-JWT handling.
+
+The result is not automated governance.
+The result is a technical surface where governance choices can be configured, enforced,
+and reviewed.
+
+## What is built today
+
+The current docs describe Relay API-key and OIDC modes, dataset-scoped scopes, projected
+fields, declared filters, and tamper-evident audit records.
+They describe Witness disclosure modes, configured claim evaluation, delegated evaluation,
+credential issuance, OID4VCI routes, and audit-stamped results.
+They also describe Manifest policy and evidence-offering render outputs.
+
+See [DPI safeguards alignment](../../explanation/dpi-safeguards-alignment/),
+[Authorize callers](../../projects/registry-relay/authorize-callers/), and
+[Evidence issuance](../../explanation/evidence-issuance/).
+
+## What is future-facing or out of scope
+
+Registry Stack does not decide legal basis, institutional accountability, or programme
+eligibility.
+It also does not replace security operations, incident response, retention policy, or
+human review.
+
+The future Trust Control Plane is an operations direction, not a current v2 product
+surface.
+
+## Next
+
+- [Registry Platform overview](../../projects/registry-platform/)
+- [Registry Relay reference](../../projects/registry-relay/reference/)
+- [Registry Witness reference](../../projects/registry-witness/reference/)
+- Planned explanation: executable safeguards

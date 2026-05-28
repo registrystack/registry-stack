@@ -1,0 +1,77 @@
+---
+title: Workflow engines
+description: How Registry Stack fits with workflow engines that run service processes, tasks, approvals, timers, and automated decisions.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-platform
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - cccev
+  - sd-jwt-vc
+  - oid4vci
+  - odrl
+---
+
+Workflow engines execute process state, while Registry Stack provides registry-facing contracts,
+consultation routes, evidence responses, and audit behavior for the steps that need authoritative
+facts.
+
+## Ecosystem role
+
+A workflow engine can assign tasks, wait for events, call services, branch on results, and record
+process history.
+Those engines are strongest when each external call has a narrow, inspectable contract.
+
+Registry Stack is complementary.
+Registry Relay gives a workflow step a scoped, read-only route rather than a broad registry API.
+Registry Witness gives a workflow step a configured evidence response rather than a copied source
+record.
+Registry Manifest describes the entity fields, schemas, policies, and evidence offerings before the
+workflow is deployed.
+
+## Where overlap exists
+
+The overlap appears around rule evaluation, eligibility checks, and audit logs.
+Some workflow engines include decision tables or rules engines, and they may record task-level audit
+events.
+
+Registry Witness is not a general decision engine.
+It evaluates configured claims against configured sources and returns a result or credential-shaped
+artifact.
+The workflow engine still owns process state, human review, escalation, retries, and final service
+decisions.
+
+## Pattern
+
+Use the workflow engine to own the process.
+Use Registry Stack at the registry boundary:
+
+- Registry Manifest describes the callable registry surface.
+- Registry Relay exposes route-level scopes and field projection.
+- Registry Witness evaluates purpose-specific claims.
+- Registry Platform supplies shared auth, audit, crypto, and HTTP primitives to runtime services.
+
+This pattern lets a workflow reference a stable registry contract without learning source tables,
+storage paths, or full registry records.
+
+## Standards fit
+
+OpenAPI gives workflow connectors an inspectable HTTP contract.
+CCCEV can express evidence and claim result shape.
+SD-JWT VC and OpenID for Verifiable Credential Issuance (OID4VCI) apply when a workflow needs a
+credential issuance path rather than an internal service call.
+ODRL can publish policy metadata for the exposed data service.
+
+## Next
+
+- [Consultation flow](../../explanation/consultation-flow/)
+- [Evidence issuance](../../explanation/evidence-issuance/)
+- [Workflow tool governed services](../../use-cases/workflow-tool-governed-services/)
+- [AI-assisted interoperability](../ai-assisted-interoperability/)

@@ -1,6 +1,6 @@
 ---
-title: Quickstart
-description: Audience routing for the registry stack docs, organized by goal.
+title: Choose where to start
+description: Choose the Registry Stack page that matches the question you are trying to answer.
 status: current
 owner: registry-legend
 source_repos:
@@ -10,64 +10,42 @@ source_repos:
   - registry-atlas
   - registry-lab
   - registry-platform
-last_reviewed: "2026-05-25"
+last_reviewed: "2026-05-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Stay in these docs for cross-project questions: which project owns what, how the stack
-fits together, what each standard claim means, what contracts are published.
-Jump to the owning repository when you need implementation specifics, runtime configuration,
-or service-internal contribution workflow.
+Use this page when you are new to Registry Stack and need the shortest route to a useful answer.
+The docs are organized around questions, not around repository names.
 
-Pick the path that matches your goal.
+## The short model
 
-## I want to integrate with a registry
+Registry Stack has three current product surfaces.
+Registry Relay makes existing registry-like data available through protected, read-only APIs.
+Registry metadata describes the registry surface before an integration is written.
+Registry Witness answers configured evidence questions without exposing a full source record.
 
-Start with [Commitments and capabilities](../what-we-built/) for the mental model of what the registry stack does.
-Then read [Registry Relay](/projects/registry-relay/) to understand the entity-shaped API routes,
-auth scopes, and the `Data-Purpose` header requirement.
-Check the [contracts index](/reference/contracts/) for the OpenAPI documents and generated schema
-artifacts you will integrate against.
-If you need to call a Witness endpoint to verify eligibility or receive a credential, read
-[Registry Witness](/projects/registry-witness/) next.
-Run [your first call](../your-first-call/) to get a working request before writing integration
-code.
+Stay in these docs for the problem model, product boundaries, cross-project architecture,
+standards evidence, and API contracts.
+Go to an owning repository when you need source code, runtime configuration, contribution
+workflow, or implementation issues.
 
-## I'm evaluating standards conformance
+## Choose by question
 
-Start with the [standards register](/reference/standards/) to see which standards each project
-claims to emit, implement, or align with, and at what claim level.
-Then use [Registry Atlas](/projects/registry-atlas/) to inspect a live or demo registry's
-published artifacts in a browser: Atlas indexes the DCAT, CPSV-AP, CCCEV, SHACL, JSON Schema,
-OpenAPI, and OGC Records artifacts and shows gaps.
-For the per-standard explanation of how each artifact is generated, read
-[Publishing pipeline](/explanation/publishing-pipeline/).
-For the claim evaluation and credential issuance flow, read
-[Evidence issuance](/explanation/evidence-issuance/).
+| If your question is | Start with | Then read |
+| --- | --- | --- |
+| What exists today, and where are the boundaries? | [capabilities](../../capabilities/) | [project map](../../map/boundaries-and-map/) |
+| Why do safer registry surfaces matter now? | [Why safer registry surfaces matter now](../safer-registry-surfaces/) | [AI and automation increase urgency](../../problems/ai-and-automation-increase-urgency/) |
+| How do existing files, extracts, databases, or legacy systems become usable? | [Existing data is not service-ready](../../problems/existing-data-not-service-ready/) | [Legacy registry API use case](../../use-cases/legacy-registry-api/) |
+| How does a caller discover what a registry provides? | [Registry capabilities are hard to discover](../../problems/registry-capabilities-hard-to-discover/) | [Describe registries](../../capabilities/describe-registries/) |
+| How can a service verify a status or claim without receiving the full record? | [APIs over-share records](../../problems/apis-over-share-records/) | [Certify evidence](../../capabilities/certify-evidence/) |
+| How do I review safeguards? | [Safeguards need technical enforcement](../../problems/safeguards-need-technical-enforcement/) | [Audit and operate](../../capabilities/audit-and-operate/) |
+| Which repository owns which part? | [Project map](../../map/boundaries-and-map/) | The relevant project overview |
 
-## I'm contributing to a project repo
+## Next
 
-Read [Commitments and capabilities](../what-we-built/) for the boundary definitions: which project owns which
-question.
-Then go to the owning project page ([Registry Manifest](/projects/registry-manifest/),
-[Registry Relay](/projects/registry-relay/),
-[Registry Witness](/projects/registry-witness/),
-[Registry Atlas](/projects/registry-atlas/),
-[Registry Platform](/projects/registry-platform/), or
-[Registry Lab](/projects/registry-lab/)) and follow the link to the source repository.
-These docs own cross-project explanation.
-Substantive code work, issues, and pull requests happen in the owning repos.
-
-## I'm operating a deployment
-
-Read [Registry Relay](/projects/registry-relay/) for source binding, auth configuration, scope
-policy, and the `/metadata/*` publication surface.
-Read [Registry Witness](/projects/registry-witness/) for claim configuration, disclosure policy,
-and the OID4VCI issuance flow.
-For a local end-to-end reference topology, read [Registry Lab](/projects/registry-lab/): it
-wires three Relays, four Witnesses, Postgres, Zitadel, an OpenFn sidecar, and a static
-metadata publisher into a single Docker Compose file with narrated smoke tests.
-Registry Lab is not production deployment guidance, but the topology and configuration files are
-a readable reference for how the services connect.
+- [Capabilities](../../capabilities/)
+- [Why safer registry surfaces matter now](../safer-registry-surfaces/)
+- [Legacy registry API use case](../../use-cases/legacy-registry-api/)
+- [Project map](../../map/boundaries-and-map/)

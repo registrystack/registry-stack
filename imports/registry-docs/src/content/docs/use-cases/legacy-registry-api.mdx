@@ -1,0 +1,82 @@
+---
+title: Expose a legacy registry as a protected API
+description: Explains how to wrap a legacy registry with governed API access.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - dcat
+  - json-schema
+  - shacl
+  - odrl
+  - w3c-did
+---
+
+Use this page when a registry already exists, but partners need a controlled API instead of
+database access, file exports, or manual record lookups.
+The pattern keeps the source registry authoritative and puts Registry Relay at the integration
+boundary.
+
+## Model
+
+Registry Relay is the built component for this use case.
+It exposes protected consultation routes, publishes OpenAPI descriptions, and can attach metadata
+that describes schemas, shapes, policies, provenance, and discoverable access services.
+
+The legacy registry stays behind Relay.
+Relay owns the external HTTP contract, caller authorization, request validation, response shaping,
+and audit-facing provenance fields.
+The source system continues to own records, correction workflows, retention rules, and operational
+availability.
+
+Registry Manifest is the preparation and publication layer.
+It can render the catalog, schema, SHACL, and policy artifacts that describe the Relay surface.
+Those artifacts help partners understand the API before they receive production access.
+
+## What is built
+
+- Registry Relay can publish an OpenAPI contract for the consultation API.
+- Registry Relay can expose metadata that links datasets, data services, schemas, shapes, policies,
+  and provenance identifiers.
+- Registry Relay can protect calls at the API boundary instead of exposing the backing database.
+- Registry Manifest can render static metadata bundles that describe the registry-facing API
+  surface.
+
+## What remains deployment-specific
+
+The deployment still defines the legal basis, allowed callers, rate limits, production identity
+provider, data minimization rules, and incident response process.
+Relay provides the integration boundary; the operating institution supplies the governance that
+makes access legitimate.
+
+## Why this pattern is useful
+
+Legacy systems often cannot adopt a new registry platform during the first integration phase.
+A protected API wrapper lets an institution narrow access to specific read paths while preserving
+the source registry's operational ownership.
+
+The partner receives a contract and a governed endpoint.
+The registry operator avoids bulk exports and avoids giving integrators direct access to internal
+tables or administrative screens.
+
+## Related boundaries
+
+This page describes built Relay and Manifest behavior.
+It does not claim that Registry Relay replaces the legacy registry, synchronizes all source data,
+or implements a future registry platform.
+
+For future platform preparation, see
+[Prepare existing data for a future registry platform](../prepare-for-future-registry-platform/).
+
+## Next
+
+- [Publishing pipeline](../../explanation/publishing-pipeline/)
+- [Authorize callers](../../projects/registry-relay/authorize-callers/)
+- [Registry Relay reference](../../projects/registry-relay/reference/)
+- [Prepare existing data for a future registry platform](../prepare-for-future-registry-platform/)

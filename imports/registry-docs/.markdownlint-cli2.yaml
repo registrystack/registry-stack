@@ -25,6 +25,7 @@ config:
       - ContractsTable
       - StandardsTable
       - LegendList
+      - HomeLanding
 globs:
   - "**/*.{md,mdx}"
 ignores:

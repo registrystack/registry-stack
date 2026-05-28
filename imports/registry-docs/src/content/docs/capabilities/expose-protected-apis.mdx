@@ -1,0 +1,50 @@
+---
+title: Expose protected APIs
+description: How Registry Relay exposes sensitive registry sources through scoped, read-only HTTP APIs without exposing storage internals.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-platform
+  - registry-manifest
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - shacl
+  - json-schema
+  - odrl
+  - openapi
+  - ogc-api-records
+  - sp-dci
+---
+
+Expose protected APIs is the runtime consultation capability.
+The primary implementation is Registry Relay, a config-driven HTTP gateway that maps CSV, XLSX,
+Parquet, or PostgreSQL sources to public entity routes while keeping table identifiers, raw SQL,
+and source paths out of public contracts.
+
+The old v1 term is Consult.
+In v2 language, Consult maps to protected API exposure: caller authentication, route-level scopes,
+field projection, declared filters, aggregates, caller-scoped metadata, and tamper-evident audit
+records.
+Registry Platform supplies shared auth, OIDC, HTTP security, outbound HTTP, crypto, SD-JWT, and
+audit primitives.
+
+Use this capability when a partner system needs lawful read access to registry facts without
+direct database access, write paths, or unscoped bulk export.
+Relay is not an open-data portal.
+
+## Related docs
+
+- [Consultation flow](../../explanation/consultation-flow/): authentication, authorization, query
+  shaping, and audit sequence.
+- [Registry Relay overview](../../projects/registry-relay/): source types, entity model, auth modes,
+  metadata routes, and caveats.
+- [Authorize callers](../../projects/registry-relay/authorize-callers/): scope assignment and key
+  provisioning.
+- [Registry Relay reference](../../projects/registry-relay/reference/): route, config, and audit
+  details.
+- [Registry Relay API reference](../../reference/apis/registry-relay/): HTTP contract.

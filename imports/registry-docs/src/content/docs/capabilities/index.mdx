@@ -1,0 +1,62 @@
+---
+title: Capabilities lookup
+description: A lightweight lookup for the Registry Legend v2 capability names and the projects that implement them.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+  - registry-platform
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - odrl
+  - openapi
+  - sd-jwt-vc
+  - oid4vci
+---
+
+The v2 capability names describe what the registry family lets an operator or reviewer do:
+describe registries, expose protected APIs, certify evidence, inspect published artifacts, and
+audit and operate the runtime surface.
+These pages are lookup entries, not narrative entry pages.
+
+The older terms still appear in v1 navigation and existing explanations.
+Use this mapping when moving between v1 and v2 language.
+
+| Old term | v2 capability | Primary project |
+| --- | --- | --- |
+| Publish | Describe registries | Registry Manifest |
+| Consult | Expose protected APIs | Registry Relay |
+| Prove | Certify evidence | Registry Witness |
+| n/a | Inspect published artifacts | Registry Atlas |
+| n/a | Audit and operate | Registry Relay, Registry Witness, Registry Platform |
+
+## Capability pages
+
+- [Describe registries](./describe-registries/): metadata, portable manifests, and generated
+  discovery artifacts.
+- [Expose protected APIs](./expose-protected-apis/): caller-scoped, read-only registry access
+  through Registry Relay.
+- [Certify evidence](./certify-evidence/): claim evaluation, disclosure control, and credential
+  issuance through Registry Witness.
+- [Inspect published artifacts](./inspect-published-artifacts/): Registry Atlas as a supporting
+  inspection tool for generated metadata.
+- [Audit and operate](./audit-and-operate/): audit envelopes, shared Platform primitives, and the
+  future-facing Trust Control Plane boundary.
+
+## Related docs
+
+- [Choose where to start](../start/quickstart/): route into the docs by question.
+- [Architecture overview](../explanation/architecture/): system model and project boundaries.
+- [Ownership boundaries and map](../map/boundaries-and-map/): ownership across the registry family.
+- [Contracts reference](../reference/contracts/): contract inventory and source-of-truth notes.

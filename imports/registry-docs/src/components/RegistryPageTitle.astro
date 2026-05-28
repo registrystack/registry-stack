@@ -18,14 +18,14 @@ const sectionHref = new Map([
 ]);
 
 const currentLabels = new Map([
-  ['/start/what-we-built/', 'Commitments and capabilities'],
-  ['/start/quickstart/', 'Quickstart'],
+  ['/start/quickstart/', 'Choose where to start'],
   ['/start/your-first-call/', 'Your first call'],
   ['/map/boundaries-and-map/', 'Boundaries and map'],
   ['/reference/apis/', 'API reference'],
 ]);
 
 const parts = path.split('/').filter(Boolean);
+const isHome = path === '/';
 const section = parts[0] ? sectionLabels.get(parts[0]) : undefined;
 const current = currentLabels.get(path) ?? starlightRoute.entry.data.title;
 const isWide = starlightRoute.entry.data.wide === true;
@@ -42,15 +42,17 @@ const isWide = starlightRoute.entry.data.wide === true;
   }`}></style>
 )}
 
-<nav class="registry-breadcrumb" aria-label="Breadcrumb">
-  <a href={import.meta.env.BASE_URL}>Docs</a>
-  {section && <span aria-hidden="true"> / </span>}
-  {section && sectionHref.has(parts[0]) && (
-    <a href={`${import.meta.env.BASE_URL}${sectionHref.get(parts[0])}`}>{section}</a>
-  )}
-  {section && !sectionHref.has(parts[0]) && <span>{section}</span>}
-  <span aria-hidden="true"> / </span>
-  <span aria-current="page">{current}</span>
-</nav>
+{!isHome && (
+  <nav class="registry-breadcrumb" aria-label="Breadcrumb">
+    <a href={import.meta.env.BASE_URL}>Docs</a>
+    {section && <span aria-hidden="true"> / </span>}
+    {section && sectionHref.has(parts[0]) && (
+      <a href={`${import.meta.env.BASE_URL}${sectionHref.get(parts[0])}`}>{section}</a>
+    )}
+    {section && !sectionHref.has(parts[0]) && <span>{section}</span>}
+    <span aria-hidden="true"> / </span>
+    <span aria-current="page">{current}</span>
+  </nav>
+)}
 
-<h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>
+{!isHome && <h1 id={PAGE_TITLE_ID}>{starlightRoute.entry.data.title}</h1>}

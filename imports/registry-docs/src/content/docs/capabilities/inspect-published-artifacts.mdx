@@ -1,0 +1,46 @@
+---
+title: Inspect published artifacts
+description: How Registry Atlas helps reviewers inspect generated registry metadata and run strict capability checks over published artifacts.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-atlas
+  - registry-manifest
+  - registry-relay
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - openapi
+  - ogc-api-records
+---
+
+Inspect published artifacts is the review support capability.
+The primary supporting tool is Registry Atlas, a browser application and proxy that fetches
+published catalogs and related metadata, classifies the artifacts, and runs strict capability
+queries over accepted machine terms.
+
+Registry Atlas supports the Describe registries loop: Registry Manifest renders the artifacts,
+Registry Relay can publish scoped runtime metadata, and Atlas inspects what a registry actually
+emits.
+Atlas does not infer intent from natural language in v0.1, and the governance workflow for
+reviewed capability assertions is not yet implemented.
+
+Use this capability when a reviewer or integrator needs to inspect DCAT, CPSV-AP, CCCEV, SHACL,
+JSON Schema, OpenAPI, or OGC Records outputs before depending on a registry integration.
+
+## Related docs
+
+- [Registry Atlas overview](../../projects/registry-atlas/): inspector model, proxy behavior, and
+  strict capability engine.
+- [Inspect a registry](../../projects/registry-atlas/inspect-a-registry/): artifact inspection and
+  strict capability query workflow.
+- [Registry Atlas reference](../../projects/registry-atlas/reference/): discovery terms, envelope
+  schema, fixtures, and build commands.
+- [Architecture overview](../../explanation/architecture/): where Atlas sits in the registry family.
+- [Contracts reference](../../reference/contracts/): capability envelope and related contract entries.

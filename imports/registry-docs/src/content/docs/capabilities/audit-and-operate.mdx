@@ -1,0 +1,47 @@
+---
+title: Audit and operate
+description: How Registry Relay, Registry Witness, and Registry Platform support auditability and operational consistency, with the Trust Control Plane labeled as future-facing.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-relay
+  - registry-witness
+  - registry-platform
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - w3c-did
+  - sd-jwt-vc
+  - oid4vci
+---
+
+Audit and operate covers the shared operational behavior that keeps Registry Relay and Registry
+Witness reviewable in production-like deployments.
+Relay writes audit records for authenticated metadata, row, aggregate, evidence-verification, and
+admin requests.
+Witness writes audit records for claim evaluation, credential issuance, and related request
+handling.
+
+Registry Platform supplies shared primitives that both services consume: auth helpers, OIDC
+verification, audit envelopes, HTTP security middleware, outbound HTTP policy, crypto helpers,
+SD-JWT support, and test fixtures.
+Product-specific route behavior, scopes, config files, and policy decisions stay in Registry Relay
+or Registry Witness.
+
+Trust Control Plane is future-facing.
+It is the label for a later governance and operational control surface around trust policy,
+reviewed assertions, and cross-service oversight.
+It is not yet supported as a product page or running service in the current docs set.
+
+## Related docs
+
+- [Consultation flow](../../explanation/consultation-flow/): Relay request authorization and audit
+  sequence.
+- [Evidence issuance](../../explanation/evidence-issuance/): Witness evaluation, disclosure, and
+  audit model.
+- [Registry Platform overview](../../projects/registry-platform/): shared primitives and boundaries.
+- [Registry Platform reference](../../projects/registry-platform/reference/): crate APIs and consumer
+  responsibilities.
+- [Ownership boundaries and map](../../map/boundaries-and-map/): service and primitive ownership.

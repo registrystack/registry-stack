@@ -1,0 +1,99 @@
+---
+title: Registry capabilities are hard to discover
+description: Why teams need machine-readable metadata for registry ownership, fields, policies, services, and evidence offerings before integration starts.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-atlas
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - ogc-api-records
+  - openapi
+  - shacl
+  - json-schema
+  - odrl
+  - cccev
+---
+
+Registry discovery fails when capabilities live in people, slide decks, or one-off API
+guides instead of inspectable metadata.
+This page explains why discovery has to cover ownership, fields, services, policy, and
+evidence offerings before a caller writes integration code.
+
+## The problem
+
+An integrator often cannot answer basic questions from a stable source:
+which registry exists, who owns the registry, which entities and fields are available,
+which public services the registry supports, which policies apply, and which evidence a
+caller can request.
+
+The data may exist and the institution may be willing to collaborate.
+The capability is still hard to discover if the access route, schema, policy, and evidence
+options are not published in forms that tools can inspect.
+
+## Why it matters
+
+Discovery is a control surface.
+It lets an implementer check fit before writing code, lets a reviewer inspect what will be
+exposed, and lets a registry owner publish the same facts to multiple partners.
+
+When discovery is weak, every integration starts from private negotiation.
+Teams repeat the same questions about fields, codes, API paths, and access conditions.
+Reviewers see the integration late, after assumptions have already moved into code.
+
+## Why common approaches stall
+
+PDF catalogues and human-readable API guides are useful for orientation.
+They stall when a workflow tool, API client, or review workbench needs structured facts:
+schema links, policy links, service requirements, evidence types, access endpoints, and
+machine-readable field definitions.
+
+Central service catalogues can help an institution find systems.
+They are not enough when the registry-facing details remain outside the catalogue or are
+not kept in sync with the runtime API.
+
+## What Registry Stack changes
+
+Registry Stack treats metadata as a first product surface.
+Registry Manifest renders a portable publication bundle from a single metadata manifest.
+Registry Relay can expose metadata routes with caller scoping.
+Registry Atlas can fetch, classify, and inspect the published artifacts.
+
+This changes discovery from a meeting-driven phase into an artifact-driven phase.
+The registry owner can publish what the registry says it offers, and an authorized caller
+can compare that claim with runtime routes and evidence-offering metadata.
+
+## What is built today
+
+Registry Manifest documents renderers for Data Catalog Vocabulary (DCAT), BRegDCAT-AP,
+Core Public Service Vocabulary Application Profile (CPSV-AP), SHACL, JSON Schema, ODRL
+policy documents, OGC API Records item bodies, and evidence-offering metadata.
+Registry Relay documents metadata routes and scope-controlled access.
+Registry Atlas documents a service-first inspection model for published artifacts.
+
+See the [publishing pipeline](../../explanation/publishing-pipeline/),
+[Registry Manifest overview](../../projects/registry-manifest/), and
+[Registry Atlas overview](../../projects/registry-atlas/).
+
+## What is future-facing or out of scope
+
+Registry Stack does not promise a universal catalogue of all registries.
+It provides a way for a registry or registry programme to publish and inspect its own
+metadata.
+
+Dynamic partner onboarding, cross-government discovery governance, and automatic approval
+of access requests remain deployment and governance concerns.
+
+## Next
+
+- [Standards register](../../reference/standards/)
+- [Registry Atlas: inspect a registry](../../projects/registry-atlas/inspect-a-registry/)
+- [Registry Relay reference](../../projects/registry-relay/reference/)
+- [Describe registries](../../capabilities/describe-registries/)

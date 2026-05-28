@@ -1,0 +1,80 @@
+---
+title: Semantic standards
+description: How Registry Stack uses semantic standards to describe registries, services, evidence, schemas, policies, and discovery artifacts.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+  - registry-lab
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - json-ld
+  - odrl
+  - ogc-api-records
+  - openapi
+---
+
+Semantic standards give registry metadata a shared vocabulary, while Registry Stack packages those
+vocabularies into artifacts that implementers can inspect, validate, and serve.
+
+## Ecosystem role
+
+Standards bodies define vocabularies, profiles, and protocols.
+Registry Stack does not replace those standards.
+It uses selected standards to describe registry datasets, public services, requirements, evidence
+offerings, policies, schemas, and API contracts.
+
+Registry Manifest renders portable metadata artifacts.
+Registry Relay can serve metadata at runtime, scoped to caller visibility.
+Registry Witness can render evidence-shaped results.
+Registry Atlas inspects published metadata artifacts.
+
+## Where overlap exists
+
+Overlap appears when a standard already defines a catalogue, schema, policy, or evidence shape.
+Registry Stack does not introduce a competing vocabulary for those concepts.
+It provides project-specific configuration, rendering, runtime binding, and audit behavior around
+the standards surfaces.
+
+Claim levels matter.
+Some surfaces emit a standard-shaped artifact.
+Some only align with, map to, or compare against a standard.
+The standards register keeps those differences explicit.
+
+## Pattern
+
+Use semantic standards as the shared language.
+Use Registry Stack to connect that language to working artifacts:
+
+- Registry metadata for datasets, entities, fields, policies, services, and evidence offerings
+- SHACL and JSON Schema artifacts for validation and field shape
+- OpenAPI contracts for runtime HTTP routes
+- CCCEV-shaped evidence responses where claim results need semantic evidence context
+
+This pattern keeps the registry contract inspectable before code generation, workflow automation, or
+cross-institution integration begins.
+
+## Standards fit
+
+DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, JSON-LD, ODRL, OGC API Records, and OpenAPI
+cover different parts of the metadata and runtime contract.
+Registry Stack combines them where each standard has a documented surface.
+It does not claim one universal registry ontology.
+
+## Next
+
+- [Standards positioning](../../explanation/standards-positioning/)
+- [Standards reference](../../reference/standards/)
+- [Describe registries](../../capabilities/describe-registries/)
+- [AI-assisted interoperability](../ai-assisted-interoperability/)
