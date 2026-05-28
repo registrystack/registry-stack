@@ -20,59 +20,74 @@ standards_referenced:
   - odrl
 ---
 
-Useful registry-like data often exists before a modern registry platform exists.
-This page explains why those files, extracts, databases, and vendor systems are not
-service-ready until their meaning, access rules, API shape, and review trail are explicit.
+A district focal point in the Ministry of Education updates a school directory spreadsheet
+every quarter. The deworming team emails for the latest copy. The exam board emails for
+the latest copy. The EMIS pilot emails for the latest copy. Three months later, two of
+those teams are publishing numbers that do not match the focal point's records, and nobody
+can say which list is authoritative.
 
 ## The problem
 
-A registry owner may already maintain the data that another service needs.
-The source might be a spreadsheet, a CSV export, a PostgreSQL table, a Parquet file, or a
-legacy application.
-Those sources can be operationally important while still lacking the properties an
-integrator needs: field descriptions, schema contracts, public entity names, access policy,
-stable read routes, and audit behavior.
+The data exists and is being used. What is missing is a single place to ask for the current
+version, on the owner's terms.
 
-Without those surfaces, every downstream use depends on private knowledge of the source.
-That makes the first integration slow and makes the next integration fragile.
+Every new integration starts with an email, a meeting, or a copy. Every integration ends
+with a private copy living in someone else's system, beyond the original owner's ability
+to audit, version, or revoke. The list of sources looks technical (spreadsheets, CSV
+exports, Parquet files, PostgreSQL tables, legacy applications), but the problem is
+institutional: there is no public contract for who can ask, for what, with what freshness,
+and on what authority.
 
 ## Why it matters
 
-Service readiness is not the same as data existence.
-A service team needs to know which entity a route returns, which fields are exposed, which
-filters are allowed, which policy applies, and what evidence exists that a request occurred.
-A security reviewer needs to inspect the same facts without reading private source tables.
+The data owner becomes the permanent integration bottleneck. Every new caller is a meeting,
+an email thread, and a one-off agreement. The first integration takes months; the second
+re-runs the same negotiation; the third finds out the field meanings have drifted in the
+meantime.
 
-When those questions are answered only in meetings or implementation notes, the registry
-owner becomes the permanent integration bottleneck.
-The source owner also loses control because ad hoc exports and copied data are harder to
-scope, revoke, and audit than configured service routes.
+The owner also loses control of what was shared. Copies of the spreadsheet land in other
+ministries' systems, processed by tools the original owner cannot see. Asking those callers
+to "use the new version" is a request, not a control.
+
+A reviewer arriving later finds no record of who asked, when, for what purpose, or what
+was disclosed. The integrations work. The owner cannot say who has the current data, who
+has a stale copy, or whether anyone is still using it at all.
 
 ## Why common approaches stall
 
-Common approaches try to solve the problem at the wrong layer.
-A data warehouse can make analysis easier but can also move custody away from the source
-owner.
-A generic API wrapper can expose data quickly but may leak storage names, raw columns, or
-filter behavior that was never reviewed.
-A one-time export works for a pilot but becomes stale as soon as the source changes.
+**Data warehouses** centralise the data for analysis but turn the warehouse team into the
+new gatekeeper. The source owner loses visibility into how the data is being used
+downstream, and the analytical copy drifts from the operational source.
 
-These approaches can be useful in local contexts.
-They stall when the same registry must support multiple authorized callers with different
-purposes, field access, freshness expectations, and audit requirements.
+**Generic API wrappers** put the source online quickly. They also expose internal column
+names, storage layout, and filter behavior that nobody reviewed. The first security review
+usually finds them.
+
+**One-time exports** are perfect for a pilot and broken by the second source change. By the
+time the third integration team requests the data, the export script lives on one laptop
+and nobody is sure when it last ran.
+
+All three work locally. They stall when the same registry must serve multiple callers with
+different purposes, field access, freshness expectations, and audit requirements.
 
 ## What Registry Stack changes
 
-Registry Stack separates source ownership from service exposure.
-Registry Manifest describes datasets, entities, fields, policies, schemas, and evidence
-offerings as portable metadata.
-Registry Relay binds that metadata to selected source data and exposes protected,
-read-only, entity-shaped routes.
-Registry Atlas can inspect published metadata before an integration is written.
+The source stays where it is. The contract over it becomes public.
 
-The result is a service surface that callers can discover and reviewers can inspect while
-the source owner keeps custody of the underlying system.
-For the broader model, see the [architecture overview](../../explanation/architecture/).
+**Registry Manifest** publishes the description of what the registry actually offers:
+which datasets, which entities, which fields are authoritative, which policy applies,
+which evidence shapes are available.
+
+**Registry Relay** binds that description to the underlying source and serves it as
+protected, read-only, entity-shaped routes. Callers authorise at the API layer; the source
+owner does not ship copies.
+
+**Registry Atlas** lets integrators and reviewers inspect the published description before
+any code is written.
+
+The school directory now has a public contract: who may ask, for what, with what freshness,
+on what authority, and with what audit trail. The spreadsheet still lives where it has
+always lived. For the broader model, see the [architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

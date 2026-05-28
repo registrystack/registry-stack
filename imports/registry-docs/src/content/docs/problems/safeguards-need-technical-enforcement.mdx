@@ -20,54 +20,65 @@ standards_referenced:
   - w3c-did
 ---
 
-Policy language is necessary, but policy language does not enforce registry exchange by
-itself.
-This page explains why safeguards need inspectable metadata, configured runtime behavior,
-and audit records that reviewers can use after a trust-critical request.
+A medical licensing authority signs a data-sharing agreement with a large insurance company:
+the practitioner registry may be queried to verify credentials for empanelment, and for
+that purpose only. The API the insurer calls has no purpose field, no scope narrower than
+"authenticated as the insurer," and an audit log limited to HTTP access times. A year later,
+an inspector asked to confirm the insurer respected the agreement has nowhere to look.
 
 ## The problem
 
-Registry integrations often rely on policy documents, memoranda, or access approvals that
-sit outside the technical surface.
-The API may not know the caller purpose, allowed scope, disclosure limit, or audit
-requirement.
+The policy exists. The runtime cannot see it.
 
-When those controls are not enforced by the runtime path, a caller can receive more data
-than the approved purpose requires or make requests that are hard to reconstruct later.
+Registry integrations often rest on policy documents, signed agreements, or access
+approvals that sit outside the API. The route the caller actually hits does not know the
+caller's purpose, allowed scope, disclosure limit, or audit requirement. When the runtime
+cannot see the safeguard, the safeguard is enforced by hope.
 
 ## Why it matters
 
-Safeguards are operational properties.
-They depend on what the service accepts, what the service returns, what the service logs,
-and what reviewers can inspect before and after integration.
+A safeguard that lives only in a signed document is not a control. It is a description of
+an expectation. The reviewer cannot see whether the expectation held; the registry owner
+cannot point to evidence; the caller cannot prove they stayed inside the line.
 
-This matters for both registry-service readiness and evidence exchange.
-A protected read route needs scope checks and audit behavior.
-A claim or credential path needs disclosure rules, issuer configuration, and evidence of
-the evaluation event.
+The reviewer's question is not "was there a policy?" but "what did the API actually accept,
+return, and record?" Without a runtime answer, every audit becomes a conversation about
+what people remember.
 
 ## Why common approaches stall
 
-Governance-only approaches can state the intended control.
-They stall when the API does not carry enough structure to enforce or audit the control.
+**Paper agreements** state the intended control. They stall the moment a request arrives
+at a runtime that cannot read the agreement, enforce its limits, or record what was
+disclosed against it.
 
-Application-only controls can work inside one system.
-They stall across institutions when the registry surface, workflow tool, exchange layer,
-wallet, and reviewer cannot inspect the same contract.
+**Application-side checks** can work inside a single system. They stall the moment the
+registry, the workflow tool, the exchange layer, and the reviewer each have a different
+copy of "what the policy was supposed to be."
+
+**API gateway rules** can authenticate the caller and rate-limit them. They do not say what
+purpose was authorised, what scope is allowed, or what was disclosed, and the access logs
+they produce are not the kind of audit record a reviewer can read.
 
 ## What Registry Stack changes
 
-Registry Stack moves safeguards into metadata and runtime behavior.
-Registry Manifest can publish policy and evidence-offering metadata.
-Registry Relay enforces configured scopes and writes audit records for requests.
-Registry Witness enforces configured claim rules, disclosure modes, delegated-evaluation
-peer policy, and credential issuance paths.
-Registry Platform provides shared primitives for authentication, audit envelopes, HTTP
-safety, cryptography, OIDC, and SD-JWT handling.
+The agreement does not change. The runtime starts knowing what it says.
 
-The result is not automated governance.
-The result is a technical surface where governance choices can be configured, enforced,
-and reviewed.
+**Registry Manifest** publishes the policy and evidence-offering metadata the deployment is
+operating under. Reviewers, callers, and operators can read the same contract.
+
+**Registry Relay** enforces configured caller scopes and writes a tamper-evident audit
+record for each request: who asked, when, for what, against which dataset.
+
+**Registry Witness** enforces configured claim rules, disclosure modes, and credential
+issuance paths. The evaluation event is itself recorded.
+
+**Registry Platform** provides the shared primitives (authentication, audit envelopes,
+cryptography, SD-JWT handling) that make those guarantees consistent across components.
+
+An inspector asking "did the insurer respect the agreement?" now has a record to inspect.
+Registry Stack does not decide what the agreement should say; it makes the agreement
+enforceable and the enforcement reviewable. For the broader model, see the
+[architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

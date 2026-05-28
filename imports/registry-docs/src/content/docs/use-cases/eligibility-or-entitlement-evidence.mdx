@@ -1,6 +1,6 @@
 ---
 title: Verify an eligibility or entitlement fact without sharing the full record
-description: Explains how to verify a narrow eligibility or entitlement fact.
+description: Return a signed evaluation of an eligibility rule without disclosing the underlying source record.
 status: current
 owner: registry-legend
 source_repos:
@@ -20,51 +20,63 @@ standards_referenced:
   - openapi
 ---
 
-Use this page when a service needs to know whether a person, household, organization, or asset
-meets a rule, but the service does not need the source registry record.
-The pattern keeps the question narrow and makes the evidence artifact smaller than the record.
+## Starting situation
 
-## Model
+A land administration authority maintains a smallholder-plot registry covering 120,000 parcels
+across six provinces.
+A rural-credit scheme needs to confirm, before approving a loan, that the applicant holds a
+registered plot title in their name.
+The credit scheme needs a yes/no answer against a national land-parcel identifier.
+It does not need the plot boundaries, transaction history, or co-ownership details.
 
-Registry Witness is the built evaluator and issuer.
-It takes a subject identifier, reads configured source data, evaluates a configured rule, applies
-the configured disclosure mode, and returns a signed evaluation or credential.
+## What you set up
+
+Configure a Registry Witness claim for the title-holder fact.
+The claim definition names the source binding (the parcel registry table), the rule (a valid
+registered title exists for the subject identifier), the disclosure mode (predicate: true/false),
+and the issuer identifier.
 
 Registry Manifest can publish service, requirement, and evidence metadata that describes what
 facts a consumer may request.
-Registry Lab demonstrates a wallet-facing issuance flow for a specific lab scenario, but the
-pattern does not require that every deployment use a wallet.
+A consumer reads the evidence offering document to understand the subject identifier format,
+the claim scope, and the issuer before making runtime calls.
 
-## Example facts
+Registry Lab demonstrates a wallet-facing issuance flow that fits this pattern, but a wallet is
+not required.
+The evaluation endpoint works without a wallet-based credential flow when the relying service
+calls Witness directly.
 
-- The subject satisfies an age, residency, licensing, or registration rule.
-- The subject has a valid entitlement at the evaluation time.
-- The subject is associated with a registered asset or case.
-- The source registry can confirm the fact without releasing the full case file.
+## What a caller does
 
-These facts are examples of claim shape, not built-in policy.
-Each deployment defines the rule, source binding, disclosure mode, credential format, and issuer
-identity.
+The credit-scheme workflow sends an authorized request to the Witness evaluation endpoint,
+passing the national land-parcel identifier as the subject and naming the title-holder claim.
 
-## Why this differs from record sharing
+For a credential flow, the applicant receives an SD-JWT VC.
+They present only the title-holder disclosure to the credit scheme, keeping co-ownership details
+and plot-boundary fields in the unselected credential attributes.
 
-Traditional record sharing gives the relying service a copy of the source material and asks the
-service to interpret it.
-The Witness pattern evaluates the rule near the source and gives the relying service the result
-the policy allows.
+## What the caller gets back
 
-This reduces unnecessary disclosure, but it does not eliminate governance.
-The issuing institution still owns the rule, audit trail, correction process, appeal process, and
-terms under which the relying service may request the fact.
+A signed evaluation containing: the subject identifier, the predicate result (title registered:
+true or false), the evaluation timestamp, and the issuer identifier.
 
-## Built and future-facing parts
+The plot record, boundaries, co-owner names, transaction history, and internal registry notes
+do not appear in the response.
 
-Registry Witness already implements claim evaluation and issuance surfaces.
-Registry Manifest already publishes requirement and evidence metadata used for discovery.
+## What is in scope, what is not
 
-Future registry platform work may make more source systems available through common services.
-That future work is separate from the current ability to issue a narrow evaluation or credential
-from a configured source.
+This pattern covers: evaluating a narrow eligibility or entitlement rule near the source
+registry, returning a predicate or signed credential, and publishing requirement and evidence
+metadata for discovery.
+
+The fact returned is narrower than the source record.
+The issuing institution owns the rule, the audit trail, the correction process, and the terms
+under which the relying service may request the fact.
+
+This pattern does not cover: full record sharing, automatic determination of legal entitlement,
+or credential wallet infrastructure.
+Future registry platform work may make more source systems available through common services;
+that work is separate from the current ability to evaluate a configured claim.
 
 ## Next
 

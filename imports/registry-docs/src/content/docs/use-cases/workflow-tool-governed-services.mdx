@@ -1,6 +1,6 @@
 ---
 title: Let a workflow tool call governed registry services
-description: Explains how workflow tools can call governed registry services.
+description: Connect a workflow tool to registry services so it gets answers scoped to its authorization without becoming a copy of the source registry.
 status: current
 owner: registry-legend
 source_repos:
@@ -19,48 +19,62 @@ standards_referenced:
   - json-schema
 ---
 
-Use this page when a workflow tool needs registry answers during a service process, but the tool
-must not become the registry of record.
-The workflow calls governed services and stores only the result its process is allowed to keep.
+## Starting situation
 
-## Model
+A farmer registry holds 80,000 smallholder households across four regions in a PostgreSQL table.
+An extension-service workflow tool issues input vouchers to registered farmers, scoped by region
+and active-season programme.
+The workflow tool needs to confirm registration status and region assignment for each applicant.
+The registry operator will not give the tool a database credential; it must call a governed
+service and store only the result its process is authorized to keep.
 
-Registry Relay is the protected API boundary for source registry consultations.
-Registry Witness is the claim-evaluation and credential-issuance boundary for narrower facts.
-Registry Manifest publishes the metadata that lets workflow teams discover the service contract,
-schemas, policies, and evidence offerings before integration.
+## What you set up
+
+Deploy Registry Relay with a consultation route that accepts a farmer registration number and
+returns the authorized fields: registration status, assigned region, and season flag.
+Scope the route so the extension-service caller can read only those fields and only for the
+regions its operator role covers.
+
+Configure a Registry Witness claim for the active-registration predicate if the workflow needs a
+signed yes/no answer rather than a field set.
+Use Registry Manifest to publish service, schema, and policy metadata that the workflow team
+can read before starting integration.
 
 The workflow tool remains a consumer.
 It sends an authorized request, receives the allowed response, records the workflow decision or
-receipt, and leaves source records in the source registry.
+receipt, and leaves source records in the farmer registry.
 
-## Service choices
+## What a caller does
 
-A workflow can use different registry family surfaces for different questions.
+The workflow tool sends an authorized GET or POST to the Relay consultation route, passing the
+farmer registration number and the caller's scoped token.
+If the workflow needs a signed fact, it calls the Witness evaluation endpoint instead and
+receives a predicate or credential.
 
-- Use Registry Relay when the workflow needs an API response from a protected registry service.
-- Use Registry Witness when the workflow needs a signed fact, redacted result, or credential.
-- Use Registry Manifest metadata when the workflow team needs to discover requirements, schemas,
-  policies, or evidence offerings before making runtime calls.
+A multi-step flow is possible: use Manifest metadata to discover the service contract, use
+Relay to retrieve the region field, use Witness to receive a signed active-registration
+predicate, and record both results in the workflow audit log.
 
-These surfaces can be combined.
-For example, metadata can point a workflow team to a Witness offering, while the actual runtime
-answer comes from Witness rather than the metadata catalog.
+## What the caller gets back
 
-## Governance controls
+From Relay: a JSON response containing the authorized fields and a provenance object naming the
+issuing registry and evaluation timestamp.
 
-The workflow integration still needs institutional controls outside the code.
-Those controls include caller identity, purpose limitation, data retention, audit review,
-incident handling, and rules for what the workflow may store.
+From Witness: a signed evaluation containing the subject identifier, the predicate result, the
+evaluation timestamp, and the issuer identifier.
 
-Registry family components help keep the integration contract narrow.
-They do not decide whether a workflow has authority to call a service.
+The full household record, internal registry notes, and correction history do not appear in
+either response.
 
-## Built and future-facing parts
+## What is in scope, what is not
 
-Relay, Witness, and Manifest provide the built behavior described on this page.
-Future registry platform services may become additional governed endpoints, but the workflow
-pattern does not depend on that future platform.
+This pattern covers: a workflow tool calling Relay for a scoped field response, calling Witness
+for a signed fact, and using Manifest metadata to discover the service contract.
+
+It does not cover: the workflow tool acting as a registry, storing source records, or inheriting
+registry-of-record status.
+Caller identity, purpose limitation, data retention, audit review, and rules for what the
+workflow may store are deployment-specific governance controls outside the registry family.
 
 ## Next
 

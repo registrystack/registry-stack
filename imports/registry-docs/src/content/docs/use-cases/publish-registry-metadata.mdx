@@ -1,6 +1,6 @@
 ---
 title: Publish registry metadata
-description: Explains how registry metadata supports partner discovery.
+description: Publish an inspectable description of a registry surface so partners can discover what it offers before requesting access.
 status: current
 owner: registry-legend
 source_repos:
@@ -21,47 +21,57 @@ standards_referenced:
   - cccev
 ---
 
-Use this page when a registry needs a public or partner-visible description of what it can offer
-before an integration team writes client code.
-The metadata layer describes the registry surface without granting record access.
+## Starting situation
 
-## Model
+A ministry of health operates a health facility registry covering 4,200 public and private
+facilities across twelve districts.
+Three external systems need to integrate: a supply-chain platform, a patient-referral router, and
+an audit tool from a donor programme.
+Each team asks the same questions before any integration work starts: What fields does the registry
+expose? Which facilities are in which districts? What access controls apply?
+The ministry wants one canonical place to answer those questions without opening record-level access
+first.
 
-Registry Manifest is the built renderer for static metadata bundles.
-It can publish catalog, service, schema, shape, policy, and evidence metadata from profile fixtures.
+## What you set up
 
-Registry Relay is the built runtime publisher for registry metadata.
-It can expose metadata endpoints alongside protected API routes, including links to OpenAPI,
-JSON Schema, SHACL, ODRL, DCAT-shaped catalog material, and evidence offering documents.
+Write profile fixtures that describe the registry: the publisher organization, the dataset, the
+data service, the access rules, the field schema, and any evidence offerings.
+Run Registry Manifest to render a static metadata bundle from those fixtures.
+The bundle can include a DCAT catalog, a JSON Schema for the facility record, an SHACL shape, and
+an ODRL policy document.
 
-The metadata is not the registry record.
-It describes the available datasets, services, access constraints, schema expectations, and
-verification offerings that a consumer can inspect before requesting governed access.
+Publish the bundle to a static host or configure Registry Relay to expose the metadata artifacts
+alongside its protected consultation routes.
 
-## What metadata answers
+Registry Manifest handles the rendering.
+Registry Relay handles the runtime metadata endpoint, if you use one.
+Neither component requires you to open record access first.
 
-- What registry or service is being described.
-- Which organization publishes or controls the registry surface.
-- Which data services or distributions are available.
-- Which schemas, shapes, and policy documents describe the service.
-- Which evidence or verification offerings are discoverable.
-- Which standards profiles the published artifacts align with or emit.
+## What a caller does
 
-## What metadata does not answer
+An integration team fetches the catalog document or navigates the published artifact links.
+They read the service description, check the schema for expected fields, review the policy document
+for access constraints, and identify which evidence offering matches their information need.
+They complete this inspection before requesting a data sharing agreement or writing client code.
 
-Published metadata does not authorize a caller, disclose protected records, or prove that a
-specific person, business, asset, or entitlement exists.
-Those answers require governed service calls, Registry Witness evaluations, or both.
+## What the caller gets back
 
-The metadata also does not remove the need for institutional review.
+A set of static or hosted documents: a catalog record, a data service description, a JSON Schema,
+an SHACL shape, a policy document, and links to any evidence or requirement metadata.
+The caller sees what the registry describes itself as offering.
+They do not receive record-level data.
+
+## What is in scope, what is not
+
+This pattern covers: publishing a machine-readable, inspectable description of a registry surface.
+
+It does not cover: authorizing access to protected records, proving that any specific facility or
+entity exists, or replacing legal review.
+Metadata publication answers "what can this registry offer and under what constraints" not
+"here are the records."
+
 Legal basis, data sharing agreements, operational ownership, and production security controls
 remain outside the metadata document.
-
-## Built and future-facing parts
-
-Manifest and Relay already cover the metadata publication behavior described on this page.
-Future registry platform work may reuse these metadata conventions, but the value of publishing
-metadata does not depend on replacing existing registries with a new platform.
 
 ## Next
 

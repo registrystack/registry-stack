@@ -22,20 +22,43 @@ standards_referenced:
 ---
 
 Expose protected APIs is the runtime consultation capability.
-The primary implementation is Registry Relay, a config-driven HTTP gateway that maps CSV, XLSX,
-Parquet, or PostgreSQL sources to public entity routes while keeping table identifiers, raw SQL,
-and source paths out of public contracts.
+The primary implementation is [Registry Relay](../../projects/registry-relay/), a config-driven HTTP
+gateway that maps CSV, XLSX, Parquet, or PostgreSQL sources to public entity routes while keeping
+table identifiers, raw SQL, and source paths out of public contracts.
 
 The old v1 term is Consult.
 In v2 language, Consult maps to protected API exposure: caller authentication, route-level scopes,
 field projection, declared filters, aggregates, caller-scoped metadata, and tamper-evident audit
 records.
-Registry Platform supplies shared auth, OIDC, HTTP security, outbound HTTP, crypto, SD-JWT, and
-audit primitives.
-
-Use this capability when a partner system needs lawful read access to registry facts without
-direct database access, write paths, or unscoped bulk export.
 Relay is not an open-data portal.
+
+## What it does
+
+Registry Relay provides:
+
+- Authenticated, scoped entity lookup and aggregate routes over CSV, XLSX, Parquet, or PostgreSQL.
+- Field projection and declared filters so callers receive only the fields their scope allows.
+- Caller-scoped metadata routes derived from the published Manifest.
+- Tamper-evident audit records for every request.
+
+[Registry Platform](../../projects/registry-platform/) supplies shared auth, OIDC, HTTP security,
+outbound HTTP, crypto, SD-JWT, and audit primitives that Relay builds on.
+
+## Primary project
+
+[Registry Relay](../../projects/registry-relay/): source types, entity model, auth modes, metadata
+routes, and caveats.
+
+## How to use it
+
+Configure a source connector, define entity routes, and assign caller scopes.
+See [Authorize callers](../../projects/registry-relay/authorize-callers/) for scope assignment and
+key provisioning.
+See the [Relay API reference](../../reference/apis/registry-relay/) for the HTTP contract.
+
+Example: a facility registry operated by a national health authority exposes
+`GET /clinics/{id}` to a regional licensing office, scoped to a caller token for that region,
+returning only the fields the policy allows.
 
 ## Related docs
 

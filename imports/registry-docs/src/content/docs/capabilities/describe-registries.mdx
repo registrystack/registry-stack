@@ -22,19 +22,42 @@ standards_referenced:
 ---
 
 Describe registries is the metadata capability.
-The primary implementation is Registry Manifest, which compiles a portable `metadata.yaml`
+The primary implementation is [Registry Manifest](../../projects/registry-manifest/), which compiles a portable `metadata.yaml`
 manifest into catalogs, schemas, service descriptions, policy documents, evidence offerings,
 and an `index.json` discovery entry point.
 
 The old v1 term is Publish.
 In v2 language, Publish maps to metadata description rather than deployment or data release.
-Registry Manifest does not read registry records, open an HTTP listener, or grant credentials.
+
+## What it produces
+
+Registry Manifest renders:
+
+- A DCAT/BregDCAT-AP catalog and dataset entries.
+- CPSV-AP service description.
+- CCCEV evidence offering definitions.
+- SHACL and JSON Schema shape files.
+- ODRL policy documents.
+- An `index.json` discovery entry point consumed by Registry Atlas.
+
 Registry Relay can also serve Manifest-rendered metadata at runtime, filtered to the authenticated
 caller's metadata scopes.
+Registry Manifest does not read registry records, open an HTTP listener, or grant credentials.
 
-Use this capability when a registry needs a machine-readable declaration of what exists, which
-standards-shaped artifacts are emitted, which evidence offerings are advertised, and which runtime
-service is expected to enforce access.
+## Primary project
+
+[Registry Manifest](../../projects/registry-manifest/): renderer, validation, and profile fixture model.
+
+## How to use it
+
+Start with the [manifest schema reference](../../projects/registry-manifest/reference/).
+To publish, run the Manifest compiler against your `metadata.yaml`.
+To inspect the output, use [Registry Atlas](../../projects/registry-atlas/).
+To serve runtime metadata to authenticated callers, configure [Registry Relay](../../projects/registry-relay/).
+
+Example: a property registry run by a national land authority publishes a manifest declaring its
+`parcels` dataset, the parcel-identifier field, the freshness window, and the evidence offerings
+available against it.
 
 ## Related docs
 

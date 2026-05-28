@@ -1,6 +1,6 @@
 ---
 title: Expose a legacy registry as a protected API
-description: Explains how to wrap a legacy registry with governed API access.
+description: Wrap a legacy registry with a governed, caller-scoped API boundary without replacing the source system.
 status: current
 owner: registry-legend
 source_repos:
@@ -18,61 +18,60 @@ standards_referenced:
   - w3c-did
 ---
 
-Use this page when a registry already exists, but partners need a controlled API instead of
-database access, file exports, or manual record lookups.
-The pattern keeps the source registry authoritative and puts Registry Relay at the integration
-boundary.
+## Starting situation
 
-## Model
+A civil registration authority maintains birth and death records in a Microsoft Access database
+refreshed nightly from district offices.
+A social-insurance authority needs to confirm vital-status for pension continuations, but the
+registrar will not give it direct database access.
+The registrar wants a narrow, auditable read path that leaves the source database untouched.
 
-Registry Relay is the built component for this use case.
-It exposes protected consultation routes, publishes OpenAPI descriptions, and can attach metadata
-that describes schemas, shapes, policies, provenance, and discoverable access services.
+## What you set up
 
-The legacy registry stays behind Relay.
-Relay owns the external HTTP contract, caller authorization, request validation, response shaping,
-and audit-facing provenance fields.
-The source system continues to own records, correction workflows, retention rules, and operational
-availability.
+Deploy Registry Relay in front of the Access export or a read replica.
+Configure a consultation route that accepts a national identifier and returns only the fields the
+policy allows (alive/deceased flag, date of last update, issuing district).
 
-Registry Manifest is the preparation and publication layer.
-It can render the catalog, schema, SHACL, and policy artifacts that describe the Relay surface.
-Those artifacts help partners understand the API before they receive production access.
+Registry Relay owns the external HTTP contract, caller authorization, request validation,
+response shaping, and the provenance fields that go into audit records.
+The source database continues to own records, correction workflows, retention rules, and
+operational availability.
 
-## What is built
+Use Registry Manifest to render an OpenAPI description, a JSON Schema, an SHACL shape, and an
+ODRL policy document for that route.
+Publish them as a static metadata bundle or expose them through a Relay metadata endpoint.
+Partners can read those artifacts before they write a single line of client code.
 
-- Registry Relay can publish an OpenAPI contract for the consultation API.
-- Registry Relay can expose metadata that links datasets, data services, schemas, shapes, policies,
-  and provenance identifiers.
-- Registry Relay can protect calls at the API boundary instead of exposing the backing database.
-- Registry Manifest can render static metadata bundles that describe the registry-facing API
-  surface.
+## What a caller does
 
-## What remains deployment-specific
+The social-insurance workflow sends an authorized GET request to the Relay consultation route,
+passing the national identifier as a path or query parameter.
+The caller authenticates with the identity provider the registry operator has configured.
 
-The deployment still defines the legal basis, allowed callers, rate limits, production identity
-provider, data minimization rules, and incident response process.
-Relay provides the integration boundary; the operating institution supplies the governance that
-makes access legitimate.
+## What the caller gets back
 
-## Why this pattern is useful
+Relay evaluates the authorized scope, queries the source, and returns a JSON response containing
+only the disclosed fields.
+A provenance object in the response names the issuing registry, the evaluation timestamp, and the
+route identifier.
+The full civil record, internal district notes, and correction history do not appear in the
+response.
 
-Legacy systems often cannot adopt a new registry platform during the first integration phase.
-A protected API wrapper lets an institution narrow access to specific read paths while preserving
-the source registry's operational ownership.
+## What is in scope, what is not
 
-The partner receives a contract and a governed endpoint.
-The registry operator avoids bulk exports and avoids giving integrators direct access to internal
-tables or administrative screens.
+This pattern covers: placing a governed read-only HTTP boundary in front of a legacy source,
+publishing an OpenAPI contract, and attaching metadata that describes schemas, shapes, and
+policies.
 
-## Related boundaries
+It does not cover: replacing the legacy system, synchronizing all source fields, or managing
+write-back corrections.
+Caller identity, legal basis, rate limits, and data sharing agreements are deployment concerns
+outside Registry Relay's scope.
 
-This page describes built Relay and Manifest behavior.
-It does not claim that Registry Relay replaces the legacy registry, synchronizes all source data,
-or implements a future registry platform.
-
-For future platform preparation, see
-[Prepare existing data for a future registry platform](../prepare-for-future-registry-platform/).
+For evidence that is narrower than a field set (a single yes/no predicate), see
+[Verify a business registry status without sharing the full record](../business-registry-status/)
+or
+[Verify an eligibility or entitlement fact without sharing the full record](../eligibility-or-entitlement-evidence/).
 
 ## Next
 

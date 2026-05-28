@@ -1,18 +1,18 @@
 <section class="home-hero" aria-label="Registry Stack overview">
   <div class="home-hero-copy">
-    <p class="home-kicker">For registry owners, integrators, and data protection reviewers</p>
+    <p class="home-kicker">For decision-makers, registry owners, integrators, and ecosystem partners</p>
     <h1 class="home-lede">
-      Use the registries you already have, without exposing more data than needed.
+      Serve the registries you already have. Share only what each request requires.
     </h1>
     <p class="home-summary">
-      Registry Stack puts a governed registry-facing layer in front of spreadsheets, extracts,
-      databases, and legacy systems: metadata people can inspect, read-only APIs callers can use,
-      evidence responses that avoid default full-record sharing, and audit trails reviewers can
-      follow.
+      Registry Stack sits in front of the spreadsheets, extracts, databases, and legacy systems you
+      already operate. It publishes inspectable metadata, serves protected read-only APIs, returns
+      evidence shaped to the question instead of whole records, and records audit trails reviewers
+      can follow.
     </p>
     <p class="home-fit-line">
       Not a workflow engine, exchange layer, wallet, or replacement registry. Registry Stack makes
-      existing registry data serviceable, inspectable, and safer to use.
+      existing registry data serviceable, inspectable, and reviewable.
     </p>
     <div class="home-actions" aria-label="Primary paths">
       <a class="home-action home-action-primary" href="./use-cases/legacy-registry-api/">Expose existing data</a>
@@ -50,15 +50,15 @@
       Data exists in files, extracts, databases, or legacy systems, but other services cannot
       depend on a clear, approved interface.
     </a>
-    <a href="./problems/registry-capabilities-hard-to-discover/">
-      <span>No inspectable meaning</span>
-      Integrators cannot see fields, schemas, policies, evidence offerings, or confidence
-      boundaries before writing code.
-    </a>
     <a href="./problems/apis-over-share-records/">
       <span>Too much disclosure</span>
       Callers need a status or evidence response, but broad record APIs move more data than the
       purpose requires.
+    </a>
+    <a href="./problems/safeguards-need-technical-enforcement/">
+      <span>No technical enforcement</span>
+      Data-sharing agreements describe intended access on paper. The API itself has no scopes,
+      no purpose field, no disclosure limits, no audit record.
     </a>
     <a href="./problems/ai-and-automation-increase-urgency/">
       <span>Unsafe connections get cheaper</span>
@@ -71,30 +71,30 @@
 <section class="home-band home-sequence-band" aria-labelledby="home-sequence-title">
   <div>
     <p class="home-section-label">The operating model</p>
-    <h2 id="home-sequence-title">Start with the registry surface, then govern what crosses it.</h2>
+    <h2 id="home-sequence-title">Three steps. In order: describe, expose, certify.</h2>
   </div>
   <ol class="home-sequence">
     <li>
-      <span>Make existing registries usable</span>
+      <span>Describe the registry</span>
       <p>
-        Registry Relay exposes protected, read-only, entity-shaped routes without moving source
-        ownership into a new central system.
-      </p>
-      <a href="./capabilities/expose-protected-apis/">Expose protected APIs</a>
-    </li>
-    <li>
-      <span>Make meaning inspectable</span>
-      <p>
-        Registry metadata describes fields, schemas, policies, services, and evidence offerings so
-        people and tools can review the contract before integration.
+        Registry metadata names the fields, schemas, policies, services, and evidence offerings the
+        registry actually publishes. Other teams can read the contract before integrating.
       </p>
       <a href="./capabilities/describe-registries/">Describe registries</a>
     </li>
     <li>
-      <span>Return the evidence needed</span>
+      <span>Expose it safely</span>
       <p>
-        Registry Witness evaluates configured claims and returns the evidence shape the workflow
-        needs: status, predicate, selected value, or supported credential.
+        Registry Relay serves protected, read-only, entity-shaped routes over the source data.
+        Callers authorize, scope, and audit at the API layer, not at the source.
+      </p>
+      <a href="./capabilities/expose-protected-apis/">Expose protected APIs</a>
+    </li>
+    <li>
+      <span>Return only the evidence the call needs</span>
+      <p>
+        Registry Witness evaluates configured claims and returns the shape the caller is entitled
+        to: a status, predicate, selected value, or signed credential.
       </p>
       <a href="./capabilities/certify-evidence/">Certify evidence</a>
     </li>
@@ -117,7 +117,7 @@
     </a>
     <a href="./use-cases/business-registry-status/">
       <strong>Service integrator</strong>
-      <span>Use the business registry lens for evidence without social-protection assumptions.</span>
+      <span>Verify a company status or licence without pulling the full record.</span>
     </a>
     <a href="./ecosystem/exchange-layers/">
       <strong>Ecosystem partner</strong>
@@ -145,7 +145,7 @@
       <ul>
         <li>Does not replace exchange layers, workflow engines, wallets, or public-service platforms.</li>
         <li>Does not solve foundational identity, deduplication, or semantic governance by itself.</li>
-        <li>Uses AI as urgency and context, not as a product pillar.</li>
+        <li>Treats AI-assisted clients as integration pressure, not as a product feature.</li>
       </ul>
     </div>
   </div>

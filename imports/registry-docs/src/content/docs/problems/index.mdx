@@ -1,0 +1,55 @@
+---
+title: Problems Registry Stack addresses
+description: Operational pain points that Registry Stack is designed to solve, organized so you can find your situation before exploring the stack.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+  - registry-platform
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+These are the failures the registry-stack family was built around. Read the page that
+matches what you are seeing. Each one names the problem, walks through why it recurs, and
+says what Registry Stack changes (and where it stops).
+
+## Problem pages
+
+Ordered by how directly Registry Stack changes the problem.
+
+- [Existing data is not service-ready](./existing-data-not-service-ready/): the data lives
+  in a spreadsheet or a database, three teams email for copies, and three months later
+  nobody can say which list is authoritative.
+- [APIs over-share records](./apis-over-share-records/): the caller needs a yes/no, and the
+  only available API hands them the whole record.
+- [Safeguards need technical enforcement](./safeguards-need-technical-enforcement/): the
+  data-sharing agreement is signed; the API has no purpose field, no scopes, no audit
+  record, and the reviewer has nowhere to look.
+- [Integrations become one-off negotiations](./one-off-integrations/): every new caller
+  asks the same questions, gets the same explanations in a fresh email thread, and the
+  fourth integration costs as much as the first.
+- [Registry capabilities are hard to discover](./registry-capabilities-hard-to-discover/):
+  integrators cannot see fields, schemas, or endpoints until they have signed an agreement
+  and read a PDF nobody is sure still matches the runtime.
+- [Semantics do not line up](./semantics-do-not-line-up/): two registries expose a field
+  called `status` with a code `active` and mean different things by it; the integration
+  code becomes the de facto definition.
+- [Entity identity and matching are unclear](./entity-identity-and-matching/): a registry
+  answers "owner confirmed" without saying which record was matched, on what fields, or how
+  confident the match was.
+- [AI and automation increase urgency](./ai-and-automation-increase-urgency/): AI-assisted
+  developers ship a dozen integrations a week against a broad API, none scoping purpose
+  and none producing an audit trail.
+
+## Related
+
+- [Capabilities](../capabilities/): what Registry Stack lets an operator or reviewer do.
+- [Use cases](../use-cases/): worked examples organized by role and situation.
+- [Architecture overview](../explanation/architecture/): system model and project
+  boundaries.

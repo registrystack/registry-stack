@@ -1,6 +1,6 @@
 ---
 title: Prepare existing data for a future registry platform
-description: Explains how to prepare data before a future platform migration.
+description: Describe, validate, and inspect an existing registry data estate so it is ready to migrate or federate later.
 status: current
 owner: registry-legend
 source_repos:
@@ -20,51 +20,65 @@ standards_referenced:
   - odrl
 ---
 
-Use this page when a registry operator is not ready to move to a new platform, but wants the
-current data estate to be easier to describe, validate, inspect, and migrate later.
-The preparation work produces metadata and quality evidence; it does not claim that the future
-platform already exists as a complete registry replacement.
+## Starting situation
 
-## Model
+A professional licensing authority records active licenses for 35,000 practitioners across six
+regulated sectors in a set of spreadsheets and a legacy licensing application.
+Leadership has committed to moving to a modern platform in three years, but no migration contract
+is signed yet.
+The authority wants to use the preparation window to describe the data estate, expose schema
+inconsistencies, and produce artifacts that will be useful regardless of which platform it
+eventually adopts.
 
-Registry Manifest is the built tool for rendering metadata and validation artifacts from profile
-fixtures.
-Registry Atlas is the built inspection tool for checking what the published metadata exposes.
-Registry Platform contains shared primitives used by other registry family components, but a
-complete future registry platform is not the same thing as the current Manifest and Atlas
-workflow.
+## What you set up
 
-The practical preparation layer is metadata-first.
-Teams describe entities, services, requirements, evidence types, schemas, shapes, policies, and
-publisher information before moving source records.
+Write Registry Manifest profile fixtures that describe each sector's license dataset: the
+publisher, the dataset, the data service (even if it is currently only an export), the field
+schema, and the access policy.
 
-## Preparation outputs
+Run Manifest to render static metadata bundles: a DCAT catalog, JSON Schema per sector, SHACL
+shapes that make field expectations explicit, and ODRL policy stubs.
 
-- A catalog of existing registry surfaces and responsible organizations.
-- Entity schemas and SHACL shapes that make record expectations explicit.
-- Service, requirement, and evidence metadata for discovery and review.
-- Policy metadata that states intended access constraints.
-- Inspection reports that show gaps, ambiguous fields, and missing artifacts.
-- A migration map that separates source records from integration contracts.
+Run Registry Atlas against the published bundles.
+Atlas reports which artifacts are present, which are missing, and which fields are ambiguous
+across sectors.
+The inspection report becomes the baseline for migration planning.
 
-## Why this helps migration
+Registry Platform contains shared primitives that other registry family components use, but a
+complete future registry platform is a separate undertaking.
+The preparation work described here uses only Manifest and Atlas.
 
-Future platform work is easier when the source estate is already described.
-Schemas and shapes expose inconsistent fields.
-Catalog metadata separates public discovery from protected records.
-Evidence and requirement metadata clarifies which facts a service needs, rather than moving full
-records by default.
+## What a caller does
 
-This preparation also helps non-migration work.
-The same metadata can support partner onboarding, API documentation, registry inspection, and
-governance review while the existing source system remains in place.
+In this use case the "caller" is the authority's own team.
+They iterate: run Manifest to render, run Atlas to inspect, review the report, correct profile
+fixtures, and re-render until the metadata accurately describes the estate.
 
-## Boundaries
+External partners can be given the published metadata bundle to read before any production
+integration is agreed.
+That gives them a contract to comment on before the migration begins.
 
-This page is future-facing by design.
-It describes preparation that can be done with built Manifest and Atlas behavior.
-It does not claim that Registry Platform currently provides a complete production registry system,
-migration engine, or automatic data quality remediation service.
+## What the caller gets back
+
+A set of metadata artifacts: a catalog of existing registry surfaces and responsible
+organizations, entity schemas and SHACL shapes that make record expectations explicit, service
+and requirement metadata for discovery, policy stubs that state intended access constraints, and
+Atlas inspection reports that show gaps, ambiguous fields, and missing documents.
+
+These artifacts serve migration planning.
+They also serve non-migration work: partner onboarding, API documentation, governance review,
+and registry inspection can all use the same published metadata while the source system
+remains in place.
+
+## What is in scope, what is not
+
+This pattern covers: producing metadata and quality evidence for an existing data estate using
+Manifest and Atlas.
+
+It does not claim that Registry Platform currently provides a complete production registry
+system, a migration engine, or an automatic data-quality remediation service.
+The future platform is a separate undertaking; the preparation work here is independent of
+when or whether that platform is built.
 
 ## Next
 

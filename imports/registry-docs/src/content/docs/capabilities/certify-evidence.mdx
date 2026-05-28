@@ -21,9 +21,9 @@ standards_referenced:
 ---
 
 Certify evidence is the claim evaluation and evidence artifact capability.
-The primary implementation is Registry Witness, which evaluates configured eligibility claims
-against registry data, applies disclosure policy, and returns structured results, CCCEV-shaped
-JSON-LD, or SD-JWT VC credentials.
+The primary implementation is [Registry Witness](../../projects/registry-witness/), which evaluates
+configured eligibility claims against registry data, applies disclosure policy, and returns
+structured results, CCCEV-shaped JSON-LD, or SD-JWT VC credentials.
 
 The old v1 term is Prove.
 In v2 language, Prove maps to evidence certification: a service can attest that a configured claim
@@ -31,9 +31,34 @@ was evaluated and can package the result for a calling program or wallet flow.
 Registry Witness does not decide program entitlement; the caller decides what a verified claim
 means for a benefit, service, or workflow.
 
-Use this capability when a system needs a yes/no predicate, a redacted result, a value-bearing
-result, delegated evaluation from a trusted peer, or credential issuance without giving the caller
-the records that produced the result.
+## What it produces
+
+Registry Witness returns:
+
+- A predicate result (true/false) with the configured grounds, without returning the underlying
+  record.
+- A redacted or value-bearing result when policy permits additional disclosure.
+- A CCCEV-shaped JSON-LD evidence artifact.
+- An SD-JWT VC credential for wallet or OID4VCI flows.
+- A delegated evaluation result when the claim is answered by a trusted peer service.
+
+Audit records are written for every evaluation.
+
+## Primary project
+
+[Registry Witness](../../projects/registry-witness/): claim model, rule types, credential issuance,
+and v0 caveats.
+
+## How to use it
+
+Define a claim, configure evaluation rules, and set disclosure policy.
+See [Configure a claim](../../projects/registry-witness/configure-a-claim/) for the configuration
+surface.
+See the [Witness API reference](../../reference/apis/registry-witness/) for the HTTP contract.
+
+Example: a social protection workflow asks whether a household is currently enrolled in a
+conditional cash transfer programme and receives a predicate response (true/false plus the
+configured grounds), not the enrollment record.
 
 ## Related docs
 

@@ -22,53 +22,70 @@ standards_referenced:
   - odrl
 ---
 
-Two systems can use the same label for fields or codes while meaning different things.
-This page explains why registry exchange needs explicit semantics before data, evidence,
-or automated workflows can be reviewed with confidence.
+A national procurement portal integrates two domestic registries that both expose a field
+called `status` with a code `active`. In the business registry, `active` means the company
+has filed its annual return in the last 12 months. In the professional licensing registry,
+`active` means the licence has never been formally revoked. A bidder-eligibility check
+that reads the two codes as equivalent will pass companies whose business filings have
+lapsed, so long as their licence has not been formally revoked.
 
 ## The problem
 
-A field named `status` may refer to registration status, licensing status, programme
-enrollment, operational status, or data quality.
-A code named `active` can mean legally active, recently updated, eligible for service, or
-not suspended.
+The shapes line up. The meanings do not.
 
-Those differences are not cosmetic.
-They decide whether a downstream service can rely on the value, whether a claim is true,
-and whether a reviewer can reconstruct the basis for an answer.
+A field named `status` may refer to registration status, licensing status, programme
+enrollment, operational status, or data quality. A code named `active` can mean legally
+active, recently updated, eligible for service, or simply "not yet suspended."
+
+Those differences are not cosmetic. They decide whether a downstream service can rely on
+the value, whether a claim is true, and whether a reviewer can reconstruct the basis for
+an answer.
 
 ## Why it matters
 
-Semantics define the boundary between an interoperable service and a data copy with
-unclear meaning.
-When meaning is explicit, implementers can map fields carefully, reviewers can identify
-assumptions, and evidence responses can preserve the source meaning that supported the
-answer.
+When meaning is implicit, the integration code becomes the semantic record. The mapping
+decision an engineer made on a Tuesday in 2024, in a function nobody else has read since,
+is now the de facto definition of what `active` means inside the procurement portal.
 
-When meaning is implicit, integration code becomes the semantic record.
-That makes assumptions hard to audit and harder to update.
+An audit asking "what was the basis for this eligibility decision?" has to read the
+integration code to find the answer. The semantic choice was load-bearing. It was also
+invisible.
 
 ## Why common approaches stall
 
-Field mapping spreadsheets are common and often necessary.
-They stall when the mapping is disconnected from the API contract, policy surface,
-evidence offering, and runtime behavior.
+**Field mapping spreadsheets** are common and often necessary. They stall when the
+spreadsheet lives in a wiki and the runtime lives in a Helm chart, and nothing forces them
+to agree.
 
-Shared standards can reduce ambiguity.
-They do not remove the need to say which local field maps to which concept, which value
-set is used, what freshness applies, and what the deployment does not claim.
+**Shared standards** reduce ambiguity by giving teams a common vocabulary. They do not
+remove the need to say which local field maps to which concept, which value set is used,
+what freshness applies, and what the deployment does not claim. Two registries can both
+align to the same standard and still mean different things by `active`.
+
+**Code review at integration time** catches obvious mismatches. It misses the ones that
+look right: same field name, same code, different meaning underneath.
 
 ## What Registry Stack changes
 
-Registry Stack makes semantic metadata part of the registry surface.
-Registry Manifest can publish schemas, shapes, catalog metadata, service metadata,
-policies, and evidence-offering descriptions.
-Registry Relay binds declared entities and fields to runtime sources.
-Registry Witness evaluates configured claims against named source bindings.
-Registry Atlas can inspect the published graph before integration code is written.
+The registry says what it means, in a form an integrator can read and a reviewer can audit.
 
-The goal is not to invent new meanings.
-The goal is to make local meaning visible enough for mapping, review, and evidence use.
+**Registry Manifest** publishes schemas, shapes, catalogue metadata, service metadata,
+policies, and evidence-offering descriptions. The procurement portal can read what `active`
+means in the business registry, and separately what `active` means in the licensing
+registry, before it writes the eligibility logic.
+
+**Registry Relay** binds the declared entities and fields to the runtime sources, so the
+published meaning is the meaning the API serves.
+
+**Registry Witness** evaluates configured claims against named source bindings. A signed
+answer carries the source meaning that supported it.
+
+**Registry Atlas** lets a reviewer inspect the published graph before integration code is
+written.
+
+Two registries can still mean different things by `active`. The procurement portal now sees
+both meanings and decides what to do, instead of discovering the difference in production.
+For the broader model, see the [architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

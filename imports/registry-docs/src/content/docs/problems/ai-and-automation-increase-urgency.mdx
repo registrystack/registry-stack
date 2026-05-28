@@ -22,57 +22,73 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-AI and automation do not change the registry problem.
-They change the speed and scale at which unsafe integrations, accidental over-sharing,
-and unreviewed semantic assumptions can spread.
+A tax authority publishes a broad taxpayer status API to an ecosystem of accountants,
+payroll providers, and procurement platforms. Their developers use AI assistants to generate
+the integration code. Within a week, a dozen new integrations are live. None scope their
+purpose. None produce an audit record beyond HTTP timestamps. Several pull the full
+taxpayer record where a yes/no compliance answer would have done, because that was the most
+natural way to call the API.
 
 ## The problem
 
-Generated code, workflow tools, and AI-assisted development lower the cost of connecting
-systems.
-That helps teams move faster.
-It also lowers the cost of calling a broad API, copying unneeded fields, or encoding a
-wrong semantic assumption into production code.
+The integration work that used to take weeks now takes hours. The mistakes are the same.
+The mistakes ship faster.
 
-The risk is not that AI becomes the registry.
-The risk is that integration work accelerates before the registry surface has purpose,
-scope, minimization, metadata, and audit built in.
+Generated code, workflow tools, and AI-assisted development lower the cost of connecting
+systems. That helps teams move faster. It also lowers the cost of calling a broad API,
+copying unneeded fields, or encoding a wrong semantic assumption into production code.
+
+The risk is not that AI becomes the registry. The risk is that integration work accelerates
+before the registry surface has purpose, scope, minimization, metadata, and audit built in.
 
 ## Why it matters
 
-Automation increases the value of explicit contracts.
-A human reviewer and an automated client both need to know which route exists, which
-fields are exposed, which purpose and scope apply, which evidence shape is available, and
-what audit event will be created.
+An AI assistant cannot read a PDF policy, an unwritten convention, or a tribal-knowledge
+"you would never actually want that field." It calls what the API exposes, the way the API
+exposes it. If the API exposes the full record, the generated integration uses the full
+record.
 
-Without those controls, faster integration can mean faster propagation of bad assumptions.
-The same mistake can appear in generated code, workflow jobs, API clients, and test
-fixtures.
+The mistake that used to be one engineer's assumption now propagates across every
+integration the same assistant helps build. The fastest reviewer in the world cannot
+inspect twelve integrations a week.
 
 ## Why common approaches stall
 
-Prompt guidance and developer review are useful.
-They stall when the API remains broad, the metadata remains incomplete, or the source
-meaning is not visible to the tool or reviewer.
+**Prompt guidance and developer review** are useful. They stall when the API itself remains
+broad, the metadata remains incomplete, or the source meaning is not visible to the
+assistant or the reviewer. The reviewer can catch a bad pattern; they cannot catch the
+pattern that looked correct against an over-broad API.
 
-Generic API gateways can enforce authentication and rate limits.
-They do not, by themselves, define registry semantics, evidence offerings, disclosure
-modes, or field-level meaning.
+**Generic API gateways** enforce authentication and rate limits. They do not define
+registry semantics, evidence offerings, disclosure modes, or field-level meaning, which
+means the gateway happily lets the generated integration call the broad route as often as
+it likes.
+
+**AI usage policies** can tell developers what not to do. They stall the moment the only
+API available to call is the broad one.
 
 ## What Registry Stack changes
 
-Registry Stack provides concrete controls that automated clients can respect and
-reviewers can inspect.
-Registry metadata makes fields, schemas, policies, services, and evidence offerings
-visible before integration code is written.
-Registry Relay exposes configured, read-only routes that callers cannot widen at request
-time.
-Registry Witness can return configured evidence responses instead of forcing callers to
-retrieve full source records.
-Audit behavior records trust-critical requests and evidence events for review.
+The controls live in the API the assistant sees, not in a document the assistant cannot
+read.
 
-AI remains context and urgency, not a product category.
-Registry Stack does not claim to automate governance or decide data meaning.
+**Registry Manifest** makes fields, schemas, policies, services, and evidence offerings
+visible before any integration code is written. The assistant and the reviewer read the
+same description.
+
+**Registry Relay** exposes configured, read-only routes that callers cannot widen at
+request time. The narrow route is the only route the generated integration can find.
+
+**Registry Witness** returns configured evidence responses instead of forcing callers to
+retrieve full source records. The yes/no compliance answer is the natural way to call the
+API; the full taxpayer record stops being the path of least resistance.
+
+**Audit behavior** records trust-critical requests and evidence events. Twelve integrations
+a week each leave a trail the reviewer can inspect after the fact.
+
+AI is the urgency, not the answer. Registry Stack does not automate governance or decide
+data meaning; it shapes the API so the fast-moving integration ends up on the safer path
+by default. For the broader model, see the [architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

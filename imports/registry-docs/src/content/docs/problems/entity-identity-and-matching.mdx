@@ -18,59 +18,69 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Registry interoperability depends on knowing which entity a request or evidence response
-refers to.
-This page explains how Registry Stack can carry identity and matching assumptions while
-leaving foundational identity, deduplication, and master data management to other systems.
+A tax authority queries a cadastral registry to confirm that a taxpayer owns a parcel
+before issuing a property-tax assessment. The cadastral registry is keyed by parcel ID;
+the tax authority knows the owner by taxpayer number and a name on the deed. The cadastral
+service responds "owner confirmed." It does not say which cadastral record it matched, on
+what fields, or how confident the match was. The assessment goes out anyway.
 
 ## The problem
 
-Two registries can describe the same person, company, facility, land parcel, or license
-with different local identifiers.
-They can also contain duplicates, stale links, or records that are similar enough to match
-operationally but not strong enough to prove identity.
+Two registries can be about the same thing. They are rarely keyed the same way.
 
-When an API route or evidence response omits the identifier basis, downstream systems may
-treat a weak match as a strong identity assertion.
-That mistake is hard to find later because the assumption disappears into integration code.
+Two registries can describe the same person, company, facility, parcel, or licence under
+different local identifiers. They can also contain duplicates, stale links, or records
+that are similar enough to match operationally but not strong enough to prove identity.
+
+When the API route or evidence response omits the identifier basis ("matched on taxpayer
+number and surname"), the downstream system can treat a weak match as a strong identity
+assertion. The assumption disappears into integration code.
 
 ## Why it matters
 
-Identity and matching errors change the meaning of registry exchange.
-A status response is useful only if the caller knows which subject was evaluated and what
-identifier or matching rule selected the source record.
+A signed "active" or "owner confirmed" answer carries the weight of the registry behind it.
+If the answer is about the wrong subject, the registry's authority got attached to a
+mistake.
 
-The same risk appears for organizations and assets.
-A business registry status, facility registration, or license validity check can be
-misleading if the request matched the wrong local record or if the registry never published
-the matching assumptions.
+The reviewer cannot find the mistake by reading the response: the response looks correct.
+They have to find the matching rule, somewhere in deployment code or an integration script,
+and ask whether it should have matched at all.
 
 ## Why common approaches stall
 
-Common approaches hide matching behind integration glue.
-One system sends a local ID, another system searches by name or tax number, and the
-mapping rule is stored in code or an operations playbook.
-That can work for a single trusted pair.
-It stalls when reviewers, auditors, or additional partners need to inspect what happened.
+**Matching glue inside integration code** is the most common pattern. One system sends a
+local ID, the other searches by name or tax number, and the mapping rule sits in code,
+deployment config, or an operations playbook. It works for one trusted pair. It stalls when
+a reviewer, an auditor, or a third partner needs to see which record was matched and why.
 
-Another common approach is to expect a single foundational identifier to solve every
-linkage question.
-Some deployments have such identifiers for some entities.
-Many registry domains still need local keys, source identifiers, relationship metadata,
-and documented matching assumptions.
+**A single foundational identifier** is sometimes proposed as the answer. Some deployments
+have such an identifier for some entities. Many registry domains still operate with local
+keys, source identifiers, and relationship metadata, and pretending otherwise creates
+incorrect linkages elsewhere.
+
+**Probabilistic entity resolution services** can match records well in batch. They do not,
+by themselves, produce an answer a downstream service can act on with confidence: an
+unbounded probability score is not an identity assertion.
 
 ## What Registry Stack changes
 
-Registry Stack makes the entity boundary visible.
-Registry Manifest can describe entity schemas and evidence offerings.
-Registry Relay exposes entity-shaped routes rather than raw storage tables.
-Registry Witness evaluates configured claims against named subject inputs and records
-claim results.
+The match becomes part of the contract.
 
-Those surfaces can carry entity keys, subject identifiers, source identifiers, and
-matching assumptions as metadata or evidence.
-Registry Stack does not decide that two records are the same entity unless the deployment
-configures that behavior in an upstream source or claim rule.
+**Registry Manifest** describes the entity schemas and evidence offerings the registry
+exposes, including which identifier fields the entity is keyed on.
+
+**Registry Relay** exposes entity-shaped routes rather than raw storage tables. A caller
+asks for an entity by a declared identifier, and the route either returns the entity or
+does not match: there is no implicit join hidden in the response.
+
+**Registry Witness** evaluates configured claims against named subject inputs and records
+the claim result, including which source record the subject input was bound to.
+
+The cadastral service can still answer "owner confirmed" to the tax authority. The answer
+now carries which record matched and on what basis, instead of asking the assessor to trust
+a hidden join. Registry Stack does not decide that two records are the same entity; the
+deployment configures that behavior. For the broader model, see the
+[architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

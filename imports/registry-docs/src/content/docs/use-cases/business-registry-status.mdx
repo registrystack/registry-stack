@@ -1,6 +1,6 @@
 ---
 title: Verify a business registry status without sharing the full record
-description: Explains how to verify a business status fact without a full record.
+description: Return a narrow status fact about a registered company without disclosing the full business record.
 status: current
 owner: registry-legend
 source_repos:
@@ -21,55 +21,66 @@ standards_referenced:
   - json-ld
 ---
 
-Use this page when a relying party needs to know whether a business has a registry status, but
-does not need the full business record.
-The pattern is about business registry verification: incorporation status, active status,
-registration class, or a similar narrow fact.
+## Starting situation
 
-## Model
+A national business registry records company incorporations, legal-status changes, and
+gazette references in a relational database.
+A public procurement platform must confirm that a supplier is actively registered before
+it processes a tender submission.
+The procurement platform needs a yes/no answer tied to the national business number.
+It does not need the company's beneficial-ownership chain, registered address, or filing
+history.
 
-Registry Witness is the built component that evaluates configured claims and can return a signed
-evaluation, a redacted result, or an SD-JWT VC credential.
-Registry Relay can publish metadata that tells consumers where a relevant evidence offering lives.
-Registry Manifest can publish business registry metadata using BRegDCAT-AP-shaped artifacts.
+## What you set up
 
-In this pattern, the relying party asks for a status fact.
-The registry-facing service evaluates the configured rule against the source record and returns
-only the allowed result.
-The full business profile, ownership details, filings, addresses, or internal registry notes do
-not need to move through the relying party workflow unless the governing policy permits them.
+Configure a Registry Witness claim for the active-status fact.
+The claim definition names the source binding (the business registry table or extract),
+the rule (registration status equals "active"), the disclosure mode (predicate: true/false),
+and the issuer identifier.
 
-## Example facts
+Configure Registry Relay to expose the consultation route that accepts a national business
+number or LEI and routes the request to Witness for evaluation.
+Use Registry Manifest to publish BRegDCAT-AP-shaped catalog metadata for the business registry,
+including a link to the evidence offering document that describes the active-status claim.
 
-- The business registration exists.
-- The registration status is active.
-- The business is registered for a named category.
-- The business identifier matches the issuing registry's namespace.
-- The status was evaluated at a stated time by a stated issuer.
+## What a caller does
 
-The exact fields are deployment-specific.
-The common property is that each answer is narrower than the underlying business record.
+The procurement platform sends an authorized POST to the Witness evaluation endpoint,
+passing the national business number as the subject identifier and naming the active-status
+claim.
+The platform authenticates with the configured identity provider.
 
-## Disclosure choices
+For a credential issuance flow, the platform or its operator requests an SD-JWT VC.
+The credential holder can then present only the active-status disclosure to the relying party,
+keeping unselected credential fields hidden.
 
-Registry Witness supports different disclosure modes for a configured claim.
-A status fact can be returned as a value, a predicate, or a redacted result, depending on the
-claim definition.
-For credential flows, SD-JWT VC lets a holder present selected disclosures while keeping
-unselected credential fields hidden.
+## What the caller gets back
 
-The disclosure mode belongs in governance and claim configuration.
-The implementation does not make the legal decision that a relying party is entitled to a full
-record.
+A signed evaluation containing: the national business number, the predicate result (active: true
+or false), the evaluation timestamp, and the issuer identifier.
 
-## Boundaries
+The full company record, beneficial-ownership chain, gazette reference list, registered address,
+and internal registry notes do not appear in the response.
 
-The registry subject is a business, and the relying party is verifying a business registry fact
-for an administrative, compliance, procurement, licensing, or commercial workflow.
+For a dissolved or suspended company, the predicate returns false.
+The specific legal-status code (suspended, dissolved, struck off) can be included as a separate
+configured disclosure if the governing policy permits it.
 
-This page describes built Witness, Relay, and Manifest surfaces.
-It does not claim dynamic trust-chain discovery, open federation, or automatic legal-basis
+## What is in scope, what is not
+
+This pattern covers: evaluating a narrow company-status fact against the business registry,
+returning a predicate or signed credential, and publishing BRegDCAT-AP metadata that makes the
+offering discoverable.
+
+The registry subject is a legal entity identified by a national business number or LEI.
+The relevant facts are incorporation status, active/suspended/dissolved status, registration
+class, and gazette references where the governing policy permits them.
+
+This pattern does not cover: full company record sharing, beneficial-ownership disclosure beyond
+what a configured claim permits, dynamic trust-chain federation, or automatic legal-basis
 approval.
+The issuing institution owns the rule definition, the audit trail, the correction process, and
+the terms under which a relying party may request the fact.
 
 ## Next
 

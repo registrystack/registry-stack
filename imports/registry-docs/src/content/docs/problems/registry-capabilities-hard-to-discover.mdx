@@ -22,53 +22,66 @@ standards_referenced:
   - cccev
 ---
 
-Registry discovery fails when capabilities live in people, slide decks, or one-off API
-guides instead of inspectable metadata.
-This page explains why discovery has to cover ownership, fields, services, policy, and
-evidence offerings before a caller writes integration code.
+A ministry of health maintains a facility registry of 1,200 hospitals, clinics, and rural
+health posts in a vendor portal. A licensing authority wants to verify that the
+practitioners it certifies are posted to registered facilities. Before writing any
+integration code, the licensing team must sign an agreement, attend a kickoff, and read a
+PDF listing the fields, codes, and endpoints. The PDF was last refreshed nine months ago
+and nobody is sure whether it still matches the runtime.
 
 ## The problem
 
-An integrator often cannot answer basic questions from a stable source:
-which registry exists, who owns the registry, which entities and fields are available,
-which public services the registry supports, which policies apply, and which evidence a
-caller can request.
+The registry exists. What it offers is not published anywhere a tool can read.
 
-The data may exist and the institution may be willing to collaborate.
-The capability is still hard to discover if the access route, schema, policy, and evidence
-options are not published in forms that tools can inspect.
+An integrator cannot answer the basic questions from a stable source: which registry
+exists, who owns it, which entities and fields are available, which services it supports,
+which policies apply, which evidence a caller can request. The institution may be willing
+to collaborate. The capability is still hard to discover when the access route, schema,
+policy, and evidence options live only in PDFs, meeting notes, and the memory of two
+engineers.
 
 ## Why it matters
 
-Discovery is a control surface.
-It lets an implementer check fit before writing code, lets a reviewer inspect what will be
-exposed, and lets a registry owner publish the same facts to multiple partners.
+When discovery happens by meeting, the first technical decision is made before any technical
+artifact exists. The integration team estimates work from rumour, scopes it from a slide
+deck, and writes code that turns the rumour into an assumption inside production.
 
-When discovery is weak, every integration starts from private negotiation.
-Teams repeat the same questions about fields, codes, API paths, and access conditions.
-Reviewers see the integration late, after assumptions have already moved into code.
+A reviewer only meets the integration after that. The questions a reviewer would have
+caught early ("is this field the authoritative one? does this policy actually allow this
+purpose?") arrive when the answer would require a refactor.
 
 ## Why common approaches stall
 
-PDF catalogues and human-readable API guides are useful for orientation.
-They stall when a workflow tool, API client, or review workbench needs structured facts:
-schema links, policy links, service requirements, evidence types, access endpoints, and
-machine-readable field definitions.
+**PDF catalogues and API guides** are useful for orientation. They stall the moment a
+workflow tool, an integration testing harness, or a review workbench needs structured
+facts: schema links, policy links, service requirements, evidence types, endpoints. Nothing
+reads a PDF as a contract.
 
-Central service catalogues can help an institution find systems.
-They are not enough when the registry-facing details remain outside the catalogue or are
-not kept in sync with the runtime API.
+**Central service catalogues** can help an institution find which systems exist. They stall
+when the registry-specific details (which entities, which fields, which evidence is
+offered) remain outside the catalogue or drift out of sync with the actual runtime.
+
+**A Swagger UI on the API** lists endpoints and parameters. It stalls when reviewers ask
+about policy, codes, evidence shapes, or who the data owner is, because OpenAPI alone does
+not describe any of those.
 
 ## What Registry Stack changes
 
-Registry Stack treats metadata as a first product surface.
-Registry Manifest renders a portable publication bundle from a single metadata manifest.
-Registry Relay can expose metadata routes with caller scoping.
-Registry Atlas can fetch, classify, and inspect the published artifacts.
+The questions get answers tools can read.
 
-This changes discovery from a meeting-driven phase into an artifact-driven phase.
-The registry owner can publish what the registry says it offers, and an authorized caller
-can compare that claim with runtime routes and evidence-offering metadata.
+**Registry Manifest** renders the registry's description as a portable publication bundle:
+catalogue entries, service descriptions, schemas, policies, and evidence-offering metadata,
+each in a standard form a reviewer or a tool can consume.
+
+**Registry Relay** exposes metadata routes alongside the data routes, so a caller can fetch
+the description that matches what the runtime actually serves.
+
+**Registry Atlas** fetches, classifies, and inspects those published artifacts. The
+licensing team can answer "what does this registry offer?" before requesting the meeting.
+
+The meeting still happens. The meeting is now about purpose, scope, and timeline, not about
+which fields exist. For the broader model, see the
+[architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

@@ -1,6 +1,6 @@
 ---
-title: Capabilities lookup
-description: A lightweight lookup for the Registry Legend v2 capability names and the projects that implement them.
+title: Capabilities
+description: What Registry Stack does for registry owners, service integrators, and reviewers.
 status: current
 owner: registry-legend
 source_repos:
@@ -25,38 +25,65 @@ standards_referenced:
   - oid4vci
 ---
 
-The v2 capability names describe what the registry family lets an operator or reviewer do:
-describe registries, expose protected APIs, certify evidence, inspect published artifacts, and
-audit and operate the runtime surface.
-These pages are lookup entries, not narrative entry pages.
+Registry Stack provides a registry-facing layer for systems that already hold authoritative data.
+The capabilities are organized around one sequence: describe what the registry can provide, expose
+protected read-only access, and return evidence that fits the purpose of the request.
 
-The older terms still appear in v1 navigation and existing explanations.
-Use this mapping when moving between v1 and v2 language.
+## The sequence
 
-| Old term | v2 capability | Primary project |
+Start with metadata.
+A caller cannot safely use a registry if the fields, schemas, services, policies, evidence
+offerings, and confidence boundaries are not inspectable.
+After the registry surface is described, Registry Relay can expose scoped routes over the existing
+source.
+Registry Witness can then evaluate configured claims and return a minimized evidence response when
+the caller does not need the whole record.
+
+| Capability | Use it when | Primary project |
 | --- | --- | --- |
-| Publish | Describe registries | Registry Manifest |
-| Consult | Expose protected APIs | Registry Relay |
-| Prove | Certify evidence | Registry Witness |
-| n/a | Inspect published artifacts | Registry Atlas |
-| n/a | Audit and operate | Registry Relay, Registry Witness, Registry Platform |
+| [Describe registries](./describe-registries/) | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | Registry Manifest |
+| [Expose protected APIs](./expose-protected-apis/) | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | Registry Relay |
+| [Certify evidence](./certify-evidence/) | A caller needs a status, predicate, selected value, or supported credential instead of the source record. | Registry Witness |
 
-## Capability pages
+## Supporting capabilities
 
-- [Describe registries](./describe-registries/): metadata, portable manifests, and generated
-  discovery artifacts.
-- [Expose protected APIs](./expose-protected-apis/): caller-scoped, read-only registry access
-  through Registry Relay.
-- [Certify evidence](./certify-evidence/): claim evaluation, disclosure control, and credential
-  issuance through Registry Witness.
-- [Inspect published artifacts](./inspect-published-artifacts/): Registry Atlas as a supporting
-  inspection tool for generated metadata.
-- [Audit and operate](./audit-and-operate/): audit envelopes, shared Platform primitives, and the
-  future-facing Trust Control Plane boundary.
+[Inspect published artifacts](./inspect-published-artifacts/) helps reviewers check what a registry
+actually publishes before an integration is built.
+Registry Atlas reads generated metadata artifacts and runs strict capability queries against known
+machine terms.
 
-## Related docs
+[Audit and operate](./audit-and-operate/) explains the shared audit and operational behavior that
+makes Registry Relay and Registry Witness reviewable.
+Registry Platform supplies shared primitives for authentication, HTTP security, audit envelopes,
+cryptography, and credential support.
 
-- [Choose where to start](../start/quickstart/): route into the docs by question.
-- [Architecture overview](../explanation/architecture/): system model and project boundaries.
-- [Ownership boundaries and map](../map/boundaries-and-map/): ownership across the registry family.
-- [Contracts reference](../reference/contracts/): contract inventory and source-of-truth notes.
+## How to choose
+
+- Start with [describe registries](./describe-registries/) if the registry surface is not yet
+  documented in machine-readable form.
+- Start with [expose protected APIs](./expose-protected-apis/) if a source already exists and the
+  immediate need is governed read-only access.
+- Start with [certify evidence](./certify-evidence/) if the integration already has a clear claim
+  and the caller should receive an answer rather than a full record.
+- Start with [inspect published artifacts](./inspect-published-artifacts/) if the task is review,
+  discovery, or integration planning.
+- Start with [audit and operate](./audit-and-operate/) if the question is how runtime requests are
+  logged, secured, and reviewed.
+
+## Boundaries
+
+Registry Stack does not replace a source registry, workflow engine, exchange layer, wallet, or
+public-service portal.
+It provides the registry-facing controls those systems can call: metadata, protected routes,
+evidence responses, and audit records.
+
+Registry Stack also does not solve foundational identity, deduplication, legal authority, semantic
+governance, or institutional approval by itself.
+The capabilities make those boundaries explicit so they can be reviewed before data starts moving.
+
+## Next
+
+- [Existing data is not service-ready](../problems/existing-data-not-service-ready/)
+- [Legacy registry API](../use-cases/legacy-registry-api/)
+- [Architecture overview](../explanation/architecture/)
+- [Ownership boundaries and map](../map/boundaries-and-map/)

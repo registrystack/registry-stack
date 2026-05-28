@@ -443,11 +443,12 @@ h1,
 
 .home-sequence li {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr) 150px;
-  gap: 20px;
+  grid-template-columns: 48px minmax(180px, 0.62fr) minmax(260px, 1fr);
+  column-gap: 28px;
+  row-gap: 8px;
   align-items: start;
   margin: 0;
-  padding: 18px 0;
+  padding: 22px 0;
   counter-increment: home-sequence;
 }
 
@@ -457,23 +458,34 @@ h1,
 
 .home-sequence li::before {
   content: counter(home-sequence, decimal-leading-zero);
+  grid-column: 1;
+  grid-row: 1 / span 2;
   color: var(--registry-blue);
   font-family: var(--__sl-font-mono);
   font-size: 12px;
 }
 
 .home-sequence span {
+  grid-column: 2;
+  grid-row: 1;
   color: var(--registry-ink);
   font-weight: 700;
+  line-height: 1.35;
 }
 
 .home-sequence p {
+  grid-column: 3;
+  grid-row: 1 / span 2;
   margin: 0;
   max-inline-size: none !important;
   font-size: 14px;
+  line-height: 1.55;
 }
 
 .home-sequence a {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: end;
   color: var(--registry-blue) !important;
   font-size: 13px;
   text-decoration: underline !important;
@@ -950,6 +962,14 @@ mobile-starlight-toc summary {
   .home-boundary-grid,
   .home-sequence li {
     grid-template-columns: 1fr;
+  }
+
+  .home-sequence li::before,
+  .home-sequence span,
+  .home-sequence p,
+  .home-sequence a {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .home-hero {

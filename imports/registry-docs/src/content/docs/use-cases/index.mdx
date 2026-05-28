@@ -1,0 +1,58 @@
+---
+title: Use cases
+description: Concrete scenarios showing how Registry Stack handles common integration and evidence problems for public registries.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+  - registry-atlas
+  - registry-platform
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cccev
+  - openapi
+  - sd-jwt-vc
+---
+
+Each page below starts from a registry that already exists: a spreadsheet, a legacy application,
+a relational table, or a static export.
+It walks through what you configure, what a caller sends, and what comes back.
+The scenarios span civil registration, business, agriculture, land, health, education, licensing,
+and social-protection contexts.
+
+Ordered to mirror the [Problems](../problems/) ranking: cases that directly demonstrate the
+highest-impact Stack capabilities come first.
+
+- [Expose a legacy registry as a protected API](./legacy-registry-api/): a civil registration
+  authority wraps an Access database with a governed Relay boundary so a pension authority can
+  confirm vital-status without direct database access.
+- [Verify a business registry status without sharing the full record](./business-registry-status/):
+  a procurement platform asks for a yes/no active-status answer tied to a national business number,
+  receiving a signed predicate instead of the full company record.
+- [Verify an eligibility or entitlement fact without sharing the full record](./eligibility-or-entitlement-evidence/):
+  a rural-credit scheme confirms that an applicant holds a registered land-parcel title without
+  receiving plot boundaries, co-ownership details, or transaction history.
+- [Let a workflow tool call governed registry services](./workflow-tool-governed-services/): an
+  extension-service voucher tool queries a farmer registry for registration status and region
+  assignment, scoped to its caller role, without storing source records.
+- [Publish registry metadata](./publish-registry-metadata/): a health ministry publishes a
+  machine-readable description of a facility registry so three integration teams can assess
+  feasibility before any data sharing agreement is signed.
+- [Inspect a registry before integrating](./inspect-before-integrating/): integration teams for a
+  national school registry run Registry Atlas against published metadata to map assets, surface
+  gaps, and identify candidate routes before writing client code.
+- [Prepare existing data for a future registry platform](./prepare-for-future-registry-platform/):
+  a professional licensing authority describes 35,000 practitioner records across six sectors with
+  Manifest and Atlas, producing migration-ready artifacts while the source system remains in place.
+
+## Related
+
+- [Problems](../problems/): the integration and governance problems the registry family addresses.
+- [Capabilities](../capabilities/): the built surfaces that each use case draws on.
+- [Architecture overview](../explanation/architecture/): system model and project boundaries.

@@ -21,52 +21,66 @@ standards_referenced:
   - cccev
 ---
 
-One registry integration often repeats the same discovery, mapping, access, and testing
-work as the last one.
-This page explains how reusable metadata, protected routes, and evidence offerings reduce
-the amount of integration knowledge that lives only in bilateral negotiations.
+A national farmer registry has been integrated with an extension service, a subsidy
+programme, and a crop insurance provider. Each integration started with the same questions
+("what fields exist? what do they mean? what does `crop_type` cover?") and was answered
+separately, in a separate email thread, with a separate spreadsheet attached. A fourth
+partner has just asked to integrate. The same conversation begins again next week.
 
 ## The problem
 
-Each new caller asks similar questions: what data exists, what fields mean, how codes are
-defined, which endpoint to call, which policy applies, and which test data or expected
-responses prove that the integration works.
+The questions repeat. The answers do not get reused.
 
-Without reusable contracts, the registry owner answers those questions again for each
-partner.
-The answers drift across emails, issue trackers, API client code, and deployment notes.
+Every caller asks the same things: what data exists, what fields mean, how codes are
+defined, which endpoint to call, which policy applies, what test data and expected
+responses look like. The registry owner answers them in an email thread. The answers drift
+into deployment notes, integration code, and tribal knowledge nobody else can read.
 
 ## Why it matters
 
-Repeated negotiation slows public-service delivery and increases inconsistency.
-Two partners can integrate with the same registry and still use different field meanings,
-freshness assumptions, or disclosure expectations.
+The third integration takes as long as the first. The fourth caller asks the same questions,
+and the registry team writes the same explanations into a fresh email thread. The
+negotiation never compounds; the cost of every new partner is roughly the cost of the
+previous one.
 
-The registry owner also carries the support burden.
-Every future source change needs to be communicated across separate integration histories
-instead of through published metadata and versioned contracts.
+When the source changes, the owner has no one place to publish it. Each partner carries its
+own version of the integration, its own assumptions about what changed, and its own copy of
+fields the owner can no longer see into. The change goes out by phone and email, partner by
+partner.
 
 ## Why common approaches stall
 
-Integration templates can accelerate a known partner pattern.
-They stall when the next caller has a different legal basis, different field needs, or a
-different evidence shape.
+**Integration templates** accelerate one known partner pattern. They stall when the next
+caller has a different legal basis, different field needs, or a different evidence shape,
+and you discover the template was actually the previous partner's integration with the
+names changed.
 
-Point-to-point middleware can move data between systems.
-It stalls when the registry needs an inspectable contract that outlives one workflow job
-and can be reviewed by security, data protection, and programme teams.
+**Point-to-point middleware** moves data between two named systems. It stalls when a third
+system needs the same data with a different scope and the middleware has no contract anyone
+outside engineering can inspect.
+
+**A wiki page documenting the API** captures the answers once. It stalls the first time the
+answers fall out of date, because nothing forces the wiki to track the source.
 
 ## What Registry Stack changes
 
-Registry Stack turns repeated integration questions into reusable artifacts.
-Registry Manifest publishes metadata and schemas.
-Registry Relay exposes protected, read-only API contracts for configured entities.
-Registry Witness publishes and serves configured evidence responses where a caller needs a
-status, predicate, selected value, or credential-shaped artifact instead of a broad record.
-Registry Atlas helps review the published artifacts before code is written.
+The questions get answers once, in artifacts every partner can read.
 
-The negotiation does not disappear.
-The negotiation starts from artifacts that can be inspected, tested, and updated.
+**Registry Manifest** publishes the metadata, schemas, code lists, and policies the registry
+actually exposes. The third partner reads the same description as the first.
+
+**Registry Relay** exposes protected, read-only API contracts for configured entities. The
+contract is the same artifact every caller integrates against.
+
+**Registry Witness** publishes configured evidence responses where a caller needs a status,
+predicate, selected value, or credential-shaped artifact instead of a broad record.
+
+**Registry Atlas** lets a new partner inspect the published artifacts before any code is
+written, so the first integration meeting is about purpose, not about discovery.
+
+The fourth partner still starts a conversation. The conversation starts from artifacts that
+have already been built, reviewed, and tested. For the broader model, see the
+[architecture overview](../../explanation/architecture/).
 
 ## What is built today
 

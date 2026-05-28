@@ -1,6 +1,6 @@
 ---
 title: Inspect a registry before integrating
-description: Explains how to inspect a registry surface before integration.
+description: Use Registry Atlas to turn published metadata into a reviewable map of assets, gaps, and candidate integration routes.
 status: current
 owner: registry-legend
 source_repos:
@@ -21,44 +21,62 @@ standards_referenced:
   - cccev
 ---
 
-Use this page when an integration team needs to understand a registry surface before committing
-to client code, data sharing agreements, or production onboarding.
-Inspection turns published metadata into a reviewable map of assets, gaps, and candidate routes.
+## Starting situation
 
-## Model
+A national education ministry publishes a school registry covering 12,000 institutions.
+Three separate systems want to integrate: a student-loan disbursement platform, a teacher
+certification authority, and a statistics bureau.
+Each team has been given a metadata URL and told to assess feasibility before any data sharing
+agreement is signed.
+They need to know what the metadata describes, where the gaps are, and which route matches
+their information need.
 
-Registry Atlas is the built inspection tool.
-It reads published metadata, follows linked artifacts, classifies discovered assets, and reports
-what it can recognize from the catalog, schema, shape, policy, and service documents.
+## What you set up
 
-Registry Manifest and Registry Relay are common publishers of the metadata that Atlas inspects.
-Manifest can render static bundles.
-Relay can expose metadata at runtime next to protected registry services.
+Ensure the registry has published metadata: a DCAT catalog from Registry Manifest, a Relay
+runtime metadata endpoint, or both.
+The metadata bundle should include a dataset description, a data-service entry, a JSON Schema,
+an SHACL shape, and links to any evidence or requirement documents.
 
-## What inspection can reveal
+Point Registry Atlas at the metadata URL.
+Atlas reads the published artifacts, follows linked documents, classifies discovered assets,
+and produces an inspection report.
 
-- The catalog, datasets, data services, and distributions that are visible through metadata.
-- The schema and SHACL artifacts linked from those assets.
-- The policies, evidence offerings, and requirement structures that are discoverable.
-- Candidate routes for an information need, with evidence references and gaps.
-- Missing or ambiguous metadata that needs human review before integration.
+No record-level access is required for the inspection.
 
-## What inspection cannot prove
+## What a caller does
+
+The integration team runs Atlas against the published metadata URL.
+
+Atlas traverses the catalog, schema, shape, policy, and service documents.
+It classifies what it can recognize, flags missing or ambiguous artifacts, and maps candidate
+routes to the information needs the team has described.
+
+The team reviews the Atlas report to confirm whether the published metadata is sufficient to
+plan an integration, or whether they need to ask the registry operator to fill gaps before
+proceeding.
+
+## What the caller gets back
+
+An inspection report listing: the catalog entries and datasets visible through metadata, the
+schema and SHACL artifacts linked from those assets, the policies and evidence offerings
+discoverable from the service description, candidate routes for each information need with gap
+notes, and a list of missing or ambiguous metadata items that need human review.
+
+A candidate route in the report is evidence for integration planning.
+It is not a production approval or authorization.
+
+## What is in scope, what is not
+
+This pattern covers: running Atlas against published metadata, classifying discovered assets,
+and producing a gap report before integration work begins.
 
 Atlas does not authorize access to a protected service.
 It does not prove that the source registry will return production data for a caller.
 It does not replace a legal or operational integration review.
 
-Atlas reports what the published artifacts say and what the strict matcher can support from those
-artifacts.
-A candidate route is evidence for integration planning, not a production approval.
-
-## Built and future-facing parts
-
-Registry Atlas already implements the inspection behavior described on this page.
-Future registry platform work may publish additional metadata surfaces for Atlas to inspect, but
-the current use case works against published metadata from Relay, Manifest, or another compatible
-registry publisher.
+What Atlas reports reflects what the published artifacts say, not what the source registry
+actually contains.
 
 ## Next
 
