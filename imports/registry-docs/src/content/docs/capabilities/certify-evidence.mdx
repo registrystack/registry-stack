@@ -20,10 +20,12 @@ standards_referenced:
   - sp-dci
 ---
 
-Certify evidence is the claim evaluation and evidence artifact capability.
-The primary implementation is [Registry Witness](../../projects/registry-witness/), which evaluates
-configured eligibility claims against registry data, applies disclosure policy, and returns
-structured results, CCCEV-shaped JSON-LD, or SD-JWT VC credentials.
+Certify evidence is how a registry answers a configured question about its data, a status,
+a predicate, or a selected value, and returns the answer as a signed artifact instead of
+the full source record. The primary implementation is
+[Registry Witness](../../projects/registry-witness/), which evaluates configured eligibility
+claims against registry data, applies disclosure policy, and returns structured results,
+CCCEV-shaped JSON-LD, or SD-JWT VC credentials.
 
 The old v1 term is Prove.
 In v2 language, Prove maps to evidence certification: a service can attest that a configured claim

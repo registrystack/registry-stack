@@ -21,10 +21,12 @@ standards_referenced:
   - sp-dci
 ---
 
-Expose protected APIs is the runtime consultation capability.
-The primary implementation is [Registry Relay](../../projects/registry-relay/), a config-driven HTTP
-gateway that maps CSV, XLSX, Parquet, or PostgreSQL sources to public entity routes while keeping
-table identifiers, raw SQL, and source paths out of public contracts.
+Expose protected APIs is how a registry serves scoped, read-only access to existing source
+data (a CSV, an XLSX, a Parquet file, or a PostgreSQL table) without giving callers database
+credentials or exposing storage internals. The primary implementation is
+[Registry Relay](../../projects/registry-relay/), a config-driven HTTP gateway that maps
+those sources to public entity routes while keeping table identifiers, raw SQL, and source
+paths out of public contracts.
 
 The old v1 term is Consult.
 In v2 language, Consult maps to protected API exposure: caller authentication, route-level scopes,
