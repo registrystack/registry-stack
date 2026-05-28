@@ -21,6 +21,9 @@ standards_referenced:
   - cccev
 ---
 
+Use this pattern when multiple integration teams need to discover what a registry offers before
+any record-level access is opened or a data sharing agreement is signed.
+
 ## Starting situation
 
 A ministry of health operates a health facility registry covering 4,200 public and private
@@ -59,19 +62,8 @@ They complete this inspection before requesting a data sharing agreement or writ
 A set of static or hosted documents: a catalog record, a data service description, a JSON Schema,
 an SHACL shape, a policy document, and links to any evidence or requirement metadata.
 The caller sees what the registry describes itself as offering.
-They do not receive record-level data.
-
-## What is in scope, what is not
-
-This pattern covers: publishing a machine-readable, inspectable description of a registry surface.
-
-It does not cover: authorizing access to protected records, proving that any specific facility or
-entity exists, or replacing legal review.
-Metadata publication answers "what can this registry offer and under what constraints" not
-"here are the records."
-
-Legal basis, data sharing agreements, operational ownership, and production security controls
-remain outside the metadata document.
+They do not receive record-level data, and the published artifacts do not prove that any specific
+facility or entity exists in the source system.
 
 ## Next
 

@@ -21,6 +21,10 @@ standards_referenced:
   - json-ld
 ---
 
+Use this pattern when a relying party needs to confirm one narrow fact about a registered
+company (active, suspended, dissolved) tied to a national business number or LEI, and the
+existing API returns the full record alongside the answer.
+
 ## Starting situation
 
 A national business registry records company incorporations, legal-status changes, and
@@ -65,22 +69,6 @@ and internal registry notes do not appear in the response.
 For a dissolved or suspended company, the predicate returns false.
 The specific legal-status code (suspended, dissolved, struck off) can be included as a separate
 configured disclosure if the governing policy permits it.
-
-## What is in scope, what is not
-
-This pattern covers: evaluating a narrow company-status fact against the business registry,
-returning a predicate or signed credential, and publishing BRegDCAT-AP metadata that makes the
-offering discoverable.
-
-The registry subject is a legal entity identified by a national business number or LEI.
-The relevant facts are incorporation status, active/suspended/dissolved status, registration
-class, and gazette references where the governing policy permits them.
-
-This pattern does not cover: full company record sharing, beneficial-ownership disclosure beyond
-what a configured claim permits, dynamic trust-chain federation, or automatic legal-basis
-approval.
-The issuing institution owns the rule definition, the audit trail, the correction process, and
-the terms under which a relying party may request the fact.
 
 ## Next
 

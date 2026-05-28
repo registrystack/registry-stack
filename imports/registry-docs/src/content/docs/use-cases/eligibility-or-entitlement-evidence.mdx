@@ -20,6 +20,10 @@ standards_referenced:
   - openapi
 ---
 
+Use this pattern when a programme needs to confirm a yes/no eligibility fact against another
+ministry's registry, without receiving the underlying case file, income tier, or family
+composition.
+
 ## Starting situation
 
 A social-protection authority operates a household enrollment registry for a national
@@ -63,20 +67,8 @@ or false), the evaluation timestamp, and the issuer identifier.
 The household case file, income tier, family composition, transfer history, and internal
 registry notes do not appear in the response.
 
-## What is in scope, what is not
-
-This pattern covers: evaluating a narrow eligibility or entitlement rule near the source
-registry, returning a predicate or signed credential, and publishing requirement and evidence
-metadata for discovery.
-
-The fact returned is narrower than the source record.
-The issuing institution owns the rule, the audit trail, the correction process, and the terms
-under which the relying service may request the fact.
-
-This pattern does not cover: full record sharing, automatic determination of legal entitlement,
-or credential wallet infrastructure.
 Cross-programme eligibility decisions remain a policy responsibility of the issuing and
-relying ministries; the registry surface gives them an auditable answer to work from.
+relying ministries; the signed evaluation gives them an auditable answer to work from.
 
 ## Next
 
