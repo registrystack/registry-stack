@@ -399,7 +399,7 @@
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "Relay catalog JSON-LD can include dataset-scoped ODRL Offers; Manifest renders policies."
+    "notes": "Relay catalog JSON-LD can include dataset-scoped ODRL Offers; Manifest renders policies. Policies are published as metadata; Relay does not evaluate or enforce them at runtime."
   },
   {
     "id": "prov-o",

@@ -53,9 +53,11 @@ export default defineConfig({
             { label: 'Overview', slug: 'problems' },
             { label: 'Data readiness', slug: 'problems/existing-data-not-service-ready' },
             { label: 'Over-sharing APIs', slug: 'problems/apis-over-share-records' },
+            { label: 'Policy enforcement', slug: 'problems/safeguards-need-technical-enforcement' },
+            { label: 'One-off integrations', slug: 'problems/one-off-integrations' },
+            { label: 'Capabilities discoverability', slug: 'problems/registry-capabilities-hard-to-discover' },
             { label: 'Shared meaning', slug: 'problems/semantics-do-not-line-up' },
             { label: 'Entity matching', slug: 'problems/entity-identity-and-matching' },
-            { label: 'Policy enforcement', slug: 'problems/safeguards-need-technical-enforcement' },
           ],
         },
         {
@@ -66,6 +68,8 @@ export default defineConfig({
             { label: 'Legacy API', slug: 'use-cases/legacy-registry-api' },
             { label: 'Business status', slug: 'use-cases/business-registry-status' },
             { label: 'Eligibility evidence', slug: 'use-cases/eligibility-or-entitlement-evidence' },
+            { label: 'Publish metadata', slug: 'use-cases/publish-registry-metadata' },
+            { label: 'Inspect before integrating', slug: 'use-cases/inspect-before-integrating' },
           ],
         },
         {
@@ -73,9 +77,32 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'capabilities' },
-            { label: 'Describe', slug: 'capabilities/describe-registries' },
-            { label: 'Expose', slug: 'capabilities/expose-protected-apis' },
-            { label: 'Certify', slug: 'capabilities/certify-evidence' },
+            {
+              label: 'Describe',
+              collapsed: true,
+              items: [
+                { label: 'Overview', slug: 'capabilities/describe-registries' },
+                { label: 'Publishing pipeline', slug: 'explanation/publishing-pipeline' },
+              ],
+            },
+            {
+              label: 'Expose',
+              collapsed: true,
+              items: [
+                { label: 'Overview', slug: 'capabilities/expose-protected-apis' },
+                { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
+              ],
+            },
+            {
+              label: 'Certify',
+              collapsed: true,
+              items: [
+                { label: 'Overview', slug: 'capabilities/certify-evidence' },
+                { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
+              ],
+            },
+            { label: 'Audit & operate', slug: 'capabilities/audit-and-operate' },
+            { label: 'Inspect artifacts', slug: 'capabilities/inspect-published-artifacts' },
             { label: 'Architecture', slug: 'explanation/architecture' },
             { label: 'Safeguards', slug: 'explanation/dpi-safeguards-alignment' },
             { label: 'Ecosystem', slug: 'ecosystem' },
