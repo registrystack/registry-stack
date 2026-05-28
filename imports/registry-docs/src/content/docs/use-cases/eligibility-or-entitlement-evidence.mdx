@@ -22,19 +22,19 @@ standards_referenced:
 
 ## Starting situation
 
-A land administration authority maintains a smallholder-plot registry covering 120,000 parcels
-across six provinces.
-A rural-credit scheme needs to confirm, before approving a loan, that the applicant holds a
-registered plot title in their name.
-The credit scheme needs a yes/no answer against a national land-parcel identifier.
-It does not need the plot boundaries, transaction history, or co-ownership details.
+A social-protection authority operates a household enrollment registry for a national
+cash-transfer programme. A school-feeding programme run by a separate ministry needs to
+confirm, before enrolling a child for free meals, that the child's household is registered
+in the cash-transfer programme. The school-feeding programme needs a yes/no answer against a
+household identifier. It does not need the household case file, income tier, family
+composition, or transfer history.
 
 ## What you set up
 
-Configure a Registry Witness claim for the title-holder fact.
-The claim definition names the source binding (the parcel registry table), the rule (a valid
-registered title exists for the subject identifier), the disclosure mode (predicate: true/false),
-and the issuer identifier.
+Configure a Registry Witness claim for the enrolled-household fact.
+The claim definition names the source binding (the enrollment registry table), the rule (an
+active enrollment exists for the household identifier), the disclosure mode (predicate:
+true/false), and the issuer identifier.
 
 Registry Manifest can publish service, requirement, and evidence metadata that describes what
 facts a consumer may request.
@@ -48,20 +48,20 @@ calls Witness directly.
 
 ## What a caller does
 
-The credit-scheme workflow sends an authorized request to the Witness evaluation endpoint,
-passing the national land-parcel identifier as the subject and naming the title-holder claim.
+The school-feeding workflow sends an authorized request to the Witness evaluation endpoint,
+passing the household identifier as the subject and naming the enrolled-household claim.
 
-For a credential flow, the applicant receives an SD-JWT VC.
-They present only the title-holder disclosure to the credit scheme, keeping co-ownership details
-and plot-boundary fields in the unselected credential attributes.
+For a credential flow, the head of household receives an SD-JWT VC.
+They present only the enrolled-household disclosure to the school-feeding programme, keeping
+income tier, family composition, and transfer history in the unselected credential attributes.
 
 ## What the caller gets back
 
-A signed evaluation containing: the subject identifier, the predicate result (title registered:
-true or false), the evaluation timestamp, and the issuer identifier.
+A signed evaluation containing: the subject identifier, the predicate result (enrolled: true
+or false), the evaluation timestamp, and the issuer identifier.
 
-The plot record, boundaries, co-owner names, transaction history, and internal registry notes
-do not appear in the response.
+The household case file, income tier, family composition, transfer history, and internal
+registry notes do not appear in the response.
 
 ## What is in scope, what is not
 
@@ -75,8 +75,8 @@ under which the relying service may request the fact.
 
 This pattern does not cover: full record sharing, automatic determination of legal entitlement,
 or credential wallet infrastructure.
-Future registry platform work may make more source systems available through common services;
-that work is separate from the current ability to evaluate a configured claim.
+Cross-programme eligibility decisions remain a policy responsibility of the issuing and
+relying ministries; the registry surface gives them an auditable answer to work from.
 
 ## Next
 

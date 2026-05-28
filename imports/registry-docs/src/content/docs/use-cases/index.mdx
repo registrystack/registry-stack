@@ -20,36 +20,29 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Each page below starts from a registry that already exists: a spreadsheet, a legacy application,
-a relational table, or a static export.
-It walks through what you configure, what a caller sends, and what comes back.
-The scenarios span civil registration, business, agriculture, land, health, education, licensing,
-and social-protection contexts.
+These are situations where Registry Stack can be used to reach a specific outcome. Read
+the page that matches yours. Each one starts from a registry that already exists, walks through
+what you configure, and shows what a caller sends and gets back.
 
-Ordered to mirror the [Problems](../problems/) ranking: cases that directly demonstrate the
-highest-impact Stack capabilities come first.
+Ordered by how directly the case exercises the Stack's highest-impact capabilities.
 
-- [Expose a legacy registry as a protected API](./legacy-registry-api/): a civil registration
-  authority wraps an Access database with a governed Relay boundary so a pension authority can
-  confirm vital-status without direct database access.
+- [Expose a legacy registry as a protected API](./legacy-registry-api/): the source is an
+  Access database refreshed nightly from district offices, a pension authority needs an
+  authoritative vital-status answer, and the registrar will not hand out a database credential.
 - [Verify a business registry status without sharing the full record](./business-registry-status/):
-  a procurement platform asks for a yes/no active-status answer tied to a national business number,
-  receiving a signed predicate instead of the full company record.
+  the procurement platform needs to confirm one thing about a supplier (are they actively
+  registered?), and the existing API returns the beneficial-ownership chain and filing history
+  with it.
 - [Verify an eligibility or entitlement fact without sharing the full record](./eligibility-or-entitlement-evidence/):
-  a rural-credit scheme confirms that an applicant holds a registered land-parcel title without
-  receiving plot boundaries, co-ownership details, or transaction history.
-- [Let a workflow tool call governed registry services](./workflow-tool-governed-services/): an
-  extension-service voucher tool queries a farmer registry for registration status and region
-  assignment, scoped to its caller role, without storing source records.
-- [Publish registry metadata](./publish-registry-metadata/): a health ministry publishes a
-  machine-readable description of a facility registry so three integration teams can assess
-  feasibility before any data sharing agreement is signed.
-- [Inspect a registry before integrating](./inspect-before-integrating/): integration teams for a
-  national school registry run Registry Atlas against published metadata to map assets, surface
-  gaps, and identify candidate routes before writing client code.
-- [Prepare existing data for a future registry platform](./prepare-for-future-registry-platform/):
-  a professional licensing authority describes 35,000 practitioner records across six sectors with
-  Manifest and Atlas, producing migration-ready artifacts while the source system remains in place.
+  a school-feeding programme needs to confirm that a child's household is enrolled in the
+  cash-transfer programme run by a separate ministry, without receiving the household case
+  file, income tier, or transfer history.
+- [Publish registry metadata](./publish-registry-metadata/): three integration teams are
+  asking the same questions (which fields, which districts, which access controls), and the
+  ministry wants one canonical place to answer them before any data sharing agreement is signed.
+- [Inspect a registry before integrating](./inspect-before-integrating/): the metadata URL has
+  been published, three teams have been told to assess feasibility against it, and they need
+  to know what is described, where the gaps are, and which route matches their information need.
 
 ## Related
 

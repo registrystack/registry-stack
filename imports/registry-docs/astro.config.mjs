@@ -57,7 +57,6 @@ export default defineConfig({
             { label: 'Registry capabilities are hard to discover', slug: 'problems/registry-capabilities-hard-to-discover' },
             { label: 'Semantics do not line up', slug: 'problems/semantics-do-not-line-up' },
             { label: 'Entity identity and matching are unclear', slug: 'problems/entity-identity-and-matching' },
-            { label: 'AI and automation increase urgency', slug: 'problems/ai-and-automation-increase-urgency' },
           ],
         },
         {
@@ -67,10 +66,8 @@ export default defineConfig({
             { label: 'Legacy registry API', slug: 'use-cases/legacy-registry-api' },
             { label: 'Business registry status', slug: 'use-cases/business-registry-status' },
             { label: 'Eligibility or entitlement evidence', slug: 'use-cases/eligibility-or-entitlement-evidence' },
-            { label: 'Workflow tool and governed services', slug: 'use-cases/workflow-tool-governed-services' },
             { label: 'Publish registry metadata', slug: 'use-cases/publish-registry-metadata' },
             { label: 'Inspect before integrating', slug: 'use-cases/inspect-before-integrating' },
-            { label: 'Prepare for a future registry platform', slug: 'use-cases/prepare-for-future-registry-platform' },
           ],
         },
         {
