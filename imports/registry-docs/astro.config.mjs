@@ -84,6 +84,7 @@ export default defineConfig({
         {
           label: 'Ecosystem',
           items: [
+            { label: 'Domain registry platforms', slug: 'ecosystem/domain-registry-platforms' },
             { label: 'Public service platforms', slug: 'ecosystem/public-service-platforms' },
             { label: 'Workflow engines', slug: 'ecosystem/workflow-engines' },
             { label: 'Exchange layers', slug: 'ecosystem/exchange-layers' },

@@ -1,0 +1,105 @@
+---
+title: Domain registry platforms
+description: How Registry Stack fits alongside production domain registry platforms (OpenCRVS, OpenSPP, DHIS2, OpenIMIS) that own their own storage, APIs, and domain logic.
+status: current
+owner: registry-legend
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-witness
+last_reviewed: "2026-05-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - odrl
+  - openapi
+  - sd-jwt-vc
+---
+
+Domain registry platforms are the systems of record for vital events, social-protection
+enrollment, health information, health insurance, and similar institutional data. Registry
+Stack is designed to work alongside them, not to replace them.
+
+## Ecosystem role
+
+Each domain registry platform owns its domain: storage, business rules, correction workflows,
+user interfaces, and a runtime API.
+
+- [OpenCRVS](https://www.opencrvs.org/) is a civil registration and vital statistics platform.
+- [OpenSPP](https://openspp.org/) is a social-protection platform covering household
+  registries and programme management.
+- [DHIS2](https://dhis2.org/) is a health management information system used at national and
+  facility levels.
+- [OpenIMIS](https://openimis.org/) is a health insurance information system.
+
+Registry Stack does not duplicate any of those domains. It provides a registry-facing layer
+that sits alongside the system of record: standardized metadata, scoped read access,
+configured evidence responses, and audit records.
+
+## Pattern
+
+Use the domain registry as the system of record. Use Registry Stack at the registry edge for
+inter-institutional patterns:
+
+- Registry Manifest publishes a machine-readable description of what the registry offers
+  (catalogs, schemas, services, policies, evidence offerings) so partners can discover the
+  surface before integration.
+- Registry Relay can expose a scoped, read-only HTTP route over the domain registry's data
+  (a CSV export, a Parquet snapshot, or a read replica) for callers that must not be given
+  direct database access.
+- Registry Witness can answer a configured claim against the registry's data without
+  exposing the full source record (a yes/no enrollment check, an active-status predicate,
+  a selected value).
+
+The domain registry continues to own records, correction workflows, retention rules, and
+operational availability. The Stack surface gives external callers a narrow, governed path
+that respects the authority of the source.
+
+## Where overlap exists
+
+Domain registry platforms already publish APIs. Registry Stack does not propose to replace
+them. The Stack is useful where the domain registry does not yet publish:
+
+- Standardized metadata in DCAT, BRegDCAT-AP, CPSV-AP, or CCCEV shapes.
+- Caller-scoped read routes with declared fields and a publishable policy document.
+- Evidence-shaped responses (predicate, redacted, selected value) backed by a signed result.
+- Tamper-evident audit records for trust-critical access.
+
+Where the platform already publishes these, Registry Stack does not need to repeat them.
+Where it does not, the Stack provides the missing registry-facing surface without altering
+the domain system.
+
+## What this is not
+
+The current docs describe configurable surfaces and standards renderers. They do not describe
+production integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
+The fixtures shipped with Registry Lab simulate civil, social-protection, and health
+registry patterns; they are not connected to any production instance.
+
+A reviewed integration with a specific domain registry platform remains a separate piece
+of work. The Stack's design is shaped to support that work; the work itself is not yet done.
+
+## Standards fit
+
+DCAT and BRegDCAT-AP describe catalog and dataset metadata.
+CPSV-AP describes the service the registry offers and the competent authority.
+SHACL and JSON Schema describe entity shapes.
+ODRL describes policy metadata.
+OpenAPI describes runtime HTTP contracts.
+CCCEV and SD-JWT VC apply when the response is evidence-shaped or credential-shaped.
+
+These standards are also widely used in the domain-registry ecosystem, which is why Registry
+Stack adopts them rather than defining its own metadata or policy language.
+
+## Next
+
+- [Describe registries](../../capabilities/describe-registries/)
+- [Expose protected APIs](../../capabilities/expose-protected-apis/)
+- [Certify evidence](../../capabilities/certify-evidence/)
+- [Architecture overview](../../explanation/architecture/)
