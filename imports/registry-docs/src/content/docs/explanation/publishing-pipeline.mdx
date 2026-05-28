@@ -33,11 +33,9 @@ The two paths share the same manifest input, but they serve different deployment
 ## The two-layer split: portable vs runtime
 
 **Portable metadata** (Registry Manifest only) travels wherever files can travel.
-A civil registration authority can validate and publish a DCAT Data Catalog Vocabulary
-(DCAT) catalog, a BRegDCAT-AP Business Registers Extended DCAT Application Profile
-(BRegDCAT-AP) profile, SHACL node shapes, JSON Schema, and an ODRL Open Digital Rights
-Language (ODRL) policy bundle from a single `metadata.yaml` with no running service, no
-credentials, and no network.
+A civil registration authority can validate and publish a DCAT catalog, a BRegDCAT-AP
+profile, SHACL shapes, JSON Schemas, and an ODRL policy bundle from a single
+`metadata.yaml` with no running service, no credentials, and no network.
 The output is a directory of static files that can be served from an object store, a CDN,
 or a government open-data portal.
 
@@ -85,20 +83,21 @@ catalog:
 ```
 
 From that catalog block plus the dataset and entity blocks below it, Registry Manifest
-derives a DCAT catalog document, a BRegDCAT-AP profile, SHACL node shapes per entity, a
-JSON Schema per entity, CPSV-AP service catalogue entries for declared public services, a
-Core Criterion and Core Evidence Vocabulary (CCCEV) requirements bundle, and ODRL policy
-documents per dataset.
+derives a DCAT catalog document, a BRegDCAT-AP profile, a SHACL shapes document, a JSON
+Schema per entity, CPSV-AP service catalogue entries for declared public services, and
+ODRL policy documents per dataset. CCCEV evidence rendering is owned by Registry Witness,
+not Registry Manifest.
 No renderer makes network calls or reads additional files.
 
 ## What Relay adds at runtime
 
-When Registry Relay starts, it loads `metadata.yaml` and validates it against the runtime
-`config.yaml`, which binds the manifest's logical datasets and entities to actual source
-files or database tables.
-The startup check produces stable error codes (`metadata.manifest.validation_failed`,
-`runtime.binding.dataset_missing`) and exits non-zero on any mismatch, so misconfiguration
-is visible immediately.
+When Registry Relay starts, it compiles `metadata.yaml` and validates it; it then loads
+the runtime `config.yaml`, which binds the manifest's logical datasets and entities to
+actual source files or database tables, and cross-checks that every binding resolves to a
+declared dataset and entity.
+Manifest problems surface as `metadata.manifest.validation_failed`; binding mismatches
+surface as `runtime.binding.dataset_missing` (and related `runtime.binding.*` codes).
+Startup exits non-zero on either, so misconfiguration is visible immediately.
 
 At request time, a caller authenticated with a `<dataset_id>:metadata` scope can fetch:
 
@@ -120,10 +119,10 @@ Beyond scoped filtering, Relay adds:
   is available as an authenticated route. The same caller that can read rows with a `rows`
   scope can separately hold a `metadata` scope to fetch catalog artifacts.
 - **Audit records for every metadata request.** The same JSONL audit trail that covers row
-  reads covers metadata reads. The caller's `principal_id`, the scopes checked, and the
+  reads covers metadata reads. The caller's `principal_id`, the `scopes_used`, and the
   `request_id` all appear in the record.
 - **Scope-aware filtering.** A key or token that carries `social_registry:metadata` but not
-  `vital_events:metadata` receives a catalog that lists only the social registry dataset,
+  `vital-events:metadata` receives a catalog that lists only the social registry dataset,
   even if the manifest declares both.
 
 ## When to use Manifest alone vs Manifest with Relay

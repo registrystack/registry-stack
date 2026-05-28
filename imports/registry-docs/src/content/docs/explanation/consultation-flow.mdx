@@ -14,12 +14,10 @@ standards_referenced:
   - openapi
 ---
 
-Registry Relay is a read-only HTTP consultation gateway, not a database proxy, not a
-generic REST adapter, and not a provisioning system.
-It fronts sensitive tabular sources with entity-shaped routes and caller-specific access
-controls.
-What it does not do matters as much as what it does: no writes in v1, no SQL passthrough,
-no raw table exposure.
+Registry Relay is a read-only HTTP consultation gateway that fronts sensitive tabular
+sources with entity-shaped routes and caller-specific access controls.
+Storage table identifiers stay private; callers see only declared entities, fields,
+filters, and aggregates.
 For the broader scope of what each project owns, see the
 [boundaries and map page](../../map/boundaries-and-map/).
 
@@ -54,9 +52,9 @@ expressions to the source.
 
 **3. Audit.** Before returning the response, Relay writes one JSONL record to the
 configured audit sink (stdout, file, or syslog).
-The record carries the `principal_id`, `request_id` (a ULID also returned as
-`X-Request-Id`), `dataset_id`, `entity_name`, `scopes_used`, `query_params` (names and
-operators, never values), `status_code`, and `duration_ms`.
+The record carries the `principal_id`, `request_id` (a ULID also returned in the
+`x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
+(names and operators, never values), `status_code`, and `duration_ms`.
 Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
 For the full field list, see the [audit record shape in the Relay reference](../../projects/registry-relay/reference/#audit-record-shape).
 
@@ -75,8 +73,8 @@ The four primary route shapes for row access are:
 - `GET /datasets/{dataset_id}/{entity}/{id}` : single record by identifier.
 - `GET /datasets/{dataset_id}/{entity}/{id}/{relationship}` : related records for a
   declared relationship.
-- `GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}` : a pre-configured
-  aggregate over entity records.
+- `GET /datasets/{dataset_id}/aggregates/{aggregate_id}` : a pre-configured aggregate over
+  entity records.
 
 Metadata routes under `/metadata/*` follow the same auth path but require a `metadata`
 scope, not a `rows` or `aggregate` scope.
@@ -85,11 +83,12 @@ The full route inventory is in the [Registry Relay reference](../../projects/reg
 ## Scope model
 
 Scopes are independent.
-A principal can hold any combination of the five suffixes for any dataset:
+A principal can hold any combination of the following suffixes for any dataset:
 
 - `metadata`: read catalog, DCAT, SHACL, policies, and evidence-offering metadata.
 - `rows`: read entity records, single records, and relationship traversals.
 - `aggregate`: run pre-configured aggregates over entity records.
+- `verify`: call the per-entity `verify` route.
 - `evidence_verification`: call evidence-offering verification endpoints.
 - `admin`: trigger data reloads on the admin listener.
 
@@ -130,17 +129,18 @@ The identity verification service can run evidence verification but cannot read 
 Full scope configuration and API-key provisioning are in
 [Authorize callers](../../projects/registry-relay/authorize-callers/).
 
-## What Relay does not do
+## Closed surfaces
 
-- **No writes in v1.** Registry Relay has no `POST`, `PUT`, `PATCH`, or `DELETE` routes
-  on entity paths. Provisioning is out of scope.
-- **No SQL passthrough.** Callers cannot submit arbitrary query expressions. Relay
-  enforces a closed filter set declared in `entities[].api.allowed_filters`.
-- **No plain SQL exposure.** Storage table names, column names, and connection strings
-  are never returned in responses or error messages.
-- **No open-ended filter values in audit.** The audit record captures filter parameter
-  names and operators but never the submitted values, to avoid logging personal
-  identifiers.
-- **No token minting.** In OIDC mode, Registry Relay is a resource server only. It
-  verifies tokens issued by an external identity provider; it never mints or refreshes
-  tokens.
+Five constraints a reviewer can verify against the code:
+
+- **Read-only in v1.** Entity paths expose only `GET`. No `POST`, `PUT`, `PATCH`, or
+  `DELETE` route is registered; provisioning is out of scope.
+- **Closed filter set.** Callers cannot submit arbitrary query expressions. Relay accepts
+  only the operators declared in `entities[].api.allowed_filters` and builds queries from
+  its own plan.
+- **Storage details stay private.** Table names, column names, and connection strings
+  never appear in responses or error messages.
+- **Filter values stay out of audit.** Records capture filter parameter names and
+  operators but never the submitted values, so personal identifiers are not logged.
+- **No token minting.** In OIDC mode, Relay is a resource server: it verifies tokens
+  issued by an external identity provider and never mints or refreshes them.
