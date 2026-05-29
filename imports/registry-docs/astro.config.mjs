@@ -4,8 +4,7 @@ import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://jeremi.github.io/registry-docs',
-  base: '/registry-docs',
+  site: 'https://docs.registrystack.org',
   trailingSlash: 'always',
   integrations: [
     starlight({
