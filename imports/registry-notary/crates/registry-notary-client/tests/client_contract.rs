@@ -92,6 +92,7 @@ fn credential_issue_response_debug_redacts_credential_material() {
 
     let wrapped = NotaryResponse {
         body: response,
+        status: StatusCode::OK,
         request_id: Some("req-credential".to_string()),
         retry_after: None,
     };
@@ -120,6 +121,7 @@ fn notary_response_debug_keeps_non_sensitive_body_metadata() {
             status: "ok".to_string(),
             checks: json!({ "database": "ready" }),
         },
+        status: StatusCode::OK,
         request_id: Some("req-health".to_string()),
         retry_after: None,
     };
@@ -574,6 +576,64 @@ async fn retry_after_delta_on_problem_controls_retry_delay() {
 }
 
 #[tokio::test]
+async fn retry_after_http_date_uses_server_date_for_retry_delay() {
+    let state = Arc::new(AtomicUsize::new(0));
+    let app = Router::new()
+        .route("/claims", get(retry_after_http_date_then_claims_handler))
+        .with_state(Arc::clone(&state));
+    let base = spawn(app).await;
+    let retry_policy = RetryPolicy {
+        max_attempts: 2,
+        base_delay: Duration::from_secs(5),
+        max_delay: Duration::from_secs(5),
+        retry_unavailable: true,
+        ..RetryPolicy::default()
+    };
+    let client = RegistryNotaryClient::builder(base)
+        .retry_policy(retry_policy)
+        .build()
+        .expect("client builds");
+
+    let started = Instant::now();
+    let response = client
+        .list_claims(RequestOptions::default())
+        .await
+        .expect("retry-after HTTP-date equal to server date allows immediate retry");
+
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(response.body.data.is_empty());
+    assert_eq!(state.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn accepted_status_decode_error_keeps_response_status() {
+    let app = Router::new().route(
+        "/ready",
+        get(|| async {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [("x-request-id", "req-ready-decode")],
+                "not-json",
+            )
+        }),
+    );
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .build()
+        .expect("client builds");
+
+    let error = client.ready().await.expect_err("invalid ready JSON fails");
+
+    match error {
+        NotaryClientError::Decode { status, request_id } => {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(request_id.as_deref(), Some("req-ready-decode"));
+        }
+        other => panic!("expected decode error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn decode_error_display_is_opaque() {
     let app = Router::new().route(
         "/claims",
@@ -939,6 +999,30 @@ async fn retry_after_then_claims_handler(State(counter): State<Arc<AtomicUsize>>
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [("retry-after", "0")],
+            Json(json!({
+                "type": "https://docs.registry-notary.dev/problems/source/unavailable",
+                "title": "Source unavailable",
+                "status": 503,
+                "detail": "source unavailable",
+                "code": "source.unavailable"
+            })),
+        )
+            .into_response();
+    }
+    Json(json!({ "data": [] })).into_response()
+}
+
+async fn retry_after_http_date_then_claims_handler(
+    State(counter): State<Arc<AtomicUsize>>,
+) -> Response {
+    let call = counter.fetch_add(1, Ordering::SeqCst) + 1;
+    if call == 1 {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                ("retry-after", "Wed, 31 Dec 2099 00:00:00 GMT"),
+                ("date", "Wed, 31 Dec 2099 00:00:00 GMT"),
+            ],
             Json(json!({
                 "type": "https://docs.registry-notary.dev/problems/source/unavailable",
                 "title": "Source unavailable",

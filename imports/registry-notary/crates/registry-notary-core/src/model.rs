@@ -867,7 +867,7 @@ impl EvidencePrincipal {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EvidenceAuditEvent {
     pub event_id: String,
     pub occurred_at: String,
@@ -877,11 +877,15 @@ pub struct EvidenceAuditEvent {
     pub method: String,
     pub path: String,
     pub status: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purposes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<AccessMode>,
@@ -1007,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_self_attestation_fields_are_serializable_without_raw_values() {
+    fn audit_self_attestation_fields_round_trip_without_raw_values() {
         let event = EvidenceAuditEvent {
             event_id: "01HX".to_string(),
             occurred_at: "2026-05-25T00:00:00Z".to_string(),
@@ -1040,7 +1044,7 @@ mod tests {
             policy_hash: Some(Hashed::from_hash("sha256:policy")),
         };
 
-        let value = serde_json::to_value(event).expect("audit event serializes");
+        let value = serde_json::to_value(&event).expect("audit event serializes");
         assert_eq!(value["access_mode"], json!("self_attestation"));
         assert_eq!(
             value["denial_code"],
@@ -1056,6 +1060,47 @@ mod tests {
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
         assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());
+
+        let decoded: EvidenceAuditEvent =
+            serde_json::from_value(value).expect("audit event deserializes");
+        assert_eq!(decoded.event_id, event.event_id);
+        assert_eq!(decoded.access_mode, Some(AccessMode::SelfAttestation));
+        assert_eq!(
+            decoded.denial_code,
+            Some(SelfAttestationDenialCode::SubjectMismatch)
+        );
+        assert_eq!(
+            decoded.token_claim_name.as_ref().map(Bounded::as_str),
+            Some("national_id")
+        );
+        assert_eq!(
+            decoded.correlation_id.as_ref().map(Bounded::as_str),
+            Some("req-123")
+        );
+        assert_eq!(
+            decoded.policy_hash.as_ref().map(Hashed::as_str),
+            Some("sha256:policy")
+        );
+    }
+
+    #[test]
+    fn audit_event_missing_optional_fields_defaults_to_none() {
+        let decoded: EvidenceAuditEvent = serde_json::from_value(json!({
+            "event_id": "01HX",
+            "occurred_at": "2026-05-25T00:00:00Z",
+            "decision": "allowed",
+            "method": "GET",
+            "path": "/claims",
+            "status": 200
+        }))
+        .expect("legacy audit event deserializes");
+
+        assert!(decoded.verification_id.is_none());
+        assert!(decoded.claim_hash.is_none());
+        assert!(decoded.purposes.is_none());
+        assert!(decoded.row_count.is_none());
+        assert!(decoded.error_code.is_none());
+        assert!(decoded.access_mode.is_none());
     }
 
     #[test]

@@ -47,6 +47,10 @@ impl std::fmt::Debug for AuthState {
     }
 }
 
+/// Cloneable typed HTTP client for a Registry Notary service.
+///
+/// Construct with [`RegistryNotaryClient::builder`]. Clones share the same
+/// underlying `reqwest::Client` and JWKS cache.
 #[derive(Debug, Clone)]
 pub struct RegistryNotaryClient {
     base_url: Url,
@@ -63,6 +67,10 @@ struct CachedJwks {
     expires_at: Instant,
 }
 
+/// Builder for [`RegistryNotaryClient`].
+///
+/// Exactly one authentication mode may be configured. The builder rejects
+/// non-HTTPS base URLs except HTTP loopback in debug or `test-support` builds.
 #[derive(Default)]
 pub struct NotaryClientBuilder {
     base_url: Option<String>,
@@ -99,6 +107,10 @@ impl std::fmt::Debug for NotaryClientBuilder {
 }
 
 impl RegistryNotaryClient {
+    /// Start building a client for `base_url`.
+    ///
+    /// `base_url` may include a path prefix; route paths are joined under that
+    /// prefix.
     #[must_use]
     pub fn builder(base_url: impl Into<String>) -> NotaryClientBuilder {
         NotaryClientBuilder {
@@ -107,6 +119,7 @@ impl RegistryNotaryClient {
         }
     }
 
+    /// Fetch `GET /healthz`.
     pub async fn health(&self) -> Result<NotaryResponse<HealthResponse>, NotaryClientError> {
         self.get_json(
             "/healthz",
@@ -117,6 +130,10 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Fetch `GET /ready`.
+    ///
+    /// A `503 Service Unavailable` body is decoded as [`HealthResponse`] rather
+    /// than surfaced as an error so callers can inspect readiness checks.
     pub async fn ready(&self) -> Result<NotaryResponse<HealthResponse>, NotaryClientError> {
         self.get_json_accepting_status(
             "/ready",
@@ -128,6 +145,9 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Trigger `POST /admin/reload`.
+    ///
+    /// Requires the server-side admin scope or equivalent API key.
     pub async fn admin_reload(
         &self,
         options: RequestOptions,
@@ -143,6 +163,7 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Fetch the generated OpenAPI document from `GET /openapi.json`.
     pub async fn openapi_json(
         &self,
         options: RequestOptions,
@@ -156,6 +177,7 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Fetch `GET /.well-known/evidence-service`.
     pub async fn service_document(
         &self,
         options: RequestOptions,
@@ -169,6 +191,11 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Fetch and cache `GET /.well-known/evidence/jwks.json`.
+    ///
+    /// Calls without request options use a short in-process cache. Use
+    /// [`Self::refresh_jwks`] to force a refresh, or [`Self::raw_issuer_jwks`]
+    /// to fetch without updating the cache.
     pub async fn issuer_jwks(
         &self,
         options: RequestOptions,
@@ -184,6 +211,7 @@ impl RegistryNotaryClient {
             if let Some(body) = cached {
                 return Ok(NotaryResponse {
                     body,
+                    status: StatusCode::OK,
                     request_id: None,
                     retry_after: None,
                 });
@@ -192,6 +220,7 @@ impl RegistryNotaryClient {
         self.fetch_issuer_jwks(options).await
     }
 
+    /// Force-refresh the evidence issuer JWKS cache.
     pub async fn refresh_jwks(
         &self,
         options: RequestOptions,
@@ -199,6 +228,9 @@ impl RegistryNotaryClient {
         self.fetch_issuer_jwks(options).await
     }
 
+    /// Fetch Prometheus metrics from `GET /metrics`.
+    ///
+    /// Metrics are operational data and are returned as text.
     pub async fn metrics(
         &self,
         options: RequestOptions,
@@ -218,16 +250,13 @@ impl RegistryNotaryClient {
             )
             .await?;
         let request_id = response.request_id.clone();
+        let status = response.status;
         String::from_utf8(response.body).map_or_else(
-            |_| {
-                Err(NotaryClientError::Decode {
-                    status: StatusCode::OK,
-                    request_id,
-                })
-            },
+            |_| Err(NotaryClientError::Decode { status, request_id }),
             |body| {
                 Ok(NotaryResponse {
                     body,
+                    status,
                     request_id: response.request_id,
                     retry_after: response.retry_after,
                 })
@@ -255,6 +284,7 @@ impl RegistryNotaryClient {
         Ok(response)
     }
 
+    /// Fetch the issuer JWKS without using or updating the client cache.
     pub async fn raw_issuer_jwks(
         &self,
         options: RequestOptions,
@@ -269,6 +299,9 @@ impl RegistryNotaryClient {
     }
 
     #[cfg(feature = "oid4vci")]
+    /// Fetch OpenID4VCI issuer metadata.
+    ///
+    /// This helper wraps the endpoint only. It does not generate holder proofs.
     pub async fn oid4vci_issuer_metadata(
         &self,
         options: RequestOptions,
@@ -287,6 +320,7 @@ impl RegistryNotaryClient {
     }
 
     #[cfg(feature = "oid4vci")]
+    /// Fetch an OpenID4VCI credential offer.
     pub async fn oid4vci_credential_offer(
         &self,
         credential_configuration_id: Option<&str>,
@@ -307,6 +341,7 @@ impl RegistryNotaryClient {
     }
 
     #[cfg(feature = "oid4vci")]
+    /// Request an OpenID4VCI nonce.
     pub async fn oid4vci_nonce(
         &self,
         request: Option<registry_platform_oid4vci::NonceRequest>,
@@ -328,6 +363,9 @@ impl RegistryNotaryClient {
     }
 
     #[cfg(feature = "oid4vci")]
+    /// Submit an OpenID4VCI credential request.
+    ///
+    /// The caller is responsible for holder-key custody and proof JWT creation.
     pub async fn oid4vci_credential(
         &self,
         request: registry_platform_oid4vci::CredentialRequest,
@@ -346,6 +384,9 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// List configured claim definitions with `GET /claims`.
+    ///
+    /// The current server contract returns a bounded, unpaginated list.
     pub async fn list_claims(
         &self,
         options: RequestOptions,
@@ -354,6 +395,7 @@ impl RegistryNotaryClient {
             .await
     }
 
+    /// Fetch one claim definition by claim id.
     pub async fn get_claim(
         &self,
         claim_id: &str,
@@ -368,6 +410,7 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// List evidence formats supported by the service.
     pub async fn list_formats(
         &self,
         options: RequestOptions,
@@ -376,6 +419,7 @@ impl RegistryNotaryClient {
             .await
     }
 
+    /// Start the ergonomic evaluation builder for one subject id.
     #[must_use]
     pub fn evaluate(&self, subject_id: impl Into<String>) -> EvaluateBuilder<'_> {
         EvaluateBuilder {
@@ -391,6 +435,10 @@ impl RegistryNotaryClient {
         }
     }
 
+    /// Submit a raw typed [`EvaluateRequest`].
+    ///
+    /// This method is best when the caller already has a core DTO. It applies
+    /// default purpose and claim-result format handling before sending.
     pub async fn evaluate_dto(
         &self,
         mut request: EvaluateRequest,
@@ -416,6 +464,10 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Submit a raw typed [`BatchEvaluateRequest`].
+    ///
+    /// Batch evaluation is the only POST route where the client allows
+    /// `Idempotency-Key`; retries require that key.
     pub async fn batch_evaluate_dto(
         &self,
         mut request: BatchEvaluateRequest,
@@ -441,6 +493,7 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Render a stored evaluation into a requested evidence format.
     pub async fn render_dto(
         &self,
         request: RenderRequest,
@@ -458,6 +511,10 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Issue a credential from a stored evaluation.
+    ///
+    /// Returned credential material is present in typed fields but redacted from
+    /// `Debug` output.
     pub async fn issue_credential_dto(
         &self,
         request: CredentialIssueRequest,
@@ -475,6 +532,7 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Fetch minimal credential status by credential id.
     pub async fn credential_status(
         &self,
         credential_id: &str,
@@ -489,6 +547,7 @@ impl RegistryNotaryClient {
         .await
     }
 
+    /// Update minimal credential status through the admin route.
     pub async fn update_credential_status(
         &self,
         credential_id: &str,
@@ -513,6 +572,9 @@ impl RegistryNotaryClient {
     }
 
     #[cfg(feature = "federation")]
+    /// Submit an already-signed federation evaluation JWS.
+    ///
+    /// The client does not mint or sign federation JWTs.
     pub async fn federation_evaluate_jws(
         &self,
         compact_jws: &str,
@@ -533,16 +595,13 @@ impl RegistryNotaryClient {
         .await
         .and_then(|response| {
             let request_id = response.request_id.clone();
+            let status = response.status;
             String::from_utf8(response.body).map_or_else(
-                |_| {
-                    Err(NotaryClientError::Decode {
-                        status: StatusCode::OK,
-                        request_id,
-                    })
-                },
+                |_| Err(NotaryClientError::Decode { status, request_id }),
                 |body| {
                     Ok(NotaryResponse {
                         body,
+                        status,
                         request_id: response.request_id,
                         retry_after: response.retry_after,
                     })
@@ -586,7 +645,7 @@ impl RegistryNotaryClient {
             .await?;
         let body =
             serde_json::from_slice(&response.body).map_err(|_| NotaryClientError::Decode {
-                status: StatusCode::OK,
+                status: response.status,
                 request_id: response.request_id.clone(),
             })?;
         Ok(response.map(body))
@@ -624,7 +683,7 @@ impl RegistryNotaryClient {
             .await?;
         let body =
             serde_json::from_slice(&response.body).map_err(|_| NotaryClientError::Decode {
-                status: StatusCode::OK,
+                status: response.status,
                 request_id: response.request_id.clone(),
             })?;
         Ok(response.map(body))
@@ -733,6 +792,10 @@ impl RegistryNotaryClient {
                 .headers()
                 .get(headers::RETRY_AFTER)
                 .and_then(|value| value.to_str().ok()),
+            response
+                .headers()
+                .get(headers::DATE)
+                .and_then(|value| value.to_str().ok()),
         );
         let bytes =
             read_bounded(response, limit)
@@ -743,6 +806,7 @@ impl RegistryNotaryClient {
         if status.is_success() || accepted_status == Some(status) {
             return Ok(NotaryResponse {
                 body: bytes,
+                status,
                 request_id,
                 retry_after,
             });
@@ -811,42 +875,52 @@ impl RegistryNotaryClient {
 }
 
 impl NotaryClientBuilder {
+    /// Configure bearer-token authentication.
     #[must_use]
     pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
         self.bearer_token = Some(SecretString::from(token.into()));
         self
     }
 
+    /// Configure API-key authentication.
     #[must_use]
     pub fn api_key(mut self, token: impl Into<String>) -> Self {
         self.api_key = Some(SecretString::from(token.into()));
         self
     }
 
+    /// Configure dynamic authentication.
     #[must_use]
     pub fn auth_provider(mut self, provider: Arc<dyn AuthProvider>) -> Self {
         self.auth_provider = Some(provider);
         self
     }
 
+    /// Configure the default data purpose for evaluation requests.
+    ///
+    /// A body purpose must match this value unless overridden through
+    /// [`RequestOptions`].
     #[must_use]
     pub fn default_purpose(mut self, purpose: impl Into<String>) -> Self {
         self.default_purpose = Some(purpose.into());
         self
     }
 
+    /// Configure request timeout. Defaults to 30 seconds.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
+    /// Configure the `User-Agent` header.
     #[must_use]
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = Some(user_agent.into());
         self
     }
 
+    /// Configure route-aware retry behavior.
     #[must_use]
     pub fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = Some(retry_policy);
@@ -854,12 +928,17 @@ impl NotaryClientBuilder {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    /// Override the HTTP client in tests.
+    ///
+    /// This is intentionally unavailable in production builds because it can
+    /// bypass transport safety defaults.
     #[must_use]
     pub fn reqwest_client(mut self, client: reqwest::Client) -> Self {
         self.reqwest_client = Some(client);
         self
     }
 
+    /// Build the client and validate base URL and auth configuration.
     pub fn build(self) -> Result<RegistryNotaryClient, NotaryClientBuildError> {
         let base_url = self.base_url.unwrap_or_default();
         let mut base_url =
@@ -994,6 +1073,7 @@ fn encode_query_value(value: &str) -> String {
     encode_path_segment(value).replace("%20", "+")
 }
 
+/// Fluent builder for one high-level evaluation request.
 pub struct EvaluateBuilder<'a> {
     client: &'a RegistryNotaryClient,
     subject_id: String,
@@ -1007,18 +1087,21 @@ pub struct EvaluateBuilder<'a> {
 }
 
 impl<'a> EvaluateBuilder<'a> {
+    /// Set the subject id type.
     #[must_use]
     pub fn id_type(mut self, id_type: impl Into<String>) -> Self {
         self.id_type = Some(id_type.into());
         self
     }
 
+    /// Add one claim id.
     #[must_use]
     pub fn claim(mut self, claim: impl Into<String>) -> Self {
         self.claims.push(ClaimRef::new(claim.into()));
         self
     }
 
+    /// Add multiple claim ids.
     #[must_use]
     pub fn claims<I, S>(mut self, claims: I) -> Self
     where
@@ -1030,36 +1113,42 @@ impl<'a> EvaluateBuilder<'a> {
         self
     }
 
+    /// Set the disclosure mode.
     #[must_use]
     pub fn disclosure(mut self, disclosure: impl Into<String>) -> Self {
         self.disclosure = Some(disclosure.into());
         self
     }
 
+    /// Set the requested response format.
     #[must_use]
     pub fn format(mut self, format: impl Into<String>) -> Self {
         self.format = Some(format.into());
         self
     }
 
+    /// Set the data purpose for this request.
     #[must_use]
     pub fn purpose(mut self, purpose: impl Into<String>) -> Self {
         self.purpose = Some(purpose.into());
         self
     }
 
+    /// Set `X-Request-Id` for this request.
     #[must_use]
     pub fn request_id(mut self, request_id: impl Into<String>) -> Self {
         self.request_id = Some(request_id.into());
         self
     }
 
+    /// Set W3C `traceparent` for this request.
     #[must_use]
     pub fn traceparent(mut self, traceparent: impl Into<String>) -> Self {
         self.traceparent = Some(traceparent.into());
         self
     }
 
+    /// Send the evaluation request.
     pub async fn send(self) -> Result<NotaryResponse<Evaluation>, NotaryClientError> {
         let request = EvaluateRequest {
             subject: SubjectRequest {
@@ -1087,6 +1176,7 @@ impl<'a> EvaluateBuilder<'a> {
                 let results = response.body.results;
                 NotaryResponse {
                     body: Evaluation { results },
+                    status: response.status,
                     request_id,
                     retry_after,
                 }

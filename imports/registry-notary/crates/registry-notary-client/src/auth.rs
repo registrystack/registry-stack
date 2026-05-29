@@ -6,9 +6,16 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::NotaryClientError;
 
+/// Static authentication material configured on a client.
+///
+/// `Debug` output redacts the underlying secret. The public builder exposes
+/// this through [`crate::NotaryClientBuilder::bearer_token`] and
+/// [`crate::NotaryClientBuilder::api_key`].
 #[derive(Clone)]
 pub enum Auth {
+    /// Send an `Authorization: Bearer ...` header.
     Bearer(SecretString),
+    /// Send an `X-Api-Key` header.
     ApiKey(SecretString),
 }
 
@@ -21,9 +28,16 @@ impl std::fmt::Debug for Auth {
     }
 }
 
+/// One resolved authentication header for a single request.
+///
+/// Implementations of [`AuthProvider`] return this type when credentials are
+/// minted or refreshed dynamically. `Debug` and `Display` never print the
+/// secret value.
 #[derive(Clone)]
 pub enum AuthHeader {
+    /// A complete `Authorization` header value, for example `Bearer <token>`.
     Authorization(SecretString),
+    /// An `X-Api-Key` header value.
     ApiKey(SecretString),
 }
 
@@ -55,6 +69,13 @@ impl Auth {
 }
 
 #[async_trait]
+/// Dynamic per-request authentication provider.
+///
+/// Use this when a caller needs to refresh an access token, consult a secure
+/// credential store, or mint short-lived credentials before each request. The
+/// client awaits the provider before sending the request and still enforces the
+/// single-auth-mode rule at build time.
 pub trait AuthProvider: Send + Sync {
+    /// Return the authentication header to attach to the next request.
     async fn auth_header(&self) -> Result<AuthHeader, NotaryClientError>;
 }

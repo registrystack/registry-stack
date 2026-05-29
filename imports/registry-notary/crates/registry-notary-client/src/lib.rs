@@ -1,5 +1,60 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Registry Notary HTTP client.
+//! Typed Registry Notary HTTP client.
+//!
+//! This crate is the Rust client for Registry Notary. It wraps the HTTP API
+//! with typed request and response DTOs, strict transport defaults, bounded
+//! response reads, route-aware retries, and redacted error surfaces.
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! use registry_notary_client::RegistryNotaryClient;
+//!
+//! let client = RegistryNotaryClient::builder("https://notary.example.gov")
+//!     .bearer_token("token")
+//!     .default_purpose("benefits_eligibility")
+//!     .user_agent("benefits-api/1.0")
+//!     .build()?;
+//!
+//! let evaluation = client
+//!     .evaluate("person-1")
+//!     .id_type("national_id")
+//!     .claims(["person-is-alive"])
+//!     .disclosure("predicate")
+//!     .send()
+//!     .await?;
+//!
+//! if let Some(result) = evaluation.body.first_result() {
+//!     println!("{} = {:?}", result.claim_id, result.satisfied);
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Wire DTOs and helper wrappers
+//!
+//! Request DTOs come from `registry-notary-core` for routes whose wire shapes
+//! are part of the service contract. Batch evaluation now uses
+//! [`registry_notary_core::BatchEvaluateResponse`] directly. The helper
+//! wrappers in [`responses`] are not compatibility workarounds; they add
+//! redacted formatting or ergonomic accessors on top of the wire DTOs.
+//!
+//! # Feature flags
+//!
+//! - `oid4vci` enables OpenID4VCI endpoint helpers.
+//! - `federation` enables delegated evaluation JWS submission.
+//! - `json-facade` enables a binding-safe JSON facade for Python and Node
+//!   wrappers.
+//! - `test-support` exposes the test-only `reqwest::Client` override and
+//!   loopback HTTP allowance.
+//!
+//! # Safety contract
+//!
+//! The client rejects multiple authentication modes, disables redirects,
+//! ignores proxy environment variables, bounds every response body, and redacts
+//! raw Problem Details `detail`, compact credentials, holder proofs, nonces,
+//! SD-JWT disclosures, and token material from incidental formatting surfaces.
 
 pub mod auth;
 mod client;
@@ -22,7 +77,7 @@ pub use error::{
 };
 pub use options::{RequestOptions, RetryAfter, RetryPolicy};
 pub use responses::{
-    AdminReloadResponse, BatchEvaluation, CredentialIssueResponse, CredentialStatusResponse,
+    AdminReloadResponse, CredentialIssueResponse, CredentialStatusResponse,
     CredentialStatusUpdateRequest, EvaluateResponse, Evaluation, FormatsResponse, HealthResponse,
     ListClaimsResponse, NotaryResponse,
 };
