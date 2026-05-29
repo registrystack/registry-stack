@@ -36,7 +36,7 @@ DataFusion, Postgres, auth, audit, observability, runtime row access, secret
 handling, `utoipa`, or `clap`.
 
 Federation fields are metadata only. Runtime peer policy, request verification,
-replay storage, audit emission, and source reads remain Registry Witness
+replay storage, audit emission, and source reads remain Registry Notary
 responsibilities.
 
 ## Testing
