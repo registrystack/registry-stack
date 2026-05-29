@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/registry-notary-core",
+    "crates/registry-notary-client",
     "crates/registry-notary-server",
     "crates/registry-notary-bin",
     "crates/registry-notary-openfn-sidecar",
@@ -38,6 +39,7 @@ registry-platform-replay = { version = "0.1.2", path = "../registry-platform/cra
 registry-platform-sdjwt = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-sdjwt" }
 registry-platform-testing = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-testing" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+secrecy = { version = "0.10" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_norway = { version = "0.9" }

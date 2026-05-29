@@ -1,0 +1,39 @@
+[package]
+name = "registry-notary-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Registry Notary HTTP client and binding facade."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[features]
+default = ["rustls"]
+rustls = []
+native-tls = []
+oid4vci = ["dep:registry-platform-oid4vci"]
+federation = []
+json-facade = []
+test-support = []
+
+[dependencies]
+async-trait.workspace = true
+registry-notary-core.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oid4vci = { workspace = true, optional = true }
+reqwest.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+axum-test = { version = "20" }
+registry-notary-server = { version = "0.3.0", path = "../registry-notary-server" }
+serde_norway.workspace = true
+tempfile = { version = "3" }
+tokio.workspace = true

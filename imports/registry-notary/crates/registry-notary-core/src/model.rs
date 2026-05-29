@@ -632,7 +632,7 @@ pub struct BatchEvaluateRequest {
     pub purpose: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchEvaluateResponse {
     pub batch_id: String,
     pub status: BatchStatus,
@@ -641,19 +641,19 @@ pub struct BatchEvaluateResponse {
     pub summary: BatchSummary,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchStatus {
     Completed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchSummary {
     pub succeeded: usize,
     pub failed: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchItemResponse {
     pub input_index: usize,
     pub subject_ref: SubjectRefView,
@@ -664,14 +664,14 @@ pub struct BatchItemResponse {
     pub errors: Vec<BatchItemError>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchItemStatus {
     Succeeded,
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchClaimResultView {
     pub result_id: String,
     pub claim_id: String,
@@ -684,7 +684,7 @@ pub struct BatchClaimResultView {
     pub provenance: ClaimProvenance,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchItemError {
     pub code: String,
     pub title: String,

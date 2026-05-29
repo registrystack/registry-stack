@@ -2569,6 +2569,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-notary-client"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-test",
+ "registry-notary-core",
+ "registry-notary-server",
+ "registry-platform-httputil",
+ "registry-platform-oid4vci",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "registry-notary-core"
 version = "0.3.0"
 dependencies = [
