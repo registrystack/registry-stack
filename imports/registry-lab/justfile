@@ -63,6 +63,10 @@ federation:
 client:
     docker compose -f compose.yaml --profile client run --rm demo-client
 
+# Run the Registry Notary Python client against the default Notary services.
+notary-client:
+    scripts/smoke-notary-client.py
+
 # Run the OpenFn sidecar smoke.
 openfn:
     scripts/smoke-openfn.sh

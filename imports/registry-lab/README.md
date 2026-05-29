@@ -108,6 +108,7 @@ just federation  # signed Notary-to-Notary delegated evaluation smoke
 just openfn      # OpenFn sidecar-backed Notary smoke
 just opencrvs-dci # live OpenCRVS DCI-backed Notary smoke
 just dhis2-openfn # live DHIS2/OpenFn health evidence smoke
+just notary-client # Registry Notary Python client smoke against lab Notaries
 just client      # narrated default client flow
 just quick       # generate, build, up, smoke, openfn, client
 ```
@@ -576,6 +577,14 @@ OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
 the core Notary image. The current lab default points OpenFn at
 `../registry-notary` because the vendored Notary pin does not yet include the
 OpenFn sidecar crate.
+
+`just notary-client` imports the Registry Notary Python client directly from a
+source checkout and runs it against the default lab Notary services. It looks at
+`REGISTRY_NOTARY_CLIENT_SOURCE_DIR` first, then `REGISTRY_NOTARY_SOURCE_DIR`,
+then `../registry-notary`, and finally `vendor/registry-notary`. Use
+`REGISTRY_NOTARY_CLIENT_SOURCE_DIR` when validating a client SDK branch before
+the lab submodule pin has moved. This smoke is explicit and is not part of
+`just quick`.
 
 ## Fixture Data
 
