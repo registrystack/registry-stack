@@ -72,7 +72,7 @@
   `azp` gaps.
 - Tightened OID4VCI proof validation, SD-JWT holder-proof headers, and JWK
   thumbprint construction.
-- Added OpenID4VCI metadata primitives consumed by Registry Witness.
+- Added OpenID4VCI metadata primitives consumed by Registry Notary.
 
 ## v0.1.1
 

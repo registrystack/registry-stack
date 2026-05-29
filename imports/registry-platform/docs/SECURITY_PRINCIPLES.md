@@ -44,7 +44,7 @@ CPU-heavy crypto and evaluation work should run on bounded worker paths, usually
 
 ## 9. Make Security Events Tamper Evident
 
-`registry-platform-audit` provides the tamper-evident primitive: `AuditEnvelope`, `ChainState`, the JSONL sinks, and the HMAC redaction helpers. Consumer applications (Registry Relay, Registry Witness, and other services) are responsible for routing their security-relevant events through it, including auth failures, admin reloads, OIDC verifier changes, policy bypasses, SD-JWT issuance, holder-proof validation failures, config reload outcomes, and outbound fetch denials.
+`registry-platform-audit` provides the tamper-evident primitive: `AuditEnvelope`, `ChainState`, the JSONL sinks, and the HMAC redaction helpers. Consumer applications (Registry Relay, Registry Notary, and other services) are responsible for routing their security-relevant events through it, including auth failures, admin reloads, OIDC verifier changes, policy bypasses, SD-JWT issuance, holder-proof validation failures, config reload outcomes, and outbound fetch denials.
 
 Platform crates outside `audit` deliberately do not take a hard dependency on `audit`. They surface security-relevant outcomes as `Result` types and structured errors so consumers can choose how to emit them. A consumer audit confirms wiring; absence of wiring inside a platform primitive is not a platform defect.
 

@@ -5,11 +5,11 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/audit-configs.sh [--base DIR] [--format markdown|tsv|paths] [--check]
 
-Enumerates Registry Witness and Registry Relay config files that are likely to
+Enumerates Registry Notary and Registry Relay config files that are likely to
 drift during the registry-platform v0.1.0 migration.
 
 Defaults:
-  --base ..              parent directory containing registry-witness/relay
+  --base ..              parent directory containing registry-notary/relay
   --format markdown      human-readable inventory table
 
 Flags:
@@ -58,9 +58,9 @@ esac
 base="${base%/}"
 
 declare -a roots=(
-  "witness|demo config|registry-witness/demo/config"
-  "witness|perf config|registry-witness/perf/config"
-  "witness|server test fixtures|registry-witness/crates/registry-witness-server/tests"
+  "notary|demo config|registry-notary/demo/config"
+  "notary|perf config|registry-notary/perf/config"
+  "notary|server test fixtures|registry-notary/crates/registry-notary-server/tests"
   "relay|operator examples|registry-relay/config"
   "relay|demo config|registry-relay/demo/config"
   "relay|config test fixtures|registry-relay/tests/fixtures/config"
@@ -124,7 +124,7 @@ for root_spec in "${roots[@]}"; do
 done
 
 if [[ "$check" == true && "$found_root" == false ]]; then
-  echo "no registry-witness or registry-relay config roots found under $base" >&2
+  echo "no registry-notary or registry-relay config roots found under $base" >&2
   exit 1
 fi
 

@@ -13,7 +13,7 @@ Shared fixtures and assertions for registry-platform consumers.
   be bound to a trusted start or tail hash.
 - `assert_replay_duplicate_rejected` for reusable replay-store duplicate checks.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
-- Federation fixture helpers for building signed Witness request/response JWTs.
+- Federation fixture helpers for building signed Notary request/response JWTs.
 - Provider-backed Ed25519 signer and JWKS helpers for tests that exercise the
   production signing abstraction.
 - `sign_openid4vci_proof_jwt` for building OID4VCI holder proof JWTs in tests.
@@ -102,8 +102,7 @@ the duplicate with `AlreadySeen`.
 ### Federation fixture helpers
 
 These helpers produce deterministic JWT claim sets matching the
-`registry-witness-federation/v0.1` protocol. They are intended for Witness
-federation tests only; the domain knowledge is isolated here so callers don't
+`registry-notary-federation/v0.1` protocol. They are intended for Notary federation tests only; the domain knowledge is isolated here so callers don't
 have to re-implement the claim layout.
 
 - `federation_request_fixture_claims(issuer, subject_node_id, audience_node_id, now)` —
@@ -115,9 +114,9 @@ have to re-implement the claim layout.
 
 | Constant | Value | Use |
 |---|---|---|
-| `FEDERATION_PROTOCOL` | `"registry-witness-federation/v0.1"` | `"protocol"` claim value |
-| `FEDERATION_REQUEST_JWT_TYPE` | `"registry-witness-request+jwt"` | `"typ"` header for request JWTs |
-| `FEDERATION_RESPONSE_JWT_TYPE` | `"registry-witness-response+jwt"` | `"typ"` header for response JWTs |
+| `FEDERATION_PROTOCOL` | `"registry-notary-federation/v0.1"` | `"protocol"` claim value |
+| `FEDERATION_REQUEST_JWT_TYPE` | `"registry-notary-request+jwt"` | `"typ"` header for request JWTs |
+| `FEDERATION_RESPONSE_JWT_TYPE` | `"registry-notary-response+jwt"` | `"typ"` header for response JWTs |
 | `FEDERATION_EVALUATE_ACTION` | `"evaluate"` | `"action"` claim value |
 | `FEDERATION_REQUEST_FIXTURE_JTI` | (fixed ULID string) | Deterministic `"jti"` for request fixtures |
 | `FEDERATION_RESPONSE_FIXTURE_JTI` | (fixed ULID string) | Deterministic `"jti"` for response fixtures |

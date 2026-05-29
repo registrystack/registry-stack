@@ -5,8 +5,9 @@ SD-JWT VC issuance and holder-proof validation helpers.
 ## What It Provides
 
 - `SdJwtIssuer` for provider-backed EdDSA SD-JWT VC issuance.
-- `SdJwtIssuanceInput` with issuer, subject reference, validity, profile,
-  holder confirmation, and disclosures.
+- `SdJwtIssuanceInput` with issuer, subject reference, optional caller-provided
+  credential id, validity, profile, optional status claim, holder confirmation,
+  and disclosures.
 - Disclosure digest sorting for deterministic `_sd` payload ordering.
 - Holder-proof validation with signature, audience, lifetime, subject, replay id,
   disclosure hash, evaluation id, credential profile, and claim-set bindings.
@@ -34,9 +35,11 @@ let issuer = SdJwtIssuer::from_jwk(issuer_key)?;
 let signed = issuer.issue(SdJwtIssuanceInput {
     iss: "did:web:issuer.example".to_string(),
     sub_ref: "did:example:subject".to_string(),
+    credential_id: None,
     iat: 1_700_000_000,
     exp: 1_700_000_600,
     vct: "https://issuer.example/vct/registry-credential".to_string(),
+    status: None,
     cnf: None::<HolderConfirmation>,
     disclosures: vec![Disclosure {
         name: "claim".to_string(),

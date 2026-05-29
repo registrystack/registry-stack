@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/registry-platform-cache",
     "crates/registry-platform-httputil",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-audit",
@@ -49,6 +50,7 @@ ulid = { version = "1" }
 url = { version = "2" }
 wiremock = { version = "0.6" }
 zeroize = { version = "1", features = ["derive"] }
+redis = { version = "1.2.1", default-features = false, features = ["aio", "tokio-comp"] }
 
 [profile.release]
 codegen-units = 1

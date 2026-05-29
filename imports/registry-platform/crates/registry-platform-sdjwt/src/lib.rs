@@ -45,7 +45,7 @@ impl SdJwtIssuer {
         if self.signer.key_id().trim().is_empty() {
             return Err(SdJwtError::Signing(SigningError::MissingKeyId));
         }
-        let credential_id = format!("urn:ulid:{}", Ulid::new());
+        let credential_id = input.credential_id.unwrap_or_else(new_credential_id);
 
         let mut payload = Map::new();
         payload.insert("iss".to_string(), Value::String(input.iss));
@@ -56,6 +56,9 @@ impl SdJwtIssuer {
         payload.insert("id".to_string(), Value::String(credential_id.clone()));
         payload.insert("jti".to_string(), Value::String(credential_id.clone()));
         payload.insert("_sd_alg".to_string(), Value::String("sha-256".to_string()));
+        if let Some(status) = input.status {
+            payload.insert("status".to_string(), status);
+        }
 
         if let Some(cnf) = input.cnf {
             let mut cnf_value = Map::new();
@@ -93,6 +96,11 @@ impl SdJwtIssuer {
     }
 }
 
+#[must_use]
+pub fn new_credential_id() -> String {
+    format!("urn:ulid:{}", Ulid::new())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HolderConfirmation {
     pub jwk: PublicJwk,
@@ -109,9 +117,11 @@ pub struct Disclosure {
 pub struct SdJwtIssuanceInput {
     pub iss: String,
     pub sub_ref: String,
+    pub credential_id: Option<String>,
     pub iat: i64,
     pub exp: i64,
     pub vct: String,
+    pub status: Option<Value>,
     pub cnf: Option<HolderConfirmation>,
     pub disclosures: Vec<Disclosure>,
 }
@@ -125,8 +135,19 @@ impl SdJwtIssuanceInput {
         {
             return Err(SdJwtError::InvalidInput);
         }
+        if self
+            .credential_id
+            .as_deref()
+            .is_some_and(invalid_credential_id)
+        {
+            return Err(SdJwtError::InvalidInput);
+        }
         Ok(())
     }
+}
+
+fn invalid_credential_id(value: &str) -> bool {
+    value.trim().is_empty() || value.chars().any(|ch| ch.is_ascii_control())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -393,9 +414,11 @@ mod tests {
             .issue(SdJwtIssuanceInput {
                 iss: "did:web:issuer.test".to_string(),
                 sub_ref: "did:example:subject".to_string(),
+                credential_id: None,
                 iat: 1_700_000_000,
                 exp: 1_700_000_600,
                 vct: "https://vct.example/test".to_string(),
+                status: None,
                 cnf: Some(HolderConfirmation {
                     jwk: holder.public(),
                     kid: Some("did:jwk:holder#key-1".to_string()),
@@ -432,6 +455,49 @@ mod tests {
         let signed = issuer.issue(issue_input(None)).await.expect("issues");
 
         assert!(jwt_payload(&signed.jwt).get("cnf").is_none());
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuance_accepts_caller_credential_id_and_status_claim() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+        let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC".to_string();
+        let status = json!({
+            "type": "RegistryNotaryCredentialStatus",
+            "statusUrl": "https://issuer.example/credentials/status/01HX7Y5F2WAJ7ZP0Q4M5K9E8NC"
+        });
+
+        let signed = issuer
+            .issue(SdJwtIssuanceInput {
+                credential_id: Some(credential_id.clone()),
+                status: Some(status.clone()),
+                ..issue_input(None)
+            })
+            .await
+            .expect("issues");
+        let payload = jwt_payload(&signed.jwt);
+
+        assert_eq!(signed.credential_id, credential_id);
+        assert_eq!(signed.jti, credential_id);
+        assert_eq!(payload["id"], credential_id);
+        assert_eq!(payload["jti"], credential_id);
+        assert_eq!(payload["status"], status);
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuance_rejects_blank_caller_credential_id() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+
+        let err = issuer
+            .issue(SdJwtIssuanceInput {
+                credential_id: Some(" \t".to_string()),
+                ..issue_input(None)
+            })
+            .await
+            .expect_err("blank credential id rejects");
+
+        assert!(matches!(err, SdJwtError::InvalidInput));
     }
 
     #[tokio::test]
@@ -686,9 +752,11 @@ mod tests {
         SdJwtIssuanceInput {
             iss: "did:web:issuer.test".to_string(),
             sub_ref: "did:example:subject".to_string(),
+            credential_id: None,
             iat: 1_700_000_000,
             exp: 1_700_000_600,
             vct: "https://vct.example/test".to_string(),
+            status: None,
             cnf,
             disclosures: Vec::new(),
         }
@@ -841,7 +909,7 @@ mod tests {
 
     fn policy() -> HolderProofPolicy {
         HolderProofPolicy {
-            audience: "registry-witness".to_string(),
+            audience: "registry-notary".to_string(),
             max_lifetime: Duration::from_secs(300),
         }
     }
@@ -849,7 +917,7 @@ mod tests {
     fn proof_payload(now: i64, jti: &str) -> Value {
         json!({
             "sub": "did:jwk:holder",
-            "aud": "registry-witness",
+            "aud": "registry-notary",
             "iat": now,
             "exp": now + 60,
             "jti": jti,

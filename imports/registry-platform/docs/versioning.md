@@ -1,6 +1,6 @@
 # Versioning
 
-`registry-platform` is released as one workspace tag and consumed by Registry Relay and Registry Witness through that tag.
+`registry-platform` is released as one workspace tag and consumed by Registry Relay and Registry Notary through that tag.
 
 ## Tag Policy
 
@@ -32,7 +32,7 @@ offer EdDSA, as long as their algorithm allowlist is explicit.
 
 ## Consumer Alignment
 
-Relay and Witness must pin the same `registry-platform` tag during coordinated migrations. CI in each consumer should fail when:
+Relay and Notary must pin the same `registry-platform` tag during coordinated migrations. CI in each consumer should fail when:
 
 - The pinned platform tag differs from the approved migration tag.
 - `clippy.toml`, `rustfmt.toml`, or `deny.toml` differs from `registry-platform/templates/`.

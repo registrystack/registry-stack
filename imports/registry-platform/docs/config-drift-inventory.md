@@ -8,9 +8,9 @@ scripts/audit-configs.sh --base ..
 
 Use `--check` in CI to fail when no consumer config roots are found.
 
-## Witness Drift
+## Notary Drift
 
-Witness has breaking config changes:
+Notary has breaking config changes:
 
 | Area | Required change |
 | --- | --- |
@@ -22,13 +22,13 @@ Witness has breaking config changes:
 | HTTP security | Adopt CORS, CSP, CORP, body-limit, and RFC 7807 settings where exposed by config. |
 | Fixtures | Update demo config, perf config, and server test fixtures atomically. |
 
-Current expected Witness roots:
+Current expected Notary roots:
 
 | Root | Purpose |
 | --- | --- |
-| `registry-witness/demo/config/` | Demo operator config. |
-| `registry-witness/perf/config/` | Performance-smoke configs. |
-| `registry-witness/crates/registry-witness-server/tests/` | Server integration fixtures, when present. |
+| `registry-notary/demo/config/` | Demo operator config. |
+| `registry-notary/perf/config/` | Performance-smoke configs. |
+| `registry-notary/crates/registry-notary-server/tests/` | Server integration fixtures, when present. |
 
 ## Relay Drift
 
@@ -63,9 +63,9 @@ Generated on 2026-05-24 with `scripts/audit-configs.sh --check --base .. --forma
 
 | App | Category | File | Notes |
 | --- | --- | --- | --- |
-| witness | demo config | `registry-witness/demo/config/registry-witness.yaml` | static-auth,token_env->hash_env,fingerprint,oidc,audit,sd-jwt |
-| witness | perf config | `registry-witness/perf/config/medium.yaml` | static-auth,token_env->hash_env,fingerprint,oidc,audit,sd-jwt |
-| witness | perf config | `registry-witness/perf/config/small.yaml` | static-auth,token_env->hash_env,fingerprint,oidc,audit,sd-jwt |
+| notary | demo config | `registry-notary/demo/config/registry-notary.yaml` | static-auth,token_env->hash_env,fingerprint,oidc,audit,sd-jwt |
+| notary | perf config | `registry-notary/perf/config/medium.yaml` | static-auth,token_env->hash_env,fingerprint,oidc,audit,sd-jwt |
+| notary | perf config | `registry-notary/perf/config/small.yaml` | static-auth,token_env->hash_env,fingerprint,oidc,audit,sd-jwt |
 | relay | operator examples | `registry-relay/config/example.oidc.yaml` | oidc,audit,sd-jwt |
 | relay | operator examples | `registry-relay/config/example.yaml` | static-auth,fingerprint,oidc,audit,sd-jwt |
 | relay | operator examples | `registry-relay/config/spdci_disability_registry.example.yaml` | static-auth,fingerprint,audit |

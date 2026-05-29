@@ -31,9 +31,9 @@ use wiremock::{
 };
 
 const TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
-pub const FEDERATION_PROTOCOL: &str = "registry-witness-federation/v0.1";
-pub const FEDERATION_REQUEST_JWT_TYPE: &str = "registry-witness-request+jwt";
-pub const FEDERATION_RESPONSE_JWT_TYPE: &str = "registry-witness-response+jwt";
+pub const FEDERATION_PROTOCOL: &str = "registry-notary-federation/v0.1";
+pub const FEDERATION_REQUEST_JWT_TYPE: &str = "registry-notary-request+jwt";
+pub const FEDERATION_RESPONSE_JWT_TYPE: &str = "registry-notary-response+jwt";
 pub const FEDERATION_EVALUATE_ACTION: &str = "evaluate";
 pub const FEDERATION_REQUEST_FIXTURE_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6";
 pub const FEDERATION_RESPONSE_FIXTURE_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q7";
