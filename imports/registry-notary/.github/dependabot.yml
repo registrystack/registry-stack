@@ -13,6 +13,6 @@ updates:
         patterns:
           - "*"
   - package-ecosystem: npm
-    directory: /crates/registry-witness-openfn-sidecar/workers
+    directory: /crates/registry-notary-openfn-sidecar/workers
     schedule:
       interval: weekly

@@ -72,7 +72,7 @@ export default function (ctx) {
   });
 
   // Case 3: valid no-scope token on evaluate -> 403
-  // (Witness checks required_scope on the claim's source binding before
+  // (Notary checks required_scope on the claim's source binding before
   // any source IO, so this stays on the cheap deny path.)
   group('no_scope_403', () => {
     const res = http.post(evaluateUrl, evaluatePayload, {

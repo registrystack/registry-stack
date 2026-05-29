@@ -4,10 +4,10 @@
 # dependencies = ["aiohttp>=3.9"]
 # ///
 """
-Deterministic DCI source stub for registry-witness perf testing.
+Deterministic DCI source stub for registry-notary perf testing.
 
-Witness's claim evaluation reads from an upstream over HTTP using the DCI
-search protocol. To isolate witness latency from any specific upstream, this
+Notary's claim evaluation reads from an upstream over HTTP using the DCI
+search protocol. To isolate notary latency from any specific upstream, this
 stub serves the two DCI paths that the perf configs point at:
 
     POST /dci/crvs/registry/sync/search        (birth_date)
@@ -15,9 +15,9 @@ stub serves the two DCI paths that the perf configs point at:
 
 Records are derived from a fixed seed (42). The profile controls how many
 distinct subject ids resolve to a record; subjects outside that pool produce
-an empty response, which witness surfaces as SourceNotFound.
+an empty response, which notary surfaces as SourceNotFound.
 
-Request shape expected (witness constructs this in standalone.rs::dci_search_request_body):
+Request shape expected (notary constructs this in standalone.rs::dci_search_request_body):
 
     {
       "header": {...},
@@ -35,7 +35,7 @@ Request shape expected (witness constructs this in standalone.rs::dci_search_req
       }
     }
 
-Response shape returned (mirrors what witness parses at
+Response shape returned (mirrors what notary parses at
 standalone.rs::read_external_dci_http_one):
 
     {"message": {"search_response": [{"data": {"reg_records": [<row>]}}]}}
@@ -186,7 +186,7 @@ def is_known_subject(subject_id: str, subject_count: int) -> bool:
 
 
 def _extract_subject_id(payload: dict) -> str | None:
-    """Pull NATIONAL_ID value out of the DCI request body witness sends."""
+    """Pull NATIONAL_ID value out of the DCI request body notary sends."""
     try:
         criteria = payload["message"]["search_request"][0]["search_criteria"]
     except (KeyError, IndexError, TypeError):
@@ -371,7 +371,7 @@ def main() -> None:
     token = os.environ.get(args.token_env, "")
     if not token:
         print(
-            f"error: ${args.token_env} is not set; the stub cannot authenticate witness",
+            f"error: ${args.token_env} is not set; the stub cannot authenticate notary",
             file=sys.stderr,
         )
         sys.exit(2)

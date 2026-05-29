@@ -1,7 +1,7 @@
 [project]
-name = "registry-witness-perf"
+name = "registry-notary-perf"
 version = "0.1.0"
-description = "Load harness and test tooling for registry-witness performance testing"
+description = "Load harness and test tooling for registry-notary performance testing"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9",

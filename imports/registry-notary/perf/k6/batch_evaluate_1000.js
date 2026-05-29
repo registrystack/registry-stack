@@ -4,7 +4,7 @@
 // Uses the extract claim. See batch_evaluate_10.js for rationale.
 //
 // Note: the perf configs set inline_batch_limit: 100. Sending 1000 subjects
-// in a single request causes witness to reject it with 413 (batch too
+// in a single request causes notary to reject it with 413 (batch too
 // large) unless the claim's max_subjects is raised. This scenario is
 // included so the harness has a reference point once the limit is relaxed;
 // expect 413 responses with the current config. See Known Gaps in README.md.

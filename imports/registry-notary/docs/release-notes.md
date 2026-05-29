@@ -10,7 +10,7 @@
 - Hardened SD-JWT VC conformance for `dc+sd-jwt`, holder binding, proof
   validation, and OpenAPI documentation.
 - Replaced fake Problem Details type URLs with
-  `https://docs.registry-witness.dev/problems/...`.
+  `https://docs.registry-notary.dev/problems/...`.
 - Changed self-attestation subject-binding hashes to keyed HMAC values and
   stopped recording raw query strings in request spans or audit paths.
 - Known limitations: this release is `dc+sd-jwt` only, does not serve
@@ -26,19 +26,19 @@
 
 ## 0.2.0 (rename)
 
-- Renamed: `evidence-server` → `registry-witness`. No backward compatibility; no aliases.
-  - Crates: `evidence-core` → `registry-witness-core`, `evidence-server` → `registry-witness-server`,
-    `evidence-server-bin` → `registry-witness-bin`.
-  - Binary: `evidence-server` → `registry-witness`.
-  - Media type: `application/vnd.evidence-server.claim-result+json` → `application/vnd.registry-witness.claim-result+json`.
-  - Default audience: `"evidence-server"` → `"registry-witness"`.
-  - Cargo feature: `evidence-server-cel` → `registry-witness-cel`.
+- Renamed: `evidence-server` → `registry-notary`. No backward compatibility; no aliases.
+  - Crates: `evidence-core` → `registry-notary-core`, `evidence-server` → `registry-notary-server`,
+    `evidence-server-bin` → `registry-notary-bin`.
+  - Binary: `evidence-server` → `registry-notary`.
+  - Media type: `application/vnd.evidence-server.claim-result+json` → `application/vnd.registry-notary.claim-result+json`.
+  - Default audience: `"evidence-server"` → `"registry-notary"`.
+  - Cargo feature: `evidence-server-cel` → `registry-notary-cel`.
   - Project-labeled env vars: `EVIDENCE_SERVER_API_KEY`, `EVIDENCE_SERVER_BEARER_TOKEN`,
-    `EVIDENCE_SERVER_ISSUER_JWK` → `REGISTRY_WITNESS_API_KEY_HASH`,
-    `REGISTRY_WITNESS_BEARER_TOKEN_HASH`, `REGISTRY_WITNESS_ISSUER_JWK`. The
+    `EVIDENCE_SERVER_ISSUER_JWK` → `REGISTRY_NOTARY_API_KEY_HASH`,
+    `REGISTRY_NOTARY_BEARER_TOKEN_HASH`, `REGISTRY_NOTARY_ISSUER_JWK`. The
     renamed auth variables hold `sha256:<64 hex>` fingerprints, not plaintext
     tokens.
-  - Demo config: `demo/config/evidence-server.yaml` → `demo/config/registry-witness.yaml`.
+  - Demo config: `demo/config/evidence-server.yaml` → `demo/config/registry-notary.yaml`.
 
 ## 0.1.0
 

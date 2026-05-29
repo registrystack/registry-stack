@@ -1,13 +1,13 @@
 # OpenSPP Disability DCI Demo
 
-This note documents the local Registry Witness demo config for using the
+This note documents the local Registry Notary demo config for using the
 OpenSPP Disability Registry DCI API as an evidence source.
 
 ## Scope
 
 The demo config is:
 
-`demo/config/openspp-disability-registry-witness.yaml`
+`demo/config/openspp-disability-registry-notary.yaml`
 
 It targets:
 
@@ -19,20 +19,20 @@ queries during integration testing.
 
 ## Environment
 
-Set these environment variables before starting Registry Witness:
+Set these environment variables before starting Registry Notary:
 
 ```bash
-export REGISTRY_WITNESS_API_KEY_HASH='sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51'
-export REGISTRY_WITNESS_AUDIT_HASH_SECRET='dev-registry-witness-audit-hash-secret'
+export REGISTRY_NOTARY_API_KEY_HASH='sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51'
+export REGISTRY_NOTARY_AUDIT_HASH_SECRET='dev-registry-notary-audit-hash-secret'
 export OPENSPP_DCI_TOKEN='<OpenSPP bearer token>'
-export REGISTRY_WITNESS_ISSUER_JWK='<Ed25519 issuer private JWK for demo VC issuance>'
+export REGISTRY_NOTARY_ISSUER_JWK='<Ed25519 issuer private JWK for demo VC issuance>'
 ```
 
 Then run:
 
 ```bash
-cargo run -p registry-witness-bin -- \
-  --config demo/config/openspp-disability-registry-witness.yaml
+cargo run -p registry-notary-bin -- \
+  --config demo/config/openspp-disability-registry-notary.yaml
 ```
 
 The API key hash above is for local key `api-token`.
@@ -66,7 +66,7 @@ OpenID4VCI credential endpoint.
 
 - The OpenSPP test server currently accepts an empty DCI envelope `signature`.
   The demo config uses `signature: ""` only for that server. If OpenSPP starts
-  enforcing DCI signatures, Registry Witness needs real DCI request signing for
+  enforcing DCI signatures, Registry Notary needs real DCI request signing for
   this connector.
 - `receiver_id: openspp` is required by the OpenSPP request schema.
 - `bulk_mode` is pinned to `none` because multi-item Disability DCI search

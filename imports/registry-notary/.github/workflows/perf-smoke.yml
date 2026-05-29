@@ -18,13 +18,13 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 826223a16c8122f6e39504a15eddf591ce1f0399
+  REGISTRY_PLATFORM_REF: registry-stack-rename-downstream-2026-05-29
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 defaults:
   run:
-    working-directory: registry-witness
+    working-directory: registry-notary
 
 # Smoke-checks the perf scaffolding without running any actual load.
 # It verifies:
@@ -45,7 +45,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: registry-witness
+          path: registry-notary
 
       - name: Checkout registry-platform
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -69,7 +69,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: perf-smoke
-          workspaces: registry-witness -> target
+          workspaces: registry-notary -> target
 
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -102,4 +102,4 @@ jobs:
           done
 
       - name: Run perf Python tests
-        run: uv run --project perf pytest
+        run: uv run --project perf python -m pytest

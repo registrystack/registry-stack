@@ -1,10 +1,10 @@
-# Registry Witness SD-JWT VC Conformance Profile
+# Registry Notary SD-JWT VC Conformance Profile
 
-Registry Witness currently issues one credential format: SD-JWT VC using the
+Registry Notary currently issues one credential format: SD-JWT VC using the
 current digital credential media type.
 
 This profile is intentionally narrow. It documents the credential contract that
-Registry Witness can test and support today, and it names adjacent ecosystem
+Registry Notary can test and support today, and it names adjacent ecosystem
 features that are not yet part of the product surface.
 
 ## Supported Credential Format
@@ -18,14 +18,14 @@ features that are not yet part of the product surface.
 | Holder binding DID method | `did:jwk` |
 | Credential status methods | none |
 
-Registry Witness rejects credential profile format aliases such as
+Registry Notary rejects credential profile format aliases such as
 `sd_jwt_vc` and `application/vc+sd-jwt`. Operator configuration must use the
 wire media type `application/dc+sd-jwt`.
 
 ## Issuer-Signed JWT Header
 
 Issued credentials use a compact issuer-signed JWT as the first component of
-the SD-JWT value. The protected header has these Registry Witness invariants:
+the SD-JWT value. The protected header has these Registry Notary invariants:
 
 - `alg` is `EdDSA`.
 - `typ` is `dc+sd-jwt`.
@@ -37,7 +37,7 @@ or other algorithms requires a separate design and test pass.
 
 ## Issuer-Signed JWT Payload
 
-Registry Witness sets these payload claims:
+Registry Notary sets these payload claims:
 
 - `iss`: credential profile issuer.
 - `sub`: holder DID for holder-bound credentials, otherwise the evaluation
@@ -51,7 +51,7 @@ Registry Witness sets these payload claims:
 - `cnf`: holder confirmation for holder-bound credentials.
 
 For citizen-facing holder-bound credentials, `sub` is the holder DID. Registry
-Witness does not claim that the holder DID is the same identifier as the civil
+Notary does not claim that the holder DID is the same identifier as the civil
 or registry subject.
 
 ## Holder Binding
@@ -66,7 +66,7 @@ When a credential profile requires holder proof of possession:
 - The issued credential includes `cnf.kid` equal to the holder DID.
 - The issued credential includes `cnf.jwk` with the public holder JWK only.
 
-Registry Witness does not support `did:key`, `did:web`, CWT proof, or mDoc
+Registry Notary does not support `did:key`, `did:web`, CWT proof, or mDoc
 holder binding in this profile.
 
 ## Disclosures
@@ -99,7 +99,7 @@ the same constants listed in this profile:
 - configured credential profiles;
 - unsupported adjacent features.
 
-The metadata is Registry Witness capability metadata. It is not a claim of full
+The metadata is Registry Notary capability metadata. It is not a claim of full
 OpenID4VCI issuer conformance.
 
 ## Explicit Non-Support
@@ -109,11 +109,10 @@ The following features are out of scope for the current profile:
 - `application/vc+sd-jwt` compatibility alias;
 - JSON-LD Verifiable Credential issuance;
 - Data Integrity proofs;
-- credential status or revocation lists;
+- external status-list or revocation-list profiles;
 - mDoc/mDL;
 - CWT proof binding;
 - full OpenID4VCI issuer behavior.
 
 These features require separate compatibility, lifecycle, and security design
 before implementation.
-

@@ -1,9 +1,9 @@
 # OpenFn Sidecar Source Spike
 
 This spike explores using an OpenFn-powered sidecar as a one-record source for
-Registry Witness claim evaluation. The starting point is intentionally narrow:
+Registry Notary claim evaluation. The starting point is intentionally narrow:
 support one subject lookup at a time, return at most one normalized source
-record, and let Registry Witness keep the attestation decision.
+record, and let Registry Notary keep the attestation decision.
 
 ## Preferred First Shape
 
@@ -12,7 +12,7 @@ a small Registry Data API facade:
 
 ```text
 GET /datasets/{dataset}/{entity}?{lookup_field}={lookup_value}&fields=a,b&limit=2
-Authorization: Bearer <witness-to-sidecar-token>
+Authorization: Bearer <notary-to-sidecar-token>
 Data-Purpose: <purpose>
 ```
 
@@ -29,7 +29,7 @@ Response:
 }
 ```
 
-Registry Witness already interprets this shape:
+Registry Notary already interprets this shape:
 
 - `data: []` becomes `SourceNotFound`.
 - `data: [record]` feeds the claim rule.
@@ -41,13 +41,13 @@ into the existing one-record contract.
 
 ## OpenFn Execution Model
 
-Do not put an OpenFn Lightning webhook or queued run directly in the Witness
+Do not put an OpenFn Lightning webhook or queued run directly in the Notary
 request path. Lightning is designed around work orders and runs that are queued,
 claimed by workers, and completed asynchronously. That model is useful for
 background sync and durable workflow processing, but it is a poor fit for a
 claim evaluation that needs a bounded answer before the HTTP response returns.
 
-For this Witness source shape, the sidecar should use the local OpenFn runtime
+For this Notary source shape, the sidecar should use the local OpenFn runtime
 or CLI execution path instead. The CLI supports running a job or workflow as a
 blocking command and writing the final state to stdout or a file. A sidecar can
 wrap that process with its own timeout, output parsing, and error mapping.
@@ -81,12 +81,12 @@ cached run completed in about 157 ms and printed a final state containing:
 
 That confirms the synchronous sidecar approach is viable in principle, with one
 important operational requirement: adaptors must be pre-installed or warmed
-before serving Witness traffic. Cold installs are too slow and too dependent on
+before serving Notary traffic. Cold installs are too slow and too dependent on
 network/package registry availability for an attestation request.
 
 ## Boundary
 
-The sidecar should fetch and normalize source facts. Registry Witness should keep
+The sidecar should fetch and normalize source facts. Registry Notary should keep
 ownership of:
 
 - public caller authorization;
@@ -98,12 +98,12 @@ ownership of:
 - evaluation audit.
 
 The sidecar must not decide claim satisfaction. For example, it can return
-`birth_date`, but the configured Witness claim decides how that value is
+`birth_date`, but the configured Notary claim decides how that value is
 attested or disclosed.
 
 ## Sidecar Responsibilities
 
-- Hold target-service credentials outside Witness config.
+- Hold target-service credentials outside Notary config.
 - Run pinned OpenFn workflow or adaptor code, not `latest` in production.
 - Enforce one lookup per request for this spike.
 - Return no more than two records so ambiguity can be detected cheaply.
@@ -112,7 +112,7 @@ attested or disclosed.
   appropriate.
 - Return a compact, normalized JSON record with no credential material.
 
-## Witness Config Sketch
+## Notary Config Sketch
 
 ```yaml
 source_connections:
@@ -149,14 +149,14 @@ claims:
 ## Spike Evidence
 
 `openfn_sidecar_rda_facade_can_source_single_item_attestation` in
-`crates/registry-witness-server/src/standalone.rs` starts a test-only sidecar
-that behaves like the facade above. The test proves that Registry Witness can:
+`crates/registry-notary-server/src/standalone.rs` starts a test-only sidecar
+that behaves like the facade above. The test proves that Registry Notary can:
 
 - authenticate to the sidecar with a source token;
 - send the configured `Data-Purpose`;
 - request `limit=2` and the projected fields;
 - evaluate a claim from one normalized record;
-- preserve Witness provenance with `source_count = 1`.
+- preserve Notary provenance with `source_count = 1`.
 
 ## Next Decisions
 

@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/registry-witness-core",
-    "crates/registry-witness-server",
-    "crates/registry-witness-bin",
-    "crates/registry-witness-openfn-sidecar",
+    "crates/registry-notary-core",
+    "crates/registry-notary-server",
+    "crates/registry-notary-bin",
+    "crates/registry-notary-openfn-sidecar",
 ]
 resolver = "2"
 
@@ -12,24 +12,26 @@ version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/jeremi/registry-witness"
+repository = "https://github.com/jeremi/registry-notary"
 
 [workspace.dependencies]
 axum = { version = "0.8" }
 base64 = { version = "0.22" }
 clap = { version = "4", features = ["derive", "env"] }
-registry-witness-core = { version = "0.3.0", path = "crates/registry-witness-core" }
-registry-witness-server = { version = "0.3.0", path = "crates/registry-witness-server", default-features = false }
+registry-notary-core = { version = "0.3.0", path = "crates/registry-notary-core" }
+registry-notary-server = { version = "0.3.0", path = "crates/registry-notary-server", default-features = false }
 crosswalk-core = { version = "0.1.1", path = "../cel-mapping/crates/crosswalk-core" }
 getrandom = { version = "0.4" }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 registry-platform-audit = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-audit" }
 registry-platform-authcommon = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-authcommon" }
+registry-platform-cache = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-cache", features = ["redis"] }
 registry-platform-crypto = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-crypto" }
 registry-platform-httpsec = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httpsec" }
 registry-platform-httputil = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-httputil" }
 registry-platform-oid4vci = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-oid4vci" }
 registry-platform-oidc = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-replay = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-replay", features = ["redis"] }
 registry-platform-sdjwt = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-sdjwt" }
 registry-platform-testing = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-testing" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

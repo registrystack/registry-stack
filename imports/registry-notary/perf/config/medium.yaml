@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# Perf config for registry-witness, medium profile (100k stub subjects).
+# Perf config for registry-notary, medium profile (100k stub subjects).
 #
-# Witness sees exactly one record per request, so the "profile" really
+# Notary sees exactly one record per request, so the "profile" really
 # controls how the harness fans out subject ids across the stub's record
-# pool; witness itself is invariant. Both small.yaml and medium.yaml differ
+# pool; notary itself is invariant. Both small.yaml and medium.yaml differ
 # only in service_id label and audit log path so concurrent runs do not
 # collide.
 
@@ -14,28 +14,28 @@ auth:
   mode: api_key
   api_keys:
     - id: perf_verification_service
-      hash_env: REGISTRY_WITNESS_API_KEY_HASH
+      hash_env: REGISTRY_NOTARY_API_KEY_HASH
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
     - id: perf_no_scope
-      hash_env: REGISTRY_WITNESS_NO_SCOPE_TOKEN_HASH
+      hash_env: REGISTRY_NOTARY_NO_SCOPE_TOKEN_HASH
       scopes: []
   bearer_tokens:
     - id: perf_verification_service
-      hash_env: REGISTRY_WITNESS_BEARER_TOKEN_HASH
+      hash_env: REGISTRY_NOTARY_BEARER_TOKEN_HASH
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
 
 audit:
   sink: file
-  path: target/perf/registry-witness-audit-medium.jsonl
-  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+  path: target/perf/registry-notary-audit-medium.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
-  service_id: perf.registry-witness.medium
+  service_id: perf.registry-notary.medium
   api_base_url: http://127.0.0.1:14255
   inline_batch_limit: 100
   source_connections:
@@ -62,10 +62,10 @@ evidence:
   credential_profiles:
     smallholder_sd_jwt:
       format: application/dc+sd-jwt
-      issuer: did:web:perf.registry-witness.example
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
-      issuer_kid: did:web:perf.registry-witness.example#perf-key-1
-      vct: https://perf.registry-witness.example/credentials/smallholder-farmer/v1
+      issuer: did:web:perf.registry-notary.example
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
+      issuer_kid: did:web:perf.registry-notary.example#perf-key-1
+      vct: https://perf.registry-notary.example/credentials/smallholder-farmer/v1
       validity_seconds: 86400
       allowed_claims:
         - farmer-under-4ha
@@ -120,7 +120,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: farmed-land-size
       title: Farmed land size
       version: 2026-05
@@ -165,7 +165,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: farmer-under-4ha
       title: Farmer under four hectares
       version: 2026-05
@@ -196,7 +196,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - smallholder_sd_jwt

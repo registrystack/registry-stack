@@ -10,13 +10,13 @@ permissions:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 826223a16c8122f6e39504a15eddf591ce1f0399
+  REGISTRY_PLATFORM_REF: registry-stack-rename-downstream-2026-05-29
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 
 defaults:
   run:
-    working-directory: registry-witness
+    working-directory: registry-notary
 
 jobs:
   cargo-deny:
@@ -24,10 +24,10 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
-      - name: Checkout registry-witness
+      - name: Checkout registry-notary
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: registry-witness
+          path: registry-notary
       - name: Checkout registry-platform
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -44,39 +44,39 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          workspaces: registry-witness -> target
+          workspaces: registry-notary -> target
       - run: cargo install cargo-deny --version 0.19.7 --locked
       - run: ~/.cargo/bin/cargo-deny --all-features check --hide-inclusion-graph
 
   openfn-worker:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout registry-witness
+      - name: Checkout registry-notary
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: registry-witness
+          path: registry-notary
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: registry-witness/crates/registry-witness-openfn-sidecar/workers/package-lock.json
+          cache-dependency-path: registry-notary/crates/registry-notary-openfn-sidecar/workers/package-lock.json
       - name: Install worker dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-witness-openfn-sidecar/workers
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-notary-openfn-sidecar/workers
       - name: Syntax-check OpenFn worker
-        run: node --check crates/registry-witness-openfn-sidecar/workers/openfn_worker.mjs
+        run: node --check crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs
       - name: Smoke-test OpenFn worker
-        run: crates/registry-witness-openfn-sidecar/scripts/smoke-openfn-worker.sh
+        run: crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
 
   rust:
     runs-on: ubuntu-latest
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
-      - name: Checkout registry-witness
+      - name: Checkout registry-notary
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          path: registry-witness
+          path: registry-notary
       - name: Checkout registry-platform
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -95,14 +95,14 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          workspaces: registry-witness -> target
+          workspaces: registry-notary -> target
       - run: ../registry-platform/scripts/check-hygiene-alignment.sh . ../registry-platform
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test -p registry-witness-server --no-default-features
+      - run: cargo test -p registry-notary-server --no-default-features
       - run: cargo test --workspace --all-features
       - run: cargo build --workspace --all-features
-      - run: cargo run -p registry-witness-bin -- openapi > target/registry-witness.openapi.json
+      - run: cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
       - name: Build Docker image
         working-directory: ${{ github.workspace }}
-        run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --file registry-witness/Dockerfile --tag registry-witness:ci registry-witness
+        run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary

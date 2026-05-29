@@ -4,20 +4,20 @@
 # dependencies = ["psutil"]
 # ///
 """
-Orchestrator for a single registry-witness perf run.
+Orchestrator for a single registry-notary perf run.
 
-Starts the source stub and the witness binary, waits until both are
-responsive, runs the requested k6 scenario while sampling the witness
+Starts the source stub and the notary binary, waits until both are
+responsive, runs the requested k6 scenario while sampling the notary
 process, then tears both down cleanly.
 
-Witness has no /ready endpoint, so readiness is probed with an
+Notary has no /ready endpoint, so readiness is probed with an
 authenticated GET /claims (the harness must already know the bearer token,
 which it reads from the env file).
 
 Usage:
     uv run perf/scripts/run_scenario.py \\
         --scenario perf/k6/evaluate_extract.js \\
-        --witness-config perf/config/medium.yaml \\
+        --notary-config perf/config/medium.yaml \\
         --stub-profile medium \\
         --env-file target/perf/perf.env
 """
@@ -170,14 +170,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", required=True, help="Path to a k6 scenario file.")
     parser.add_argument(
-        "--witness-config",
+        "--notary-config",
         default="perf/config/medium.yaml",
-        help="Witness config (default: perf/config/medium.yaml).",
+        help="Notary config (default: perf/config/medium.yaml).",
     )
     parser.add_argument(
-        "--witness-binary",
-        default="target/release/registry-witness-bin",
-        help="Built witness binary (default: target/release/registry-witness-bin).",
+        "--notary-binary",
+        default="target/release/registry-notary-bin",
+        help="Built notary binary (default: target/release/registry-notary-bin).",
     )
     parser.add_argument(
         "--stub-profile",
@@ -220,11 +220,11 @@ def main() -> int:
     env_overrides = _load_env_file(env_path)
     env = {**os.environ, **env_overrides}
 
-    bearer = env_overrides.get("REGISTRY_WITNESS_BEARER_TOKEN")
+    bearer = env_overrides.get("REGISTRY_NOTARY_BEARER_TOKEN")
     if not bearer:
-        print("REGISTRY_WITNESS_BEARER_TOKEN missing from env file", file=sys.stderr)
+        print("REGISTRY_NOTARY_BEARER_TOKEN missing from env file", file=sys.stderr)
         return 2
-    base_url = env_overrides.get("REGISTRY_WITNESS_BASE_URL", "http://127.0.0.1:14255")
+    base_url = env_overrides.get("REGISTRY_NOTARY_BASE_URL", "http://127.0.0.1:14255")
     stub_bind = env_overrides.get("EVIDENCE_SOURCE_STUB_BIND", "127.0.0.1:14256")
 
     reports_dir = Path(args.reports_dir)
@@ -234,7 +234,7 @@ def main() -> int:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     scenario_name = Path(args.scenario).stem
     stub_log = reports_dir / f"{scenario_name}-{timestamp}.stub.log"
-    witness_log = reports_dir / f"{scenario_name}-{timestamp}.witness.log"
+    notary_log = reports_dir / f"{scenario_name}-{timestamp}.notary.log"
     k6_log = reports_dir / f"{scenario_name}-{timestamp}.k6.log"
     proc_stats_path = reports_dir / f"{scenario_name}-{timestamp}.proc-stats.json"
 
@@ -244,19 +244,19 @@ def main() -> int:
         env=env,
         log_path=stub_log,
     )
-    witness_proc: subprocess.Popen | None = None
-    witness_log_file: typing.IO[str] | None = None
+    notary_proc: subprocess.Popen | None = None
+    notary_log_file: typing.IO[str] | None = None
 
     try:
         if not _wait_for(f"http://{stub_bind}/health", headers={}, timeout=READY_TIMEOUT_SEC):
             print("source stub failed to come up; aborting", file=sys.stderr)
             return 3
 
-        print(f"[{_now_iso()}] starting witness: {args.witness_binary} --config {args.witness_config}")
-        witness_proc, witness_log_file = _spawn(
-            [args.witness_binary, "--config", args.witness_config],
+        print(f"[{_now_iso()}] starting notary: {args.notary_binary} --config {args.notary_config}")
+        notary_proc, notary_log_file = _spawn(
+            [args.notary_binary, "--config", args.notary_config],
             env=env,
-            log_path=witness_log,
+            log_path=notary_log,
         )
 
         if not _wait_for(
@@ -264,13 +264,13 @@ def main() -> int:
             headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"},
             timeout=READY_TIMEOUT_SEC,
         ):
-            print("witness failed to become ready; aborting", file=sys.stderr)
+            print("notary failed to become ready; aborting", file=sys.stderr)
             return 3
 
-        # Begin sampling witness.
+        # Begin sampling notary.
         samples: list = []
         stop_event = threading.Event()
-        sampler_proc = psutil.Process(witness_proc.pid)
+        sampler_proc = psutil.Process(notary_proc.pid)
         sampler_thread = threading.Thread(
             target=_run_sampler,
             args=(sampler_proc, args.sample_interval, stop_event, samples),
@@ -297,7 +297,7 @@ def main() -> int:
             json.dumps(
                 {
                     "scenario": args.scenario,
-                    "witness_pid": witness_proc.pid,
+                    "notary_pid": notary_proc.pid,
                     "stub_bind": stub_bind,
                     "started_at": timestamp,
                     "platform": sys.platform,
@@ -310,10 +310,10 @@ def main() -> int:
         print(f"[{_now_iso()}] proc stats written: {proc_stats_path}")
         return k6_result.returncode
     finally:
-        if witness_proc is not None:
-            _terminate(witness_proc, "witness")
-        if witness_log_file is not None:
-            witness_log_file.close()
+        if notary_proc is not None:
+            _terminate(notary_proc, "notary")
+        if notary_log_file is not None:
+            notary_log_file.close()
         _terminate(stub_proc, "stub")
         stub_log_file.close()
 

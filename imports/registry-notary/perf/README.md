@@ -1,14 +1,14 @@
-# registry-witness Performance Testing
+# registry-notary Performance Testing
 
 Scaffolding for local, CI, and scheduled performance runs against the
-`registry-witness` HTTP service. Goals: measure authenticated claim evaluation
+`registry-notary` HTTP service. Goals: measure authenticated claim evaluation
 latency, CEL-derived claim cost, batch evaluate throughput, peak outbound
 concurrency, and the correctness of the politeness cap (Stage 1 DoD).
 
-Witness's claim evaluation calls an upstream source over HTTP (DCI). To
-isolate witness latency from any specific upstream, this harness ships a small
+Notary's claim evaluation calls an upstream source over HTTP (DCI). To
+isolate notary latency from any specific upstream, this harness ships a small
 deterministic stub server (`perf/stub/source_stub.py`) that responds to DCI
-search requests with seed-42 records. The perf configs point witness at the
+search requests with seed-42 records. The perf configs point notary at the
 local stub. Replacing the stub with a real upstream (a registry-relay running
 its own perf config, for example) is left as a follow-up.
 
@@ -30,10 +30,10 @@ tracked separately.
 2. Build the release binary:
 
    ```bash
-   cargo build --release -p registry-witness-bin
+   cargo build --release -p registry-notary-bin
    ```
 
-   The binary is written to `target/release/registry-witness`.
+   The binary is written to `target/release/registry-notary`.
 
 3. Install `k6` (see [k6 docs](https://k6.io/docs/get-started/installation/)).
    k6 v2.x is supported. Note: k6 v2 removed the `vu` export from `k6`; all
@@ -53,10 +53,10 @@ output path are reported.
 
 The script writes:
 
-- bearer + API-key tokens for the witness service (one shared verification
+- bearer + API-key tokens for the notary service (one shared verification
   identity matching the demo config, plus a deny-path identity)
-- a bearer token consumed by the witness process when it calls the source stub
-- an Ed25519 private JWK used by the witness credential issuer (witness will
+- a bearer token consumed by the notary process when it calls the source stub
+- an Ed25519 private JWK used by the notary credential issuer (notary will
   refuse to start without it, even if no issuance scenario is run)
 - the base URL, claim ids, and subject id prefix that the k6 scenarios read
 
@@ -71,7 +71,7 @@ uv run perf/stub/source_stub.py --profile medium
 ```
 
 The stub binds `127.0.0.1:14256` by default and serves DCI search responses on
-the paths witness expects:
+the paths notary expects:
 
 - `POST /dci/crvs/registry/sync/search` (birth_date lookups)
 - `POST /dci/fr/registry/sync/search` (farmed_land_size_hectares lookups)
@@ -81,7 +81,7 @@ Both paths accept the bearer token from
 seed (42); the `--profile` flag selects how many distinct subjects respond
 with hits (1k for `small`, 100k for `medium`).
 
-The stub is intentionally minimal: it implements the response shape witness
+The stub is intentionally minimal: it implements the response shape notary
 parses (`message.search_response[0].data.reg_records`) and nothing else. It
 is not a registry-relay replacement.
 
@@ -117,13 +117,13 @@ without a proxy or network tap.
 
 ---
 
-## Start the witness server
+## Start the notary server
 
 With [1Password CLI](https://developer.1password.com/docs/cli/):
 
 ```bash
 op run --env-file=target/perf/perf.env -- \
-  target/release/registry-witness --config perf/config/medium.yaml
+  target/release/registry-notary --config perf/config/medium.yaml
 ```
 
 Without 1Password (source the env file directly):
@@ -132,15 +132,15 @@ Without 1Password (source the env file directly):
 set -a
 . target/perf/perf.env
 set +a
-target/release/registry-witness --config perf/config/medium.yaml
+target/release/registry-notary --config perf/config/medium.yaml
 ```
 
-Witness has no `/ready` endpoint. Probe with an authenticated `GET /claims`
+Notary has no `/ready` endpoint. Probe with an authenticated `GET /claims`
 and wait for `200`:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $REGISTRY_WITNESS_BEARER_TOKEN" \
+  -H "Authorization: Bearer $REGISTRY_NOTARY_BEARER_TOKEN" \
   http://127.0.0.1:14255/claims
 ```
 
@@ -148,7 +148,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ## Run k6 scenarios
 
-All scenarios require `Accept: application/vnd.registry-witness.claim-result+json`
+All scenarios require `Accept: application/vnd.registry-notary.claim-result+json`
 for evaluate and batch-evaluate requests. The scenarios set this automatically.
 Generic `Accept: application/json` returns 406.
 
@@ -170,7 +170,7 @@ result to `target/perf/results/<scenario>.json` so baselines can be diffed.
 
 ## Capture a performance baseline
 
-`perf/scripts/capture_baseline.py` starts the stub and witness, runs the full
+`perf/scripts/capture_baseline.py` starts the stub and notary, runs the full
 scenario set, and writes a composite JSON to `perf/baselines/<tag>.json`. This
 is the recommended way to produce a baseline for regression comparisons.
 
@@ -227,19 +227,19 @@ The `/_stats/reset` call in `capture_baseline.py` ensures each scenario's
 | small   | 1,000    | CI smoke check, quick iteration       |
 | medium  | 100,000  | Standard developer run                |
 
-`small` and `medium` are stub-side data sizes. The witness process itself sees
-exactly one record per request, so witness memory is flat across profiles.
+`small` and `medium` are stub-side data sizes. The notary process itself sees
+exactly one record per request, so notary memory is flat across profiles.
 The profile influences only how widely k6 spreads its subject ids and so how
 much cache locality the stub can exploit.
 
-**Important**: set `REGISTRY_WITNESS_SUBJECT_COUNT` to match the stub profile.
+**Important**: set `REGISTRY_NOTARY_SUBJECT_COUNT` to match the stub profile.
 The default env file sets it to 100000 (medium). For `--profile small`, pass
-`-e REGISTRY_WITNESS_SUBJECT_COUNT=1000` to k6 or use `capture_baseline.py`
+`-e REGISTRY_NOTARY_SUBJECT_COUNT=1000` to k6 or use `capture_baseline.py`
 which does this automatically.
 
-There is no `large` profile. Witness does not scan datasets: per-request work
+There is no `large` profile. Notary does not scan datasets: per-request work
 is bounded by claim depth, source latency, and signing cost. Adding a 1M-row
-tier would not exercise additional witness behavior.
+tier would not exercise additional notary behavior.
 
 ---
 
@@ -252,12 +252,12 @@ tier would not exercise additional witness behavior.
 | `batch_evaluate_10`       | POST /claims/batch-evaluate     | Batch of 10 subjects; baseline for Stage 1 concurrency comparison         |
 | `batch_evaluate_100`      | POST /claims/batch-evaluate     | Batch of 100 subjects (equals `inline_batch_limit`); Stage 1 key scenario |
 | `batch_evaluate_1000`     | POST /claims/batch-evaluate     | Batch of 1000 subjects; expects 413 today (see Known Gaps)                |
-| `batch_evaluate`          | POST /claims/batch-evaluate     | Dynamic batch size via `REGISTRY_WITNESS_BATCH_SIZE`                      |
+| `batch_evaluate`          | POST /claims/batch-evaluate     | Dynamic batch size via `REGISTRY_NOTARY_BATCH_SIZE`                      |
 | `politeness_concurrent`   | POST /claims/batch-evaluate     | Two concurrent batch calls; asserts `stub_peak_in_flight` (Stage 1 DoD)  |
 | `list_claims`             | GET /claims                     | Catalog read, no source IO                                                |
 | `auth_deny`               | mixed                           | 401 (missing/invalid token) and 403 (deny-path identity) only             |
 
-All scenarios pass `data-purpose: perf` so witness's purpose-required check is
+All scenarios pass `data-purpose: perf` so notary's purpose-required check is
 satisfied.
 
 Each scenario's `handleSummary` writes to two locations:
@@ -270,14 +270,14 @@ Each scenario's `handleSummary` writes to two locations:
 ## Runner script
 
 `perf/scripts/run_scenario.py` orchestrates a single run end-to-end: it starts
-the source stub, starts the witness binary, waits for both to come up, runs a
-named k6 scenario while sampling the witness process (CPU, RSS, threads, FDs
+the source stub, starts the notary binary, waits for both to come up, runs a
+named k6 scenario while sampling the notary process (CPU, RSS, threads, FDs
 on Linux), and tears down cleanly.
 
 ```bash
 uv run perf/scripts/run_scenario.py \
   --scenario perf/k6/evaluate_extract.js \
-  --witness-config perf/config/medium.yaml \
+  --notary-config perf/config/medium.yaml \
   --stub-profile medium \
   --env-file target/perf/perf.env
 ```
@@ -309,26 +309,26 @@ Tests cover:
 
 | Variable                                | Default                  | Description                                            |
 |-----------------------------------------|--------------------------|--------------------------------------------------------|
-| `REGISTRY_WITNESS_BASE_URL`             | `http://127.0.0.1:14255` | Witness base URL used by k6 scripts                    |
-| `REGISTRY_WITNESS_BEARER_TOKEN`         | (generated)              | Bearer token with civil+farmer evidence scopes         |
-| `REGISTRY_WITNESS_BEARER_TOKEN_HASH`    | (generated)              | Server-side SHA-256 fingerprint for bearer auth        |
-| `REGISTRY_WITNESS_API_KEY`              | (generated)              | API-key token (same scopes; exercised in auth_deny)    |
-| `REGISTRY_WITNESS_API_KEY_HASH`         | (generated)              | Server-side SHA-256 fingerprint for API-key auth       |
-| `REGISTRY_WITNESS_NO_SCOPE_TOKEN`       | (generated)              | Valid bearer token with no evidence scopes (deny path) |
-| `REGISTRY_WITNESS_NO_SCOPE_TOKEN_HASH`  | (generated)              | Server-side SHA-256 fingerprint for no-scope auth      |
-| `REGISTRY_WITNESS_TOKEN_INVALID`        | `not-a-real-token-xxxx`  | Deliberately invalid token for 401 tests               |
-| `REGISTRY_WITNESS_AUDIT_HASH_SECRET`    | (generated)              | HMAC secret for audit primary-key hashing              |
-| `REGISTRY_WITNESS_PROFILE`              | `medium`                 | Profile name read by k6 for logs and tags              |
-| `REGISTRY_WITNESS_BATCH_SIZE`           | `10`                     | Subjects per batch in `batch_evaluate.js`              |
-| `REGISTRY_WITNESS_SUBJECT_COUNT`        | (matches stub profile)   | Pool size of distinct subject ids k6 cycles through    |
-| `REGISTRY_WITNESS_CLAIM_EXTRACT`        | `date-of-birth`          | Claim id used in `evaluate_extract.js`                 |
-| `REGISTRY_WITNESS_CLAIM_CEL`            | `farmer-under-4ha`       | Claim id used in `evaluate_cel.js`                     |
-| `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`  | (generated)              | Bearer token witness sends to the source stub          |
+| `REGISTRY_NOTARY_BASE_URL`             | `http://127.0.0.1:14255` | Notary base URL used by k6 scripts                    |
+| `REGISTRY_NOTARY_BEARER_TOKEN`         | (generated)              | Bearer token with civil+farmer evidence scopes         |
+| `REGISTRY_NOTARY_BEARER_TOKEN_HASH`    | (generated)              | Server-side SHA-256 fingerprint for bearer auth        |
+| `REGISTRY_NOTARY_API_KEY`              | (generated)              | API-key token (same scopes; exercised in auth_deny)    |
+| `REGISTRY_NOTARY_API_KEY_HASH`         | (generated)              | Server-side SHA-256 fingerprint for API-key auth       |
+| `REGISTRY_NOTARY_NO_SCOPE_TOKEN`       | (generated)              | Valid bearer token with no evidence scopes (deny path) |
+| `REGISTRY_NOTARY_NO_SCOPE_TOKEN_HASH`  | (generated)              | Server-side SHA-256 fingerprint for no-scope auth      |
+| `REGISTRY_NOTARY_TOKEN_INVALID`        | `not-a-real-token-xxxx`  | Deliberately invalid token for 401 tests               |
+| `REGISTRY_NOTARY_AUDIT_HASH_SECRET`    | (generated)              | HMAC secret for audit primary-key hashing              |
+| `REGISTRY_NOTARY_PROFILE`              | `medium`                 | Profile name read by k6 for logs and tags              |
+| `REGISTRY_NOTARY_BATCH_SIZE`           | `10`                     | Subjects per batch in `batch_evaluate.js`              |
+| `REGISTRY_NOTARY_SUBJECT_COUNT`        | (matches stub profile)   | Pool size of distinct subject ids k6 cycles through    |
+| `REGISTRY_NOTARY_CLAIM_EXTRACT`        | `date-of-birth`          | Claim id used in `evaluate_extract.js`                 |
+| `REGISTRY_NOTARY_CLAIM_CEL`            | `farmer-under-4ha`       | Claim id used in `evaluate_cel.js`                     |
+| `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`  | (generated)              | Bearer token notary sends to the source stub          |
 | `EVIDENCE_SOURCE_STUB_BIND`             | `127.0.0.1:14256`        | Stub listen address                                    |
-| `REGISTRY_WITNESS_ISSUER_JWK`           | (generated Ed25519 JWK)  | Required by witness even when issuance is not exercised |
+| `REGISTRY_NOTARY_ISSUER_JWK`           | (generated Ed25519 JWK)  | Required by notary even when issuance is not exercised |
 
 All bearer + API-key tokens are raw strings (subject to constant-time
-comparison server-side); witness does not use hashed fingerprints.
+comparison server-side); notary does not use hashed fingerprints.
 
 ---
 
@@ -345,13 +345,13 @@ comparison server-side); witness does not use hashed fingerprints.
    have an Ed25519 library out of the box. Tracked separately.
 
 3. **`run_scenario.py` uses the wrong binary name**: the script defaults to
-   `target/release/registry-witness-bin` but the actual binary produced by
-   `cargo build --release -p registry-witness-bin` is
-   `target/release/registry-witness`. Pass `--witness-binary
-   target/release/registry-witness` when using `run_scenario.py`.
+   `target/release/registry-notary-bin` but the actual binary produced by
+   `cargo build --release -p registry-notary-bin` is
+   `target/release/registry-notary`. Pass `--notary-binary
+   target/release/registry-notary` when using `run_scenario.py`.
 
 4. **`stub_peak_in_flight = 1` at zero stub latency**: when the stub has no
-   added latency, it responds fast enough that sequential witness fan-out
+   added latency, it responds fast enough that sequential notary fan-out
    completes each request before the next one is dispatched. The counter still
    records correctly; you just need `--stub-latency-ms >= 50` to observe
    meaningful overlap. The `pre-stage-1-100ms-stub.json` baseline uses 100ms

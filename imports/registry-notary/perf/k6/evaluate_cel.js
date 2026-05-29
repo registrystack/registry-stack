@@ -2,7 +2,7 @@
 // Scenario: CEL-derived claim evaluation.
 //
 // POST /claims/evaluate with the CEL claim (default: farmer-under-4ha). The
-// claim depends on farmed-land-size, so witness performs:
+// claim depends on farmed-land-size, so notary performs:
 //   1. DCI POST to fetch farmed_land_size_hectares (extract claim)
 //   2. CEL evaluation of `claims.farmed_land_size.value < 4.0`
 //   3. Audit emit

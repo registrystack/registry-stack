@@ -15,9 +15,9 @@
 //
 // Environment:
 //   EVIDENCE_SOURCE_STUB_BIND (default 127.0.0.1:14256) -- stub host:port
-//   REGISTRY_WITNESS_BASE_URL  (default http://127.0.0.1:14255)
-//   REGISTRY_WITNESS_BEARER_TOKEN -- required
-//   REGISTRY_WITNESS_CLAIM_EXTRACT (default date-of-birth)
+//   REGISTRY_NOTARY_BASE_URL  (default http://127.0.0.1:14255)
+//   REGISTRY_NOTARY_BEARER_TOKEN -- required
+//   REGISTRY_NOTARY_CLAIM_EXTRACT (default date-of-birth)
 
 import http from 'k6/http';
 import { check } from 'k6';
@@ -46,12 +46,12 @@ function stubStatsUrl() {
 }
 
 export const options = {
-  // Two VUs simulate two concurrent inbound witness requests.
+  // Two VUs simulate two concurrent inbound notary requests.
   vus: 2,
-  duration: __ENV.REGISTRY_WITNESS_DURATION || '30s',
+  duration: __ENV.REGISTRY_NOTARY_DURATION || '30s',
   tags: { scenario: 'politeness_concurrent', expected_status: 'false' },
   thresholds: {
-    // No 5xx from witness.
+    // No 5xx from notary.
     'http_req_failed{expected_status:false}': ['rate<0.001'],
   },
 };

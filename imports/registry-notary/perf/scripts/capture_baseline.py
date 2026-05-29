@@ -4,7 +4,7 @@
 # dependencies = ["psutil"]
 # ///
 """
-Capture a Stage 0 performance baseline for registry-witness.
+Capture a Stage 0 performance baseline for registry-notary.
 
 Runs the full scenario set (single-subject evaluate, batch_evaluate at
 10/100/1000, politeness_concurrent) against the current binary and the source
@@ -20,8 +20,8 @@ Usage:
 Options:
     --env-file PATH         Env file with credentials (default: target/perf/perf.env).
     --tag NAME              Baseline tag written to filename and JSON (default: pre-stage-1).
-    --witness-config PATH   Witness config (default: perf/config/medium.yaml).
-    --witness-binary PATH   Built binary (default: target/release/registry-witness).
+    --notary-config PATH   Notary config (default: perf/config/medium.yaml).
+    --notary-binary PATH   Built binary (default: target/release/registry-notary).
     --stub-profile NAME     Stub profile (default: small -- fast for baseline capture).
     --stub-latency-ms N     Median latency for the stub in ms (default: 0).
     --stub-jitter-ms N      Jitter for the stub in ms (default: 0).
@@ -217,8 +217,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default="target/perf/perf.env")
     parser.add_argument("--tag", default="pre-stage-1")
-    parser.add_argument("--witness-config", default="perf/config/medium.yaml")
-    parser.add_argument("--witness-binary", default="target/release/registry-witness")
+    parser.add_argument("--notary-config", default="perf/config/medium.yaml")
+    parser.add_argument("--notary-binary", default="target/release/registry-notary")
     parser.add_argument("--stub-profile", default="small")
     parser.add_argument("--stub-latency-ms", type=float, default=0.0)
     parser.add_argument("--stub-jitter-ms", type=float, default=0.0)
@@ -239,16 +239,16 @@ def main() -> int:
     env = {
         **os.environ,
         **env_overrides,
-        "REGISTRY_WITNESS_DURATION": args.duration,
-        "REGISTRY_WITNESS_SUBJECT_COUNT": subject_count_override,
+        "REGISTRY_NOTARY_DURATION": args.duration,
+        "REGISTRY_NOTARY_SUBJECT_COUNT": subject_count_override,
     }
 
-    bearer = env_overrides.get("REGISTRY_WITNESS_BEARER_TOKEN", "")
+    bearer = env_overrides.get("REGISTRY_NOTARY_BEARER_TOKEN", "")
     if not bearer:
-        print("REGISTRY_WITNESS_BEARER_TOKEN missing from env file", file=sys.stderr)
+        print("REGISTRY_NOTARY_BEARER_TOKEN missing from env file", file=sys.stderr)
         return 2
 
-    base_url = env_overrides.get("REGISTRY_WITNESS_BASE_URL", "http://127.0.0.1:14255")
+    base_url = env_overrides.get("REGISTRY_NOTARY_BASE_URL", "http://127.0.0.1:14255")
     stub_bind = env_overrides.get("EVIDENCE_SOURCE_STUB_BIND", "127.0.0.1:14256")
 
     results_dir = Path("target/perf/results")
@@ -274,26 +274,26 @@ def main() -> int:
     stub_proc, stub_log_file = _spawn(
         stub_cmd, env=env, log_path=reports_dir / f"baseline-{timestamp}.stub.log"
     )
-    witness_proc: subprocess.Popen | None = None
-    witness_log_file: typing.IO[str] | None = None
+    notary_proc: subprocess.Popen | None = None
+    notary_log_file: typing.IO[str] | None = None
 
     try:
         if not _wait_for(f"http://{stub_bind}/health", headers={}, timeout=READY_TIMEOUT):
             print("source stub failed to come up; aborting", file=sys.stderr)
             return 3
 
-        print(f"[{_now_iso()}] starting witness: {args.witness_binary}")
-        witness_proc, witness_log_file = _spawn(
-            [args.witness_binary, "--config", args.witness_config],
+        print(f"[{_now_iso()}] starting notary: {args.notary_binary}")
+        notary_proc, notary_log_file = _spawn(
+            [args.notary_binary, "--config", args.notary_config],
             env=env,
-            log_path=reports_dir / f"baseline-{timestamp}.witness.log",
+            log_path=reports_dir / f"baseline-{timestamp}.notary.log",
         )
         if not _wait_for(
             f"{base_url}/claims",
             headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"},
             timeout=READY_TIMEOUT,
         ):
-            print("witness failed to become ready; aborting", file=sys.stderr)
+            print("notary failed to become ready; aborting", file=sys.stderr)
             return 3
 
         scenarios = [
@@ -341,10 +341,10 @@ def main() -> int:
         return 0
 
     finally:
-        if witness_proc is not None:
-            _terminate(witness_proc, "witness")
-        if witness_log_file is not None:
-            witness_log_file.close()
+        if notary_proc is not None:
+            _terminate(notary_proc, "notary")
+        if notary_log_file is not None:
+            notary_log_file.close()
         _terminate(stub_proc, "stub")
         stub_log_file.close()
 

@@ -718,7 +718,7 @@ wheels = [
 ]
 
 [[package]]
-name = "registry-witness-perf"
+name = "registry-notary-perf"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

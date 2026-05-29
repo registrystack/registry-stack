@@ -3,7 +3,7 @@
 //
 // Uses the extract claim. See batch_evaluate_10.js for rationale.
 // Batch size 100 matches the inline_batch_limit in the perf configs, so
-// witness will not split the request internally.
+// notary will not split the request internally.
 
 import http from 'k6/http';
 import { check } from 'k6';

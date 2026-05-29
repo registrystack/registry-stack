@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scenario: batch evaluate over N subjects.
 //
-// POST /claims/batch-evaluate with REGISTRY_WITNESS_BATCH_SIZE distinct
+// POST /claims/batch-evaluate with REGISTRY_NOTARY_BATCH_SIZE distinct
 // subjects. Uses the extract claim by default to keep the per-subject work
 // directly comparable to evaluate_extract.
 

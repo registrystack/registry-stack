@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Shared helpers for registry-witness k6 load test scenarios.
+// Shared helpers for registry-notary k6 load test scenarios.
 //
 // Protocol notes:
 //   HTTP version: k6 defaults to HTTP/1.1 with connection keepalive. Do not override.
@@ -26,33 +26,33 @@ export const serverErrors5xx = new Counter('server_errors_5xx');
 // ---------------------------------------------------------------------------
 
 export function baseUrl() {
-  return __ENV.REGISTRY_WITNESS_BASE_URL || 'http://127.0.0.1:14255';
+  return __ENV.REGISTRY_NOTARY_BASE_URL || 'http://127.0.0.1:14255';
 }
 
 export function profile() {
-  return __ENV.REGISTRY_WITNESS_PROFILE || 'medium';
+  return __ENV.REGISTRY_NOTARY_PROFILE || 'medium';
 }
 
 export function batchSize() {
-  return parseInt(__ENV.REGISTRY_WITNESS_BATCH_SIZE || '10', 10);
+  return parseInt(__ENV.REGISTRY_NOTARY_BATCH_SIZE || '10', 10);
 }
 
 export function subjectCount() {
-  return parseInt(__ENV.REGISTRY_WITNESS_SUBJECT_COUNT || '100000', 10);
+  return parseInt(__ENV.REGISTRY_NOTARY_SUBJECT_COUNT || '100000', 10);
 }
 
 export function extractClaim() {
-  return __ENV.REGISTRY_WITNESS_CLAIM_EXTRACT || 'date-of-birth';
+  return __ENV.REGISTRY_NOTARY_CLAIM_EXTRACT || 'date-of-birth';
 }
 
 export function celClaim() {
-  return __ENV.REGISTRY_WITNESS_CLAIM_CEL || 'farmer-under-4ha';
+  return __ENV.REGISTRY_NOTARY_CLAIM_CEL || 'farmer-under-4ha';
 }
 
 const loggedTokenLabels = new Set();
 
 function logTokenPresenceOnce(label, message) {
-  if (__ENV.REGISTRY_WITNESS_LOG_TOKENS !== '1') {
+  if (__ENV.REGISTRY_NOTARY_LOG_TOKENS !== '1') {
     return;
   }
   if (!loggedTokenLabels.has(label)) {
@@ -71,28 +71,28 @@ function requireToken(envVar, label) {
 }
 
 export function bearerToken() {
-  return requireToken('REGISTRY_WITNESS_BEARER_TOKEN', 'bearer token');
+  return requireToken('REGISTRY_NOTARY_BEARER_TOKEN', 'bearer token');
 }
 
 export function apiKeyToken() {
-  return requireToken('REGISTRY_WITNESS_API_KEY', 'api key');
+  return requireToken('REGISTRY_NOTARY_API_KEY', 'api key');
 }
 
 export function noScopeToken() {
-  return requireToken('REGISTRY_WITNESS_NO_SCOPE_TOKEN', 'no-scope token');
+  return requireToken('REGISTRY_NOTARY_NO_SCOPE_TOKEN', 'no-scope token');
 }
 
 export function invalidToken() {
   // Invalid token is a synthetic value. A blank value still exercises 401,
   // so we do not fail-fast.
-  const token = __ENV.REGISTRY_WITNESS_TOKEN_INVALID || 'invalid-token-value';
+  const token = __ENV.REGISTRY_NOTARY_TOKEN_INVALID || 'invalid-token-value';
   logTokenPresenceOnce('invalid token', 'invalid token: token present: yes (synthetic)');
   return token;
 }
 
 // Accept header for claim evaluate / batch-evaluate responses.
-// Witness requires this specific media type; generic application/json returns 406.
-export const CLAIM_RESULT_ACCEPT = 'application/vnd.registry-witness.claim-result+json';
+// Notary requires this specific media type; generic application/json returns 406.
+export const CLAIM_RESULT_ACCEPT = 'application/vnd.registry-notary.claim-result+json';
 
 export function bearerHeaders(token, opts) {
   const o = opts || {};
@@ -158,7 +158,7 @@ const THRESHOLDS = {
   'evaluate_cel': {
     'http_req_duration{expected_status:false}': ['p(95)<150', 'p(99)<400'],
   },
-  // Batch evaluate: N subjects per request, default REGISTRY_WITNESS_BATCH_SIZE=10.
+  // Batch evaluate: N subjects per request, default REGISTRY_NOTARY_BATCH_SIZE=10.
   'batch_evaluate': {
     'http_req_duration{expected_status:false}': ['p(95)<500', 'p(99)<1500'],
   },
@@ -194,13 +194,13 @@ export function commonOptions(opts) {
     extraTags,
   } = opts;
 
-  const vus = parseInt(__ENV.REGISTRY_WITNESS_VUS || String(defaultVus || 10), 10);
-  const duration = __ENV.REGISTRY_WITNESS_DURATION || defaultDuration || '30s';
+  const vus = parseInt(__ENV.REGISTRY_NOTARY_VUS || String(defaultVus || 10), 10);
+  const duration = __ENV.REGISTRY_NOTARY_DURATION || defaultDuration || '30s';
 
   const tags = Object.assign({ scenario, expected_status: 'false' }, extraTags || {});
 
   if (scenarioType === 'constant-arrival-rate') {
-    const rate = parseInt(__ENV.REGISTRY_WITNESS_RATE || String(defaultRate || 50), 10);
+    const rate = parseInt(__ENV.REGISTRY_NOTARY_RATE || String(defaultRate || 50), 10);
     return {
       scenarios: {
         [scenario]: {

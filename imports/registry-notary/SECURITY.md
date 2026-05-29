@@ -2,7 +2,7 @@
 
 Report vulnerabilities privately through GitHub Security Advisories:
 
-`https://github.com/jeremi/registry-witness/security/advisories/new`
+`https://github.com/jeremi/registry-notary/security/advisories/new`
 
 If GitHub advisories are unavailable, contact Jeremi through an existing private
 project channel before opening a public issue or pull request. Do not open
@@ -25,4 +25,4 @@ Known pilot limitations such as no revocation service, no
 workflow should be reported as product gaps unless they create an exploitable
 security or privacy issue beyond the documented limitation. The OpenFn sidecar
 also relies on deployment-network egress controls for JavaScript adaptor
-traffic; see `crates/registry-witness-openfn-sidecar/README.md`.
+traffic; see `crates/registry-notary-openfn-sidecar/README.md`.

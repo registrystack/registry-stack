@@ -2,12 +2,12 @@
 
 ## Goal
 
-Add an optional OpenID4VCI issuer facade for Registry Witness so citizen
+Add an optional OpenID4VCI issuer facade for Registry Notary so citizen
 self-attestation credentials can be downloaded by standards-oriented wallets
 such as Inji Wallet and Walt Wallet.
 
 The facade must be wallet-neutral. Inji and Walt are validation clients, not
-special cases. eSignet remains the citizen identity provider. Registry Witness
+special cases. eSignet remains the citizen identity provider. Registry Notary
 remains the authorization, subject-binding, source-read, audit, and credential
 issuance authority.
 
@@ -15,15 +15,15 @@ issuance authority.
 Wallet
   -> OpenID4VCI issuer metadata and credential offer
   -> eSignet citizen authentication
-  -> Witness OpenID4VCI credential endpoint
-  -> Witness self-attestation guard
+  -> Notary OpenID4VCI credential endpoint
+  -> Notary self-attestation guard
   -> Registry Relay/source read
-  -> Witness SD-JWT VC issuance
+  -> Notary SD-JWT VC issuance
 ```
 
 ## Background
 
-Registry Witness already supports citizen self-attestation through its custom
+Registry Notary already supports citizen self-attestation through its custom
 API surface:
 
 1. `POST /claims/evaluate`
@@ -37,10 +37,10 @@ OpenID4VCI:
 3. Submit an access token and wallet proof JWT to a credential endpoint.
 4. Receive a credential response in the advertised format.
 
-Witness can already issue `application/dc+sd-jwt` credentials, but its holder
-proof is currently stricter and more Witness-specific than the standard
+Notary can already issue `application/dc+sd-jwt` credentials, but its holder
+proof is currently stricter and more Notary-specific than the standard
 OpenID4VCI proof JWT most wallets generate. The facade therefore needs to adapt
-the protocol without weakening the existing Witness `/credentials/issue`
+the protocol without weakening the existing Notary `/credentials/issue`
 contract.
 
 ## Actors
@@ -49,8 +49,8 @@ contract.
 | --- | --- |
 | Citizen wallet | Discovers issuer metadata, launches citizen authentication, signs holder proof, stores the credential |
 | eSignet | Authenticates the citizen and provides the verified subject-binding claim |
-| Registry Witness | Publishes OpenID4VCI facade, validates token and proof, enforces self-attestation policy, issues credential |
-| Registry Relay/source | Supplies configured civil registry facts after Witness authorization |
+| Registry Notary | Publishes OpenID4VCI facade, validates token and proof, enforces self-attestation policy, issues credential |
+| Registry Relay/source | Supplies configured civil registry facts after Notary authorization |
 | Registry Platform | Provides reusable cryptographic, OpenID4VCI, SD-JWT, OIDC, and test-fixture primitives |
 | Registry Lab | Orchestrates the optional demo, scripts, artifacts, and wallet smoke checks |
 
@@ -80,7 +80,7 @@ cause a registry source read before subject binding succeeds.
 
 ## Protocol Surface
 
-The facade is disabled by default and enabled by explicit Witness config.
+The facade is disabled by default and enabled by explicit Notary config.
 
 ### `GET /.well-known/openid-credential-issuer`
 
@@ -138,7 +138,7 @@ Example:
 ```
 
 `format` uses the OpenID4VCI credential format identifier expected by wallets.
-Witness still issues the wire credential media type documented in the SD-JWT VC
+Notary still issues the wire credential media type documented in the SD-JWT VC
 profile.
 
 ### `GET /oid4vci/credential-offer`
@@ -245,7 +245,7 @@ the OpenID4VCI draft/profile behavior observed during the run.
 
 ## Configuration
 
-Add an optional top-level Witness block:
+Add an optional top-level Notary block:
 
 ```yaml
 oid4vci:
@@ -343,7 +343,7 @@ V1 does not validate:
 - that a wallet instance has not been revoked by a wallet provider;
 - issuer access certificates, trusted lists, or external ecosystem trust
   anchors;
-- credential status or revocation after issuance;
+- external status-list or revocation-list validation after issuance;
 - delegated authority between the citizen and another civil subject.
 
 Privacy boundaries:
@@ -362,7 +362,7 @@ Privacy boundaries:
 
 ## Holder Proof Compatibility
 
-OpenID4VCI wallets normally produce a standard proof JWT. Witness currently
+OpenID4VCI wallets normally produce a standard proof JWT. Notary currently
 requires a custom holder proof on `/credentials/issue` that binds additional
 internal values such as `evaluation_id`, `credential_profile`, disclosure hash,
 and claim set.
@@ -394,14 +394,14 @@ The OpenID4VCI validator must:
 - produce bounded audit metadata without raw proof JWT material.
 
 The facade may translate the validated OpenID4VCI proof into the internal
-holder request used by Witness issuance. Wallets must not be asked to include
-Witness-specific proof claims in V1.
+holder request used by Notary issuance. Wallets must not be asked to include
+Notary-specific proof claims in V1.
 
 ## Nonce Lifecycle
 
 Nonce handling is mandatory when `oid4vci.nonce.enabled = true`.
 
-- Witness is the nonce minting authority.
+- Notary is the nonce minting authority.
 - `POST /oid4vci/nonce` returns `c_nonce` and `c_nonce_expires_in`.
 - `POST /oid4vci/credential` may also return `c_nonce` and
   `c_nonce_expires_in` for Draft 13 clients that expect the next nonce in the
@@ -457,7 +457,7 @@ When the subject-binding claim is sourced from UserInfo:
 
 The wallet facade creates reusable standards and crypto surface. These pieces
 belong in `registry-platform` rather than being implemented only inside
-Witness:
+Notary:
 
 ### `registry-platform-oid4vci`
 
@@ -473,7 +473,7 @@ New crate or module for OpenID4VCI primitives:
 - negative test vectors for malformed proof, wrong audience, stale proof,
   unsupported algorithm, missing key, and replayed nonce.
 
-The crate must not know about Witness claim ids, registry subjects, Relay
+The crate must not know about Notary claim ids, registry subjects, Relay
 sources, or self-attestation policy. It validates protocol and cryptographic
 facts only.
 
@@ -490,7 +490,7 @@ Extend or reuse existing SD-JWT utilities for:
 - issuer media type and compact JWT `typ` constants where reusable;
 - wallet-proof test fixture generation.
 
-The existing Witness-specific holder proof validator remains available. The
+The existing Notary-specific holder proof validator remains available. The
 OpenID4VCI proof validator must be a separate API so callers cannot
 accidentally relax `/credentials/issue`.
 
@@ -508,7 +508,7 @@ Use or add shared helpers for:
 ### `registry-platform-oidc`
 
 Use the shared OIDC verifier for eSignet access-token validation when it is
-available in the target branch. If Witness keeps its current verifier in V1,
+available in the target branch. If Notary keeps its current verifier in V1,
 that is explicit V1 debt and must be listed in the implementation note.
 Signed UserInfo validation should reuse the platform OIDC UserInfo verifier
 when available rather than introducing a third verifier.
@@ -522,9 +522,9 @@ Add reusable test fixtures:
 - mock eSignet/OIDC token helper if not already covered;
 - golden metadata and credential-offer examples.
 
-## What Belongs In Registry Witness
+## What Belongs In Registry Notary
 
-Witness owns product policy and runtime behavior:
+Notary owns product policy and runtime behavior:
 
 - `oid4vci` config schema and validation against `self_attestation`;
 - axum routes;
@@ -537,14 +537,14 @@ Witness owns product policy and runtime behavior:
 - nonce storage for V1 if no shared platform storage abstraction exists;
 - error mapping to safe client responses.
 
-Witness must not move registry domain types into platform only to support this
+Notary must not move registry domain types into platform only to support this
 facade.
 
 ## What Belongs In Registry Lab
 
 Registry Lab owns optional demo orchestration:
 
-- generated Witness config with `oid4vci.enabled = true`;
+- generated Notary config with `oid4vci.enabled = true`;
 - `just oid4vci-offer`;
 - `just oid4vci-smoke`;
 - optional `just wallet-walt` once a Walt Wallet API target is available;
@@ -726,7 +726,7 @@ The feature is complete only when every item below is true:
 - Nonces are consumed atomically.
 - Nonce-store unavailability fails closed when nonce enforcement is enabled.
 - `POST /oid4vci/credential` accepts a standard OpenID4VCI JWT proof.
-- `POST /oid4vci/credential` rejects the existing Witness-specific proof when
+- `POST /oid4vci/credential` rejects the existing Notary-specific proof when
   it is not a valid OpenID4VCI proof.
 - `POST /oid4vci/credential` validates a current eSignet/OIDC bearer token.
 - Access tokens with wrong audience are denied.
@@ -765,7 +765,7 @@ The feature is complete only when every item below is true:
   validation, proof validation, and self-attestation subject binding.
 - Zero-source-read claims are proven by a mock source read counter or structured
   audit field assertion, not by log text.
-- The issued credential remains compatible with the existing Witness SD-JWT VC
+- The issued credential remains compatible with the existing Notary SD-JWT VC
   profile.
 - The existing `/claims/evaluate` and `/credentials/issue` tests still pass.
 - The facade does not relax the existing strict `/credentials/issue` holder
@@ -824,7 +824,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# registry-witness
+# registry-notary
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -866,7 +866,7 @@ Parallel workers:
 - Worker B starts after Worker A and Worker C have landed their APIs:
   implement OpenID4VCI proof JWT validation, nonce policy checks, and negative
   fixtures.
-- Reviewer: check standards alignment, API boundaries, and that Witness domain
+- Reviewer: check standards alignment, API boundaries, and that Notary domain
   policy did not leak into platform.
 
 Exit criteria:
@@ -874,9 +874,9 @@ Exit criteria:
 - platform unit tests pass;
 - metadata, offer, nonce, wire-error, and proof negative tests pass;
 - public APIs are documented;
-- reviewer signs off before Witness integration starts.
+- reviewer signs off before Notary integration starts.
 
-### Wave 2: Witness Facade Routes
+### Wave 2: Notary Facade Routes
 
 Parallel workers:
 
@@ -891,7 +891,7 @@ Parallel workers:
 
 Exit criteria:
 
-- focused Witness route and config tests pass;
+- focused Notary route and config tests pass;
 - successful issuance integration test passes;
 - other-subject denial proves zero source reads;
 - wire errors map from internal denial codes without leaking subject-binding
@@ -902,7 +902,7 @@ Exit criteria:
 
 Parallel workers:
 
-- Worker A: add generated optional Witness config and `just oid4vci-smoke`.
+- Worker A: add generated optional Notary config and `just oid4vci-smoke`.
 - Worker B: add narrated smoke script and artifact report.
 - Worker C: add Walt offer smoke if local Walt API is available.
 - Worker D: add Inji/Mimoto compatibility config notes and smoke if stable.

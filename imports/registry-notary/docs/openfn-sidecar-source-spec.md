@@ -2,19 +2,19 @@
 
 ## Goal
 
-Provide a small synchronous source sidecar that lets Registry Witness evaluate a
+Provide a small synchronous source sidecar that lets Registry Notary evaluate a
 single-subject claim using OpenFn adaptors. The first implementation uses
 OpenFn, but the contract is a synchronous Registry Data API-shaped source
-contract, not an OpenFn-specific Witness connector.
+contract, not an OpenFn-specific Notary connector.
 
 ## Architecture
 
-Registry Witness calls the sidecar through the existing `registry_data_api`
+Registry Notary calls the sidecar through the existing `registry_data_api`
 source connector:
 
 ```text
 GET /datasets/{dataset}/{entity}?{lookup_field}={lookup_value}&fields=a,b&limit=2
-Authorization: Bearer <witness-to-sidecar-token>
+Authorization: Bearer <notary-to-sidecar-token>
 Data-Purpose: <purpose>
 ```
 
@@ -30,11 +30,11 @@ or:
 { "data": [{ "field": "value" }] }
 ```
 
-It may return two records only to signal ambiguity. Registry Witness remains the
+It may return two records only to signal ambiguity. Registry Notary remains the
 attestation authority: it owns caller auth, scopes, purpose, claim rules,
 disclosure, provenance, audit, and credential issuance.
 
-The production topology is sidecar-to-Witness over a private pod network or
+The production topology is sidecar-to-Notary over a private pod network or
 localhost. The v1 channel uses a sidecar bearer token; token rotation is a known
 deployment responsibility. Do not expose the sidecar publicly.
 
@@ -48,7 +48,7 @@ for local proof-of-concept work.
 Credentials never traverse a network socket; they stay within the sidecar
 process tree.
 
-OpenFn Lightning webhooks, work orders, and queued runs are not in the Witness
+OpenFn Lightning webhooks, work orders, and queued runs are not in the Notary
 request path.
 
 The sidecar owns concurrency:
@@ -140,7 +140,7 @@ smoke lookup. Runtime execution must not fetch packages from the network.
   not found `[]`, exact match `[record]`, ambiguous `[record1, record2]`.
 - The sidecar trims extra fields from successful records before responding.
 - If the target returns more than two matching records, the sidecar returns two
-  records to preserve Witness's existing ambiguous-source behavior.
+  records to preserve Notary's existing ambiguous-source behavior.
 
 ## HTTP Outcomes
 
@@ -163,12 +163,12 @@ smoke lookup. Runtime execution must not fetch packages from the network.
 
 ## Non-Goals
 
-- Do not use OpenFn Lightning webhooks or queued runs for the synchronous Witness
+- Do not use OpenFn Lightning webhooks or queued runs for the synchronous Notary
   lookup path.
 - Do not let OpenFn decide claim satisfaction or disclosure.
-- Do not add a new Registry Witness connector until the RDA facade is proven
-  insufficient. Trigger signals include needing typed source errors in Witness,
-  needing request bodies instead of RDA query parameters, or needing Witness to
+- Do not add a new Registry Notary connector until the RDA facade is proven
+  insufficient. Trigger signals include needing typed source errors in Notary,
+  needing request bodies instead of RDA query parameters, or needing Notary to
   participate in target-service OAuth flows.
 - Do not support batch lookups in the first implementation.
 - Do not retry OpenFn execution failures in v1; target reads may not be
@@ -189,7 +189,7 @@ Done means all items below are satisfied in one reviewed change set:
   a smoke lookup.
 - Liveness distinguishes process health from readiness and remains responsive
   when workers are saturated or a worker is killed.
-- A Registry Witness config points at the sidecar using `connector:
+- A Registry Notary config points at the sidecar using `connector:
   registry_data_api` and evaluates one claim end to end through the sidecar.
 - Automated tests cover exact match, not found, ambiguous result, invalid OpenFn
   output, timeout with worker kill, oversized output, missing purpose, bad
@@ -200,7 +200,7 @@ Done means all items below are satisfied in one reviewed change set:
 - Logs, metrics, and HTTP responses are checked to confirm no configured
   credentials, target-service credentials, OpenFn environment secrets, or full
   request state are disclosed.
-- Focused sidecar tests, affected `registry-witness-server` tests, formatter,
+- Focused sidecar tests, affected `registry-notary-server` tests, formatter,
   linter, and build checks pass in CI or an equivalent local verification run.
 - Implementation docs include local run instructions, manifest fields, expected
   deployment topology, and the exact verification commands used.
@@ -220,9 +220,9 @@ Wave 0: Design Freeze And Review
 Wave 1: Contract Harness
 
 - Worker A owns sidecar HTTP contract tests and mock OpenFn worker fixtures.
-- Worker B owns Registry Witness integration config and end-to-end test harness.
+- Worker B owns Registry Notary integration config and end-to-end test harness.
 - Work can run in parallel because Worker A stays in the sidecar package and
-  Worker B stays in Witness test/config surfaces.
+  Worker B stays in Notary test/config surfaces.
 - Review gate: tests fail against an empty sidecar and cover every HTTP outcome
   in the spec.
 
@@ -248,7 +248,7 @@ Wave 4: Security, Observability, And Negative Tests
 
 - Worker E owns redaction tests, stderr/log leak tests, correlation IDs, metrics,
   and structured logs.
-- Worker B extends Witness end-to-end tests for success and source failure.
+- Worker B extends Notary end-to-end tests for success and source failure.
 - Review gate: security review verifies no secrets in logs, responses, temp
   files, process args, or failed worker output.
 

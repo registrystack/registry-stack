@@ -2,18 +2,18 @@
 
 ## Goal
 
-Add an optional Registry Witness mode that lets an authenticated citizen request
+Add an optional Registry Notary mode that lets an authenticated citizen request
 configured attestations about themself and receive a holder-bound credential,
 without changing the default machine-client evidence-verification model.
 
-This feature is intentionally stricter than ordinary Witness evaluation:
+This feature is intentionally stricter than ordinary Notary evaluation:
 
 ```text
 Default mode:
-  authorized client asks Witness about a subject
+  authorized client asks Notary about a subject
 
 Citizen self-attestation mode:
-  authenticated citizen asks Witness about the subject bound to their own token
+  authenticated citizen asks Notary about the subject bound to their own token
 ```
 
 The first version should support self-service claim evaluation and SD-JWT VC
@@ -22,10 +22,10 @@ access, arbitrary subject lookup, batch lookup, or delegated access.
 
 ## Background
 
-Registry Witness already owns claim evaluation, disclosure policy, source
+Registry Notary already owns claim evaluation, disclosure policy, source
 lookup, provenance, audit, and SD-JWT VC issuance. It can authenticate callers
 with static credentials, and it has an OIDC auth mode that verifies bearer JWTs
-and maps token scopes to Witness scopes.
+and maps token scopes to Notary scopes.
 
 The missing piece for citizen-facing use is not token verification alone. A
 valid citizen token proves the caller authenticated, but it does not prove the
@@ -41,12 +41,12 @@ V1 is deliberately small:
 2. The issuer returns a JWT access token with a verified stable
    subject-binding claim.
 3. The citizen calls `POST /claims/evaluate` for exactly one `subject.id`.
-4. Witness verifies the token, scopes, allow-lists, and exact subject binding
+4. Notary verifies the token, scopes, allow-lists, and exact subject binding
    before reading any source.
-5. Witness returns a configured claim result.
+5. Notary returns a configured claim result.
 6. If requested, the citizen calls `POST /credentials/issue` for the same
    evaluation and supplies holder DID proof.
-7. Witness issues a short-lived, holder-bound SD-JWT VC.
+7. Notary issues a short-lived, holder-bound SD-JWT VC.
 
 The citizen cannot request arbitrary subject ids, raw Relay rows, batch
 evaluation, delegated access, or claims outside the configured allow-list.
@@ -81,7 +81,7 @@ linkability, detectability, and disclosure.
 ## Requirements
 
 - Self-attestation must be disabled by default.
-- When disabled, existing Witness API behavior, config, and tests must remain
+- When disabled, existing Notary API behavior, config, and tests must remain
   unchanged.
 - Self-attestation must require OIDC authentication. Static credentials are not
   sufficient for citizen self-service.
@@ -143,7 +143,7 @@ self_attestation:
     allowed_client_ids:
       - citizen-portal
     allowed_audiences:
-      - registry-witness-citizen
+      - registry-notary-citizen
   token_policy:
     required_acr_values:
       - urn:example:loa:substantial
@@ -164,7 +164,7 @@ self_attestation:
     - civil-status
     - person-is-alive
   allowed_formats:
-    - application/vnd.registry-witness.claim-result+json
+    - application/vnd.registry-notary.claim-result+json
     - application/dc+sd-jwt
   allowed_disclosures:
     - predicate
@@ -195,14 +195,14 @@ auth:
     issuer: https://id.example.gov
     jwks_uri: https://id.example.gov/oauth/v2/keys
     audiences:
-      - registry-witness
+      - registry-notary
     scope_claim: scope
     scope_map:
       self_attestation:
         - self_attestation
 ```
 
-The exact `scope_map` input form should follow the current Witness OIDC config
+The exact `scope_map` input form should follow the current Notary OIDC config
 model. The important invariant is that a citizen token yields only the narrow
 self-attestation permission. It must not directly receive machine-client source
 scopes such as `civil_registry:evidence_verification`.
@@ -219,7 +219,7 @@ omits scope and `scope_policy = optional`, and ignored when
 authorization once classified as self-attestation.
 
 After access-mode classification, subject binding, operation allow-list, claim
-allow-list, disclosure allow-list, and format allow-list pass, Witness may
+allow-list, disclosure allow-list, and format allow-list pass, Notary may
 derive an internal source-read capability for the selected claim only. That
 derived capability is scoped to `access_mode = self_attestation` and must not
 authorize raw Relay access, batch evaluation, or machine-client evaluation.
@@ -280,7 +280,7 @@ allow localhost, private address ranges, redirects to unapproved hosts, or
 non-HTTP(S) schemes.
 
 For the registry-lab story, confirm whether the issuer emits an algorithm
-Witness accepts. Current Witness OIDC defaults are expected to be EdDSA-only.
+Notary accepts. Current Notary OIDC defaults are expected to be EdDSA-only.
 The V1 lab story should use an EdDSA dev issuer. Zitadel RS256 support should
 be a separate implementation ticket that adds RSA key-size validation before
 broadening `allowed_algorithms`. RSA keys smaller than 2048 bits must be
@@ -394,7 +394,7 @@ body fields that could override `request.subject.id`.
 
 ### Access Mode Selection
 
-When `self_attestation.enabled = true`, Witness must classify every OIDC caller
+When `self_attestation.enabled = true`, Notary must classify every OIDC caller
 into exactly one access mode before authorization: `machine_client` or
 `self_attestation`.
 
@@ -429,7 +429,7 @@ For `POST /claims/evaluate`:
 6. Continue through the existing claim evaluation pipeline.
 
 The guard placement is part of the contract. In
-`crates/registry-witness-server/src/api.rs::evaluate`, the self-attestation
+`crates/registry-notary-server/src/api.rs::evaluate`, the self-attestation
 guard must run after request parsing, authentication, principal construction,
 and claim selection, but before calling the runtime evaluation path or any code
 that can invoke an upstream source connector. Denials from this guard still
@@ -447,7 +447,7 @@ For rendering an existing evaluation:
    principal hash, access mode, issuer, and client or audience when present.
 2. If the stored evaluation was created through self-attestation, require the
    current request to classify as `self_attestation`.
-3. Require a currently valid citizen token. Witness must not reuse or store the
+3. Require a currently valid citizen token. Notary must not reuse or store the
    original evaluation token.
 4. Re-check that the current verified token still satisfies subject binding and
    hashes to the stored subject-binding hash.
@@ -463,7 +463,7 @@ For `POST /credentials/issue`:
    principal hash, access mode, issuer, and client or audience when present.
 2. If the stored evaluation was created through self-attestation, require the
    current request to classify as `self_attestation`.
-3. Require a currently valid citizen token. Witness must not reuse or store the
+3. Require a currently valid citizen token. Notary must not reuse or store the
    original evaluation token.
 4. Re-check that the current verified token still satisfies subject binding and
    hashes to the stored subject-binding hash.
@@ -503,7 +503,7 @@ bounded operational details:
   "self_attestation": {
     "enabled": true,
     "claims": ["person-is-alive"],
-    "formats": ["application/vnd.registry-witness.claim-result+json", "application/dc+sd-jwt"],
+    "formats": ["application/vnd.registry-notary.claim-result+json", "application/dc+sd-jwt"],
     "credential_profiles": ["civil_status_sd_jwt"]
   }
 }
@@ -523,7 +523,7 @@ public disclosure. Public discovery must not expose `subject_id_type` in v1.
 ### Browser And Wallet Origin Policy
 
 The first lab story may use CLI or script-driven calls and avoid browser CORS
-entirely. If Witness is called directly from a browser wallet or portal, CORS
+entirely. If Notary is called directly from a browser wallet or portal, CORS
 must be disabled by default and enabled only with an exact
 `allowed_wallet_origins` allow-list. Wildcard origins must not be used with
 credentials. Preflight failures should be generic and must not disclose
@@ -621,7 +621,7 @@ the holder DID proven during issuance. Credential subject identifiers must never
 contain raw `subject.id`, raw registry identifiers, or the bound subject hash
 directly. If a profile later needs a pairwise subject identifier distinct from
 the holder DID, it must derive that identifier per `(issuer, holder DID,
-claim_profile)` and keep it unlinkable to the civil subject id outside Witness.
+claim_profile)` and keep it unlinkable to the civil subject id outside Notary.
 Citizen credential profiles should use random credential identifiers, short
 validity, and no civil identifier in credential subject identifiers unless
 explicitly required by the claim. Audit should record `credential_id_hash`
@@ -696,7 +696,7 @@ source reads. The goal is to reduce probing, noisy mismatch attempts, and
 credential spam.
 
 Rate-limit checks must run before source reads and credential issuance. V1 uses
-in-Witness in-process buckets for the single-process lab and for basic local
+in-Notary in-process buckets for the single-process lab and for basic local
 protection. Keys are derived from the existing `AuditKeyHasher` or an
 equivalent service-held keyed hasher.
 
@@ -762,7 +762,7 @@ HTTP request. The audit record should let an operator answer:
   profile selection;
 - which holder binding mode was requested, without logging holder private
   material or holder proofs;
-- which request/correlation id links the Witness audit event to upstream Relay
+- which request/correlation id links the Notary audit event to upstream Relay
   audit events.
 
 Audit events must remain tamper-evident through the existing chained audit
@@ -821,20 +821,20 @@ has succeeded, rate-limit denial audit events must propagate the classified
 
 ### Correlation
 
-Witness should preserve a privacy-safe incoming `x-request-id` or equivalent
+Notary should preserve a privacy-safe incoming `x-request-id` or equivalent
 correlation header in audit context and pass the same bounded correlation value
 to upstream source requests. This lets operators trace:
 
 ```text
-citizen request -> Witness self-attestation decision -> Relay source read
+citizen request -> Notary self-attestation decision -> Relay source read
 ```
 
-without exposing citizen identifiers. If no request id is supplied, Witness may
+without exposing citizen identifiers. If no request id is supplied, Notary may
 generate one, but it must not derive it from the subject id or token contents.
 
 Incoming correlation ids must be validated before audit or upstream
 propagation. If the supplied value is missing, too long, contains unsafe
-characters, resembles a token, or contains likely PII patterns, Witness must
+characters, resembles a token, or contains likely PII patterns, Notary must
 replace it with a generated opaque id and may record only that replacement
 occurred. Generated ids must be random or UUID-like and must not derive from
 token claims, subject ids, holder material, source data, or request bodies.
@@ -1090,7 +1090,7 @@ Definition of Done:
 
 - Add an optional `registry-lab` story that provisions a citizen-capable OIDC
   token with a namespaced custom subject-binding claim from an EdDSA dev issuer.
-- Configure a Witness instance with `self_attestation.enabled = true`.
+- Configure a Notary instance with `self_attestation.enabled = true`.
 - Demonstrate a citizen token requesting an attestation for itself.
 - Demonstrate a denied request for a different subject.
 - Demonstrate holder-bound SD-JWT VC issuance.
@@ -1101,10 +1101,10 @@ Definition of Done:
   evaluation, subject-mismatch denial, and credential issuance.
 - The story never writes raw access tokens, client secrets, source tokens, or
   full registry rows to artifacts.
-- The story verifies audit artifacts link the citizen request, Witness decision,
+- The story verifies audit artifacts link the citizen request, Notary decision,
   and Relay source read by correlation id without exposing raw citizen
   identifiers.
-- The story demonstrates in-Witness subject mismatch rate limiting and
+- The story demonstrates in-Notary subject mismatch rate limiting and
   documents that production hour-window or cross-replica enforcement requires a
   gateway or shared limiter.
 - The story remains optional so existing lab release checks do not depend on a
@@ -1123,7 +1123,7 @@ Definition of Done:
 - The first lab story uses an EdDSA dev issuer. Zitadel RS256 support is a
   separate hardening ticket requiring RSA minimum key-size enforcement.
 - Citizen-facing credential validity is capped at 600 seconds in v1.
-- Rate limiting starts with in-Witness in-process buckets keyed through
+- Rate limiting starts with in-Notary in-process buckets keyed through
   `AuditKeyHasher`; hour-window or cross-replica enforcement requires a gateway
   or shared limiter.
 - Per-bound-subject rate limiting is omitted in v1 because self-only binding
@@ -1135,7 +1135,7 @@ Definition of Done:
 
 ## Deployment Questions Before Implementation
 
-- Is there a gateway in front of Witness in the target deployment, and can it
+- Is there a gateway in front of Notary in the target deployment, and can it
   enforce production hour-window or cross-replica rate limits?
 - Which production IdPs, if any, must be supported beyond the EdDSA dev issuer
   used by the lab story?
@@ -1195,7 +1195,7 @@ The feature is done only when all of the following are true:
 - Logs, metrics, audit JSONL, Problem Details, lab artifacts, and credential
   payloads pass non-disclosure tests for tokens, civil identifiers, holder
   proofs, SD-JWT disclosures, source rows, and raw Relay responses.
-- In-Witness rate limits run before source reads and issuance, use keyed hashes,
+- In-Notary rate limits run before source reads and issuance, use keyed hashes,
   apply atomic multi-bucket semantics, audit bounded denial context, and fail
   closed when unavailable unless an explicit emergency fallback is configured.
 - Citizen-facing credentials are holder-bound, do not claim holder-equals-
@@ -1231,7 +1231,7 @@ Parallel workers:
   classification.
 - Worker B owns subject-binding, allow-list, fixed claim-profile purpose, and
   alternate-subject rejection tests.
-- Worker C owns in-Witness rate-limit buckets, keyed rate-limit identifiers,
+- Worker C owns in-Notary rate-limit buckets, keyed rate-limit identifiers,
   and rate-limit audit events.
 - Worker D reviews for BOLA, source-read-before-guard regressions, and generic
   external denial bodies.

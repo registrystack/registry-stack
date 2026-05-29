@@ -5,24 +5,24 @@ It is intentionally narrower than the broader federation roadmap.
 
 ## What This Enables
 
-One trusted Witness can call another trusted Witness:
+One trusted Notary can call another trusted Notary:
 
 ```text
 Agency B -> signed request JWT -> Agency A /federation/v1/evaluations
 Agency B <- signed response JWT <- Agency A
 ```
 
-The serving Witness verifies the request, enforces local peer policy, reads its
+The serving Notary verifies the request, enforces local peer policy, reads its
 own source only after policy passes, emits audit, and returns a signed result.
 
 ## Required Environment
 
-Set these before starting the serving Witness:
+Set these before starting the serving Notary:
 
 ```bash
-export REGISTRY_WITNESS_AUDIT_HASH_SECRET='change-me-audit-hash-secret'
-export REGISTRY_WITNESS_FEDERATION_RESPONSE_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
-export REGISTRY_WITNESS_PAIRWISE_SUBJECT_HASH_SECRET='change-me-pairwise-secret'
+export REGISTRY_NOTARY_AUDIT_HASH_SECRET='change-me-audit-hash-secret'
+export REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
+export REGISTRY_NOTARY_PAIRWISE_SUBJECT_HASH_SECRET='change-me-pairwise-secret'
 export EVIDENCE_SOURCE_TOKEN='source-token-issued-by-the-registry'
 ```
 
@@ -39,20 +39,16 @@ federation:
   jwks_uri: https://agency-a.example.gov/federation/jwks.json
   federation_api: https://agency-a.example.gov/federation/v1
   supported_protocol_versions:
-    - registry-witness-federation/v0.1
+    - registry-notary-federation/v0.1
   inbound_body_limit_bytes: 16384
   max_request_lifetime_seconds: 300
   clock_leeway_seconds: 60
   signing:
     kid: agency-a-fed-1
-    key_env: REGISTRY_WITNESS_FEDERATION_RESPONSE_JWK
+    key_env: REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK
     alg: EdDSA
   pairwise_subject_hash:
-    secret_env: REGISTRY_WITNESS_PAIRWISE_SUBJECT_HASH_SECRET
-  replay:
-    storage: in_process_single_instance_only
-    max_entries: 10000
-    eviction: expire_oldest
+    secret_env: REGISTRY_NOTARY_PAIRWISE_SUBJECT_HASH_SECRET
   response_shaping:
     minimum_denial_latency_ms: 250
   emergency_denylist:
@@ -65,7 +61,7 @@ federation:
       # Local Compose demos may use allow_insecure_private_network: true with
       # an HTTP service URL. Production peer JWKS URLs must use HTTPS.
       allowed_protocol_versions:
-        - registry-witness-federation/v0.1
+        - registry-notary-federation/v0.1
       allowed_purposes:
         - https://purpose.example.gov/social-protection/service-delivery
       allowed_profiles:
@@ -94,13 +90,13 @@ Send `POST /federation/v1/evaluations` with:
 
 - `Content-Type: application/jwt`
 - compact JWS serialization
-- protected header `typ = registry-witness-request+jwt`
+- protected header `typ = registry-notary-request+jwt`
 - `alg = EdDSA`
 - `kid` present in the configured peer JWKS
 - payload claims `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `protocol`,
   `action`, `profile`, `purpose`, and `request`
 
-The serving Witness rejects the request before source reads when signature,
+The serving Notary rejects the request before source reads when signature,
 audience, time window, profile, purpose, replay, emergency denylist, or body
 limit checks fail.
 
@@ -108,8 +104,8 @@ limit checks fail.
 
 Successful responses are compact signed JWTs with:
 
-- protected header `typ = registry-witness-response+jwt`
-- `iss` and `sub` for the serving Witness
+- protected header `typ = registry-notary-response+jwt`
+- `iss` and `sub` for the serving Notary
 - `aud` for the requesting peer node id
 - `request_jti` copied from the request
 - `result.subject_ref.hash` as a pairwise `hmac-sha256:` handle
@@ -118,19 +114,34 @@ Stale source observations return HTTP 200 with a signed top-level `error`
 object. Transport denials use RFC 7807-style JSON and do not prove whether the
 subject exists.
 
-## Replay Limitation
+## Replay Store
 
-The MVP replay store is in-process only. It is acceptable for local development,
-single-process pilots, and tests when:
+Replay protection is selected by the top-level `replay` block. The default
+`in_memory` store is acceptable for local development, single-process pilots,
+and tests:
 
 ```yaml
 replay:
-  storage: in_process_single_instance_only
+  storage: in_memory
 ```
 
-Do not run active-active federation with this store. Multiple serving Witness
+Do not run active-active federation with this store. Multiple serving Notary
 instances need a shared replay store before privileged federation traffic is
-enabled.
+enabled:
+
+```yaml
+replay:
+  storage: redis
+  redis:
+    url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
+    key_prefix: registry-notary
+    connect_timeout_ms: 1000
+    operation_timeout_ms: 500
+```
+
+`federation.replay.storage` is retained only for legacy configuration shape. If
+it is set to `redis`, startup validation requires top-level
+`replay.storage = redis` so the configured backend is unambiguous.
 
 ## Verification Checklist
 
@@ -138,10 +149,10 @@ Before rollout, run:
 
 ```bash
 cargo fmt --check
-cargo test -p registry-witness-server federation -- --nocapture
-REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}' \
-  cargo test -p registry-witness-core -p registry-witness-server -- --test-threads=1
-cargo clippy -p registry-witness-core -p registry-witness-server --all-targets -- -D warnings
+cargo test -p registry-notary-server federation -- --nocapture
+REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}' \
+  cargo test -p registry-notary-core -p registry-notary-server -- --test-threads=1
+cargo clippy -p registry-notary-core -p registry-notary-server --all-targets -- -D warnings
 ```
 
 Also confirm:

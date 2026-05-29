@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Define the first practical Registry Witness federation slice: one trusted
-Witness asks another trusted Witness for a signed, scoped evaluation result.
+Define the first practical Registry Notary federation slice: one trusted
+Notary asks another trusted Notary for a signed, scoped evaluation result.
 
 This MVP deliberately implements delegated evaluation only. It does not attempt
 full federation, federated credential issuance, trust-chain discovery, audit
@@ -12,14 +12,14 @@ checkpoint exchange, or open network participation.
 The goal is a government-ready integration pattern that is simple to operate:
 
 ```text
-Agency A Witness -> signed evaluation request -> Agency B Witness
-Agency A Witness <- signed evaluation response <- Agency B Witness
+Agency A Notary -> signed evaluation request -> Agency B Notary
+Agency A Notary <- signed evaluation response <- Agency B Notary
 ```
 
 ```mermaid
 sequenceDiagram
-  participant A as Agency A Witness
-  participant B as Agency B Witness
+  participant A as Agency A Notary
+  participant B as Agency B Notary
   participant S as Agency B Registry Source
 
   A->>B: Signed evaluation request JWT
@@ -55,7 +55,7 @@ critical path.
 ```mermaid
 flowchart LR
   Manifest["Registry Manifest public metadata"]
-  Policy["Static Witness peer policy"]
+  Policy["Static Notary peer policy"]
   Request["Signed delegated evaluation"]
   Result["Signed scoped result"]
   Audit["Local audit on both nodes"]
@@ -79,7 +79,7 @@ peer manually:
 - `jwks_uri`;
 - `federation_api`;
 - supported protocol versions;
-- `registry-witness` evidence offerings;
+- `registry-notary` evidence offerings;
 - evaluation profiles;
 - public `ruleset` identifiers.
 
@@ -90,7 +90,7 @@ flowchart TD
   Offering["Evidence offering"]
   Profile["Evaluation profile"]
   Ruleset["Public ruleset id"]
-  Runtime["Private Witness claim config"]
+  Runtime["Private Notary claim config"]
   Source["Registry source connection"]
 
   Offering --> Ruleset
@@ -99,9 +99,9 @@ flowchart TD
   Runtime --> Source
 ```
 
-### Static Witness Peer Policy
+### Static Notary Peer Policy
 
-Registry Witness uses static local config for the trusted peer:
+Registry Notary uses static local config for the trusted peer:
 
 ```yaml
 federation:
@@ -111,16 +111,16 @@ federation:
   jwks_uri: https://agency-a.example.gov/federation/jwks.json
   federation_api: https://agency-a.example.gov/federation/v1
   supported_protocol_versions:
-    - registry-witness-federation/v0.1
+    - registry-notary-federation/v0.1
   inbound_body_limit_bytes: 16384
   max_request_lifetime_seconds: 300
   clock_leeway_seconds: 60
   signing:
-    kid: witness-fed-2026-05
-    key_env: REGISTRY_WITNESS_FEDERATION_RESPONSE_JWK
+    kid: notary-fed-2026-05
+    key_env: REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK
     alg: EdDSA
   pairwise_subject_hash:
-    secret_env: REGISTRY_WITNESS_PAIRWISE_SUBJECT_HASH_SECRET
+    secret_env: REGISTRY_NOTARY_PAIRWISE_SUBJECT_HASH_SECRET
   peers:
     - node_id: did:web:agency-b.example.gov
       issuer: https://agency-b.example.gov
@@ -128,7 +128,7 @@ federation:
       # Local Compose demos may use allow_insecure_private_network: true with
       # an HTTP service URL. Production peer JWKS URLs must use HTTPS.
       allowed_protocol_versions:
-        - registry-witness-federation/v0.1
+        - registry-notary-federation/v0.1
       allowed_purposes:
         - https://purpose.example.gov/social-protection/service-delivery
       allowed_profiles:
@@ -142,10 +142,6 @@ federation:
       subject_id_type: national_id
       disclosure: predicate
       max_source_observed_age_seconds: 3600
-  replay:
-    storage: in_process_single_instance_only
-    max_entries: 10000
-    eviction: expire_oldest
   response_shaping:
     minimum_denial_latency_ms: 250
   emergency_denylist:
@@ -189,13 +185,13 @@ raising it requires an explicit config change and a focused oversized-body test.
 
 Requests must be compact JWS signed JWTs using the V1 protocol profile:
 
-- `typ = registry-witness-request+jwt`;
+- `typ = registry-notary-request+jwt`;
 - compact JWS serialization only;
 - `alg = EdDSA`;
 - `kid` resolves only within the caller issuer's configured JWKS;
-- `iss` is the calling Witness issuer;
-- `sub` is the calling Witness node id;
-- `aud` is the serving Witness node id;
+- `iss` is the calling Notary issuer;
+- `sub` is the calling Notary node id;
+- `aud` is the serving Notary node id;
 - `iat`, `nbf`, `exp`, and `jti` are required;
 - `protocol`, `action`, `profile`, and `purpose` are required;
 - `purpose` must be an HTTPS URI. Compact purpose ids are deferred beyond the
@@ -203,7 +199,7 @@ Requests must be compact JWS signed JWTs using the V1 protocol profile:
   vocabulary such as W3C DPV instead of local string substitution.
 - requests where `exp - iat` exceeds `max_request_lifetime_seconds` are denied.
 
-`typ = registry-witness-request+jwt` is an unregistered project JWT type for the
+`typ = registry-notary-request+jwt` is an unregistered project JWT type for the
 MVP. Registration or migration to a registered media type is deferred until the
 protocol stabilizes.
 
@@ -218,7 +214,7 @@ Example payload:
   "nbf": 1779878400,
   "exp": 1779878700,
   "jti": "01J...",
-  "protocol": "registry-witness-federation/v0.1",
+  "protocol": "registry-notary-federation/v0.1",
   "action": "evaluate",
   "profile": "disability_status_predicate",
   "purpose": "https://purpose.example.gov/social-protection/service-delivery",
@@ -232,7 +228,7 @@ Example payload:
 }
 ```
 
-The serving Witness verifies the JWT before any source read.
+The serving Notary verifies the JWT before any source read.
 
 `jti` must be a ULID string. Test fixtures should use deterministic ULIDs so
 replay tests can assert exact values.
@@ -241,17 +237,17 @@ replay tests can assert exact values.
 
 Responses must be compact JWS signed JWTs:
 
-- `typ = registry-witness-response+jwt`;
+- `typ = registry-notary-response+jwt`;
 - compact JWS serialization only;
 - `alg = EdDSA`;
 - `kid` resolves only within the serving issuer's configured JWKS;
-- `iss` is the serving Witness issuer;
-- `sub` is the serving Witness node id;
-- `aud` is the requesting Witness node id;
+- `iss` is the serving Notary issuer;
+- `sub` is the serving Notary node id;
+- `aud` is the requesting Notary node id;
 - `iat`, `nbf`, `exp`, and `jti` are required;
 - `request_jti` binds the response to the request.
 
-`typ = registry-witness-response+jwt` is an unregistered project JWT type for
+`typ = registry-notary-response+jwt` is an unregistered project JWT type for
 the MVP. Registration or migration to a registered media type is deferred until
 the protocol stabilizes.
 
@@ -267,7 +263,7 @@ Example payload:
   "exp": 1779879001,
   "jti": "01J...",
   "request_jti": "01J...",
-  "protocol": "registry-witness-federation/v0.1",
+  "protocol": "registry-notary-federation/v0.1",
   "action": "evaluate",
   "profile": "disability_status_predicate",
   "result": {
@@ -310,11 +306,11 @@ auditable even when the source observation is too old:
   "exp": 1779879001,
   "jti": "01J...",
   "request_jti": "01J...",
-  "protocol": "registry-witness-federation/v0.1",
+  "protocol": "registry-notary-federation/v0.1",
   "action": "evaluate",
   "profile": "disability_status_predicate",
   "error": {
-    "type": "urn:registry-witness:problem:federation:stale-source-observation",
+    "type": "urn:registry-notary:problem:federation:stale-source-observation",
     "title": "Source observation is stale"
   }
 }
@@ -337,7 +333,7 @@ hmac-sha256:<base64url-no-pad HMAC>
 ```
 
 The `hmac-sha256:` prefix is a project-scoped label for this MVP, not a
-registered hash URI scheme. The HMAC key is owned by the serving Witness and
+registered hash URI scheme. The HMAC key is owned by the serving Notary and
 must not be shared. The input is this JCS-canonicalized JSON object:
 
 ```json
@@ -358,21 +354,21 @@ across different consuming peers by comparing handles.
 V1 must reject repeated `jti` values within the request expiry window plus clock
 leeway.
 
-Witness rejects requests where `exp - iat` exceeds
+Notary rejects requests where `exp - iat` exceeds
 `max_request_lifetime_seconds`. `jti` entries are retained until
 `exp + clock_leeway_seconds`.
 
-For the first single-instance development implementation, an in-process replay
-store is acceptable only when `replay.storage =
-in_process_single_instance_only` is explicitly configured. Production or
-active-active deployments require a shared replay store before federation can be
-enabled. The in-process store must enforce `max_entries`, evict expired entries
-first, then evict the oldest entry, and increment a replay-store-eviction metric
-when eviction occurs.
+For single-instance development, top-level `replay.storage = in_memory` is
+acceptable. Production or active-active deployments require a shared replay
+store before federation can be enabled. The supported shared backend is
+top-level `replay.storage = redis`, with the Redis URL read from the configured
+environment variable. Redis readiness must verify write and delete capability,
+and stored backend keys must hash replay scope and one-time identifiers rather
+than expose peer ids, holder ids, subjects, nonces, or JWT `jti` values.
 
 ### Audit
 
-Both Witness nodes audit:
+Both Notary nodes audit:
 
 - peer id;
 - issuer;
@@ -392,7 +388,7 @@ claims may be logged only after redacting subject identifiers and token ids.
 
 - Federated credential issuance.
 - OpenID4VCI holder-proof proxying.
-- Citizen wallet issuance through an intermediary Witness.
+- Citizen wallet issuance through an intermediary Notary.
 - Trust bundles.
 - OpenID Federation trust chains.
 - Dynamic peer enrollment.
@@ -407,7 +403,7 @@ claims may be logged only after redacting subject identifiers and token ids.
 
 ## Request Processing Order
 
-The serving Witness must process requests in this order:
+The serving Notary must process requests in this order:
 
 1. Enforce the `inbound_body_limit_bytes` limit before buffering the full body.
 2. Parse compact JWS without logging token material.
@@ -429,7 +425,7 @@ The serving Witness must process requests in this order:
 
 Any failure before step 11 must happen before source reads. Audit is
 write-before-respond: if the audit sink fails after source access or evaluation,
-the Witness must not send a successful signed response. It should return a
+the Notary must not send a successful signed response. It should return a
 generic `503` denial and emit an operator log without raw subject or token
 material.
 
@@ -463,7 +459,7 @@ Denials use a small RFC 7807-style body:
 
 ```json
 {
-  "type": "urn:registry-witness:problem:federation:forbidden",
+  "type": "urn:registry-notary:problem:federation:forbidden",
   "title": "Federation request denied",
   "status": 403,
   "detail": "The request is not permitted by local federation policy.",
@@ -471,7 +467,7 @@ Denials use a small RFC 7807-style body:
 }
 ```
 
-Problem `type` values use private, non-resolvable `urn:registry-witness`
+Problem `type` values use private, non-resolvable `urn:registry-notary`
 identifiers in the MVP. The response body must not reveal whether a subject
 exists.
 
@@ -498,17 +494,17 @@ This section is the implementation gate for the MVP. A feature is not done
 until every applicable item below is satisfied and reviewed.
 
 - Registry Manifest validates a fixture containing `federation`,
-  `evaluation_profiles`, and a `registry-witness` evidence offering with a
+  `evaluation_profiles`, and a `registry-notary` evidence offering with a
   matching `ruleset`.
 - Registry Manifest rejects fixtures where `access.ruleset` does not resolve to
   an evaluation profile, `conforms_to` is not
-  `registry-witness-federation/v0.1`, or required federation URLs are invalid.
-- Registry Witness loads federation config with `enabled: false` and serves the
+  `registry-notary-federation/v0.1`, or required federation URLs are invalid.
+- Registry Notary loads federation config with `enabled: false` and serves the
   existing API exactly as before in the existing test suite.
-- Registry Witness rejects startup config when federation is enabled without
+- Registry Notary rejects startup config when federation is enabled without
   `node_id`, `issuer`, peer policy, trusted peer JWKS URI, or signing key
   configuration.
-- Registry Witness rejects startup config when `node_id` and `issuer` do not
+- Registry Notary rejects startup config when `node_id` and `issuer` do not
   satisfy the MVP binding rule.
 - `POST /federation/v1/evaluations` is not mounted unless federation is enabled.
 - Request bodies over `inbound_body_limit_bytes` are rejected before full body
@@ -524,7 +520,7 @@ until every applicable item below is satisfied and reviewed.
 - Successful evaluation returns a signed response JWT with required `typ`,
   `alg = EdDSA`, `kid`, `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`,
   `request_jti`, `protocol`, `action`, `profile`, and a result body.
-- Response verification succeeds using the serving Witness JWKS and fails if the
+- Response verification succeeds using the serving Notary JWKS and fails if the
   payload or protected header is modified.
 - `subject_ref.hash` is produced with the pairwise HMAC input defined in this
   spec and differs for the same subject when the consuming peer or profile
@@ -539,9 +535,9 @@ until every applicable item below is satisfied and reviewed.
   with a focused test.
 - `source_observed_at` older than `max_source_observed_age_seconds` is returned
   as a signed evaluation error, with a focused test.
-- In-process replay storage enforces `max_entries`, evicts expired entries
-  first, evicts oldest entries second, and refuses to start unless
-  `in_process_single_instance_only` is explicitly configured.
+- In-memory replay storage is bounded for public OID4VCI nonce reservations.
+  Redis replay storage is required for active-active deployments and fails
+  readiness when write or delete capability is unavailable.
 - The repository commands listed in the project README for formatting, linting,
   and focused tests pass, or any skipped command is documented with the exact
   blocker.
@@ -554,17 +550,17 @@ when behavior changes.
 | Spec requirement | Implementation | Verification |
 |---|---|---|
 | Manifest declares `federation` and `evaluation_profiles` | `registry-manifest-core/src/lib.rs` federation structs and validation | `federated_evaluation_manifest_validates_and_renders_catalog_fields` |
-| `access.ruleset` resolves to an evaluation profile ruleset | `validate_registry_witness_access` checks `evaluation_profiles[*].ruleset` | `validation_rejects_registry_witness_unresolved_ruleset` |
+| `access.ruleset` resolves to an evaluation profile ruleset | `validate_registry_notary_access` checks `evaluation_profiles[*].ruleset` | `validation_rejects_registry_notary_unresolved_ruleset` |
 | Federation disabled by default and route hidden | `standalone_router` mounts federation router only when enabled | `federation_route_is_not_mounted_until_enabled` |
 | Startup validates node/issuer binding and peer policy | `FederationConfig::validate` | `federation_config_validates_enabled_mvp_shape` and negative config tests |
-| Request verification uses compact JWS, EdDSA, `typ`, `kid`, `iss`, `sub`, `aud`, time, and `jti` | `registry-witness-server/src/federation.rs` request handler and `TokenVerifier` integration | `federation_denial_happens_before_source_read` |
+| Request verification uses compact JWS, EdDSA, `typ`, `kid`, `iss`, `sub`, `aud`, time, and `jti` | `registry-notary-server/src/federation.rs` request handler and `TokenVerifier` integration | `federation_denial_happens_before_source_read` |
 | Denials before policy pass do not read sources | `handle_federated_evaluate` orders verification before `evaluate_with_source_capability` | source hit counters in denial tests |
 | Oversized request bodies are rejected before full buffering | `to_bytes(body, inbound_body_limit_bytes)` in federation handler | oversized body case in `federation_denial_happens_before_source_read` |
-| Single-instance replay retains `jti` through `exp + leeway` and evicts oldest entries | `FederationReplayStore` | federation replay-store unit tests |
+| Replay retains one-time identifiers through protocol expiry and rejects duplicates | `registry-notary-server/src/replay.rs` and `registry-platform-replay` | replay unit tests and `federation_evaluation_returns_signed_response_and_rejects_replay` |
 | Successful response is signed and bound to `request_jti` | `FederationSignedOutcome::success` | `federation_evaluation_returns_signed_response_and_rejects_replay` |
 | Stale source returns signed top-level `error` | `FederationSignedOutcome::evaluation_error` | `federation_stale_source_observation_returns_signed_evaluation_error` |
 | Audit is write-before-respond | federation audit emission before response return | `federation_audit_write_failure_replaces_signed_success` |
-| Two configured standalone Witnesses can complete delegated evaluation | two `standalone_router` instances in one smoke test | `federation_two_standalone_witnesses_smoke` |
+| Two configured standalone Notaries can complete delegated evaluation | two `standalone_router` instances in one smoke test | `federation_two_standalone_notaries_smoke` |
 
 ## Wave Implementation Plan
 
@@ -574,7 +570,7 @@ flowchart LR
   R0["Review checkpoint"]
   W1["Wave 1: Manifest schema and validation"]
   R1["Review checkpoint"]
-  W2["Wave 2: Witness config, JWT verification, replay"]
+  W2["Wave 2: Notary config, JWT verification, replay"]
   R2["Security review checkpoint"]
   W3["Wave 3: Delegated evaluation endpoint"]
   R3["End-to-end review and verification"]
@@ -584,7 +580,7 @@ flowchart LR
 
 ## Registry Platform Work
 
-The MVP should avoid copying shared security primitives into Witness when they
+The MVP should avoid copying shared security primitives into Notary when they
 belong in `registry-platform`.
 
 Push to `registry-platform` before or during the matching wave:
@@ -596,14 +592,14 @@ Push to `registry-platform` before or during the matching wave:
 - Wave 2: reuse `registry-platform-oidc::JwksFetcher` and JWT verification
   policy instead of writing a parallel JWKS cache. Layer the MVP `typ`,
   `alg = EdDSA`, compact-JWS, issuer/audience, and `iss`/`sub` binding checks
-  in Witness if the platform verifier does not expose them directly.
-- Wave 2: keep the first in-process replay store in Witness. Extract
-  `registry-platform-replay` only after a second consumer needs the same replay
-  semantics.
+  in Notary if the platform verifier does not expose them directly.
+- Wave 2: use `registry-platform-replay` for replay and consumable nonce
+  semantics, backed by `registry-platform-cache` for in-memory and Redis cache
+  operations. Notary owns configuration and route policy only.
 - Wave 3: add pairwise HMAC helper and redaction test helpers to
   `registry-platform-crypto` or `registry-platform-authcommon` only if another
   service will consume them. Until then, keep the pairwise subject-hash wrapper
-  local to Witness but use platform canonicalization and constant-time
+  local to Notary but use platform canonicalization and constant-time
   primitives.
 - Future audit checkpoint work belongs in `registry-platform-audit`, not this
   MVP.
@@ -613,7 +609,7 @@ Push to `registry-platform` before or during the matching wave:
 Parallel work:
 
 - Worker A: add Registry Manifest valid and invalid federation fixtures.
-- Worker B: add Witness federation config fixtures for disabled mode, valid
+- Worker B: add Notary federation config fixtures for disabled mode, valid
   static peer, and invalid enabled config.
 - Worker C: add signed compact-JWS request/response JWT test fixtures using
   deterministic Ed25519 test keys from `registry-platform-testing`.
@@ -622,7 +618,7 @@ Wave DoD:
 
 - Valid Manifest fixture parses and validates.
 - Invalid Manifest fixtures fail on the expected field paths.
-- Witness config fixtures cover disabled, valid enabled, and missing-required
+- Notary config fixtures cover disabled, valid enabled, and missing-required
   enabled cases.
 - JWT fixtures include `typ`, `kid`, `nbf`, `exp`, `jti`, profile, purpose, and
   request payload.
@@ -658,11 +654,11 @@ Review checkpoint:
   reuse of existing `EvidenceOfferingAccessManifest.ruleset` for the MVP.
 - Wave 2 cannot merge until this checkpoint passes.
 
-### Wave 2: Witness Config, JWT Verification, And Replay
+### Wave 2: Notary Config, JWT Verification, And Replay
 
 Parallel work:
 
-- Worker A: add Witness federation config structs and fail-closed validation.
+- Worker A: add Notary federation config structs and fail-closed validation.
 - Worker B: implement JWT verifier by reusing `registry-platform-oidc`
   JWKS/verifier primitives where possible, with MVP `typ`, compact-JWS,
   `alg = EdDSA`, and `iss`/`sub` binding checks layered on top.
@@ -704,7 +700,7 @@ Wave DoD:
   tests.
 - Pairwise subject hash differs across consuming peer and profile test cases.
 - Audit tests cover allow, policy denial, signature denial, and replay denial.
-- Existing Witness evaluation and credential tests still pass.
+- Existing Notary evaluation and credential tests still pass.
 
 Review checkpoint:
 

@@ -1,12 +1,12 @@
-# Registry Witness Scalability Spec
+# Registry Notary Scalability Spec
 
 ## Purpose
 
-Define the work needed to make `registry-witness` serve both synchronous credential issuance and batch backfills against third-party registries without the current single-threaded fan-out becoming the bottleneck. The fan-out diagnosis is provisional, to be confirmed by the Stage 0 load harness before Stage 1 ships.
+Define the work needed to make `registry-notary` serve both synchronous credential issuance and batch backfills against third-party registries without the current single-threaded fan-out becoming the bottleneck. The fan-out diagnosis is provisional, to be confirmed by the Stage 0 load harness before Stage 1 ships.
 
 ## Background
 
-Today the evaluation pipeline is strictly sequential at every level: `runtime::batch_evaluate` iterates subjects in a `for` loop (`crates/registry-witness-server/src/runtime.rs:362-421`); inside one subject, claims are evaluated in order; inside one claim, source bindings are read one at a time via `SourceReader::read_one`. Both connector backends (`registry_data_api`, `dci` in `crates/registry-witness-server/src/standalone.rs:459-537`) do one upstream HTTP request per (claim, subject, binding).
+Today the evaluation pipeline is strictly sequential at every level: `runtime::batch_evaluate` iterates subjects in a `for` loop (`crates/registry-notary-server/src/runtime.rs:362-421`); inside one subject, claims are evaluated in order; inside one claim, source bindings are read one at a time via `SourceReader::read_one`. Both connector backends (`registry_data_api`, `dci` in `crates/registry-notary-server/src/standalone.rs:459-537`) do one upstream HTTP request per (claim, subject, binding).
 
 This is fine for one-off issuance, breaks down under any meaningful load, and ignores bulk capabilities the upstream Registry Data API and DCI search envelope already expose.
 
@@ -15,7 +15,7 @@ This is fine for one-off issuance, breaks down under any meaningful load, and ig
 - Parallelize the evaluation pipeline within a single request.
 - Avoid duplicate upstream fetches inside one `batch_evaluate`.
 - Use bulk upstream operations when the connector backend supports them, without breaking arbitrary third-party REST upstreams.
-- Cap outbound concurrency per `source_connection` across **all** concurrent witness requests (process-global), so the witness cannot DOS an upstream regardless of inbound load.
+- Cap outbound concurrency per `source_connection` across **all** concurrent notary requests (process-global), so the notary cannot DOS an upstream regardless of inbound load.
 - Establish measurable performance targets and a load-test harness to prevent regressions.
 
 ## Non-Goals
@@ -23,7 +23,7 @@ This is fine for one-off issuance, breaks down under any meaningful load, and ig
 - Cross-request shared cache (Stage 4, gated on an explicit audit/freshness design pass).
 - Connector-level streaming or pagination semantics (claim bindings remain single-record by design).
 - Distinguishing transient vs. permanent upstream errors as a general hardening item; see Cross-Cutting Concerns for the minimum retry policy required once concurrency lands.
-- Schema or contract changes to the public witness HTTP API.
+- Schema or contract changes to the public notary HTTP API.
 
 ## Stages
 
@@ -45,7 +45,7 @@ Each stage is independently shippable. Definition of Done is per stage.
 
 **Change.** Replace the sequential subject loop in `runtime::batch_evaluate` with a bounded `JoinSet`. Inside one `evaluate`, run independent claims (no `depends_on` edges between them) concurrently; later DAG levels run after their predecessors complete. Inside one claim, fan out source bindings concurrently. Rework the `prior` map (`runtime.rs:487-561`, esp. the mut borrow at 491) so concurrent sibling claims at the same DAG level publish results without data races; either an `Arc<Mutex<BTreeMap<...>>>` or per-claim `OnceCell` in a level-keyed structure.
 
-Add a per-`source_connection` outbound semaphore as a **process-global** `Arc<Semaphore>` keyed by `connection_id`, owned by `HttpEvidenceSources` and shared across all concurrent witness requests.
+Add a per-`source_connection` outbound semaphore as a **process-global** `Arc<Semaphore>` keyed by `connection_id`, owned by `HttpEvidenceSources` and shared across all concurrent notary requests.
 
 Provide a kill switch: `concurrency.subjects=1` and `concurrency.bindings=1` reproduce today's strictly-sequential behavior exactly.
 
@@ -132,19 +132,19 @@ These apply across stages and have their own DoD bullets in the stage that intro
 To be locked down via Stage 0 measurements before Stage 1 lands. Proposed starting bar, revisable:
 
 - **Sync issuance (p99)**: single subject, one claim, one binding, upstream median 100ms: under 300ms end-to-end.
-- **Batch backfill (sustained)** at the **default** `max_in_flight=8`: 3 claims, 1 binding each, RDA upstream at 100ms median: at least 50 subjects per second per witness instance after Stage 1.
-- **Batch backfill (stretch, tuned)** with `max_in_flight=16`: at least 100 subjects per second per witness instance after Stage 1. This number is conditional on operators tuning `max_in_flight` upward against a tolerant upstream and does not contradict the default-politeness goal.
-- **Outbound politeness**: process-global concurrent outbound calls per `source_connection` never exceed `max_in_flight`, verified across multiple concurrent inbound witness requests.
+- **Batch backfill (sustained)** at the **default** `max_in_flight=8`: 3 claims, 1 binding each, RDA upstream at 100ms median: at least 50 subjects per second per notary instance after Stage 1.
+- **Batch backfill (stretch, tuned)** with `max_in_flight=16`: at least 100 subjects per second per notary instance after Stage 1. This number is conditional on operators tuning `max_in_flight` upward against a tolerant upstream and does not contradict the default-politeness goal.
+- **Outbound politeness**: process-global concurrent outbound calls per `source_connection` never exceed `max_in_flight`, verified across multiple concurrent inbound notary requests.
 
 ## Open Questions
 
 1. Are the third-party upstreams we expect to integrate against mostly relay-shaped (RDA collection + `in:`) and DCI-spec compliant, or mostly arbitrary bespoke REST? Decides how much value Stage 3 actually delivers.
 2. Concrete example registries to design `bulk_mode` against, so we are not abstracting over hypothetical API shapes.
 3. Stage 0 harness location: standalone `perf/` in this repo, or shared infrastructure with `registry-relay/perf/`?
-4. For RDA `rda_in_filter`: is operator-attested `bulk_mode_lookup_unique: true` acceptable, or should the witness verify uniqueness by inspecting the upstream entity schema response?
+4. For RDA `rda_in_filter`: is operator-attested `bulk_mode_lookup_unique: true` acceptable, or should the notary verify uniqueness by inspecting the upstream entity schema response?
 
 ## Out of Scope
 
-- Horizontal scaling of the witness itself (multiple instances, leader election). Stateless per request today; horizontal scale is a deployment concern, not a code change.
+- Horizontal scaling of the notary itself (multiple instances, leader election). Stateless per request today; horizontal scale is a deployment concern, not a code change.
 - Async issuance / job queue model. Current spec assumes synchronous request/response.
 - Upstream contract negotiation. We adapt to what upstreams expose; we do not propose new upstream APIs here.
