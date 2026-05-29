@@ -67,6 +67,14 @@ client:
 openfn:
     scripts/smoke-openfn.sh
 
+# Run the live DHIS2 OpenFn sidecar smoke.
+dhis2-openfn:
+    scripts/smoke-dhis2-openfn.sh
+
+# Run the live OpenCRVS DCI-backed Notary smoke.
+opencrvs-dci:
+    scripts/smoke-opencrvs-dci.sh
+
 # Run Relay's ignored live Postgres integration test against lab Postgres.
 relay-postgres:
     scripts/check-relay-postgres.sh

@@ -1,3 +1,7 @@
 *
 !Dockerfile.registry-relay
 !Dockerfile.evidence-server
+!config/
+!config/openfn/
+!config/openfn/jobs/
+!config/openfn/jobs/dhis2-*.js
