@@ -358,13 +358,14 @@ services:
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     profiles: ["opencrvs"]
     command: ["--config", "/etc/registry-notary/opencrvs-dci-notary.yaml"]
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
     environment:
       RUST_LOG: info
       REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:?missing REGISTRY_NOTARY_AUDIT_HASH_SECRET; run scripts/generate-demo-secrets.py}
       REGISTRY_NOTARY_ISSUER_JWK: ${REGISTRY_NOTARY_ISSUER_JWK:?missing REGISTRY_NOTARY_ISSUER_JWK; run scripts/generate-demo-secrets.py}
-      OPENCRVS_DCI_CLIENT_ID: ${OPENCRVS_DCI_CLIENT_ID:-}
-      OPENCRVS_DCI_CLIENT_SECRET: ${OPENCRVS_DCI_CLIENT_SECRET:-}
-      OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH:-}
     restart: unless-stopped
     ports:
       - "${OPENCRVS_DCI_NOTARY_PORT:-4352}:8080"

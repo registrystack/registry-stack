@@ -164,6 +164,7 @@ if [[ -z "${subject_uin}" ]]; then
   subject_uin="$(discover_subject_uin "${opencrvs_dci_token}")"
 fi
 [[ -n "${subject_uin}" ]] || fail "could not find an OpenCRVS demo UIN"
+update_local_env "OPENCRVS_DEMO_SUBJECT_UIN" "${subject_uin}"
 
 mkdir -p "${output_dir}"
 
