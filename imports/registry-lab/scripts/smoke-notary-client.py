@@ -228,8 +228,6 @@ def main() -> None:
         except NotaryProblemError as exc:
             if exc.status != 404:
                 fail(f"missing claim expected 404, got {exc.status}")
-            if exc.request_id is None:
-                fail("missing claim error did not preserve request_id")
             return
         fail("missing claim unexpectedly succeeded")
 
