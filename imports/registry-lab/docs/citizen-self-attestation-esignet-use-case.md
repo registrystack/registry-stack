@@ -2,8 +2,8 @@
 
 ## Goal
 
-A citizen can request a Registry Witness attestation about themself using an
-eSignet-issued OIDC credentials. Registry Witness verifies the access token,
+A citizen can request a Registry Notary attestation about themself using an
+eSignet-issued OIDC credentials. Registry Notary verifies the access token,
 optionally verifies the eSignet ID token for authentication freshness, binds the
 requested subject to a verified access-token or UserInfo claim, reads only the
 configured registry fact, and returns a bounded attestation result.
@@ -11,9 +11,9 @@ configured registry fact, and returns a bounded attestation result.
 ## Actors
 
 - Citizen wallet or portal: holds the eSignet access token and calls Registry
-  Witness.
+  Notary.
 - eSignet: authenticates the citizen and issues the OIDC token.
-- Registry Witness: verifies the token, enforces self-attestation policy, reads
+- Registry Notary: verifies the token, enforces self-attestation policy, reads
   Relay, and returns the attestation.
 - Registry Relay: exposes the civil registry fact through the evidence source
   API.
@@ -29,19 +29,19 @@ configured registry fact, and returns a bounded attestation result.
    and the signed UserInfo JWT supplies the subject-binding claim, for example
    `individual_id=NID-1001`.
 3. The wallet or portal calls `POST /claims/evaluate` on the optional
-   citizen-facing civil Witness.
-4. Registry Witness validates issuer, signature, audience, client, token
+   citizen-facing civil Notary.
+4. Registry Notary validates issuer, signature, audience, client, token
    lifetime, configured self-attestation scope, and any configured ID
    token/UserInfo companion JWTs.
-5. Registry Witness checks that `subject.id` in the request exactly matches the
+5. Registry Notary checks that `subject.id` in the request exactly matches the
    configured token claim, for example `national_id`.
-6. Registry Witness reads the civil Relay for the allowed claim
+6. Registry Notary reads the civil Relay for the allowed claim
    `person-is-alive`.
-7. Registry Witness returns a claim result showing the citizen is alive.
+7. Registry Notary returns a claim result showing the citizen is alive.
 
 ## Security Invariants
 
-- Witness denies before any registry source read when the requested subject does
+- Notary denies before any registry source read when the requested subject does
   not match the token-bound subject.
 - Self-attestation can evaluate only explicitly allowed claims, purposes,
   disclosures, formats, and credential profiles.
@@ -49,7 +49,7 @@ configured registry fact, and returns a bounded attestation result.
   token is otherwise valid.
 - Audit events carry `access_mode=self_attestation` and do not write raw bearer
   tokens or raw citizen identifiers.
-- eSignet is treated as the citizen identity proofing authority; Witness does
+- eSignet is treated as the citizen identity proofing authority; Notary does
   not accept unsigned, opaque, shell-decoded, or request-body identity claims
   from the wallet.
 
@@ -64,7 +64,7 @@ material, and issued credentials when an optional credential probe is run. Keep
 them for replay and debugging, but treat them as sensitive and do not commit or
 share them without redaction.
 
-- `citizen-witness-discovery.json`: authenticated Witness discovery.
+- `citizen-notary-discovery.json`: authenticated Notary discovery.
 - `citizen-self-evaluation.json`: successful `person-is-alive` evaluation for
   `NID-1001`.
 - `citizen-other-subject-denied.json`: denied evaluation for `NID-1002`.
@@ -73,7 +73,7 @@ share them without redaction.
   `ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token`.
 - `citizen-userinfo-claims.json`: decoded UserInfo JWT header and claims when
   `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo`.
-- `citizen-civil-witness.log`: Witness startup and audit output, including
+- `citizen-civil-notary.log`: Notary startup and audit output, including
   `access_mode=self_attestation`.
 - `flow-transcript.txt`: step-by-step transcript with token hashes, issuers,
   audiences, algorithms, binding choices, and demo control values.
@@ -104,7 +104,7 @@ The supplied JWT access token must:
 - be discoverable through `/.well-known/openid-configuration` and JWKS;
 - include `national_id=NID-1001`, or the claim configured by
   `ESIGNET_SUBJECT_CLAIM`, unless `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo`;
-- include `auth_time`, because Witness enforces bounded authentication
+- include `auth_time`, because Notary enforces bounded authentication
   freshness for citizen self-attestation, unless
   `ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token`;
 - include the configured client identifier in `azp` or `client_id`, or the
@@ -115,7 +115,7 @@ The supplied JWT access token must:
 `ESIGNET_SELF_ATTESTATION_SCOPE_POLICY` can be `required`, `optional`, or
 `disabled`. The live eSignet demo defaults to `disabled` because stock local
 eSignet access tokens may omit the OAuth `scope` claim. This does not grant
-source access: Witness still requires trusted issuer/JWKS, allowed
+source access: Notary still requires trusted issuer/JWKS, allowed
 client/audience, current authentication assurance, and an exact subject-binding
 match before any registry read.
 
@@ -128,7 +128,7 @@ ESIGNET_CITIZEN_ID_TOKEN="<jwt-id-token>" \
 just citizen-token
 ```
 
-Witness fetches the UserInfo endpoint itself with the access token and verifies
+Notary fetches the UserInfo endpoint itself with the access token and verifies
 the returned signed JWT before accepting the subject-binding claim. The UserInfo
 response must be JWS/JWT, not an encrypted JWE, for this lab path.
 
@@ -177,7 +177,7 @@ The first command prints the authorization URL, writes the PKCE verifier to
 `output/citizen-self-attestation/esignet-pkce.env`, and waits on
 `http://127.0.0.1:4325/callback` to capture the browser redirect. The callback
 code is saved to `output/citizen-self-attestation/esignet-callback.env`. The
-second command exchanges the saved code and runs the Witness smoke. If the local
+second command exchanges the saved code and runs the Notary smoke. If the local
 live eSignet setup did not create `/tmp/esignet-live-test/client-private.pem`,
 set `ESIGNET_CLIENT_PRIVATE_KEY_FILE` when running `just citizen-code`.
 The login command prints the local demo values (`NID-1001`, generated code
@@ -190,7 +190,7 @@ and audit proof.
 
 The OID4VCI commands are optional and are not part of `just quick`. They reuse
 the same eSignet login/code/token flow, enable an OID4VCI block in the generated
-citizen Witness config, and write endpoint evidence under
+citizen Notary config, and write endpoint evidence under
 `output/citizen-oid4vci/`:
 
 ```bash
@@ -215,7 +215,7 @@ that require it. The script prints what each endpoint returned without printing
 bearer tokens or credential values to the terminal, but it intentionally writes
 raw local replay/debug artifacts under `output/citizen-oid4vci/`, including the
 proof JWT, credential request body, and credential response body. If the active
-Witness does not expose OID4VCI endpoints yet, the command fails and leaves
+Notary does not expose OID4VCI endpoints yet, the command fails and leaves
 `report.md`, status files, headers, request bodies, and response bodies under
 `output/citizen-oid4vci/` rather than passing silently. For real wallet checks
 with Walt Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
@@ -226,7 +226,7 @@ The simplest integration is access-token subject binding:
 
 - eSignet emits the citizen identifier in the JWT access token, for example
   `national_id`.
-- Witness config uses `self_attestation.subject_binding.token_claim:
+- Notary config uses `self_attestation.subject_binding.token_claim:
   national_id`.
 
 If the selected eSignet deployment cannot emit the binding claim in the JWT
@@ -254,11 +254,11 @@ Do not move the claim binding into an unverified request field.
 1. Keep the current Zitadel scenarios as generic OIDC and machine-client demos.
 2. Add an optional eSignet citizen flow driven by
    `scripts/smoke-citizen-self-attestation.sh`.
-3. Generate a host-side Witness config at
-   `output/citizen-self-attestation/citizen-civil-witness.yaml` using the
+3. Generate a host-side Notary config at
+   `output/citizen-self-attestation/citizen-civil-notary.yaml` using the
    eSignet issuer, JWKS URI, UserInfo endpoint when needed, token audience,
    client ID, configured scope, and subject-binding claim.
-4. Start the host-side Witness on port `4325` against the existing civil Relay
+4. Start the host-side Notary on port `4325` against the existing civil Relay
    on port `4311`.
 5. Prove success for `NID-1001`, denial for `NID-1002`, and auditability through
    saved artifacts.

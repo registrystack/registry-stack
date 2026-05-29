@@ -19,25 +19,25 @@ The story flow is:
    evidence.
 5. Validate one sample service-form payload against the JSON Schema published
    from the form's `validates_with.json_schema` reference.
-6. Call Registry Witness through the access-service endpoints discovered from
+6. Call Registry Notary through the access-service endpoints discovered from
    the evidence offerings. The runner only maps Compose-internal hostnames to
    host ports for local execution.
 
 The interactive page presents the core chain as:
 
-`api-catalog -> CPSV-AP PublicService -> CCCEV requirement/evidence option -> BRegDCAT/DCAT access service -> Witness claim discovery -> evaluation`
+`api-catalog -> CPSV-AP PublicService -> CCCEV requirement/evidence option -> BRegDCAT/DCAT access service -> Notary claim discovery -> evaluation`
 
 When the runner captures response header artifacts for discovery calls, the
 page shows the important headers alongside the payload values, including
 content type, Link, ETag, cache-control, and Vary.
 
-Witness dispatch is intentionally service-first. The story does not choose a
-Witness URL from a static evidence-type table. Atlas discovers the evidence
+Notary dispatch is intentionally service-first. The story does not choose a
+Notary URL from a static evidence-type table. Atlas discovers the evidence
 offering access services, the runner records each discovered `endpoint_url`,
 selects a satisfiable evidence option group for each requirement, and the HTTP
-call is made to the corresponding Witness service. The only local demo
+call is made to the corresponding Notary service. The only local demo
 adaptation is translating Compose URLs such as
-`http://shared-eligibility-witness:8080` to their published host ports such as
+`http://shared-eligibility-notary:8080` to their published host ports such as
 `http://127.0.0.1:4323`.
 
 Generated artifacts are written under `output/live-stories/`:
@@ -54,16 +54,16 @@ Generated artifacts are written under `output/live-stories/`:
 - `service-form-validation.json`
 - `service-evidence-provider-map.json`
 - `service-route-status.json`
-- `service-witness-evaluations.json`
+- `service-notary-evaluations.json`
 - `service-route-provenance-validation.json`
 
 The Python story runner deliberately does not traverse JSON-LD relations by
-hand, does not compile a Lab-local Atlas helper, and does not select Witness
+hand, does not compile a Lab-local Atlas helper, and does not select Notary
 endpoints from a static evidence-type table. JSON-LD parsing, graph navigation,
 and provider/access-service route selection stay in Atlas.
 
 `service-route-provenance-validation.json` fails the live story if an evaluated
-Witness route was not present in Atlas-discovered access-service metadata, or
+Notary route was not present in Atlas-discovered access-service metadata, or
 if the host URL cannot be derived from that endpoint by the local Compose
 hostname-to-host-port translation.
 
@@ -87,7 +87,7 @@ A service-first live story is done when:
 - The HTML walkthrough displays the returned API result for each discovery
   step, relevant HTTP response headers when captured, and the value used by the
   next call.
-- Witness evaluations are made only through endpoints derived from Atlas
+- Notary evaluations are made only through endpoints derived from Atlas
   access-service metadata, except for local Compose hostname-to-host-port
   translation.
 - Form JSON Schema validation passes for the service sample payload.

@@ -40,8 +40,8 @@ storage, and display.
 
 - Local eSignet is running and can authenticate the seeded citizen `NID-1001`.
 - Registry Relay civil fixtures are running.
-- Registry Witness is started through the citizen OID4VCI flow.
-- The wallet can reach the Witness issuer URL and eSignet authorization URL.
+- Registry Notary is started through the citizen OID4VCI flow.
+- The wallet can reach the Notary issuer URL and eSignet authorization URL.
 - The configured `credential_issuer`, `credential_endpoint`,
   `offer_endpoint`, and `nonce_endpoint` use the same externally reachable
   origin.
@@ -58,13 +58,13 @@ CITIZEN_OID4VCI_NONCE_ENDPOINT="https://your-tunnel.example/oid4vci/nonce" \
 just citizen-oid4vci-code
 ```
 
-The generated Witness config is written to
-`output/citizen-self-attestation/citizen-civil-witness.yaml`. Inspect it when a
+The generated Notary config is written to
+`output/citizen-self-attestation/citizen-civil-notary.yaml`. Inspect it when a
 wallet cannot discover or call the issuer.
 
 ## Offer URI
 
-Registry Witness exposes the offer object directly at:
+Registry Notary exposes the offer object directly at:
 
 ```text
 GET /oid4vci/credential-offer
@@ -72,7 +72,7 @@ GET /oid4vci/credential-offer
 
 Many wallets ingest an `openid-credential-offer://` URI whose
 `credential_offer` query parameter contains the JSON offer. Generate one from a
-running Witness:
+running Notary:
 
 ```bash
 OFFER_JSON="$(curl -s http://127.0.0.1:4325/oid4vci/credential-offer)"
@@ -83,7 +83,7 @@ import urllib.parse
 
 offer = sys.argv[1]
 print(
-    "openid-credential-offer://registry-witness/?credential_offer="
+    "openid-credential-offer://registry-notary/?credential_offer="
     + urllib.parse.quote(offer, safe="")
 )
 PY
@@ -124,15 +124,15 @@ Expected result:
   eSignet authorization flow.
 - Walt requests a nonce.
 - Walt submits a proof JWT with `typ=openid4vci-proof+jwt`.
-- Witness issues an SD-JWT VC with `format=dc+sd-jwt`.
+- Notary issues an SD-JWT VC with `format=dc+sd-jwt`.
 
 If Walt stops before issuance, capture:
 
 - Walt image tag or version.
 - The exact `useOfferRequest` command.
 - HTTP status and body from Walt.
-- Witness `output/citizen-oid4vci/report.md`.
-- Witness log or audit line for `/oid4vci/credential`, if reached.
+- Notary `output/citizen-oid4vci/report.md`.
+- Notary log or audit line for `/oid4vci/credential`, if reached.
 - Whether the blocker was offer parsing, issuer metadata, authorization,
   nonce, proof, credential response, or credential storage.
 - Redact raw tokens, proof JWTs, issued credentials, and seeded civil IDs before
@@ -146,9 +146,9 @@ Mimoto issuer configuration.
 
 Testing path:
 
-1. Expose Registry Witness at a stable HTTPS issuer URL.
+1. Expose Registry Notary at a stable HTTPS issuer URL.
 2. Add a Mimoto issuer/provider entry that points to:
-   - `https://your-witness/.well-known/openid-credential-issuer`
+   - `https://your-notary/.well-known/openid-credential-issuer`
    - credential configuration id `person_is_alive_sd_jwt`
    - format `dc+sd-jwt`
 3. Register the Mimoto/Inji client with the eSignet issuer used by the lab.
@@ -162,9 +162,9 @@ Expected result:
 
 - Inji shows the configured provider.
 - Inji completes eSignet authentication.
-- Witness audit records `access_mode=self_attestation`.
+- Notary audit records `access_mode=self_attestation`.
 - The issued credential is holder-bound to the wallet key.
-- No raw civil identifier appears in Witness audit artifacts.
+- No raw civil identifier appears in Notary audit artifacts.
 
 If Inji does not complete the flow, capture:
 
@@ -173,7 +173,7 @@ If Inji does not complete the flow, capture:
 - Relevant Mimoto issuer config entry with secrets removed.
 - eSignet client id used by Mimoto/Inji.
 - The first incompatible request or response field.
-- Witness `output/citizen-oid4vci/report.md`.
+- Notary `output/citizen-oid4vci/report.md`.
 - A scripted partial-path result from `just citizen-oid4vci-code`.
 - Redact raw tokens, proof JWTs, issued credentials, and seeded civil IDs before
   sharing artifacts outside the local demo workspace.
@@ -190,8 +190,8 @@ issuer_url:
 credential_configuration_id: person_is_alive_sd_jwt
 result: passed | blocked | failed
 first_blocker:
-witness_report: output/citizen-oid4vci/report.md
-witness_audit_excerpt:
+notary_report: output/citizen-oid4vci/report.md
+notary_audit_excerpt:
 notes:
 ```
 
@@ -199,7 +199,7 @@ The run is considered passed when:
 
 - The wallet obtains and stores a credential.
 - The credential response uses `format=dc+sd-jwt`.
-- Witness audit shows `access_mode=self_attestation`.
+- Notary audit shows `access_mode=self_attestation`.
 - `NID-1001` is the token-bound subject.
 - An attempted other-person flow remains denied by the base citizen smoke.
 

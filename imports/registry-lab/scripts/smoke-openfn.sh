@@ -63,22 +63,22 @@ mkdir -p "${output_dir}"
 docker compose -f "${compose_file}" up -d --force-recreate --remove-orphans \
   openfn-mock-registry \
   openfn-civil-sidecar \
-  openfn-civil-witness
+  openfn-civil-notary
 
-wait_http "OpenFn civil witness discovery" http://127.0.0.1:4324/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}"
+wait_http "OpenFn civil notary discovery" http://127.0.0.1:4324/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}"
 
-witness_body="${output_dir}/smoke-openfn-witness-evaluation.json"
+notary_body="${output_dir}/smoke-openfn-notary-evaluation.json"
 curl -fsS \
   -X POST \
   -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
   -H "x-request-id: ${correlation_id}" \
-  -o "${witness_body}" \
+  -o "${notary_body}" \
   http://127.0.0.1:4324/claims/evaluate \
-  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-witness.claim-result+json"}'
+  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}'
 
-python - "${witness_body}" <<'PY'
+python - "${notary_body}" <<'PY'
 import json
 import sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -90,4 +90,4 @@ assert result.get("value") == "1990-01-01", body
 assert result.get("provenance", {}).get("source_count") == 1, body
 PY
 
-printf 'OpenFn sidecar Registry Witness smoke passed\n'
+printf 'OpenFn sidecar Registry Notary smoke passed\n'

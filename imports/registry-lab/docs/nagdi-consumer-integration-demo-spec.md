@@ -3,7 +3,7 @@
 ## Purpose
 
 Extend the agricultural registry demo so it shows how real consuming systems use
-Registry Relay and Registry Witness. The current demo proves that XLSX-backed
+Registry Relay and Registry Notary. The current demo proves that XLSX-backed
 agricultural registries can publish governed metadata, protected rows,
 aggregates, evidence, and credentials. This improvement should prove what a
 program MIS, an animal-health MIS, a GIS/planning user, and a semantic
@@ -24,7 +24,7 @@ Different consumers need different surfaces:
   rewrites.
 
 Registry Relay answers: what facts or aggregate views may this system consult?
-Registry Witness answers: what evidence, predicate, reason, or credential can
+Registry Notary answers: what evidence, predicate, reason, or credential can
 be issued from governed registry facts?
 
 ## Scope
@@ -65,7 +65,7 @@ The improvement builds on the current agriculture profile:
 - XLSX workbooks under `data/agriculture/`
 - Registry Relay config at `config/relay/agri-registry-relay.yaml`
 - portable metadata at `config/relay/agri-registry-relay.metadata.yaml`
-- Registry Witness config at `config/witness/nagdi-agriculture-witness.yaml`
+- Registry Notary config at `config/notary/nagdi-agriculture-notary.yaml`
 - generated fixtures from `scripts/generate-agri-fixtures.py`
 - smoke checks from `scripts/smoke-agri.sh`
 - narrated flow from `scripts/demo-agri-flow.py`
@@ -95,7 +95,7 @@ have different needs.
 ### Golden Fixtures
 
 Golden fixtures are small, hand-curated, and deterministic. They are the default
-source for Witness, MIS, denial-control, and credential tests.
+source for Notary, MIS, denial-control, and credential tests.
 
 Rules:
 
@@ -159,7 +159,7 @@ AGRI_FIXTURE_SCALE=planning just agri-generate
 ```
 
 The planning mode must preserve golden records and append or materialize
-planning rows in a way that does not make the MIS and Witness smoke tests
+planning rows in a way that does not make the MIS and Notary smoke tests
 brittle.
 
 ## Consumer Stories
@@ -175,9 +175,9 @@ User journey:
 1. A caseworker enters or imports `FARMER-1001` for season `2026A`.
 2. The MIS starts from static metadata or Relay metadata discovery.
 3. The MIS finds the climate-smart input voucher evidence offering.
-4. The MIS calls Registry Witness for
+4. The MIS calls Registry Notary for
    `eligible-for-climate-smart-input-voucher`.
-5. Witness returns an eligible outcome with minimized evidence.
+5. Notary returns an eligible outcome with minimized evidence.
 6. The MIS records an internal case decision of `ready_for_program_review`.
 7. The MIS requests a holder-bound credential only after a successful
    evaluation.
@@ -217,14 +217,14 @@ Artifacts:
 ### Story 2: `animal-health-mis`
 
 `animal-health-mis` represents a livestock movement permit workflow. It uses
-Witness to evaluate herd and movement readiness, then records an internal
+Notary to evaluate herd and movement readiness, then records an internal
 permit-review state.
 
 User journey:
 
 1. A permit officer enters `farmer_id` plus `herd_id`.
 2. The MIS discovers the livestock movement permit evidence offering.
-3. The MIS calls Registry Witness for livestock movement evidence.
+3. The MIS calls Registry Notary for livestock movement evidence.
 4. The MIS receives an eligible, denied, or manual-review result with stable
    reason codes.
 5. The MIS does not receive full animal rows, owner records, or quarantine
@@ -341,7 +341,7 @@ credential evidence after a successful voucher evaluation.
 
 Rules:
 
-- Credential issuance is downstream of Witness evaluation and never substitutes
+- Credential issuance is downstream of Notary evaluation and never substitutes
   for it.
 - The demo keeps the existing holder-bound SD-JWT VC path.
 - The OID4VCI or wallet probe should be lightweight and scripted. It should
@@ -360,18 +360,18 @@ Artifacts:
 
 Add separate demo credentials for consumer roles:
 
-- `voucher_mis_evidence_client`: can discover metadata and call voucher Witness
+- `voucher_mis_evidence_client`: can discover metadata and call voucher Notary
   evidence.
 - `voucher_mis_case_reviewer`: can read minimized farmer and holding rows with
   the correct purpose.
 - `animal_health_mis_evidence_client`: can discover metadata and call livestock
-  Witness evidence.
+  Notary evidence.
 - `qgis_planner_aggregate_client`: can discover metadata and read aggregate or
   spatial planning views only.
 - `publicschema_integrator_metadata_client`: can read metadata and mapping
   artifacts, but not personal rows.
 - `wallet_holder_client`: can receive credential issuance artifacts only after a
-  successful Witness evaluation.
+  successful Notary evaluation.
 
 Each role must have at least one positive check and one denial check.
 
@@ -387,7 +387,7 @@ The MIS clients should behave like external systems:
 - sends `Data-Purpose` where required
 - stores output artifacts without raw tokens
 - records internal case state separately from registry evidence
-- treats Witness results as evidence for review, not automatic legal decisions
+- treats Notary results as evidence for review, not automatic legal decisions
 
 Recommended `voucher-mis` case states:
 

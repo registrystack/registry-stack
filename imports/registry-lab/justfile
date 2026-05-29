@@ -2,18 +2,18 @@ set dotenv-load := true
 set positional-arguments := true
 
 relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", "../registry-relay")
-witness_src := env_var_or_default("REGISTRY_WITNESS_SOURCE_DIR", "../registry-witness")
-openfn_witness_src := env_var_or_default("REGISTRY_OPENFN_WITNESS_SOURCE_DIR", "../registry-witness")
+notary_src := env_var_or_default("REGISTRY_NOTARY_SOURCE_DIR", "../registry-notary")
+openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", "../registry-notary")
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", "../registry-platform")
 cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "../cel-mapping")
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
-export REGISTRY_WITNESS_SOURCE_DIR := witness_src
-export REGISTRY_OPENFN_WITNESS_SOURCE_DIR := openfn_witness_src
+export REGISTRY_NOTARY_SOURCE_DIR := notary_src
+export REGISTRY_OPENFN_NOTARY_SOURCE_DIR := openfn_notary_src
 export REGISTRY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
-export REGISTRY_WITNESS_PLATFORM_SOURCE_DIR := platform_src
+export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR := platform_src
 export CEL_MAPPING_SOURCE_DIR := cel_mapping_src
 export REGISTRY_RELAY_FEATURES := relay_features
 
@@ -47,15 +47,15 @@ down:
 ps:
     docker compose -f compose.yaml ps
 
-# Follow demo service logs. Pass service names after `--`, for example: just logs -- zitadel openfn-civil-witness
+# Follow demo service logs. Pass service names after `--`, for example: just logs -- zitadel openfn-civil-notary
 logs *services:
     docker compose -f compose.yaml logs -f {{services}}
 
-# Run the API-key Relay/Witness smoke.
+# Run the API-key Relay/Notary smoke.
 smoke:
     scripts/smoke.sh
 
-# Run the default signed Witness-to-Witness delegated-evaluation smoke.
+# Run the default signed Notary-to-Notary delegated-evaluation smoke.
 federation:
     scripts/smoke-federation.sh
 
@@ -75,11 +75,15 @@ relay-postgres:
 relay-zitadel:
     scripts/check-relay-zitadel.sh
 
+# Run Notary and Platform live Redis tests against lab Redis.
+notary-redis:
+    scripts/check-notary-redis.sh
+
 # Run the OIDC Relay smoke with a lab-managed Zitadel token.
 oidc-relay:
     scripts/smoke-oidc-relay.sh
 
-# Run the optional eSignet-backed citizen self-attestation Witness smoke.
+# Run the optional eSignet-backed citizen self-attestation Notary smoke.
 citizen-self-attestation:
     scripts/smoke-citizen-self-attestation.sh
 
@@ -264,7 +268,7 @@ citizen-oid4vci-token:
     ESIGNET_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=1200 \
     scripts/smoke-citizen-oid4vci.sh
 
-# Probe an already-running citizen Witness OID4VCI surface with exported tokens.
+# Probe an already-running citizen Notary OID4VCI surface with exported tokens.
 citizen-oid4vci-probe:
     scripts/probe-citizen-oid4vci.sh
 
@@ -292,16 +296,16 @@ agri-generate-planning:
 
 # Build the agricultural NAgDI profile.
 agri-build:
-    docker compose -f compose.yaml --profile agri build agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri build agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
 
 # Start the agricultural NAgDI profile.
 agri-up:
-    docker compose -f compose.yaml --profile agri up -d agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri up -d agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
 
 # Stop the agricultural NAgDI profile and remove demo volumes.
 agri-down:
-    docker compose -f compose.yaml --profile agri stop agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
-    docker compose -f compose.yaml --profile agri rm -f -v agri-registry-relay nagdi-agriculture-witness agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri stop agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri rm -f -v agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
     docker volume rm registry-lab_agri-registry-cache 2>/dev/null || true
 
 # Run the agricultural NAgDI smoke.

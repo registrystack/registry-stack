@@ -28,19 +28,19 @@ from agri_demo_common import (
     save_json,
 )
 
-FEDERATION_PROTOCOL = "registry-witness-federation/v0.1"
-REQUEST_TYP = "registry-witness-request+jwt"
-RESPONSE_TYP = "registry-witness-response+jwt"
+FEDERATION_PROTOCOL = "registry-notary-federation/v0.1"
+REQUEST_TYP = "registry-notary-request+jwt"
+RESPONSE_TYP = "registry-notary-response+jwt"
 PURPOSE = "https://demo.example.gov/purpose/decentralized-evidence-demo"
 CLIENT_NODE_ID = "did:web:benefits.demo.example.gov"
 CLIENT_ISSUER = "https://benefits.demo.example.gov"
 CLIENT_KID = "did:web:benefits.demo.example.gov#federation-client-1"
-CIVIL_NODE_ID = "did:web:civil-witness.demo.example.gov"
-CIVIL_ISSUER = "https://civil-witness.demo.example.gov"
-CIVIL_RESPONSE_KID = "did:web:civil-witness.demo.example.gov#federation-response-1"
-SOCIAL_NODE_ID = "did:web:social-protection-witness.demo.example.gov"
-SOCIAL_ISSUER = "https://social-protection-witness.demo.example.gov"
-SOCIAL_RESPONSE_KID = "did:web:social-protection-witness.demo.example.gov#federation-response-1"
+CIVIL_NODE_ID = "did:web:civil-notary.demo.example.gov"
+CIVIL_ISSUER = "https://civil-notary.demo.example.gov"
+CIVIL_RESPONSE_KID = "did:web:civil-notary.demo.example.gov#federation-response-1"
+SOCIAL_NODE_ID = "did:web:social-protection-notary.demo.example.gov"
+SOCIAL_ISSUER = "https://social-protection-notary.demo.example.gov"
+SOCIAL_RESPONSE_KID = "did:web:social-protection-notary.demo.example.gov#federation-response-1"
 ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -244,7 +244,7 @@ def verified_response_payload(
 
 def call_profile(
     *,
-    witness_url: str,
+    notary_url: str,
     client_key: dict[str, Any],
     response_key: dict[str, Any],
     response_kid: str,
@@ -256,7 +256,7 @@ def call_profile(
 ) -> dict[str, Any]:
     token = sign_compact_jws(client_key, CLIENT_KID, REQUEST_TYP, payload)
     save_json(out / f"{label}-request-payload.json", payload)
-    status, raw, headers = request_jwt(witness_url, token)
+    status, raw, headers = request_jwt(notary_url, token)
     save_json(out / f"{label}-http-response.json", {"status": status, "headers": headers, "body": raw})
     if status != 200:
         raise DemoError(f"{label} returned HTTP {status}: {raw}")
@@ -287,12 +287,12 @@ def main() -> int:
     social_response_key = secret_json_env("SOCIAL_FEDERATION_RESPONSE_JWK")
 
     print("Default Registry Lab federated delegated-evaluation demo")
-    print(f"  civil witness: {civil_url}")
-    print(f"  social witness: {social_url}")
+    print(f"  civil notary: {civil_url}")
+    print(f"  social notary: {social_url}")
     print(f"  artifacts: {out}")
 
     civil_common = {
-        "witness_url": civil_url,
+        "notary_url": civil_url,
         "client_key": client_key,
         "response_key": civil_response_key,
         "response_kid": CIVIL_RESPONSE_KID,
@@ -301,7 +301,7 @@ def main() -> int:
         "out": out,
     }
     social_common = {
-        "witness_url": social_url,
+        "notary_url": social_url,
         "client_key": client_key,
         "response_key": social_response_key,
         "response_kid": SOCIAL_RESPONSE_KID,
@@ -402,7 +402,7 @@ def main() -> int:
         },
         "boundary": {
             "raw_registry_rows_embedded": False,
-            "serving_witnesses": [CIVIL_NODE_ID, SOCIAL_NODE_ID],
+            "serving_notaries": [CIVIL_NODE_ID, SOCIAL_NODE_ID],
         },
     }
     save_json(out / "composed-benefit-screen.json", composed)

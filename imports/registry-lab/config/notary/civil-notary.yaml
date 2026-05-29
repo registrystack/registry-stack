@@ -18,18 +18,18 @@ auth:
 
 audit:
   sink: stdout
-  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
 federation:
   enabled: true
-  node_id: did:web:civil-witness.demo.example.gov
-  issuer: https://civil-witness.demo.example.gov
-  jwks_uri: https://civil-witness.demo.example.gov/federation/jwks.json
-  federation_api: https://civil-witness.demo.example.gov/federation/v1
+  node_id: did:web:civil-notary.demo.example.gov
+  issuer: https://civil-notary.demo.example.gov
+  jwks_uri: https://civil-notary.demo.example.gov/federation/jwks.json
+  federation_api: https://civil-notary.demo.example.gov/federation/v1
   supported_protocol_versions:
-    - registry-witness-federation/v0.1
+    - registry-notary-federation/v0.1
   signing:
-    kid: did:web:civil-witness.demo.example.gov#federation-response-1
+    kid: did:web:civil-notary.demo.example.gov#federation-response-1
     key_env: CIVIL_FEDERATION_RESPONSE_JWK
     alg: EdDSA
   pairwise_subject_hash:
@@ -42,7 +42,7 @@ federation:
       jwks_uri: http://static-metadata-publisher:8080/federation/default-benefits-jwks.json
       allow_insecure_private_network: true
       allowed_protocol_versions:
-        - registry-witness-federation/v0.1
+        - registry-notary-federation/v0.1
       allowed_purposes:
         - https://demo.example.gov/purpose/decentralized-evidence-demo
       allowed_profiles:
@@ -66,8 +66,8 @@ federation:
 
 evidence:
   enabled: true
-  service_id: civil-witness
-  api_base_url: http://civil-witness:8080
+  service_id: civil-notary
+  api_base_url: http://civil-notary:8080
   inline_batch_limit: 20
   source_connections:
     civil:
@@ -87,7 +87,7 @@ evidence:
     civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:civil-evidence.demo.example
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       issuer_kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
       vct: https://demo.example/credentials/civil-status/v1
       validity_seconds: 86400
@@ -142,7 +142,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
@@ -183,7 +183,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
@@ -226,7 +226,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       credential_profiles:
@@ -266,7 +266,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - 'application/ld+json; profile="cccev"'
         - application/dc+sd-jwt
       cccev:

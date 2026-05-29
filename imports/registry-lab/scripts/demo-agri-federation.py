@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Federated delegated-evaluation demo for the NAgDI agriculture Witness."""
+"""Federated delegated-evaluation demo for the NAgDI agriculture Notary."""
 
 from __future__ import annotations
 
@@ -31,15 +31,15 @@ from agri_demo_common import (
     save_json,
 )
 
-FEDERATION_PROTOCOL = "registry-witness-federation/v0.1"
-REQUEST_TYP = "registry-witness-request+jwt"
-RESPONSE_TYP = "registry-witness-response+jwt"
+FEDERATION_PROTOCOL = "registry-notary-federation/v0.1"
+REQUEST_TYP = "registry-notary-request+jwt"
+RESPONSE_TYP = "registry-notary-response+jwt"
 CLIENT_NODE_ID = "did:web:nagdi-benefits.demo.example.gov"
 CLIENT_ISSUER = "https://nagdi-benefits.demo.example.gov"
 CLIENT_KID = "did:web:nagdi-benefits.demo.example.gov#federation-client-1"
-AGRI_NODE_ID = "did:web:nagdi-agriculture-witness.demo.example.gov"
-AGRI_ISSUER = "https://nagdi-agriculture-witness.demo.example.gov"
-AGRI_RESPONSE_KID = "did:web:nagdi-agriculture-witness.demo.example.gov#federation-response-1"
+AGRI_NODE_ID = "did:web:nagdi-agriculture-notary.demo.example.gov"
+AGRI_ISSUER = "https://nagdi-agriculture-notary.demo.example.gov"
+AGRI_RESPONSE_KID = "did:web:nagdi-agriculture-notary.demo.example.gov#federation-response-1"
 ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -260,7 +260,7 @@ def verified_response_payload(response_key: dict[str, Any], raw: str, request_jt
 
 
 def call_profile(
-    witness_url: str,
+    notary_url: str,
     client_key: dict[str, Any],
     response_key: dict[str, Any],
     out: Path,
@@ -269,7 +269,7 @@ def call_profile(
 ) -> dict[str, Any]:
     token = sign_compact_jws(client_key, CLIENT_KID, REQUEST_TYP, payload)
     save_json(out / f"{label}-request-payload.json", payload)
-    status, raw, headers = request_jwt(witness_url, token)
+    status, raw, headers = request_jwt(notary_url, token)
     save_json(out / f"{label}-http-response.json", {"status": status, "headers": headers, "body": raw})
     if status != 200:
         raise DemoError(f"{label} returned HTTP {status}: {raw}")
@@ -289,12 +289,12 @@ def main() -> int:
 
     load_dotenv()
     out = prepare_output_dir(args.output_dir)
-    witness_url = env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")
+    notary_url = env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")
     client_key = secret_json_env("AGRI_FEDERATION_CLIENT_JWK")
     response_key = secret_json_env("AGRI_FEDERATION_RESPONSE_JWK")
 
     print("NAgDI federated delegated-evaluation demo")
-    print(f"  witness: {witness_url}")
+    print(f"  notary: {notary_url}")
     print(f"  artifacts: {out}")
 
     voucher_payload = federation_payload(
@@ -305,7 +305,7 @@ def main() -> int:
         subject_id_type="farmer_id",
         claim_id="eligible-for-climate-smart-input-voucher",
     )
-    voucher = call_profile(witness_url, client_key, response_key, out, "voucher-eligible", voucher_payload)
+    voucher = call_profile(notary_url, client_key, response_key, out, "voucher-eligible", voucher_payload)
     voucher_claim = voucher["result"]["claims"]["eligible-for-climate-smart-input-voucher"]
     if voucher_claim.get("satisfied") is not True:
         raise DemoError(f"FARMER-1001 should be eligible, got {voucher_claim}")
@@ -318,7 +318,7 @@ def main() -> int:
         subject_id_type="farmer_id",
         claim_id="eligible-for-climate-smart-input-voucher",
     )
-    denied = call_profile(witness_url, client_key, response_key, out, "voucher-not-eligible", denied_payload)
+    denied = call_profile(notary_url, client_key, response_key, out, "voucher-not-eligible", denied_payload)
     denied_claim = denied["result"]["claims"]["eligible-for-climate-smart-input-voucher"]
     if denied_claim.get("satisfied") is not False:
         raise DemoError(f"FARMER-1002 should not be eligible, got {denied_claim}")
@@ -331,13 +331,13 @@ def main() -> int:
         subject_id_type="herd_id",
         claim_id="eligible-for-livestock-movement-permit",
     )
-    livestock = call_profile(witness_url, client_key, response_key, out, "livestock-eligible", livestock_payload)
+    livestock = call_profile(notary_url, client_key, response_key, out, "livestock-eligible", livestock_payload)
     livestock_claim = livestock["result"]["claims"]["eligible-for-livestock-movement-permit"]
     if livestock_claim.get("satisfied") is not True:
         raise DemoError(f"HERD-2001 should be eligible, got {livestock_claim}")
 
     replay_token = sign_compact_jws(client_key, CLIENT_KID, REQUEST_TYP, voucher_payload)
-    replay_status, replay_body, replay_headers = request_jwt(witness_url, replay_token)
+    replay_status, replay_body, replay_headers = request_jwt(notary_url, replay_token)
     save_json(
         out / "voucher-replay-denial.json",
         {"status": replay_status, "headers": replay_headers, "body": parse_problem(replay_body)},
@@ -349,7 +349,7 @@ def main() -> int:
     bad_purpose["jti"] = new_ulid()
     bad_purpose["purpose"] = "https://demo.example.gov/purpose/nagdi/not-allowed"
     bad_token = sign_compact_jws(client_key, CLIENT_KID, REQUEST_TYP, bad_purpose)
-    bad_status, bad_body, bad_headers = request_jwt(witness_url, bad_token)
+    bad_status, bad_body, bad_headers = request_jwt(notary_url, bad_token)
     save_json(
         out / "unsupported-purpose-denial.json",
         {"status": bad_status, "headers": bad_headers, "body": parse_problem(bad_body)},
@@ -373,7 +373,7 @@ def main() -> int:
         },
         "boundary": {
             "raw_registry_rows_embedded": False,
-            "serving_witness": AGRI_NODE_ID,
+            "serving_notary": AGRI_NODE_ID,
         },
     }
     save_json(out / "composed-benefits-decision.json", composed)

@@ -52,8 +52,8 @@ civil_url="${CIVIL_WITNESS_URL:-http://127.0.0.1:4321}"
 social_url="${SOCIAL_WITNESS_URL:-http://127.0.0.1:4322}"
 static_url="${STATIC_METADATA_URL:-http://127.0.0.1:4331}"
 
-wait_http "civil Witness discovery" "${civil_url}/.well-known/evidence-service" "${CIVIL_EVIDENCE_CLIENT_BEARER}"
-wait_http "social protection Witness discovery" "${social_url}/.well-known/evidence-service" "${SOCIAL_EVIDENCE_CLIENT_BEARER}"
+wait_http "civil Notary discovery" "${civil_url}/.well-known/evidence-service" "${CIVIL_EVIDENCE_CLIENT_BEARER}"
+wait_http "social protection Notary discovery" "${social_url}/.well-known/evidence-service" "${SOCIAL_EVIDENCE_CLIENT_BEARER}"
 wait_http "default federation client JWKS" "${static_url}/federation/default-benefits-jwks.json" ""
 
 DEMO_CORRELATION_ID="${correlation_id}" \

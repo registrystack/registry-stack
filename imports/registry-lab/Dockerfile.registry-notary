@@ -4,17 +4,17 @@
 
 FROM rust:1-bookworm AS builder
 
-WORKDIR /workspace/registry-witness
+WORKDIR /workspace/registry-notary
 COPY --from=registry_platform_src Cargo.toml README.md LICENSE /workspace/registry-platform/
 COPY --from=registry_platform_src crates /workspace/registry-platform/crates
 COPY --from=cel_mapping_src Cargo.toml Cargo.lock README.md /workspace/cel-mapping/
 COPY --from=cel_mapping_src crates /workspace/cel-mapping/crates
-COPY --from=witness_src . .
+COPY --from=notary_src . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
-    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-witness-bin \
-    && cp /workspace/target/release/registry-witness /usr/local/bin/registry-witness
+    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin \
+    && cp /workspace/target/release/registry-notary /usr/local/bin/registry-notary
 
 FROM debian:bookworm-slim AS runtime
 
@@ -22,9 +22,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/local/bin/registry-witness /usr/local/bin/registry-witness
+COPY --from=builder /usr/local/bin/registry-notary /usr/local/bin/registry-notary
 
 USER nobody:nogroup
 EXPOSE 8080
 
-ENTRYPOINT ["registry-witness"]
+ENTRYPOINT ["registry-notary"]

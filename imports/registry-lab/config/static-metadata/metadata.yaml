@@ -68,7 +68,7 @@ federation:
   jwks_uri: https://static-metadata.demo.example.gov/.well-known/jwks.json
   federation_api: https://static-metadata.demo.example.gov/federation
   supported_protocol_versions:
-    - registry-witness-federation/v0.1
+    - registry-notary-federation/v0.1
 evaluation_profiles:
   - id: civil-child-status-v1
     ruleset: civil-child-status-v1
@@ -542,10 +542,10 @@ datasets:
         procedure_contexts:
           - health_linked_child_support
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://civil-witness:8080
-          discovery_url: https://civil-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://civil-notary:8080
+          discovery_url: https://civil-notary:8080/.well-known/evidence-service
           ruleset: civil-child-status-v1
         policy:
           purpose:
@@ -603,10 +603,10 @@ datasets:
         procedure_contexts:
           - health_linked_child_support
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://social-protection-witness:8080
-          discovery_url: https://social-protection-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-protection-notary:8080
+          discovery_url: https://social-protection-notary:8080/.well-known/evidence-service
           ruleset: program-enrollment-status-v1
         policy:
           purpose:
@@ -659,10 +659,10 @@ datasets:
         procedure_contexts:
           - health_linked_child_support
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://shared-eligibility-witness:8080
-          discovery_url: https://shared-eligibility-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://shared-eligibility-notary:8080
+          discovery_url: https://shared-eligibility-notary:8080/.well-known/evidence-service
           ruleset: health-service-availability-v1
         policy:
           purpose:
@@ -738,10 +738,10 @@ datasets:
         procedure_contexts:
           - climate_smart_input_voucher
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-witness:8080
-          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
           ruleset: farmer-registered-v1
         policy:
           purpose:
@@ -764,10 +764,10 @@ datasets:
         procedure_contexts:
           - climate_smart_input_voucher
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-witness:8080
-          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
           ruleset: active-farm-parcel-v1
         policy:
           purpose:
@@ -791,10 +791,10 @@ datasets:
           - climate_smart_input_voucher
           - agricultural_market_sizing
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-witness:8080
-          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
           ruleset: climate-risk-district-v1
         policy:
           purpose:
@@ -818,10 +818,10 @@ datasets:
         procedure_contexts:
           - climate_smart_input_voucher
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-witness:8080
-          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
           ruleset: voucher-redemption-status-v1
         policy:
           purpose:
@@ -845,10 +845,10 @@ datasets:
         procedure_contexts:
           - climate_smart_input_voucher
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-witness:8080
-          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
           ruleset: eligible-for-input-voucher-v1
         policy:
           purpose:
@@ -872,10 +872,10 @@ datasets:
         procedure_contexts:
           - livestock_movement_permit
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-witness:8080
-          discovery_url: https://nagdi-agriculture-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
           ruleset: eligible-for-livestock-movement-v1
         policy:
           purpose:
@@ -883,7 +883,7 @@ datasets:
       - id: agricultural_market_sizing_aggregate_service
         iri: https://demo.example.gov/evidence-offerings/nagdi/agricultural-market-sizing
         title: Agricultural market sizing aggregate service
-        description: Registry Relay aggregate endpoint for suppressed district-level voucher opportunity sizing. This offering is served by Relay aggregate routes, not by Registry Witness.
+        description: Registry Relay aggregate endpoint for suppressed district-level voucher opportunity sizing. This offering is served by Relay aggregate routes, not by Registry Notary.
         evidence_type: agricultural_market_sizing_evidence
         issuing_authority:
           id: nagdi_governance_body
@@ -913,7 +913,7 @@ datasets:
       - id: livestock_herd_planning_aggregate_service
         iri: https://demo.example.gov/evidence-offerings/nagdi/livestock-herd-planning
         title: Livestock herd planning aggregate service
-        description: Registry Relay aggregate endpoint for suppressed herd and animal counts by species and district. This offering is served by Relay aggregate routes, not by Registry Witness.
+        description: Registry Relay aggregate endpoint for suppressed herd and animal counts by species and district. This offering is served by Relay aggregate routes, not by Registry Notary.
         evidence_type: livestock_herd_planning_evidence
         issuing_authority:
           id: animal_health_authority
@@ -1164,10 +1164,10 @@ datasets:
         procedure_contexts:
           - health_linked_child_support
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://shared-eligibility-witness:8080
-          discovery_url: https://shared-eligibility-witness:8080/.well-known/evidence-service
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://shared-eligibility-notary:8080
+          discovery_url: https://shared-eligibility-notary:8080/.well-known/evidence-service
           ruleset: eligible-for-combined-support-v1
         policy:
           purpose:

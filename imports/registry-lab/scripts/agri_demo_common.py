@@ -20,7 +20,7 @@ DEMO_ROOT = Path(__file__).resolve().parents[1]
 PURPOSE = "https://demo.example.gov/purpose/nagdi/climate-smart-input-support"
 MARKET_PURPOSE = "https://demo.example.gov/purpose/nagdi/agricultural-market-sizing"
 LIVESTOCK_PURPOSE = "https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review"
-CLAIM_RESULT_FORMAT = "application/vnd.registry-witness.claim-result+json"
+CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 DEFAULT_CORRELATION_ID = "nagdi-agri-demo-correlation-001"
 

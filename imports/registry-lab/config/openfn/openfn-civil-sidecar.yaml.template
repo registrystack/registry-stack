@@ -5,7 +5,7 @@ server:
 
 auth:
   bearer_tokens:
-    - id: openfn_civil_witness
+    - id: openfn_civil_notary
       hash_env: OPENFN_SIDECAR_TOKEN_HASH
 
 limits:

@@ -343,12 +343,12 @@ def summarize_oidc_claims(decoded: dict[str, Any]) -> None:
 
 def summarize_openfn_discovery(discovery: Any) -> None:
     if not isinstance(discovery, dict):
-        explain("Witness discovery returned a non-JSON body.")
+        explain("Notary discovery returned a non-JSON body.")
         return
     formats = discovery.get("formats", [])
     format_ids = list_names(formats, "id") if isinstance(formats, list) else "none"
     explain(
-        f"Witness `{discovery.get('service_id')}` advertises claims at "
+        f"Notary `{discovery.get('service_id')}` advertises claims at "
         f"`{discovery.get('claims_url')}` and supports formats: {format_ids}."
     )
 
@@ -363,7 +363,7 @@ def summarize_openfn_evaluation(evaluation: Any) -> None:
     result = results[0] if results and isinstance(results[0], dict) else {}
     provenance = result.get("provenance", {}) if isinstance(result, dict) else {}
     explain(
-        "Witness evaluated the discovered claim "
+        "Notary evaluated the discovered claim "
         f"`{result.get('claim_id')}` with value `{result.get('value')}` "
         f"from {provenance.get('source_count')} sidecar-backed source(s)."
     )
@@ -1003,31 +1003,31 @@ sys.exit(1 if errors else 0)
     raise StoryError("JSON Schema validation command failed: " + (result.stderr.strip() or result.stdout.strip()))
 
 
-def witness_call_config(values: dict[str, str]) -> dict[str, dict[str, Any]]:
+def notary_call_config(values: dict[str, str]) -> dict[str, dict[str, Any]]:
     return {
         "https://demo.example.gov/evidence-types/civil-child-status": {
             "token": env("CIVIL_EVIDENCE_CLIENT_BEARER", values),
             "subject": "NID-1001",
             "disclosure": "predicate",
-            "route_label": "civil child status via civil Witness",
+            "route_label": "civil child status via civil Notary",
         },
         "https://demo.example.gov/evidence-types/household-support": {
             "token": env("SOCIAL_EVIDENCE_CLIENT_BEARER", values),
             "subject": "NID-1001",
             "disclosure": "predicate",
-            "route_label": "household support via social protection Witness",
+            "route_label": "household support via social protection Notary",
         },
         "https://demo.example.gov/evidence-types/health-service-availability": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
             "subject": "NID-1001",
             "disclosure": "predicate",
-            "route_label": "health service availability via shared Witness",
+            "route_label": "health service availability via shared Notary",
         },
         "https://demo.example.gov/evidence-types/combined-support": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
             "subject": "NID-1001",
             "disclosure": "predicate",
-            "route_label": "combined support via shared Witness",
+            "route_label": "combined support via shared Notary",
         },
     }
 
@@ -1043,14 +1043,14 @@ def host_access_url(discovered_url: str) -> str:
 
 def compose_access_translations() -> dict[tuple[str, int], str]:
     return {
-        ("civil-witness", 8080): os.environ.get("CIVIL_WITNESS_URL", "http://127.0.0.1:4321"),
-        ("social-protection-witness", 8080): os.environ.get("SOCIAL_PROTECTION_WITNESS_URL", "http://127.0.0.1:4322"),
-        ("shared-eligibility-witness", 8080): os.environ.get("SHARED_ELIGIBILITY_WITNESS_URL", "http://127.0.0.1:4323"),
+        ("civil-notary", 8080): os.environ.get("CIVIL_WITNESS_URL", "http://127.0.0.1:4321"),
+        ("social-protection-notary", 8080): os.environ.get("SOCIAL_PROTECTION_WITNESS_URL", "http://127.0.0.1:4322"),
+        ("shared-eligibility-notary", 8080): os.environ.get("SHARED_ELIGIBILITY_WITNESS_URL", "http://127.0.0.1:4323"),
     }
 
 
-def discovered_witness_routes(graph: dict[str, Any], values: dict[str, str]) -> dict[str, dict[str, Any]]:
-    config = witness_call_config(values)
+def discovered_notary_routes(graph: dict[str, Any], values: dict[str, str]) -> dict[str, dict[str, Any]]:
+    config = notary_call_config(values)
     routes: dict[str, dict[str, Any]] = {}
     for entry in graph.get("evidence_provider_map", []):
         evidence_type = entry.get("evidence_type", {})
@@ -1100,7 +1100,7 @@ def claim_matches_route(claim: dict[str, Any], route: dict[str, Any]) -> bool:
     if operations.get("evaluate") is False:
         return False
     formats = claim.get("formats") or []
-    if formats and "application/vnd.registry-witness.claim-result+json" not in formats:
+    if formats and "application/vnd.registry-notary.claim-result+json" not in formats:
         return False
     disclosures = claim.get("disclosures") or []
     disclosure = route.get("disclosure", "predicate")
@@ -1130,7 +1130,7 @@ def select_advertised_claim(evidence_iri: str, route: dict[str, Any], claims: di
     advertised_evidence_iris = sorted({claim_evidence_type_iri(item) for item in advertised_items if claim_evidence_type_iri(item)})
     if advertised_evidence_iris:
         raise StoryError(
-            f"No advertised Witness claim matched evidence type {evidence_iri}. "
+            f"No advertised Notary claim matched evidence type {evidence_iri}. "
             f"Advertised evidence type IRIs: {advertised_evidence_iris}; advertised claims: {sorted(advertised)}"
         )
 
@@ -1144,12 +1144,12 @@ def select_advertised_claim(evidence_iri: str, route: dict[str, Any], claims: di
             "claim": claim,
             "matched_by": "fallback_candidate_claim_id",
             "selection_note": (
-                "Fallback selected by scenario claim candidate because this Witness did not "
+                "Fallback selected by scenario claim candidate because this Notary did not "
                 "advertise evidence type IRIs. The selected claim still had to be present in live /claims."
             ),
         }
     raise StoryError(
-        f"No advertised Witness claim matched evidence type {evidence_iri}. "
+        f"No advertised Notary claim matched evidence type {evidence_iri}. "
         f"Candidates: {route.get('claim_candidates', [])}; advertised: {sorted(advertised)}"
     )
 
@@ -1179,13 +1179,13 @@ def validate_service_first_route_provenance(graph: dict[str, Any], evaluations: 
         host_url = str(item.get("host_access_url", "")).rstrip("/")
         if discovered not in discovered_endpoints:
             raise StoryError(
-                "service-first validation rejected a Witness route that was not selected "
+                "service-first validation rejected a Notary route that was not selected "
                 f"from Atlas access-service discovery: {discovered}"
             )
         expected_host_url = host_access_url(discovered).rstrip("/")
         if host_url != expected_host_url:
             raise StoryError(
-                "service-first validation rejected a hard-coded Witness host route: "
+                "service-first validation rejected a hard-coded Notary host route: "
                 f"{host_url} was used, but {expected_host_url} is derived from {discovered}"
             )
         parsed_discovered = urllib.parse.urlparse(discovered)
@@ -1203,7 +1203,7 @@ def validate_service_first_route_provenance(graph: dict[str, Any], evaluations: 
             }
         )
     if not checked:
-        raise StoryError("service-first validation found no evaluated Witness routes to check")
+        raise StoryError("service-first validation found no evaluated Notary routes to check")
     return {
         "status": "passed",
         "checked_route_count": len(checked),
@@ -1224,9 +1224,9 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
         "civil-registry-relay",
         "social-protection-registry-relay",
         "health-registry-relay",
-        "civil-witness",
-        "social-protection-witness",
-        "shared-eligibility-witness",
+        "civil-notary",
+        "social-protection-notary",
+        "shared-eligibility-notary",
     )
 
     wait_for("api-catalog", lambda: require(request("GET", STATIC_METADATA_URL, API_CATALOG_PATH), 200, "api-catalog"))
@@ -1307,11 +1307,11 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
     step += 1
 
     provider_map = graph.get("evidence_provider_map", [])
-    witness_routes = discovered_witness_routes(graph, values)
+    notary_routes = discovered_notary_routes(graph, values)
     claim_discovery = []
-    for evidence_iri, route in witness_routes.items():
+    for evidence_iri, route in notary_routes.items():
         wait_for(
-            f"discovered witness route for {evidence_iri}",
+            f"discovered notary route for {evidence_iri}",
             lambda route=route: require(
                 request("GET", route["base_url"], "/.well-known/evidence-service", route["token"]),
                 200,
@@ -1339,7 +1339,7 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                 "selection_note": selected_claim["selection_note"],
             }
         )
-    save(out, step, "service-witness-claim-discovery", claim_discovery)
+    save(out, step, "service-notary-claim-discovery", claim_discovery)
     step += 1
     save(out, step, "service-evidence-provider-map", provider_map)
     step += 1
@@ -1365,7 +1365,7 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
     for group in option_groups:
         for evidence_iri in group.get("evidence_type_iris", []):
             asset = evidence_assets_by_iri.get(evidence_iri, {"uri": evidence_iri})
-            route = witness_routes.get(evidence_iri)
+            route = notary_routes.get(evidence_iri)
             if not route:
                 evaluations.append(
                     {
@@ -1375,7 +1375,7 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                         "option_strategy": group.get("strategy"),
                         "evidence_type": asset,
                         "status": "gap",
-                        "gap": f"No lab Witness route configured for evidence type {evidence_iri}",
+                        "gap": f"No lab Notary route configured for evidence type {evidence_iri}",
                     }
                 )
                 continue
@@ -1383,7 +1383,7 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                 "subject": {"id": route["subject"], "id_type": "national_id"},
                 "claims": [route["claim"]],
                 "disclosure": route.get("disclosure", "predicate"),
-                "format": "application/vnd.registry-witness.claim-result+json",
+                "format": "application/vnd.registry-notary.claim-result+json",
             }
             explain(f"Call the discovered route for {route['route_label']} as part of the {group.get('strategy')} option.")
             explain(f"Discovered endpoint `{route['discovered_endpoint_url']}` is used through host URL `{route['base_url']}`.")
@@ -1422,7 +1422,7 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                 }
             )
 
-    save(out, step, "service-witness-evaluations", evaluations)
+    save(out, step, "service-notary-evaluations", evaluations)
     step += 1
     evaluation_gaps = [item for item in evaluations if item.get("status") != "evaluated"]
     if evaluation_gaps:
@@ -1458,15 +1458,15 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
             ],
             "provider_route_count": sum(len(entry.get("providers", [])) for entry in provider_map),
             "evaluated_option_count": len(option_groups),
-            "witness_evaluation_count": len([item for item in evaluations if item.get("status") == "evaluated"]),
+            "notary_evaluation_count": len([item for item in evaluations if item.get("status") == "evaluated"]),
             "gap_count": len(graph.get("gaps", [])) + len(evaluation_gaps),
             "form_validation": "valid",
             "route_status": route_status["status"],
             "boundary": {
                 "atlas_used_for_graph_navigation": True,
                 "python_jsonld_graph_traversal": False,
-                "witness_called_after_service_context": True,
-                "witness_route_provenance_validated": True,
+                "notary_called_after_service_context": True,
+                "notary_route_provenance_validated": True,
                 "local_translation_limited_to_compose_hostnames": True,
             },
         },
@@ -1697,13 +1697,13 @@ def story_oidc(out: Path, values: dict[str, str], step: int) -> int:
 
 
 def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
-    print("\nStory 4. OpenFn sidecar lookup behind Registry Witness")
-    explain("Discover the Witness service, discover its advertised claim, then evaluate that claim through the private OpenFn sidecar.")
+    print("\nStory 4. OpenFn sidecar lookup behind Registry Notary")
+    explain("Discover the Notary service, discover its advertised claim, then evaluate that claim through the private OpenFn sidecar.")
     sidecar_raw = env("OPENFN_SIDECAR_TOKEN_RAW", values)
     sidecar_hash = values.get("OPENFN_SIDECAR_TOKEN_HASH") or os.environ.get("OPENFN_SIDECAR_TOKEN_HASH") or fingerprint(sidecar_raw)
     openfn_env = {
-        "REGISTRY_OPENFN_WITNESS_SOURCE_DIR": os.environ.get("REGISTRY_OPENFN_WITNESS_SOURCE_DIR", str(ROOT / ".." / "registry-witness")),
-        "REGISTRY_WITNESS_SOURCE_DIR": os.environ.get("REGISTRY_WITNESS_SOURCE_DIR", str(ROOT / ".." / "registry-witness")),
+        "REGISTRY_OPENFN_NOTARY_SOURCE_DIR": os.environ.get("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", str(ROOT / ".." / "registry-notary")),
+        "REGISTRY_NOTARY_SOURCE_DIR": os.environ.get("REGISTRY_NOTARY_SOURCE_DIR", str(ROOT / ".." / "registry-notary")),
         "REGISTRY_PLATFORM_SOURCE_DIR": os.environ.get("REGISTRY_PLATFORM_SOURCE_DIR", str(ROOT / "vendor" / "registry-platform")),
         "OPENFN_SIDECAR_TOKEN_RAW": sidecar_raw,
         "OPENFN_SIDECAR_TOKEN_HASH": sidecar_hash,
@@ -1716,29 +1716,29 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
         "--remove-orphans",
         "openfn-mock-registry",
         "openfn-civil-sidecar",
-        "openfn-civil-witness",
+        "openfn-civil-notary",
         env_updates=openfn_env,
     )
     base = os.environ.get("OPENFN_CIVIL_WITNESS_URL", "http://127.0.0.1:4324")
     token = env("CIVIL_EVIDENCE_CLIENT_BEARER", values)
-    wait_for("OpenFn civil witness", lambda: require(request("GET", base, "/.well-known/evidence-service", token), 200, "openfn discovery"))
+    wait_for("OpenFn civil notary", lambda: require(request("GET", base, "/.well-known/evidence-service", token), 200, "openfn discovery"))
     show_query("GET", base, "/.well-known/evidence-service")
     discovery = require(request("GET", base, "/.well-known/evidence-service", token), 200, "openfn discovery")
     show_status(HttpResult(200, discovery, {}))
     summarize_openfn_discovery(discovery)
-    save(out, step, "openfn-witness-discovery", discovery)
+    save(out, step, "openfn-notary-discovery", discovery)
     step += 1
     show_query("GET", base, "/claims")
     claims = require(request("GET", base, "/claims", token), 200, "openfn claims")
     show_status(HttpResult(200, claims, {}))
     summarize_claims(claims)
-    save(out, step, "openfn-witness-claims", claims)
+    save(out, step, "openfn-notary-claims", claims)
     step += 1
     evaluation_payload = {
         "subject": {"id": "person-123", "id_type": "national_id"},
         "claims": ["date-of-birth"],
         "disclosure": "value",
-        "format": "application/vnd.registry-witness.claim-result+json",
+        "format": "application/vnd.registry-notary.claim-result+json",
     }
     show_query("POST", base, "/claims/evaluate", purpose=True, body=evaluation_payload)
     evaluation = require(
@@ -1763,13 +1763,13 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
         step,
         "openfn-story",
         {
-            "story": "OpenFn sidecar lookup behind Registry Witness",
+            "story": "OpenFn sidecar lookup behind Registry Notary",
             "claim_id": result.get("claim_id"),
             "value": result.get("value"),
             "source_count": result.get("provenance", {}).get("source_count"),
             "boundary": {
                 "sidecar_private_to_compose_network": True,
-                "client_called_witness_not_sidecar": True,
+                "client_called_notary_not_sidecar": True,
             },
         },
     )
@@ -1792,13 +1792,13 @@ def known_demo_shortcuts() -> list[dict[str, str]]:
         },
         {
             "id": "lab_evidence_type_identifiers",
-            "shortcut": "Witness claim selection uses lab-owned evidence type IRIs in the demo catalogue and Witness configs.",
+            "shortcut": "Notary claim selection uses lab-owned evidence type IRIs in the demo catalogue and Notary configs.",
             "why_it_is_ok_for_demo": "The selected claim is now matched through live /claims CCCEV evidence metadata, but the identifiers are still demo namespace values.",
             "production_direction": "Use governed CCCEV/OOTS identifiers and vocabulary lifecycle rules for production evidence types.",
         },
         {
             "id": "seeded_policy_data",
-            "shortcut": "Postgres, Witness, OpenFn, and OIDC stories use seeded lab records and deterministic credentials.",
+            "shortcut": "Postgres, Notary, OpenFn, and OIDC stories use seeded lab records and deterministic credentials.",
             "why_it_is_ok_for_demo": "The APIs are live, but the data is stable enough for demos and regression checks.",
             "production_direction": "Replace fixtures with governed tenant data, managed secrets, and environment-specific policy configuration.",
         },
@@ -1814,7 +1814,7 @@ def known_demo_shortcuts() -> list[dict[str, str]]:
 def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
     service_story = artifact_json(out, "service-first-story", {})
     service_graph = artifact_json(out, "service-graph-excerpt", {})
-    service_evaluations = artifact_json(out, "service-witness-evaluations", [])
+    service_evaluations = artifact_json(out, "service-notary-evaluations", [])
     service_route_validation = artifact_json(out, "service-route-provenance-validation", {})
     postgres_story = artifact_json(out, "postgres-live-story", {})
     oidc_story = artifact_json(out, "oidc-story", {})
@@ -1839,7 +1839,7 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
             {"id": "benefit_officer", "role": "Reviews a benefit case through governed APIs."},
             {"id": "registry_atlas", "role": "Discovers the service graph from CPSV-AP metadata."},
             {"id": "registry_relay", "role": "Publishes scoped registry data and metadata."},
-            {"id": "registry_witness", "role": "Evaluates evidence claims without exposing source systems."},
+            {"id": "registry_notary", "role": "Evaluates evidence claims without exposing source systems."},
             {"id": "zitadel", "role": "Issues and publishes verifiable OIDC access tokens."},
             {"id": "openfn_sidecar", "role": "Adapts an external HTTP registry into the evidence source contract."},
             {"id": "postgres", "role": "Holds a live operational source table."},
@@ -1857,7 +1857,7 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
                 "service_iri": service_story.get("service_iri"),
                 "requirement_count": len(service_graph.get("requirements", [])) if isinstance(service_graph, dict) else None,
                 "accepted_evidence_type_count": len(service_graph.get("accepted_evidence_types", [])) if isinstance(service_graph, dict) else None,
-                "witness_evaluation_count": service_story.get("witness_evaluation_count"),
+                "notary_evaluation_count": service_story.get("notary_evaluation_count"),
                 "route_status": service_story.get("route_status"),
                 "gap_count": service_story.get("gap_count"),
                 "route_provenance_validation": service_route_validation.get("status"),
@@ -1881,7 +1881,7 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
                 "claim_id": openfn_story.get("claim_id"),
                 "value": openfn_story.get("value"),
                 "source_count": openfn_story.get("source_count"),
-                "witness_result_count": len(openfn_eval.get("results", [])) if isinstance(openfn_eval, dict) else None,
+                "notary_result_count": len(openfn_eval.get("results", [])) if isinstance(openfn_eval, dict) else None,
             },
         },
         "trust_boundaries": [
@@ -1890,14 +1890,14 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
                 "credential": "public CPSV-AP metadata",
                 "purpose_header": "not applicable",
                 "data_returned": "service graph excerpt, requirements, evidence types, providers, and source evidence references",
-                "data_not_returned": "personal registry rows or Witness secrets",
+                "data_not_returned": "personal registry rows or Notary secrets",
             },
             {
-                "boundary": "service-first client -> Registry Witness",
-                "credential": "Witness bearer tokens from lab environment",
+                "boundary": "service-first client -> Registry Notary",
+                "credential": "Notary bearer tokens from lab environment",
                 "purpose_header": PURPOSE,
                 "data_returned": f"{len(service_evaluations) if isinstance(service_evaluations, list) else 0} service-context evidence evaluation response(s)",
-                "dispatch": "Witness endpoint selected from discovered access-service metadata; local demo translates Compose hostnames to host ports only",
+                "dispatch": "Notary endpoint selected from discovered access-service metadata; local demo translates Compose hostnames to host ports only",
                 "data_not_returned": "underlying Relay source credentials",
             },
             {
@@ -1929,16 +1929,16 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
                 "data_not_returned": "client secret, user password",
             },
             {
-                "boundary": "client -> OpenFn-backed Witness",
-                "credential": "Witness bearer token",
+                "boundary": "client -> OpenFn-backed Notary",
+                "credential": "Notary bearer token",
                 "purpose_header": PURPOSE,
                 "data_returned": "claim result for date-of-birth",
                 "data_not_returned": "sidecar token, mock registry token, full source payload",
             },
             {
-                "boundary": "Witness -> OpenFn sidecar -> mock registry",
+                "boundary": "Notary -> OpenFn sidecar -> mock registry",
                 "credential": "private sidecar bearer token and private mock registry token",
-                "purpose_header": "Witness request purpose is represented in the evidence request context",
+                "purpose_header": "Notary request purpose is represented in the evidence request context",
                 "data_returned": "adapter-normalized field projection",
                 "data_not_returned": "sidecar endpoint to host network",
             },
@@ -1956,9 +1956,9 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
             "service_requirement_evidence_map": artifact_ref(out, "service-requirement-evidence-map"),
             "service_form_validation": artifact_ref(out, "service-form-validation"),
             "service_evidence_provider_map": artifact_ref(out, "service-evidence-provider-map"),
-            "service_witness_claim_discovery": artifact_ref(out, "service-witness-claim-discovery"),
+            "service_notary_claim_discovery": artifact_ref(out, "service-notary-claim-discovery"),
             "service_route_status": artifact_ref(out, "service-route-status"),
-            "service_witness_evaluations": artifact_ref(out, "service-witness-evaluations"),
+            "service_notary_evaluations": artifact_ref(out, "service-notary-evaluations"),
             "service_route_provenance_validation": artifact_ref(out, "service-route-provenance-validation"),
             "postgres_metadata": artifact_ref(out, "postgres-live-metadata"),
             "postgres_before": artifact_ref(out, "postgres-live-before-insert"),
@@ -1967,8 +1967,8 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
             "oidc_token_claims": artifact_ref(out, "oidc-token-claims"),
             "oidc_row_attempt": artifact_ref(out, "oidc-relay-row-attempt"),
             "oidc_authorized_row_attempt": artifact_ref(out, "oidc-authorized-row-attempt"),
-            "openfn_discovery": artifact_ref(out, "openfn-witness-discovery"),
-            "openfn_claims": artifact_ref(out, "openfn-witness-claims"),
+            "openfn_discovery": artifact_ref(out, "openfn-notary-discovery"),
+            "openfn_claims": artifact_ref(out, "openfn-notary-claims"),
             "openfn_evaluation": artifact_ref(out, "openfn-date-of-birth-evaluation"),
         },
     }
@@ -1995,8 +1995,8 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         {
             "standard_or_pattern": "Service-context evidence evaluation",
             "demonstrated_by": "Service-first discovery through Atlas",
-            "what_to_check": "Witness calls happen after the api-catalog, CPSV-AP PublicService, CCCEV requirement/evidence option, BRegDCAT/DCAT access service, and advertised Witness claim context is established.",
-            "artifacts": [artifact_ref(out, "service-requirement-evidence-map"), artifact_ref(out, "service-witness-claim-discovery"), artifact_ref(out, "service-witness-evaluations")],
+            "what_to_check": "Notary calls happen after the api-catalog, CPSV-AP PublicService, CCCEV requirement/evidence option, BRegDCAT/DCAT access service, and advertised Notary claim context is established.",
+            "artifacts": [artifact_ref(out, "service-requirement-evidence-map"), artifact_ref(out, "service-notary-claim-discovery"), artifact_ref(out, "service-notary-evaluations")],
             "status": "demonstrated" if "service_first" in enabled else "skipped",
         },
         {
@@ -2009,7 +2009,7 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         {
             "standard_or_pattern": "Discovered access-service dispatch",
             "demonstrated_by": "Service-first discovery through Atlas",
-            "what_to_check": "Witness endpoint dispatch is derived from Atlas access-service endpoints, with only Compose hostname to host-port translation for the local demo.",
+            "what_to_check": "Notary endpoint dispatch is derived from Atlas access-service endpoints, with only Compose hostname to host-port translation for the local demo.",
             "artifacts": [artifact_ref(out, "service-evidence-provider-map"), artifact_ref(out, "service-route-provenance-validation")],
             "status": "demonstrated" if "service_first" in enabled else "skipped",
         },
@@ -2022,7 +2022,7 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         },
         {
             "standard_or_pattern": "HTTP Bearer token authentication",
-            "demonstrated_by": "API-key and OIDC protected Relay/Witness requests",
+            "demonstrated_by": "API-key and OIDC protected Relay/Notary requests",
             "what_to_check": "Clients present bearer credentials at the API boundary. Secrets are not written to artifacts.",
             "artifacts": [artifact_ref(out, "oidc-relay-row-attempt"), artifact_ref(out, "openfn-date-of-birth-evaluation")],
             "status": "demonstrated",
@@ -2064,13 +2064,13 @@ def write_conformance_map(out: Path, enabled: list[str]) -> dict[str, Any]:
         },
         {
             "standard_or_pattern": "OpenFn adaptor pattern",
-            "demonstrated_by": "OpenFn sidecar lookup behind Registry Witness",
-            "what_to_check": "Witness calls a private sidecar, which adapts an HTTP registry lookup into a claim input.",
-            "artifacts": [artifact_ref(out, "openfn-witness-discovery"), artifact_ref(out, "openfn-witness-claims"), artifact_ref(out, "openfn-date-of-birth-evaluation")],
+            "demonstrated_by": "OpenFn sidecar lookup behind Registry Notary",
+            "what_to_check": "Notary calls a private sidecar, which adapts an HTTP registry lookup into a claim input.",
+            "artifacts": [artifact_ref(out, "openfn-notary-discovery"), artifact_ref(out, "openfn-notary-claims"), artifact_ref(out, "openfn-date-of-birth-evaluation")],
             "status": "demonstrated" if "openfn" in enabled else "skipped",
         },
         {
-            "standard_or_pattern": "Registry Witness claim result JSON",
+            "standard_or_pattern": "Registry Notary claim result JSON",
             "demonstrated_by": "OpenFn date-of-birth claim evaluation",
             "what_to_check": "The external lookup is returned as a normalized claim result with provenance count.",
             "artifacts": [artifact_ref(out, "openfn-date-of-birth-evaluation")],
@@ -2112,15 +2112,15 @@ Correlation ID: `{CORRELATION_ID}`
 
 This run demonstrates four live-service patterns in one lab:
 
-1. Atlas follows api-catalog to CPSV-AP PublicService metadata, then resolves CCCEV evidence options and BRegDCAT/DCAT access services before Witness claim discovery and evaluation.
+1. Atlas follows api-catalog to CPSV-AP PublicService metadata, then resolves CCCEV evidence options and BRegDCAT/DCAT access services before Notary claim discovery and evaluation.
 2. A separate Relay verifies a real Zitadel-issued JWT, then applies Relay scope authorization.
 3. A Registry Relay reads a live Postgres table and sees a new operational row without restart.
-4. Registry Witness evaluates an evidence claim through a private OpenFn sidecar instead of exposing the adapter directly.
+4. Registry Notary evaluates an evidence claim through a private OpenFn sidecar instead of exposing the adapter directly.
 
 ## Case Result
 
 - Service-first route status: `{story_results['service_first'].get('route_status')}`
-- Service-first witness evaluations: `{story_results['service_first'].get('witness_evaluation_count')}`
+- Service-first notary evaluations: `{story_results['service_first'].get('notary_evaluation_count')}`
 - Service-first route provenance validation: `{story_results['service_first'].get('route_provenance_validation')}`
 - Postgres rows before insert: `{story_results['postgres'].get('before_count')}`
 - Postgres rows after insert: `{story_results['postgres'].get('after_count')}`
@@ -2133,7 +2133,7 @@ This run demonstrates four live-service patterns in one lab:
 
 ## Service-First Standards Chain
 
-`api-catalog -> CPSV-AP PublicService -> CCCEV requirement/evidence option -> BRegDCAT/DCAT access service -> Witness claim discovery -> evaluation`
+`api-catalog -> CPSV-AP PublicService -> CCCEV requirement/evidence option -> BRegDCAT/DCAT access service -> Notary claim discovery -> evaluation`
 
 The interactive page also shows relevant HTTP response headers for discovery
 steps when the runner captured header artifacts, including content type, Link,
@@ -2146,24 +2146,24 @@ flowchart LR
   Client["Demo client"]
   Static["Static metadata :4331"]
   Atlas["Registry Atlas"]
-  WitnessCore["Civil/social/shared Witness"]
+  NotaryCore["Civil/social/shared Notary"]
   RelayPg["Postgres-backed Relay :4315"]
   Postgres["Postgres live table"]
   RelayOidc["OIDC Relay :4316"]
   Zitadel["Zitadel issuer/JWKS"]
-  Witness["OpenFn-backed Witness :4324"]
+  Notary["OpenFn-backed Notary :4324"]
   Sidecar["OpenFn sidecar"]
   Mock["Mock registry"]
 
   Client --> Static
   Static --> Atlas
-  Atlas --> WitnessCore
+  Atlas --> NotaryCore
   Client --> RelayPg
   RelayPg --> Postgres
   Client --> RelayOidc
   RelayOidc --> Zitadel
-  Client --> Witness
-  Witness --> Sidecar
+  Client --> Notary
+  Notary --> Sidecar
   Sidecar --> Mock
 ```
 
@@ -2176,7 +2176,7 @@ sequenceDiagram
   participant DB as Postgres
   participant O as OIDC Relay
   participant Z as Zitadel
-  participant W as Witness
+  participant W as Notary
   participant S as OpenFn sidecar
 
   C->>P: GET beneficiary rows with Data-Purpose
@@ -2198,10 +2198,10 @@ sequenceDiagram
 - `case-file.json`: the executive case summary, actors, subject references, trust boundaries, and artifact index.
 - `conformance-map.json`: the standards and integration patterns demonstrated by each artifact.
 - `{artifact_ref(out, 'service-api-catalog-headers')}`, `{artifact_ref(out, 'service-catalogue-headers')}`, and `{artifact_ref(out, 'service-metadata-index-headers')}`: captured discovery response headers when exposed by the service.
-- `{artifact_ref(out, 'service-route-provenance-validation')}`: proof that Witness dispatch used discovered access-service endpoints.
+- `{artifact_ref(out, 'service-route-provenance-validation')}`: proof that Notary dispatch used discovered access-service endpoints.
 - `{artifact_ref(out, 'postgres-live-before-insert')}` and `{artifact_ref(out, 'postgres-live-after-insert')}`: the live database change.
 - `{artifact_ref(out, 'oidc-issuer-discovery')}`, `{artifact_ref(out, 'oidc-token-claims')}`, `{artifact_ref(out, 'oidc-relay-row-attempt')}`, and `{artifact_ref(out, 'oidc-authorized-row-attempt')}`: issuer discovery, token verification, denied authorization, then authorized access under an explicit demo policy.
-- `{artifact_ref(out, 'openfn-witness-discovery')}`, `{artifact_ref(out, 'openfn-witness-claims')}`, and `{artifact_ref(out, 'openfn-date-of-birth-evaluation')}`: Witness discovery, claim discovery, then OpenFn-backed evidence result.
+- `{artifact_ref(out, 'openfn-notary-discovery')}`, `{artifact_ref(out, 'openfn-notary-claims')}`, and `{artifact_ref(out, 'openfn-date-of-birth-evaluation')}`: Notary discovery, claim discovery, then OpenFn-backed evidence result.
 
 ## Known Demo Shortcuts
 
@@ -2211,7 +2211,7 @@ sequenceDiagram
 
 - Relay reads from Postgres but does not expose database credentials or accept caller SQL.
 - Zitadel signs the token, Relay verifies issuer, audience, type, and signature, then still applies local scope rules.
-- OpenFn sidecar and mock registry stay on the private Compose network. The client calls Witness, not the sidecar.
+- OpenFn sidecar and mock registry stay on the private Compose network. The client calls Notary, not the sidecar.
 - Artifacts intentionally avoid raw bearer tokens, client secrets, and database URLs.
 
 ## Standards And Patterns
@@ -2353,8 +2353,8 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     service_catalogue_headers = artifact_json(out, "service-catalogue-headers", {})
     service_graph = artifact_json(out, "service-graph-excerpt", {})
     service_provider_map = artifact_json(out, "service-evidence-provider-map", [])
-    service_claim_discovery = artifact_json(out, "service-witness-claim-discovery", [])
-    service_evaluations = artifact_json(out, "service-witness-evaluations", [])
+    service_claim_discovery = artifact_json(out, "service-notary-claim-discovery", [])
+    service_evaluations = artifact_json(out, "service-notary-evaluations", [])
     service_route_validation = artifact_json(out, "service-route-provenance-validation", {})
     postgres_metadata = artifact_json(out, "postgres-live-metadata", {})
     postgres_api_catalog = artifact_json(out, "postgres-live-api-catalog", {})
@@ -2366,8 +2366,8 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     oidc_claims = artifact_json(out, "oidc-token-claims", {})
     oidc_attempt = artifact_json(out, "oidc-relay-row-attempt", {})
     oidc_authorized_attempt = artifact_json(out, "oidc-authorized-row-attempt", {})
-    openfn_discovery = artifact_json(out, "openfn-witness-discovery", {})
-    openfn_claims = artifact_json(out, "openfn-witness-claims", {})
+    openfn_discovery = artifact_json(out, "openfn-notary-discovery", {})
+    openfn_claims = artifact_json(out, "openfn-notary-claims", {})
     openfn_evaluation = artifact_json(out, "openfn-date-of-birth-evaluation", {})
 
     dataset_id, entity_name, field_names = first_dataset_entity(postgres_metadata)
@@ -2452,7 +2452,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
                 + " is the selected public service.",
             ],
             used_next="The catalogue becomes the Atlas discovery input for service graph navigation.",
-            proof="Service-first discovery has its own entry point before any Witness or Relay request is chosen.",
+            proof="Service-first discovery has its own entry point before any Notary or Relay request is chosen.",
             artifact=artifact_ref(out, "service-catalogue"),
             payload=service_catalogue,
             accent="blue",
@@ -2481,7 +2481,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
                 chip("providers", service_provider_count, tone="neutral")
                 + " are associated with the accepted evidence.",
             ],
-            used_next="The provider map supplies the evidence access services used by the Witness calls.",
+            used_next="The provider map supplies the evidence access services used by the Notary calls.",
             proof="The story relies on Atlas graph navigation instead of hand-walking JSON-LD in the demo script.",
             artifact=artifact_ref(out, "service-graph-excerpt"),
             payload=service_graph,
@@ -2516,8 +2516,8 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         "Access services",
         html_step(
             index=5,
-            title="Choose Witness endpoints from access services",
-            hypothesis="Witness dispatch should come from BRegDCAT/DCAT-style access-service endpoints, with only local Compose hostname translation for the demo.",
+            title="Choose Notary endpoints from access services",
+            hypothesis="Notary dispatch should come from BRegDCAT/DCAT-style access-service endpoints, with only local Compose hostname translation for the demo.",
             request_label="Atlas evidence provider map -> access_service.endpoint_url",
             returns=[
                 chip("checked routes", service_route_validation.get("checked_route_count"), tone="green")
@@ -2527,8 +2527,8 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
                 chip("host URL", first_checked_route.get("host_access_url"), tone="neutral")
                 + " is the local demo translation used for HTTP.",
             ],
-            used_next="The translated host URL is used only to reach the same discovered Witness endpoint from outside Compose.",
-            proof="A hard-coded host-port Witness route fails validation unless it is derived from the discovered access-service endpoint.",
+            used_next="The translated host URL is used only to reach the same discovered Notary endpoint from outside Compose.",
+            proof="A hard-coded host-port Notary route fails validation unless it is derived from the discovered access-service endpoint.",
             artifact=artifact_ref(out, "service-route-provenance-validation"),
             payload={
                 "provider_map": service_provider_map,
@@ -2539,25 +2539,25 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     )
     add_step(
         6,
-        "Witness evaluation",
+        "Notary evaluation",
         html_step(
             index=6,
             title="Discover claims and evaluate evidence",
-            hypothesis="The service context should lead to Witness claim discovery before evaluation.",
+            hypothesis="The service context should lead to Notary claim discovery before evaluation.",
             request_label="GET {host_access_url}/claims -> POST {host_access_url}/claims/evaluate",
             returns=[
                 chip("selected claim", first_claim_selection.get("selected_claim_id"), tone="green")
                 + " is selected only after it appears in /claims.",
                 chip("matched by", first_claim_selection.get("matched_by"), tone="green")
-                + " links the service evidence type to Witness claim metadata.",
+                + " links the service evidence type to Notary claim metadata.",
                 chip("evaluations", service_eval_count, tone="green")
                 + " cover every satisfiable option, including granular and combined routes.",
                 chip("subject", first_service_eval.get("subject"), tone="neutral")
                 + " is the service-review subject.",
             ],
             used_next="The evaluation count and validation result become the service-first assurance result.",
-            proof="The standards chain is complete: api-catalog -> CPSV-AP PublicService -> CCCEV option -> BRegDCAT/DCAT access service -> Witness claim discovery -> evaluation.",
-            artifact=artifact_ref(out, "service-witness-evaluations"),
+            proof="The standards chain is complete: api-catalog -> CPSV-AP PublicService -> CCCEV option -> BRegDCAT/DCAT access service -> Notary claim discovery -> evaluation.",
+            artifact=artifact_ref(out, "service-notary-evaluations"),
             payload={
                 "claim_discovery": service_claim_discovery,
                 "evaluations": service_evaluations,
@@ -2752,21 +2752,21 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
     )
     add_step(
         15,
-        "Witness discovery",
+        "Notary discovery",
         html_step(
             index=15,
-            title="Discover the OpenFn-backed Witness",
-            hypothesis="The client should discover Witness capabilities before choosing a claim.",
+            title="Discover the OpenFn-backed Notary",
+            hypothesis="The client should discover Notary capabilities before choosing a claim.",
             request_label="GET http://127.0.0.1:4324/.well-known/evidence-service",
             returns=[
                 chip("service_id", openfn_discovery.get("service_id"), tone="green")
-                + " identifies the Witness.",
+                + " identifies the Notary.",
                 chip("claims_url", openfn_discovery.get("claims_url"), tone="green", value_id="value-claims-url")
                 + " points to the next discovery call.",
             ],
             used_next=f"The next call follows the discovered claims URL: <code>{html_escape(openfn_discovery.get('claims_url'))}</code>.",
-            proof="The client reaches the public Witness API, not the private OpenFn sidecar.",
-            artifact=artifact_ref(out, "openfn-witness-discovery"),
+            proof="The client reaches the public Notary API, not the private OpenFn sidecar.",
+            artifact=artifact_ref(out, "openfn-notary-discovery"),
             payload=openfn_discovery,
             accent="green",
         ),
@@ -2777,17 +2777,17 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         html_step(
             index=16,
             title="Discover the claim to request",
-            hypothesis="The client should request only claims the Witness advertises.",
+            hypothesis="The client should request only claims the Notary advertises.",
             request_label="GET http://127.0.0.1:4324/claims",
             returns=[
                 chip("claim id", openfn_claim, tone="green", value_id="value-claim")
-                + " is advertised by the Witness.",
+                + " is advertised by the Notary.",
                 chip("subject type", (openfn_claims.get("data") or [{}])[0].get("subject_type") if isinstance(openfn_claims, dict) else "", tone="neutral")
                 + " constrains the request shape.",
             ],
             used_next=f"The evaluate request body uses <code>claims: [{html_escape(openfn_claim)}]</code> from discovery.",
             proof="The evidence request is driven by advertised capabilities, not a hidden sidecar contract.",
-            artifact=artifact_ref(out, "openfn-witness-claims"),
+            artifact=artifact_ref(out, "openfn-notary-claims"),
             payload=openfn_claims,
             accent="green",
         ),
@@ -2798,7 +2798,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
         html_step(
             index=17,
             title="Evaluate the discovered claim",
-            hypothesis="Witness should use the private OpenFn sidecar to resolve the advertised claim value.",
+            hypothesis="Notary should use the private OpenFn sidecar to resolve the advertised claim value.",
             request_label="POST http://127.0.0.1:4324/claims/evaluate",
             returns=[
                 chip("claim_id", openfn_result.get("claim_id"), tone="green")
@@ -2809,7 +2809,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
                 + " shows one sidecar-backed source contributed.",
             ],
             used_next="The claim value and provenance feed the final case result and conformance map.",
-            proof="The client obtains evidence through Witness while the sidecar and mock registry remain private.",
+            proof="The client obtains evidence through Notary while the sidecar and mock registry remain private.",
             artifact=artifact_ref(out, "openfn-date-of-birth-evaluation"),
             payload=openfn_evaluation,
             accent="green",
@@ -3041,7 +3041,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
           <span>CPSV-AP PublicService</span>
           <span>CCCEV option</span>
           <span>BRegDCAT/DCAT access service</span>
-          <span>Witness claim discovery</span>
+          <span>Notary claim discovery</span>
           <span>Evaluation</span>
         </div>
       </section>
@@ -3163,7 +3163,7 @@ def main() -> int:
                 "Service-first discovery through Atlas",
                 "Zitadel-issued JWT at a separate OIDC Relay node",
                 "Database-source cutover with live Postgres",
-                "OpenFn sidecar lookup behind Registry Witness",
+                "OpenFn sidecar lookup behind Registry Notary",
             ],
             "artifacts_dir": str(out),
         },

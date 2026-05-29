@@ -24,7 +24,7 @@ support trusted, purpose-bound, interoperable data use across ministries,
 service providers, insurers, buyers, banks, and development programs.
 
 Registry Relay can expose those workbooks as protected, read-only,
-domain-oriented APIs. Registry Witness can combine facts from multiple Relay
+domain-oriented APIs. Registry Notary can combine facts from multiple Relay
 authorities and return bounded evidence, predicates, or credentials without
 copying raw registry rows into a central data lake.
 
@@ -62,7 +62,7 @@ Recommended local service names and ports:
 
 ```text
 agri-registry-relay             4341
-nagdi-agriculture-witness       4342
+nagdi-agriculture-notary       4342
 agri-static-metadata-publisher  4343
 ```
 
@@ -103,7 +103,7 @@ print raw token values in terminal output or artifacts.
 
 `just agri-generate` must write agricultural XLSX fixtures, agricultural demo
 secrets, and static metadata needed by `just agri-smoke`. Shared baseline
-secrets, including `REGISTRY_WITNESS_ISSUER_JWK`, must exist before Wave 0
+secrets, including `REGISTRY_NOTARY_ISSUER_JWK`, must exist before Wave 0
 validation starts.
 
 `just agri-down` may stop the named agricultural services rather than the full
@@ -140,7 +140,7 @@ Subject identifiers:
 - Holding and program lookup: `farmer_id`.
 - Livestock lookup: `farmer_id` plus `herd_id` for herd-specific claims.
 - Livestock movement snapshot lookup: `movement_snapshot_id`, which must equal
-  `herd_id` in the fixture rows used by Witness.
+  `herd_id` in the fixture rows used by Notary.
 - Synthetic national identifiers may exist in `FarmerIdentifiers`, but should
   not be required for the main demo path and should not be exposed in ordinary
   evidence outputs.
@@ -274,7 +274,7 @@ Realism notes:
 
 - Include inconsistent operational labels such as `active`, `inactive`,
   `pending_verification`, and `deceased_reported`, then normalize them only in
-  Relay or Witness rules where needed.
+  Relay or Notary rules where needed.
 - Include phone presence as a boolean, not phone numbers, so the demo avoids
   unnecessary personal data.
 - Include one stale verification date to show that eligibility may fail on data
@@ -285,7 +285,7 @@ Realism notes:
 - `subject_scope` must be one of `individual`, `program`, or `universal`.
   Individual consent or authorization rows use `individual`; program-level legal
   mandates or public-task authorizations use `program` or `universal` so the
-  Witness rule can establish lawful basis without requiring a per-farmer consent
+  Notary rule can establish lawful basis without requiring a per-farmer consent
   row.
 
 ### `farm-holdings-registry.xlsx`
@@ -1055,7 +1055,7 @@ geography_floor
 Realism notes:
 
 - This workbook contains materialized evidence and aggregate projections used to
-  keep the first demo inside currently proven Relay and Witness patterns.
+  keep the first demo inside currently proven Relay and Notary patterns.
 - Snapshot rows are generated outputs. They are not authoritative source
   registry records.
 - `MarketSizingCells` is the preferred source for aggregate planning evidence
@@ -1124,7 +1124,7 @@ Access model:
 - `metadata` scope can discover datasets and evidence offerings.
 - `rows` scope can read allowed personal or operational rows.
 - `aggregate` scope can read configured aggregates without row access.
-- `evidence_verification` scope is used by Witness source connections.
+- `evidence_verification` scope is used by Notary source connections.
 - All personal or holding-level entities should require `Data-Purpose`.
 
 Entity implementation contract:
@@ -1135,7 +1135,7 @@ Each Relay entity added for the demo must specify:
 - primary key
 - lookup fields and allowed filters
 - nullable fields
-- status domains used by Witness rules
+- status domains used by Notary rules
 - sensitivity classification
 - whether `Data-Purpose` is required
 - whether the entity can be used by aggregate-only clients
@@ -1144,14 +1144,14 @@ Phase 0 should use materialized one-row evidence projections where needed.
 For example, `voucher_eligibility_snapshot` can summarize whether the farmer is
 registered, has an established lawful basis for the purpose, has an active
 parcel, has a current entitlement, and has a recorded redemption. Later phases
-can replace this with multi-source Witness bindings if product support and demo
+can replace this with multi-source Notary bindings if product support and demo
 complexity justify it.
 
 Do not make the first herd aggregate depend on a cross-table Relay join unless
 the wave explicitly validates that feature. Prefer a pre-materialized
 district-level herd planning snapshot for the demo path.
 
-## Registry Witness Surface
+## Registry Notary Surface
 
 ### Crop And Input Voucher Claims
 
@@ -1214,7 +1214,7 @@ eligible-for-livestock-movement-permit =
   and no-conflicting-open-movement-permit
 ```
 
-Witness lookup design:
+Notary lookup design:
 
 - Phase 0 uses `cardinality: one` source bindings against materialized snapshot
   entities to stay inside the current lab pattern.
@@ -1318,10 +1318,10 @@ controls.
 
 1. Client discovers static NAgDI metadata.
 2. Client finds the public service for climate-smart input voucher eligibility.
-3. Client follows evidence offerings to the agriculture Witness.
-4. Witness discovers required source connections and calls the relevant Relays.
+3. Client follows evidence offerings to the agriculture Notary.
+4. Notary discovers required source connections and calls the relevant Relays.
 5. Relays enforce scope, purpose, row projection, and audit.
-6. Witness returns a predicate and reason codes.
+6. Notary returns a predicate and reason codes.
 7. Demo client writes artifacts showing discovery, evaluation, denials, and
    audit evidence.
 
@@ -1339,7 +1339,7 @@ Required controls:
 
 1. A service provider asks for aggregate opportunity sizing.
 2. Registry Relay returns counts by district, crop, risk band, or input type
-   through the aggregate endpoint, not through Registry Witness.
+   through the aggregate endpoint, not through Registry Notary.
 3. The provider cannot retrieve individual farmers with the aggregate
    credential.
 4. Static metadata and policy describe the aggregate offering.
@@ -1367,10 +1367,10 @@ Required aggregate controls:
 ### Story 3: Livestock Movement Permit
 
 1. Client discovers livestock movement evidence requirements.
-2. Witness checks livestock holder registration, herd registration,
+2. Notary checks livestock holder registration, herd registration,
    vaccination, origin and destination restrictions, requested movement date,
    animal count, quarantine, and conflicting permit status.
-3. Witness returns eligibility for movement permit review.
+3. Notary returns eligibility for movement permit review.
 4. Negative controls show expired vaccination and active quarantine.
 
 This should be optional in the first implementation if the crop/input story is
@@ -1448,17 +1448,17 @@ Phase 0 and Phase 1 should define these client classes.
 metadata_client:
   scopes: agri_registry:metadata
   allowed: metadata, catalog, evidence offerings
-  denied: rows, aggregates, Witness evaluation
+  denied: rows, aggregates, Notary evaluation
 
 agri_evidence_source:
   scopes: agri_registry:metadata, agri_registry:rows, agri_registry:evidence_verification
-  allowed: Witness source row lookups
+  allowed: Notary source row lookups
   denied: direct aggregate-only market sizing unless aggregate scope is added
 
 row_reader:
   scopes: agri_registry:metadata, agri_registry:rows
   allowed: authorized row reads with Data-Purpose
-  denied: aggregates and Witness-only evidence routes
+  denied: aggregates and Notary-only evidence routes
 
 aggregate_reader:
   scopes: agri_registry:metadata, agri_registry:aggregate
@@ -1467,7 +1467,7 @@ aggregate_reader:
 
 evidence_client:
   scopes: agri_registry:evidence_verification
-  allowed: Witness claim evaluation
+  allowed: Notary claim evaluation
   denied: direct Relay row reads
 ```
 
@@ -1506,7 +1506,7 @@ Consumer-facing MIS, GIS, and semantic projection improvements are specified in
 Build:
 
 - one combined `agri-registry-relay`
-- one `nagdi-agriculture-witness`
+- one `nagdi-agriculture-notary`
 - the minimum generated XLSX workbook set, including
   `nagdi-evidence-snapshots.xlsx` when materialized snapshot entities are used
 - materialized one-row evidence snapshot for input voucher review
@@ -1519,7 +1519,7 @@ Done when:
 - `FARMER-1001` evaluates eligible.
 - one negative farmer evaluates not eligible.
 - a row-read denial artifact is captured under `output/agri-smoke/`.
-- a Witness evaluation success artifact is captured under `output/agri-smoke/`.
+- a Notary evaluation success artifact is captured under `output/agri-smoke/`.
 - one audit artifact for an evaluation or denial is captured under
   `output/agri-smoke/`.
 - fixture generation validates primary keys and references.
@@ -1531,7 +1531,7 @@ Build:
 - farmer, holdings, program, and agroclimate workbooks
 - one combined agriculture Relay unless multi-Relay separation is required for
   a specific walkthrough
-- agriculture Witness with input voucher claims
+- agriculture Notary with input voucher claims
 - static metadata for the input voucher service
 - smoke script and narrated client flow
 
@@ -1540,7 +1540,7 @@ Done when:
 - `FARMER-1001` evaluates eligible.
 - `FARMER-1002`, `FARMER-1003`, and `FARMER-1004` evaluate not eligible with
   clear reason codes.
-- metadata discovery leads to the Witness endpoint for eligibility evidence.
+- metadata discovery leads to the Notary endpoint for eligibility evidence.
 - the evidence-only row-read denial, aggregate-only row-read denial,
   row-reader aggregate denial, and missing-purpose row-read denial all pass.
 - `FARMER-1005` returns manual review and is not auto-eligible.
@@ -1572,7 +1572,7 @@ Build:
 
 - livestock workbook
 - livestock Relay config
-- livestock Witness claims
+- livestock Notary claims
 - static metadata for livestock movement permit service
 - narrated flow and smoke controls
 
@@ -1613,7 +1613,7 @@ Done when:
 
 ## Risks And Open Questions
 
-- Multi-workbook joins may be easier to demonstrate in Witness than in Relay
+- Multi-workbook joins may be easier to demonstrate in Notary than in Relay
   aggregates. Keep the first aggregate simple if needed.
 - Consent should be represented as one possible data-use basis. Real
   deployments may use lawful basis, public task, consent, permit condition,
@@ -1627,7 +1627,7 @@ Done when:
 - Current Relay aggregates are single-source. Cross-authority opportunity
   sizing should be pre-materialized or deferred until the product supports the
   needed query shape.
-- Current Witness examples mostly use one-row lookups. Collection and absence
+- Current Notary examples mostly use one-row lookups. Collection and absence
   predicates should use materialized projections unless explicit product work is
   planned.
 
@@ -1642,8 +1642,8 @@ Agricultural demo verification should include:
 - static metadata publication and validation
 - Relay readiness checks
 - Relay OpenAPI fetch
-- Witness discovery and OpenAPI fetch
-- positive and negative Witness evaluations
+- Notary discovery and OpenAPI fetch
+- positive and negative Notary evaluations
 - manual-review evaluation for a data-quality issue
 - access-denial controls for rows, aggregates, and missing purpose
 - aggregate suppression control
@@ -1658,7 +1658,7 @@ partly implemented, hidden behind manual data edits, or dependent on
 undocumented setup.
 
 Current completion stance: the near-term 95% demo target is Phases 1, 1b, 2,
-and a lightweight Phase 3 with deterministic fixtures, Registry Witness voucher
+and a lightweight Phase 3 with deterministic fixtures, Registry Notary voucher
 and livestock evidence, Registry Relay aggregate market sizing, denial
 artifacts, narrated client artifacts, holder-bound voucher credential issuance,
 and a scripted OID4VCI or wallet probe. Full production wallet ceremonies remain
@@ -1673,11 +1673,11 @@ Functional acceptance:
 - Generated workbooks include the authority-owned sheets required by the wave,
   and no generated source file contains real personal, farm, supplier, animal,
   parcel, or location data.
-- `just agri-build` builds the agricultural Relay and Witness services without
+- `just agri-build` builds the agricultural Relay and Notary services without
   changing the baseline civil, social protection, and health demo.
 - `just agri-up` starts the agricultural Compose profile on the documented
   ports.
-- Relay readiness, Relay OpenAPI, Witness discovery, and Witness OpenAPI checks
+- Relay readiness, Relay OpenAPI, Notary discovery, and Notary OpenAPI checks
   pass.
 - Relay exposes scoped metadata, row, and aggregate routes for every entity
   required by the wave.
@@ -1685,7 +1685,7 @@ Functional acceptance:
   evidence types, evidence offerings, policies, purpose IRIs, and access
   services required by the wave.
 - The narrated client starts from metadata discovery and does not hard-code a
-  Witness route that should have been discovered from metadata.
+  Notary route that should have been discovered from metadata.
 
 Evidence acceptance:
 
@@ -1772,14 +1772,14 @@ Parallel worker ownership:
   subjects.
 - Worker B owns the combined `agri-registry-relay` config, metadata manifest,
   scopes, and purpose requirements.
-- Worker C owns `nagdi-agriculture-witness` claims for one eligible and one
+- Worker C owns `nagdi-agriculture-notary` claims for one eligible and one
   denied input-voucher subject.
 - Worker D is the infrastructure owner and owns `just agri-*` recipes, Compose
   profile wiring, README updates, and smoke script scaffolding.
 
 Review gate:
 
-- Staff engineer review checks Relay/Witness feasibility, strict XLSX schema
+- Staff engineer review checks Relay/Notary feasibility, strict XLSX schema
   compatibility, scope boundaries, and smoke reliability.
 - Agricultural domain review checks that the workbook shape still resembles
   realistic spreadsheet-era government operations.
@@ -1805,7 +1805,7 @@ Parallel worker ownership:
   generation plus referential-integrity checks.
 - Worker B owns Relay entity configs, allowed filters, schemas, sensitivity
   labels, and purpose requirements.
-- Worker C owns Witness claim rules, reason codes, materialized absence checks,
+- Worker C owns Notary claim rules, reason codes, materialized absence checks,
   and manual-review behavior.
 - Worker D owns static metadata for services, requirements, evidence types,
   policies, purpose IRIs, and access services.
@@ -1817,7 +1817,7 @@ Review gate:
 
 - Code review verifies each worker stayed inside its owned files and did not
   change baseline demo behavior unnecessarily.
-- Staff engineer review checks no cross-authority aggregate or Witness lookup
+- Staff engineer review checks no cross-authority aggregate or Notary lookup
   exceeds current product capability unless it is explicitly materialized.
 - Domain review checks lawful-basis wording, targetability, program realism,
   data-quality handling, and non-automatic decision framing.
@@ -1877,7 +1877,7 @@ Parallel worker ownership:
   vaccinations, quarantine zones, movement applications, permits, and events.
 - Worker B owns livestock Relay entities, filters, purpose requirements, and
   aggregate routes.
-- Worker C owns livestock Witness claims, species/date checks, quarantine
+- Worker C owns livestock Notary claims, species/date checks, quarantine
   checks, and conflicting-permit checks.
 - Worker D is the infrastructure owner and owns livestock static metadata,
   narrated client flow, smoke checks, docs, and any shared recipe updates.
@@ -1885,7 +1885,7 @@ Parallel worker ownership:
 Review gate:
 
 - Staff engineer review checks collection and absence predicates are
-  materialized or implemented with supported Witness behavior.
+  materialized or implemented with supported Notary behavior.
 - Domain review checks premises, disease/vaccine codes, origin and destination
   restrictions, requested movement date, animal count, and permit wording.
 
@@ -1917,7 +1917,7 @@ Review gate:
 - Security review checks holder binding, disclosure mode, source-row minimization,
   and no secret leakage.
 - Staff engineer review checks credential issuance uses a successful prior
-  evaluation and does not bypass Witness policy.
+  evaluation and does not bypass Notary policy.
 
 Validation gate:
 

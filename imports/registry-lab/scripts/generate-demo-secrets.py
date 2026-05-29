@@ -20,7 +20,7 @@ RELAY_ROOT = Path(os.environ.get("REGISTRY_RELAY_SOURCE_DIR", DEMO_ROOT / "vendo
 sys.path.insert(0, str(RELAY_ROOT / "demo/scripts"))
 
 from generate_demo_keys import (  # noqa: E402
-    generate_registry_witness_issuer_jwk,
+    generate_registry_notary_issuer_jwk,
     generate_raw_key,
 )
 
@@ -69,19 +69,19 @@ def env_line(key: str, value: str) -> str:
 
 
 def generate_env() -> dict[str, str]:
-    issuer_jwk = generate_registry_witness_issuer_jwk()
-    static_metadata_federation_jwk = generate_registry_witness_issuer_jwk()
-    default_federation_client_jwk = generate_registry_witness_issuer_jwk()
-    civil_federation_response_jwk = generate_registry_witness_issuer_jwk()
-    social_federation_response_jwk = generate_registry_witness_issuer_jwk()
-    agri_federation_client_jwk = generate_registry_witness_issuer_jwk()
-    agri_federation_response_jwk = generate_registry_witness_issuer_jwk()
+    issuer_jwk = generate_registry_notary_issuer_jwk()
+    static_metadata_federation_jwk = generate_registry_notary_issuer_jwk()
+    default_federation_client_jwk = generate_registry_notary_issuer_jwk()
+    civil_federation_response_jwk = generate_registry_notary_issuer_jwk()
+    social_federation_response_jwk = generate_registry_notary_issuer_jwk()
+    agri_federation_client_jwk = generate_registry_notary_issuer_jwk()
+    agri_federation_response_jwk = generate_registry_notary_issuer_jwk()
     openfn_sidecar_token = generate_raw_key()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_raw_key(),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
-        "REGISTRY_WITNESS_AUDIT_HASH_SECRET": generate_raw_key(),
-        "REGISTRY_WITNESS_ISSUER_JWK": issuer_jwk,
+        "REGISTRY_NOTARY_AUDIT_HASH_SECRET": generate_raw_key(),
+        "REGISTRY_NOTARY_ISSUER_JWK": issuer_jwk,
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
@@ -163,7 +163,7 @@ def main() -> int:
                 if k.endswith(("_RAW", "_TOKEN", "_BEARER", "_AUDIT_HASH_SECRET"))
             ),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
-            "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
+            "issuer_jwk": "REGISTRY_NOTARY_ISSUER_JWK",
             "static_metadata_federation_jwk": "STATIC_METADATA_FEDERATION_JWK",
             "default_federation_client_jwk": "DEFAULT_FEDERATION_CLIENT_JWK",
             "civil_federation_response_jwk": "CIVIL_FEDERATION_RESPONSE_JWK",

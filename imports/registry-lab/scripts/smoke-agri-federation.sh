@@ -48,14 +48,14 @@ assert_artifact() {
   [[ -s "${path}" ]] || fail "missing artifact ${path}"
 }
 
-witness_url="${AGRI_WITNESS_URL:-http://127.0.0.1:4342}"
+notary_url="${AGRI_WITNESS_URL:-http://127.0.0.1:4342}"
 static_url="${AGRI_STATIC_METADATA_URL:-http://127.0.0.1:4343}"
 
-wait_http "agriculture Witness discovery" "${witness_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}"
+wait_http "agriculture Notary discovery" "${notary_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}"
 wait_http "agriculture federation client JWKS" "${static_url}/federation/benefits-jwks.json" ""
 
 DEMO_CORRELATION_ID="${correlation_id}" \
-AGRI_WITNESS_URL="${witness_url}" \
+AGRI_WITNESS_URL="${notary_url}" \
 python "${script_dir}/demo-agri-federation.py" --output-dir "${output_dir}"
 
 assert_artifact "${output_dir}/voucher-eligible-verified-response.json"

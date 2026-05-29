@@ -22,12 +22,12 @@ auth:
 
 audit:
   sink: stdout
-  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
-  service_id: shared-eligibility-witness
-  api_base_url: http://shared-eligibility-witness:8080
+  service_id: shared-eligibility-notary
+  api_base_url: http://shared-eligibility-notary:8080
   inline_batch_limit: 20
   source_connections:
     civil:
@@ -46,7 +46,7 @@ evidence:
     combined_support_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:shared-eligibility-evidence.demo.example
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       issuer_kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
       vct: https://demo.example/credentials/combined-support-eligibility/v1
       validity_seconds: 86400
@@ -103,7 +103,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: social-program-active
       title: Social program active
       version: 2026-05
@@ -139,7 +139,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: health-service-available
       title: Health service available
       version: 2026-05
@@ -183,7 +183,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
       cccev:
         requirement_type: InformationRequirement
         evidence_type: health_service_availability_evidence
@@ -224,7 +224,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       cccev:
         requirement_type: InformationRequirement

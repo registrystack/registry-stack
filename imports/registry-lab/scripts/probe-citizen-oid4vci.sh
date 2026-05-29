@@ -51,7 +51,7 @@ request() {
     args+=(-H "Authorization: Bearer ${access_token}")
   fi
   if [[ -n "${id_token}" ]]; then
-    args+=(-H "x-registry-witness-oidc-id-token: ${id_token}")
+    args+=(-H "x-registry-notary-oidc-id-token: ${id_token}")
   fi
   local status
   status="$(curl "${args[@]}" "$@" "${url}" || true)"
@@ -228,7 +228,7 @@ lines = [
     "",
     f"- Overall: `{result}`",
     f"- Detail: {detail}",
-    f"- Witness base URL: `{base_url}`",
+    f"- Notary base URL: `{base_url}`",
     f"- Issuer metadata URL: `{metadata_url}`",
     "",
     "## Endpoint Evidence",
@@ -311,7 +311,7 @@ EOF
 request metadata GET "${metadata_url}" "${metadata_path}"
 metadata_status="$(status_for metadata)"
 is_2xx "${metadata_status}" ||
-  fail "issuer metadata endpoint did not return 2xx; status ${metadata_status}. This usually means the current Witness build/config does not expose OID4VCI yet."
+  fail "issuer metadata endpoint did not return 2xx; status ${metadata_status}. This usually means the current Notary build/config does not expose OID4VCI yet."
 
 if ! python3 - "${metadata_path}" "${metadata_env_path}" "${CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID:-}" 2>"${output_dir}/issuer-metadata-parse.error" <<'PY'
 import json
