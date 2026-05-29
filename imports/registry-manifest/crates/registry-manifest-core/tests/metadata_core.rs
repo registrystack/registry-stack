@@ -633,7 +633,7 @@ federation:
   jwks_uri: https://registry.example.test/.well-known/jwks.json
   federation_api: https://registry.example.test/federation
   supported_protocol_versions:
-    - registry-witness-federation/v0.1
+    - registry-notary-federation/v0.1
 evaluation_profiles:
   - id: age_eligibility_profile
     ruleset: age-eligibility-v1
@@ -651,8 +651,8 @@ datasets:
   - id: residents
     title: Residents
     evidence_offerings:
-      - id: age_witness
-        title: Age witness
+      - id: age_notary
+        title: Age notary
         evidence_type: age_evidence
         issuing_authority:
           id: civil_registry
@@ -660,10 +660,10 @@ datasets:
         entity: resident
         lookup_keys: [national_id]
         access:
-          kind: registry-witness
-          conforms_to: registry-witness-federation/v0.1
-          endpoint_url: https://witness.example.test/evaluate
-          discovery_url: https://witness.example.test/.well-known/registry-witness
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://notary.example.test/evaluate
+          discovery_url: https://notary.example.test/.well-known/registry-notary
           ruleset: age-eligibility-v1
     entities:
       - name: resident
@@ -685,7 +685,7 @@ fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
 
     assert_eq!(
         catalog["federation"]["supported_protocol_versions"][0],
-        json!("registry-witness-federation/v0.1")
+        json!("registry-notary-federation/v0.1")
     );
     assert_eq!(
         catalog["evaluation_profiles"][0]["id"],
@@ -698,7 +698,7 @@ fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
 }
 
 #[test]
-fn validation_rejects_registry_witness_unresolved_ruleset() {
+fn validation_rejects_registry_notary_unresolved_ruleset() {
     let mut manifest = federated_evaluation_manifest();
     manifest.datasets[0].evidence_offerings[0].access.ruleset = "missing_profile".to_string();
 
@@ -715,7 +715,7 @@ fn validation_rejects_registry_witness_unresolved_ruleset() {
 }
 
 #[test]
-fn validation_rejects_registry_witness_bad_conforms_to() {
+fn validation_rejects_registry_notary_bad_conforms_to() {
     let mut manifest = federated_evaluation_manifest();
     manifest.datasets[0].evidence_offerings[0]
         .access
@@ -727,7 +727,7 @@ fn validation_rejects_registry_witness_bad_conforms_to() {
     };
     assert!(errors.iter().any(|error| {
         error.path == "datasets[0].evidence_offerings[0].access.conforms_to"
-            && error.message.contains("registry-witness-federation/v0.1")
+            && error.message.contains("registry-notary-federation/v0.1")
     }));
 }
 
@@ -869,7 +869,7 @@ fn validation_reports_missing_federation_block_once_across_offerings() {
     let template = manifest.datasets[0].evidence_offerings[0].clone();
     for index in 1..3 {
         let mut copy = template.clone();
-        copy.id = format!("age_witness_{index}");
+        copy.id = format!("age_notary_{index}");
         manifest.datasets[0].evidence_offerings.push(copy);
     }
 
@@ -883,7 +883,7 @@ fn validation_reports_missing_federation_block_once_across_offerings() {
             error.path == "federation"
                 && error
                     .message
-                    .contains("registry-witness access requires a top-level federation block")
+                    .contains("registry-notary access requires a top-level federation block")
         })
         .count();
     assert_eq!(

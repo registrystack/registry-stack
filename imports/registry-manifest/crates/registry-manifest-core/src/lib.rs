@@ -14,7 +14,7 @@ const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/s
 const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/authority/data-theme";
 const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
 const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
-const REGISTRY_WITNESS_FEDERATION_PROTOCOL: &str = "registry-witness-federation/v0.1";
+const REGISTRY_NOTARY_FEDERATION_PROTOCOL: &str = "registry-notary-federation/v0.1";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1261,12 +1261,12 @@ fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec
     if !federation
         .supported_protocol_versions
         .iter()
-        .any(|version| version == REGISTRY_WITNESS_FEDERATION_PROTOCOL)
+        .any(|version| version == REGISTRY_NOTARY_FEDERATION_PROTOCOL)
     {
         errors.push(ValidationError::new(
             "federation.supported_protocol_versions",
             format!(
-                "supported protocol versions must include {REGISTRY_WITNESS_FEDERATION_PROTOCOL}"
+                "supported protocol versions must include {REGISTRY_NOTARY_FEDERATION_PROTOCOL}"
             ),
         ));
     }
@@ -1414,12 +1414,12 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             dataset
                 .evidence_offerings
                 .iter()
-                .any(|offering| offering.access.kind == "registry-witness")
+                .any(|offering| offering.access.kind == "registry-notary")
         })
     {
         errors.push(ValidationError::new(
             "federation",
-            "registry-witness access requires a top-level federation block",
+            "registry-notary access requires a top-level federation block",
         ));
     }
 
@@ -3119,7 +3119,7 @@ fn validate_evidence_offerings(
                 "access kind must not be empty",
             ));
         }
-        if offering.access.conforms_to.as_deref() != Some(REGISTRY_WITNESS_FEDERATION_PROTOCOL) {
+        if offering.access.conforms_to.as_deref() != Some(REGISTRY_NOTARY_FEDERATION_PROTOCOL) {
             validate_optional_uri(
                 offering.access.conforms_to.as_deref(),
                 format!("{offering_path}.access.conforms_to"),
@@ -3127,8 +3127,8 @@ fn validate_evidence_offerings(
                 errors,
             );
         }
-        if offering.access.kind == "registry-witness" {
-            validate_registry_witness_access(
+        if offering.access.kind == "registry-notary" {
+            validate_registry_notary_access(
                 offering,
                 &offering_path,
                 evaluation_profile_rulesets,
@@ -3166,18 +3166,16 @@ fn validate_evidence_offerings(
     }
 }
 
-fn validate_registry_witness_access(
+fn validate_registry_notary_access(
     offering: &EvidenceOfferingManifest,
     offering_path: &str,
     evaluation_profile_rulesets: &BTreeSet<&str>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if offering.access.conforms_to.as_deref() != Some(REGISTRY_WITNESS_FEDERATION_PROTOCOL) {
+    if offering.access.conforms_to.as_deref() != Some(REGISTRY_NOTARY_FEDERATION_PROTOCOL) {
         errors.push(ValidationError::new(
             format!("{offering_path}.access.conforms_to"),
-            format!(
-                "registry-witness access must conform to {REGISTRY_WITNESS_FEDERATION_PROTOCOL}"
-            ),
+            format!("registry-notary access must conform to {REGISTRY_NOTARY_FEDERATION_PROTOCOL}"),
         ));
     }
     match offering.access.endpoint_url.as_deref() {
@@ -3188,7 +3186,7 @@ fn validate_registry_witness_access(
         ),
         None => errors.push(ValidationError::new(
             format!("{offering_path}.access.endpoint_url"),
-            "registry-witness access must declare an HTTPS endpoint URL",
+            "registry-notary access must declare an HTTPS endpoint URL",
         )),
     }
     match offering.access.discovery_url.as_deref() {
@@ -3199,7 +3197,7 @@ fn validate_registry_witness_access(
         ),
         None => errors.push(ValidationError::new(
             format!("{offering_path}.access.discovery_url"),
-            "registry-witness access must declare an HTTPS discovery URL",
+            "registry-notary access must declare an HTTPS discovery URL",
         )),
     }
     if !offering.access.ruleset.trim().is_empty()
@@ -3207,7 +3205,7 @@ fn validate_registry_witness_access(
     {
         errors.push(ValidationError::new(
             format!("{offering_path}.access.ruleset"),
-            "registry-witness access.ruleset must reference a known evaluation profile ruleset",
+            "registry-notary access.ruleset must reference a known evaluation profile ruleset",
         ));
     }
 }
