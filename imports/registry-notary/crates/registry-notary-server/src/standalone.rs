@@ -1451,8 +1451,16 @@ struct AuthAuditState {
 #[derive(Debug, Clone, Default)]
 struct RequestCredentials {
     api_key: Option<String>,
+    authorization_present: bool,
     bearer_token: Option<String>,
     id_token: Option<String>,
+}
+
+impl RequestCredentials {
+    fn credential_type_count(&self) -> usize {
+        usize::from(self.api_key.is_some())
+            + usize::from(self.authorization_present || self.bearer_token.is_some())
+    }
 }
 
 #[derive(Debug)]
@@ -1594,6 +1602,9 @@ impl Authenticator {
         &self,
         credentials: RequestCredentials,
     ) -> Result<EvidencePrincipal, EvidenceError> {
+        if credentials.credential_type_count() > 1 {
+            return Err(EvidenceError::MultipleCredentials);
+        }
         match self {
             Self::Static {
                 api_keys,
@@ -2055,16 +2066,18 @@ fn resolve_credentials(
 }
 
 fn request_credentials(request: &Request) -> RequestCredentials {
+    let authorization = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(header_str);
     RequestCredentials {
         api_key: request
             .headers()
             .get("x-api-key")
             .and_then(header_str)
             .map(ToOwned::to_owned),
-        bearer_token: request
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(header_str)
+        authorization_present: authorization.is_some(),
+        bearer_token: authorization
             .and_then(|raw| parse_bearer_token(raw).ok())
             .map(ToOwned::to_owned),
         id_token: request
@@ -4408,6 +4421,89 @@ sources:
         assert_eq!(principal.principal_id, "caseworker");
     }
 
+    #[tokio::test]
+    async fn static_auth_rejects_multiple_credential_headers() {
+        let authenticator = Authenticator::Static {
+            api_keys: vec![ResolvedCredential {
+                id: "api-client".to_string(),
+                fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+                scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            }],
+            bearer_tokens: vec![ResolvedCredential {
+                id: "bearer-client".to_string(),
+                fingerprint: registry_platform_authcommon::fingerprint_api_key("bearer-token"),
+                scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            }],
+        };
+        let request = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            authorization_present: true,
+            bearer_token: Some("bearer-token".to_string()),
+            id_token: None,
+        };
+
+        let err = authenticator
+            .authenticate(request)
+            .await
+            .expect_err("multiple credentials must fail");
+
+        assert!(matches!(err, EvidenceError::MultipleCredentials));
+    }
+
+    #[tokio::test]
+    async fn static_auth_rejects_api_key_with_malformed_authorization_header() {
+        let authenticator = Authenticator::Static {
+            api_keys: vec![ResolvedCredential {
+                id: "api-client".to_string(),
+                fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+                scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            }],
+            bearer_tokens: Vec::new(),
+        };
+        let request = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            authorization_present: true,
+            bearer_token: None,
+            id_token: None,
+        };
+
+        let err = authenticator
+            .authenticate(request)
+            .await
+            .expect_err("ambiguous credentials must not fall back to api key");
+
+        assert!(matches!(err, EvidenceError::MultipleCredentials));
+    }
+
+    #[test]
+    fn oidc_id_token_is_supplemental_not_a_separate_auth_mode() {
+        let oidc_request = RequestCredentials {
+            api_key: None,
+            authorization_present: true,
+            bearer_token: Some("access-token".to_string()),
+            id_token: Some("id-token".to_string()),
+        };
+        let api_key_and_bearer = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            authorization_present: true,
+            bearer_token: Some("bearer-token".to_string()),
+            id_token: None,
+        };
+        let api_key_and_malformed_authorization = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            authorization_present: true,
+            bearer_token: None,
+            id_token: None,
+        };
+
+        assert_eq!(oidc_request.credential_type_count(), 1);
+        assert_eq!(api_key_and_bearer.credential_type_count(), 2);
+        assert_eq!(
+            api_key_and_malformed_authorization.credential_type_count(),
+            2
+        );
+    }
+
     #[test]
     fn static_credentials_have_machine_access_and_no_verified_claims() {
         let credential = ResolvedCredential {
@@ -4417,6 +4513,7 @@ sources:
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            authorization_present: false,
             bearer_token: None,
             id_token: None,
         };

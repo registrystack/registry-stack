@@ -3057,6 +3057,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::SourceNotFound
         | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
         EvidenceError::MissingCredential => StatusCode::UNAUTHORIZED,
+        EvidenceError::MultipleCredentials => StatusCode::BAD_REQUEST,
         EvidenceError::SelfAttestationInvalidToken => StatusCode::UNAUTHORIZED,
         EvidenceError::InvalidRequest
         | EvidenceError::HolderProofRequired
@@ -3102,6 +3103,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::IdempotencyConflict => "Idempotency conflict",
         EvidenceError::PurposeRequired => "Purpose required",
         EvidenceError::MissingCredential => "Missing credential",
+        EvidenceError::MultipleCredentials => "Multiple credentials",
         EvidenceError::ScopeDenied { .. } => "Scope denied",
         EvidenceError::SelfAttestationDenied { .. } => "Self-attestation denied",
         EvidenceError::SelfAttestationRateLimited => "Self-attestation rate limited",
@@ -3140,6 +3142,7 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         }
         EvidenceError::PurposeRequired => "a data purpose is required",
         EvidenceError::MissingCredential => "missing authentication credential",
+        EvidenceError::MultipleCredentials => "provide exactly one authentication credential",
         EvidenceError::ScopeDenied { .. } => "missing required scope",
         EvidenceError::SelfAttestationDenied { .. } => "self-attestation request was denied",
         EvidenceError::SelfAttestationRateLimited => "self-attestation request was rate limited",

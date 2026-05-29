@@ -57,6 +57,12 @@ impl StandaloneRegistryNotaryConfig {
                     .oidc
                     .as_ref()
                     .ok_or(EvidenceConfigError::MissingOidcConfig)?;
+                if !self.auth.api_keys.is_empty() || !self.auth.bearer_tokens.is_empty() {
+                    return Err(EvidenceConfigError::InvalidOidcConfig {
+                        reason: "auth.api_keys and auth.bearer_tokens must be empty when auth.mode = oidc"
+                            .to_string(),
+                    });
+                }
                 oidc.validate()?;
             }
             _ => {
@@ -4702,6 +4708,29 @@ auth:
             err,
             EvidenceConfigError::UnsupportedAuthMode { .. }
         ));
+    }
+
+    #[test]
+    fn oidc_auth_rejects_static_credentials() {
+        let mut config = valid_self_attestation_config();
+        config.auth.api_keys.push(EvidenceCredentialConfig {
+            id: "legacy-api-key".to_string(),
+            hash_env: "LEGACY_API_KEY_HASH".to_string(),
+            scopes: vec!["self_attestation".to_string()],
+        });
+
+        let reason = match config
+            .validate()
+            .expect_err("OIDC mode must not accept static credentials")
+        {
+            EvidenceConfigError::InvalidOidcConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        };
+
+        assert!(
+            reason.contains("auth.api_keys"),
+            "unexpected error reason: {reason}"
+        );
     }
 
     #[test]

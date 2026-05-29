@@ -605,6 +605,7 @@ fn local_env_diagnostics(
                 &key.private_jwk_env,
                 key_id,
                 &key.kid,
+                &key.alg,
                 env_report,
             ));
         }
@@ -616,6 +617,7 @@ fn local_env_diagnostics(
                 &key.public_jwk_env,
                 key_id,
                 &key.kid,
+                &key.alg,
                 env_report,
             ));
         }
@@ -631,6 +633,7 @@ fn local_env_diagnostics(
                 &key.public_jwk_env,
                 key_id,
                 &key.kid,
+                &key.alg,
                 env_report,
             ));
         }
@@ -668,6 +671,7 @@ fn check_local_jwk_env(
     env: &str,
     key_id: &str,
     expected_kid: &str,
+    expected_alg: &str,
     env_report: &EnvFileReport,
 ) -> Diagnostic {
     match std::env::var(env) {
@@ -677,7 +681,11 @@ fn check_local_jwk_env(
                     if jwk.kid.as_deref().is_some_and(|kid| kid != expected_kid) {
                         return Err(registry_platform_crypto::JwkError::Invalid("kid mismatch"));
                     }
+                    if jwk.alg.as_deref().is_some_and(|alg| alg != expected_alg) {
+                        return Err(registry_platform_crypto::JwkError::Invalid("alg mismatch"));
+                    }
                     jwk.kid = Some(expected_kid.to_string());
+                    jwk.alg = Some(expected_alg.to_string());
                     Ok(jwk)
                 })
                 .map_err(|err| err.to_string())
@@ -698,6 +706,7 @@ fn check_public_jwk_env(
     env: &str,
     key_id: &str,
     expected_kid: &str,
+    expected_alg: &str,
     env_report: &EnvFileReport,
 ) -> Diagnostic {
     match std::env::var(env) {
@@ -705,6 +714,9 @@ fn check_public_jwk_env(
             let result = PublicJwk::parse(&value).and_then(|jwk| {
                 if jwk.kid.as_deref() != Some(expected_kid) {
                     return Err(registry_platform_crypto::JwkError::Invalid("kid mismatch"));
+                }
+                if jwk.alg.as_deref() != Some(expected_alg) {
+                    return Err(registry_platform_crypto::JwkError::Invalid("alg mismatch"));
                 }
                 Ok(jwk)
             });
@@ -1996,6 +2008,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
             &env,
             "hsm-key",
             "did:web:issuer.example#expected",
+            "EdDSA",
             &EnvFileReport::default(),
         );
         unsafe {
@@ -2004,6 +2017,73 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
 
         assert!(!diagnostic.ok);
         assert!(diagnostic.label.contains("kid mismatch"));
+    }
+
+    #[test]
+    fn public_jwk_diagnostic_rejects_missing_alg() {
+        let env = format!("TEST_REGISTRY_NOTARY_PUBLIC_JWK_{}", Ulid::new());
+        unsafe {
+            std::env::set_var(
+                &env,
+                json!({
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "11qYAYdkdABYXknkTDYUs_NflZt9-QJxBWpukhfQq8Q",
+                    "kid": "did:web:issuer.example#key-1"
+                })
+                .to_string(),
+            );
+        }
+
+        let diagnostic = check_public_jwk_env(
+            &env,
+            "hsm-key",
+            "did:web:issuer.example#key-1",
+            "EdDSA",
+            &EnvFileReport::default(),
+        );
+        unsafe {
+            std::env::remove_var(&env);
+        }
+
+        assert!(!diagnostic.ok);
+        assert!(diagnostic.label.contains("alg mismatch"));
+    }
+
+    #[test]
+    fn local_jwk_diagnostic_rejects_mismatched_alg() {
+        let env = format!("TEST_REGISTRY_NOTARY_PRIVATE_JWK_{}", Ulid::new());
+        unsafe {
+            std::env::set_var(
+                &env,
+                json!({
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
+                    "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+                    "alg": "RS256",
+                    "kid": "did:web:issuer.example#key-1"
+                })
+                .to_string(),
+            );
+        }
+
+        let diagnostic = check_local_jwk_env(
+            &env,
+            "issuer-key",
+            "did:web:issuer.example#key-1",
+            "EdDSA",
+            &EnvFileReport::default(),
+        );
+        unsafe {
+            std::env::remove_var(&env);
+        }
+
+        assert!(!diagnostic.ok);
+        assert!(
+            diagnostic.label.contains("alg mismatch")
+                || diagnostic.label.contains("usable local JWK")
+        );
     }
 
     #[cfg(unix)]

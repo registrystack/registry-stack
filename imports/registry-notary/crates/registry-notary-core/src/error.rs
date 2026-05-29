@@ -50,6 +50,8 @@ pub enum EvidenceError {
     PurposeRequired,
     #[error("credential is missing")]
     MissingCredential,
+    #[error("multiple authentication credentials were provided")]
+    MultipleCredentials,
     #[error("required scope is missing")]
     ScopeDenied { required: String },
     #[error("self-attestation request is denied")]
@@ -87,6 +89,7 @@ impl EvidenceError {
             Self::IdempotencyConflict => "idempotency.conflict",
             Self::PurposeRequired => "auth.purpose_required",
             Self::MissingCredential => "auth.missing_credential",
+            Self::MultipleCredentials => "auth.multiple_credentials",
             Self::ScopeDenied { .. } => "auth.scope_denied",
             Self::SelfAttestationDenied { .. } => "self_attestation.denied",
             Self::SelfAttestationRateLimited => "self_attestation.rate_limited",
