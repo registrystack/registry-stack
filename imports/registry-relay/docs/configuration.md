@@ -618,14 +618,14 @@ Only CRS84 is accepted. `wkt` and `wkb` parse as reserved geometry kinds but are
 
 ### Evidence Verification
 
-Evidence offerings expose Registry Witness discovery metadata:
+Evidence offerings expose Registry Notary discovery metadata:
 
 ```http
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
 ```
 
-Relay does not verify claims or evidence. `registry-witness` is the only claim/evidence verifier. The portable metadata manifest declares public offerings with `access.kind: registry-witness`, `endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the Witness service that owns verification.
+Relay does not verify claims or evidence. `registry-notary` is the only claim/evidence verifier. The portable metadata manifest declares public offerings with `access.kind: registry-notary`, `endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the Notary service that owns verification.
 
 ```yaml
 access:

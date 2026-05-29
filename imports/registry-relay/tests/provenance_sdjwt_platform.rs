@@ -101,7 +101,7 @@ fn holder_proof_lifetime_must_not_exceed_300s() {
 fn holder_proof_audience_must_equal_service_id() {
     let holder = holder_key();
     let mut payload = proof_payload("proof-wrong-aud");
-    payload["aud"] = json!("registry-witness");
+    payload["aud"] = json!("registry-notary");
     let proof = sign_holder_proof(&holder, payload);
 
     validate_holder_proof(
@@ -174,6 +174,8 @@ async fn issue_sdjwt(
             iat: NOW,
             exp: NOW + 600,
             vct: "https://relay.example/credentials/entity-record/v1".to_string(),
+            credential_id: None,
+            status: None,
             cnf: Some(HolderConfirmation {
                 jwk: holder.public(),
                 kid: Some("did:key:z6Mkholder#key-1".to_string()),

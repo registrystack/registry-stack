@@ -47,8 +47,8 @@ datasets:
         entity: facility
         lookup_keys: [id]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           ruleset: facility-identity-v1
         policy:
           purpose:
@@ -65,8 +65,8 @@ datasets:
         entity: facility
         lookup_keys: [region_code]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           ruleset: facility-region-v1
         policy:
           purpose:

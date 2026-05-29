@@ -260,7 +260,7 @@ GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/individual_name_evidence
 ```
 
-Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Evidence offerings are discovery records for Registry Witness. Relay publishes `access.kind: registry-witness` metadata with the advertised Witness endpoint or discovery URL; clients submit claims and evidence to Registry Witness, not Relay.
+Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Evidence offerings are discovery records for Registry Notary. Relay publishes `access.kind: registry-notary` metadata with the advertised Notary endpoint or discovery URL; clients submit claims and evidence to Registry Notary, not Relay.
 
 Aggregates are predeclared in config. Clients can list available aggregates and execute one by id:
 

@@ -8,7 +8,7 @@ Each persona gets a freshly generated raw key (32 random bytes, base64url-encode
 no padding) and a SHA-256 fingerprint of that key. The fingerprint is what goes
 in the registry-relay config's hash_env; the raw key is what Bruno sends as Bearer.
 
-The script also emits a local Ed25519 JWK for the focused Registry Witness
+The script also emits a local Ed25519 JWK for the focused Registry Notary
 demo issuer.
 
 Re-running always generates fresh keys. Old keys are not preserved.
@@ -49,7 +49,7 @@ BRUNO_VAR_MAP = {
 # (PERSONA_RAW) here so one rotation seeds both consumers.
 BRUNO_ENV_PATH = Path("bruno/registry-relay-demo/.env")
 
-FALLBACK_REGISTRY_WITNESS_ISSUER_JWK = {
+FALLBACK_REGISTRY_NOTARY_ISSUER_JWK = {
     "kty": "OKP",
     "crv": "Ed25519",
     "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
@@ -69,7 +69,7 @@ def generate_audit_hash_secret() -> str:
     return secrets.token_urlsafe(48)
 
 
-def generate_registry_witness_issuer_jwk() -> str:
+def generate_registry_notary_issuer_jwk() -> str:
     """Return a private Ed25519 JWK for local SD-JWT VC issuance demos."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -95,7 +95,7 @@ def generate_registry_witness_issuer_jwk() -> str:
                 "alg": "EdDSA",
             }
     except Exception:
-        jwk = FALLBACK_REGISTRY_WITNESS_ISSUER_JWK
+        jwk = FALLBACK_REGISTRY_NOTARY_ISSUER_JWK
     return json.dumps(jwk, separators=(",", ":"))
 
 
@@ -154,7 +154,7 @@ def self_verify(pairs: list[tuple[str, str, str]]) -> None:
 def format_export_block(
     pairs: list[tuple[str, str, str]],
     audit_hash_secret: str,
-    registry_witness_issuer_jwk: str,
+    registry_notary_issuer_jwk: str,
 ) -> str:
     lines = []
     for persona, raw, fingerprint in pairs:
@@ -162,7 +162,7 @@ def format_export_block(
         lines.append(f"export {var}_RAW='{raw}'")
         lines.append(f"export {var}_HASH='{fingerprint}'")
     lines.append(f"export REGISTRY_RELAY_AUDIT_HASH_SECRET='{audit_hash_secret}'")
-    lines.append(f"export REGISTRY_WITNESS_ISSUER_JWK='{registry_witness_issuer_jwk}'")
+    lines.append(f"export REGISTRY_NOTARY_ISSUER_JWK='{registry_notary_issuer_jwk}'")
     return "\n".join(lines) + "\n"
 
 
@@ -209,7 +209,7 @@ def main() -> int:
         pairs = generate_pairs()
         self_verify(pairs)
         audit_hash_secret = generate_audit_hash_secret()
-        registry_witness_issuer_jwk = generate_registry_witness_issuer_jwk()
+        registry_notary_issuer_jwk = generate_registry_notary_issuer_jwk()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -217,7 +217,7 @@ def main() -> int:
     export_block = format_export_block(
         pairs,
         audit_hash_secret,
-        registry_witness_issuer_jwk,
+        registry_notary_issuer_jwk,
     )
     bruno_env_block = format_bruno_env_block(pairs)
 
@@ -226,7 +226,7 @@ def main() -> int:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(export_block, encoding="utf-8")
         print(
-            f"wrote {len(pairs)} key pairs, audit hash secret, and Registry Witness issuer JWK to {dest}",
+            f"wrote {len(pairs)} key pairs, audit hash secret, and Registry Notary issuer JWK to {dest}",
             file=sys.stderr,
         )
 

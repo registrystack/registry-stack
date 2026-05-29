@@ -135,7 +135,7 @@ capable hardware; skips must be noted in the report with machine specs and reaso
 ## Criterion Microbenchmarks
 
 Relay no longer includes an internal claim/evidence verifier benchmark. Registry
-Witness owns claim evaluation, evidence rendering, and credential issuance
+Notary owns claim evaluation, evidence rendering, and credential issuance
 benchmarks.
 
 ---

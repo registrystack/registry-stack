@@ -1,9 +1,9 @@
 # Decentralized Evidence Demo Spec
 
 Status: historical planning document. The current implementation and demo
-wording use Registry Witness as the external claim and evidence service. Treat
+wording use Registry Notary as the external claim and evidence service. Treat
 older "Evidence Server" wording below as pre-rename architecture notes unless a
-current demo README or Registry Witness contract says otherwise.
+current demo README or Registry Notary contract says otherwise.
 
 ## Purpose
 
@@ -317,7 +317,7 @@ Implementation preference:
 - Python standard library, following the existing narrated demo style.
 - Reuse the existing demo helpers where practical:
   `demo/scripts/generate_demo_keys.py` for hashed key generation patterns and
-  `demo/scripts/registry_witness_demo.py` for narrated HTTP flow patterns.
+  `demo/scripts/registry_notary_demo.py` for narrated HTTP flow patterns.
 - Do not duplicate key hashing logic when it can be imported or factored into a
   small shared helper.
 
@@ -397,7 +397,7 @@ registry-relay/
 Add Evidence Server container support in the sibling repository:
 
 ```text
-registry-witness/
+registry-notary/
   Dockerfile
   .dockerignore
 ```
@@ -422,7 +422,7 @@ existing runtime base-image pattern instead of adding a floating ad hoc image.
 `compose.yaml` must:
 
 - build `registry-relay:demo` from `Dockerfile.demo`;
-- build `registry-witness:demo` from `../../../registry-witness`;
+- build `registry-notary:demo` from `../../../registry-notary`;
 - run `static-metadata-publisher` from the generated static metadata directory;
 - support linux/amd64 and linux/arm64 without a `platform:` pin;
 - expose stable localhost ports for manual inspection;
@@ -643,19 +643,19 @@ Each Relay metadata manifest must advertise:
 - entity schemas;
 - evidence offerings;
 - policy metadata where relevant;
-- Registry Witness endpoint and discovery URL for external offerings.
+- Registry Notary endpoint and discovery URL for external offerings.
 
 Static metadata publication is required in v1:
 
 - generate a static bundle before or during Compose startup;
 - serve the bundle from `static-metadata-publisher`;
 - include evidence offerings and policy metadata;
-- the demo client must discover at least one Registry Witness endpoint from the
+- the demo client must discover at least one Registry Notary endpoint from the
   static metadata bundle, not only from Relay-hosted metadata.
 
-For external Registry Witness offerings:
+For external Registry Notary offerings:
 
-- `access.kind` must be `registry-witness`;
+- `access.kind` must be `registry-notary`;
 - Relay metadata may advertise endpoint and discovery URLs;
 - Relay must not execute the offering locally.
 
@@ -992,7 +992,7 @@ Deliver:
 
 Validation:
 
-- `cargo test -p registry-witness-server --test decentralized_cross_source_cel --all-features`;
+- `cargo test -p registry-notary-server --test decentralized_cross_source_cel --all-features`;
 - each Evidence Server lists claims;
 - each Evidence Server evaluates at least one claim;
 - shared Evidence Server calls at least two Relay sources using distinct source
@@ -1134,10 +1134,10 @@ The demo is done when all of the following are true:
   not real OpenCRVS, OpenSPP, DHIS2, OpenIMIS, or other product integrations.
 - `cargo test --test decentralized_demo_configs_load --features spdci-api-standards,standards-cel-mapping` passes in `registry-relay`.
 - `cargo test --test demo_configs_load --features spdci-api-standards,standards-cel-mapping` passes in `registry-relay`.
-- `cargo test -p registry-witness-server --test decentralized_cross_source_cel --all-features` passes in `registry-witness`.
-- `cargo test -p registry-witness-server --all-features` passes in `registry-witness`.
+- `cargo test -p registry-notary-server --test decentralized_cross_source_cel --all-features` passes in `registry-notary`.
+- `cargo test -p registry-notary-server --all-features` passes in `registry-notary`.
 - `cargo fmt --all -- --check` passes in `registry-relay`.
-- `cargo fmt --all -- --check` passes in `registry-witness`.
+- `cargo fmt --all -- --check` passes in `registry-notary`.
 - `git diff --check` passes in both repositories.
 
 ## Verification Commands
@@ -1157,10 +1157,10 @@ git diff --check
 ```
 
 ```bash
-cd /Users/jeremi/Projects/204-programs-delivery-commons/apps/registry-witness
+cd /path/to/registry-notary
 cargo fmt --all -- --check
-cargo test -p registry-witness-server --test decentralized_cross_source_cel --all-features
-cargo test -p registry-witness-server --all-features
+cargo test -p registry-notary-server --test decentralized_cross_source_cel --all-features
+cargo test -p registry-notary-server --all-features
 cargo build --workspace --all-features
 git diff --check
 ```

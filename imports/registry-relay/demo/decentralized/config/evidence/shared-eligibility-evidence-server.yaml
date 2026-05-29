@@ -41,7 +41,7 @@ evidence:
     combined_support_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:shared-eligibility-evidence.demo.example
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       issuer_kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
       vct: https://demo.example/credentials/combined-support-eligibility/v1
       validity_seconds: 86400
@@ -98,7 +98,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: social-program-active
       title: Social program active
       version: 2026-05
@@ -134,7 +134,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: health-service-available
       title: Health service available
       version: 2026-05
@@ -178,7 +178,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: eligible-for-combined-support
       title: Eligible for combined support
       version: 2026-05
@@ -215,7 +215,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - combined_support_sd_jwt

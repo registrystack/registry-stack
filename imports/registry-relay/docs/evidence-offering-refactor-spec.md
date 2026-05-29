@@ -2,7 +2,7 @@
 
 Status: historical draft. The implemented Relay contract now publishes
 evidence-offering metadata only and delegates claim/evidence execution to
-Registry Witness. See [evidence-verification.md](evidence-verification.md) and
+Registry Notary. See [evidence-verification.md](evidence-verification.md) and
 [api.md](api.md) for the current behavior.
 
 This document specifies a refactor that makes Registry Relay simpler and more

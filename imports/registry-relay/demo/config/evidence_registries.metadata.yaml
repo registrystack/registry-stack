@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# Portable metadata manifest for the focused Registry Witness demo.
+# Portable metadata manifest for the focused Registry Notary demo.
 
 schema_version: registry-manifest/v1
 catalog:
-  id: registry-witness-demo
+  id: registry-notary-demo
   base_url: http://127.0.0.1:4255
-  title: Registry Witness Demo
+  title: Registry Notary Demo
   publisher:
     name: Government Data Reuse Cell (Demo)
   standards:
@@ -96,8 +96,8 @@ datasets:
         lookup_keys:
           - national_id
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: http://127.0.0.1:4255
           discovery_url: http://127.0.0.1:4255/.well-known/evidence-service
           ruleset: farmer-under-4ha-v1
@@ -143,4 +143,4 @@ datasets:
             required: true
 vocabularies:
   spdci: https://schema.spdci.org/
-  registry-witness: https://registry-relay.dev/registry-witness/
+  registry-notary: https://registry-relay.dev/registry-notary/

@@ -95,10 +95,10 @@ datasets:
         entity: individual
         lookup_keys: [given_name]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: https://evidence.example.test/individual-name
-          discovery_url: https://evidence.example.test/.well-known/registry-witness
+          discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: exact-name
         policy:
           purpose:
@@ -115,10 +115,10 @@ datasets:
         entity: individual
         lookup_keys: [given_name]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: https://evidence.example.test/individual-targeted-name
-          discovery_url: https://evidence.example.test/.well-known/registry-witness
+          discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: exact-name-targeted
       - id: individual_alternate_name_evidence
         iri: https://data.example.test/evidence-offerings/individual-alternate-name
@@ -132,10 +132,10 @@ datasets:
         entity: individual
         lookup_keys: [given_name]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: https://evidence.example.test/individual-alternate-name
-          discovery_url: https://evidence.example.test/.well-known/registry-witness
+          discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: exact-name
       - id: individual_hidden_name_evidence
         iri: https://data.example.test/evidence-offerings/individual-hidden-name
@@ -149,10 +149,10 @@ datasets:
         entity: individual
         lookup_keys: [given_name]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: https://evidence.example.test/individual-hidden-name
-          discovery_url: https://evidence.example.test/.well-known/registry-witness
+          discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: hidden-name
       - id: external_individual_name_evidence
         iri: https://data.example.test/evidence-offerings/external-individual-name
@@ -166,8 +166,8 @@ datasets:
         entity: individual
         lookup_keys: [given_name]
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: https://evidence.example.test
           discovery_url: https://evidence.example.test/.well-known/evidence-service
           ruleset: exact-name
@@ -1143,7 +1143,7 @@ async fn metadata_evidence_offerings_are_private_filterable_and_scope_limited() 
         .iter()
         .any(
             |offering| offering["id"] == "external_individual_name_evidence"
-                && offering["access"]["kind"] == "registry-witness"
+                && offering["access"]["kind"] == "registry-notary"
         ));
 
     let empty = server.get("/metadata/evidence-offerings?country=NO").await;

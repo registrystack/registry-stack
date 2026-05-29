@@ -207,13 +207,13 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FieldMissing);
                 }
             }
-            if offering.access.kind != "registry-witness" {
+            if offering.access.kind != "registry-notary" {
                 tracing::error!(
                     code = "runtime.binding.unsupported_evidence_offering",
                     dataset_id = %dataset.id,
                     offering = %offering.id,
                     access_kind = %offering.access.kind,
-                    "Registry Relay only supports external Registry Witness evidence offerings"
+                    "Registry Relay only supports external Registry Notary evidence offerings"
                 );
                 return Err(RuntimeBindingError::UnsupportedEvidenceOffering);
             }

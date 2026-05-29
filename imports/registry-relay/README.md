@@ -30,8 +30,8 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 - [docs/metadata.md](docs/metadata.md): portable metadata manifests, static publication, and `/metadata/*` routes.
 - [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md): standards evidence,
   Registry Relay publication choices, and downstream interpretation boundaries.
-- [docs/evidence-verification.md](docs/evidence-verification.md): Registry Witness discovery notes.
-- [registry-witness](https://github.com/jeremi/registry-witness): standalone Registry Witness
+- [docs/evidence-verification.md](docs/evidence-verification.md): Registry Notary discovery notes.
+- [registry-notary](https://github.com/jeremi/registry-notary): standalone Registry Notary
   workspace for registry-backed claim evaluation, rendering, and credential
   issuance.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
@@ -65,7 +65,7 @@ Coverage metrics use `cargo-llvm-cov`; see [docs/development.md#coverage-metrics
 
 ## Metadata Manifests
 
-Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or Relay runtime backend URLs. Evidence offerings may declare standards-facing service `endpoint_url` and `discovery_url` values when the offering is fulfilled by Registry Witness.
+Portable metadata lives in `metadata.yaml` manifests. Runtime config binds those logical datasets, entities, and fields to live sources. Metadata manifests must not contain tables, columns, source paths, scopes, or Relay runtime backend URLs. Evidence offerings may declare standards-facing service `endpoint_url` and `discovery_url` values when the offering is fulfilled by Registry Notary.
 
 Use this split when you want standards-facing metadata that can outlive Registry Relay itself. A civil registration application, a social benefits application, or another registry system can validate and publish the same manifest through static files without adopting Relay's runtime API. The checked-in app profiles are hypothetical examples; real OpenCRVS, OpenSPP, PublicSchema, or SP DCI profiles should be added only after review with the relevant project artifacts or maintainers.
 
@@ -234,8 +234,8 @@ Disability Registry-specific: `{registry}` must resolve to a registry entry
 whose dataset/entity match `standards.spdci.disability_registry`.
 
 Evidence offerings are discovery records only. Relay publishes offerings whose
-metadata declares `access.kind: registry-witness`; clients call the advertised
-Registry Witness endpoint directly for claim and evidence verification.
+metadata declares `access.kind: registry-notary`; clients call the advertised
+Registry Notary endpoint directly for claim and evidence verification.
 
 Storage table ids do not appear in these paths. Filters are allowed only when declared under the entity's `api.allowed_filters`. Arbitrary SQL is not exposed.
 

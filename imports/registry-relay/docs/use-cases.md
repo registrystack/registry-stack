@@ -9,7 +9,7 @@ metadata, aggregates, provenance, audit, and operational controls.
 
 Evidence verification and credential issuance are intentionally not part of this
 core set. Registry Relay may publish evidence offerings for discovery, but
-Registry Witness is the home for claim evaluation, disclosure policy,
+Registry Notary is the home for claim evaluation, disclosure policy,
 attestations, and credential issuance.
 
 ## 1. Registry Operator Turns A Spreadsheet Into A Protected Registry API

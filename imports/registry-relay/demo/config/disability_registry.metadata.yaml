@@ -109,8 +109,8 @@ datasets:
     lookup_keys:
     - member_identifier
     access:
-      kind: registry-witness
-      conforms_to: registry_relay:registry-witness-v1
+      kind: registry-notary
+      conforms_to: registry_relay:registry-notary-v1
       ruleset: disability-status-v1
     policy:
       purpose:
@@ -255,8 +255,8 @@ datasets:
     lookup_keys:
     - group_id
     access:
-      kind: registry-witness
-      conforms_to: registry_relay:registry-witness-v1
+      kind: registry-notary
+      conforms_to: registry_relay:registry-notary-v1
       ruleset: social-group-v1
     policy:
       purpose:
@@ -370,8 +370,8 @@ datasets:
     lookup_keys:
     - national_id
     access:
-      kind: registry-witness
-      conforms_to: registry_relay:registry-witness-v1
+      kind: registry-notary
+      conforms_to: registry_relay:registry-notary-v1
       ruleset: farmer-status-v1
     policy:
       purpose:

@@ -67,8 +67,8 @@ datasets:
     lookup_keys:
     - id
     access:
-      kind: registry-witness
-      conforms_to: registry_relay:registry-witness-v1
+      kind: registry-notary
+      conforms_to: registry_relay:registry-notary-v1
       ruleset: benefits-person-v1
     policy:
       purpose:
@@ -505,8 +505,8 @@ datasets:
     lookup_keys:
     - id
     access:
-      kind: registry-witness
-      conforms_to: registry_relay:registry-witness-v1
+      kind: registry-notary
+      conforms_to: registry_relay:registry-notary-v1
       ruleset: education-student-v1
     policy:
       purpose:

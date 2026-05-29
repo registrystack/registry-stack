@@ -54,7 +54,7 @@ OPENAPI_WORDS = {
     "aggregate": ["List aggregates", "Run aggregate"],
     "rows": ["List records", "Get record", "Get relationship"],
     "verify": [],
-    "evidence_verification": ["Discover Registry Witness offerings"],
+    "evidence_verification": ["Discover Registry Notary offerings"],
     "admin": ["Admin operation"],
 }
 

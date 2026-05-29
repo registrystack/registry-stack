@@ -54,7 +54,7 @@ The metadata manifest keeps standard-facing semantics:
 Metadata manifests must not contain runtime-only details such as source paths,
 table ids, physical columns, auth scopes, Relay runtime backend URLs, or SQL.
 Evidence offerings may still declare standards-facing `endpoint_url` and
-`discovery_url` values when the offering points to Registry Witness.
+`discovery_url` values when the offering points to Registry Notary.
 
 ## Minimal Manifest
 

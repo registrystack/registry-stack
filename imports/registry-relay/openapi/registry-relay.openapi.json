@@ -30,7 +30,7 @@
     { "name": "Aggregates", "description": "Pre-declared aggregate discovery and execution. Disclosure control is per-aggregate configuration. Indicator and dimension discovery routes are dataset-scoped and generated from the aggregate declarations: reused identifiers are merged into single records with `queryable_via` links. CSV output is available via `?f=csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel=\"describedby\"` to aggregate metadata. When built with `ogcapi-edr`, configured `admin_area` aggregates are also exposed as OGC EDR `/area` collections." },
     { "name": "Metadata", "description": "Standards-facing metadata: catalog JSON, DCAT, BRegDCAT-AP, SHACL, JSON Schema, OGC Records bodies, dataset-scoped metadata. Filtered to the caller's metadata scopes." },
     { "name": "Policies", "description": "ODRL access-policy documents." },
-    { "name": "Evidence offerings", "description": "Discovery records for Registry Witness. Relay publishes the metadata; claims and evidence are submitted to Registry Witness, not Relay." },
+    { "name": "Evidence offerings", "description": "Discovery records for Registry Notary. Relay publishes the metadata; claims and evidence are submitted to Registry Notary, not Relay." },
     { "name": "OpenAPI", "description": "The auth-gated, metadata-filtered OpenAPI document for the running instance. Use this abstract document for the contract; fetch `/openapi.json` from a running gateway for the instance shape." },
     { "name": "OGC API Features", "description": "Read-only GeoJSON Features over entities configured with a `spatial` block. Available only when the gateway is built with the `ogcapi-features` feature." },
     { "name": "OGC API Records", "description": "Metadata-only catalog view conforming to OGC API - Records. The initial collection is `datasets`; each item describes a visible `dcat:Dataset`. Available only when built with the `ogcapi-records` feature." },
@@ -505,7 +505,7 @@
       "get": {
         "operationId": "get_evidence_offering",
         "summary": "Get one evidence offering",
-        "description": "Returns one evidence-offering discovery record. Submitting claims and evidence is handled by Registry Witness, not by Relay.",
+        "description": "Returns one evidence-offering discovery record. Submitting claims and evidence is handled by Registry Notary, not by Relay.",
         "tags": ["Evidence offerings"],
         "responses": {
           "200": {
@@ -1764,7 +1764,7 @@
       },
       "EvidenceOffering": {
         "type": "object",
-        "description": "One evidence-offering discovery record. Each offering points at a Registry Witness endpoint (`access.kind: registry-witness`) that performs the actual evidence check.",
+        "description": "One evidence-offering discovery record. Each offering points at a Registry Notary endpoint (`access.kind: registry-notary`) that performs the actual evidence check.",
         "additionalProperties": true,
         "properties": {
           "id": { "type": "string" },
@@ -1773,7 +1773,7 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "kind": { "type": "string", "examples": ["registry-witness"] },
+              "kind": { "type": "string", "examples": ["registry-notary"] },
               "endpoint": { "type": "string", "format": "uri" }
             }
           }

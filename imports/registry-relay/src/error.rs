@@ -1144,7 +1144,7 @@ impl RuntimeBindingError {
                 "runtime relationship binding is absent from the metadata manifest"
             }
             RuntimeBindingError::UnsupportedEvidenceOffering => {
-                "only external Registry Witness evidence offerings are supported"
+                "only external Registry Notary evidence offerings are supported"
             }
         }
     }

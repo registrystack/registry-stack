@@ -18,7 +18,7 @@ sys.path.insert(0, str(RELAY_ROOT / "demo/scripts"))
 
 from generate_demo_keys import (  # noqa: E402
     generate_audit_hash_secret,
-    generate_registry_witness_issuer_jwk,
+    generate_registry_notary_issuer_jwk,
     generate_raw_key,
 )
 
@@ -61,10 +61,10 @@ def env_line(key: str, value: str) -> str:
 
 
 def generate_env() -> dict[str, str]:
-    issuer_jwk = generate_registry_witness_issuer_jwk()
+    issuer_jwk = generate_registry_notary_issuer_jwk()
     values: dict[str, str] = {
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_audit_hash_secret(),
-        "REGISTRY_WITNESS_ISSUER_JWK": issuer_jwk,
+        "REGISTRY_NOTARY_ISSUER_JWK": issuer_jwk,
         "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
         "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
@@ -120,7 +120,7 @@ def main() -> int:
         summary = {
             "raw_token_variables": sorted(k for k in values if k.endswith(("_RAW", "_TOKEN", "_BEARER"))),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
-            "issuer_jwk": "REGISTRY_WITNESS_ISSUER_JWK",
+            "issuer_jwk": "REGISTRY_NOTARY_ISSUER_JWK",
             "audit_hash_secret": "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         }
         print(json.dumps(summary, indent=2, sort_keys=True))

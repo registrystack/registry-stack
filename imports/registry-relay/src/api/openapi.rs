@@ -1822,14 +1822,14 @@ fn evidence_offering_list_example() -> Value {
 fn evidence_offering_example() -> Value {
     json!({
         "access": {
-            "conforms_to": "https://demo.example.gov/standards/registry-witness/evidence-v1",
-            "discovery_url": "https://witness.demo.example.gov/.well-known/registry-witness",
-            "endpoint_url": "https://witness.demo.example.gov/evidence-offerings/benefits-person/verifications",
-            "kind": "registry-witness",
+            "conforms_to": "https://demo.example.gov/standards/registry-notary/evidence-v1",
+            "discovery_url": "https://notary.demo.example.gov/.well-known/registry-notary",
+            "endpoint_url": "https://notary.demo.example.gov/evidence-offerings/benefits-person/verifications",
+            "kind": "registry-notary",
             "ruleset": "benefits-person-v1",
         },
         "dataset_id": "benefits_casework",
-        "description": "Registry Witness verification for submitted benefits person eligibility status and role facts.",
+        "description": "Registry Notary verification for submitted benefits person eligibility status and role facts.",
         "entity": "person",
         "evidence_type": {
             "id": "benefits_person_record_evidence",
@@ -2418,7 +2418,7 @@ fn evidence_offering_schema() -> Value {
                 "type": "object",
                 "required": ["kind", "ruleset"],
                 "properties": {
-                    "kind": { "type": "string", "enum": ["registry-witness"] },
+                    "kind": { "type": "string", "enum": ["registry-notary"] },
                     "conforms_to": { "type": ["string", "null"], "format": "uri" },
                     "endpoint_url": { "type": ["string", "null"], "format": "uri" },
                     "discovery_url": { "type": ["string", "null"], "format": "uri" },
@@ -4156,7 +4156,7 @@ mod tests {
 
         assert_eq!(
             schemas["EvidenceOffering"]["properties"]["access"]["properties"]["kind"]["enum"],
-            json!(["registry-witness"])
+            json!(["registry-notary"])
         );
     }
 

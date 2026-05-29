@@ -52,8 +52,8 @@ datasets:
         lookup_keys:
           - national_id
         access:
-          kind: registry-witness
-          conforms_to: registry_relay:registry-witness-v1
+          kind: registry-notary
+          conforms_to: registry_relay:registry-notary-v1
           endpoint_url: http://social-protection-evidence-server:8080
           discovery_url: http://social-protection-evidence-server:8080/.well-known/evidence-service
           ruleset: program-enrollment-status-v1
