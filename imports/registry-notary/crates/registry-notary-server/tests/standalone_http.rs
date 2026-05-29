@@ -227,6 +227,7 @@ fn config(
       dci:
         search_path: /dci/fr/registry/sync/search
         query_type: idtype-value
+        registry_event_type: birth
         receiver_id: upstream-registry
         signature: ""
         records_path: /message/search_response/0/data/reg_records
@@ -2177,6 +2178,10 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
         .await;
     issue.assert_status_ok();
     let issue_body: Value = issue.json();
+    assert_eq!(
+        issue_body["credential_profile"],
+        json!("civil_status_sd_jwt")
+    );
     let credential_id = issue_body["credential_id"]
         .as_str()
         .expect("credential id returned");
@@ -2961,6 +2966,14 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     assert_eq!(
         observed["message"]["search_request"][0]["search_criteria"]["query_type"],
         "idtype-value"
+    );
+    assert_eq!(
+        observed["message"]["search_request"][0]["search_criteria"]["reg_event_type"],
+        "birth"
+    );
+    assert_eq!(
+        observed["message"]["search_request"][0]["search_criteria"]["pagination"]["page_number"],
+        1
     );
     assert_eq!(
         observed["message"]["search_request"][0]["search_criteria"]["query"]["type"],

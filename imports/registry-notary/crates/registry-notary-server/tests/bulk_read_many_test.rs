@@ -594,10 +594,15 @@ async fn dci_bulk_collapses_100_subjects_into_one_search_post() {
         .pointer("/search_criteria/pagination/page_size")
         .and_then(Value::as_u64)
         .expect("page_size present");
+    let page_number = entries[0]
+        .pointer("/search_criteria/pagination/page_number")
+        .and_then(Value::as_u64)
+        .expect("page_number present");
     assert!(
         page_size >= 100,
         "page_size {page_size} should be >= batch size",
     );
+    assert_eq!(page_number, 1);
     let mut ref_ids: Vec<&str> = entries
         .iter()
         .map(|e| {

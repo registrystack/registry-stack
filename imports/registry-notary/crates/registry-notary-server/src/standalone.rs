@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{OnceCell, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
@@ -23,10 +23,10 @@ use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
     EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal,
-    Hashed, PrincipalIdentifier, RateLimitBucket, SelfAttestationAssuranceClaimSource,
-    SelfAttestationClaimSource, SelfAttestationDenialCode, SourceBindingConfig,
-    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest,
-    VerifiedClaimName, VerifiedClaimValue,
+    Hashed, Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
+    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
+    SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind,
+    StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState, JsonlFileSink,
@@ -301,6 +301,8 @@ pub enum StandaloneServerError {
     InvalidCredentialHash(String, #[source] FingerprintFormatError),
     #[error("configured source token environment variable is missing or empty: {0}")]
     MissingSourceTokenEnv(String),
+    #[error("invalid source auth configuration: {0}")]
+    InvalidSourceAuth(String),
     #[error("credential issuer environment variable is missing or invalid: {0}")]
     InvalidIssuerEnv(String),
     #[error("federation secret environment variable is missing or empty: {0}")]
@@ -335,7 +337,7 @@ pub enum StandaloneServerError {
 struct ResolvedEvidenceSourceConnection {
     id: String,
     base_url: String,
-    bearer_token: String,
+    auth: SourceAuthRuntime,
     fetch_url_policy: FetchUrlPolicy,
     dci: DciSourceConnectionConfig,
     /// Process-global cap on concurrent outbound calls to this connection.
@@ -352,12 +354,200 @@ struct ResolvedEvidenceSourceConnection {
     bulk_timeout_max: Duration,
 }
 
+#[derive(Clone)]
+enum SourceAuthRuntime {
+    StaticBearer(Arc<str>),
+    Oauth2ClientCredentials(Arc<Oauth2ClientCredentialsRuntime>),
+}
+
+impl std::fmt::Debug for SourceAuthRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceAuthRuntime::StaticBearer(_) => f.write_str("StaticBearer(<redacted>)"),
+            SourceAuthRuntime::Oauth2ClientCredentials(_) => {
+                f.write_str("Oauth2ClientCredentials(<redacted>)")
+            }
+        }
+    }
+}
+
+struct Oauth2ClientCredentialsRuntime {
+    token_url: reqwest::Url,
+    client_id: String,
+    client_secret: String,
+    request_format: String,
+    scope: String,
+    refresh_skew: Duration,
+    cache: Mutex<Option<CachedSourceToken>>,
+}
+
+impl std::fmt::Debug for Oauth2ClientCredentialsRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Oauth2ClientCredentialsRuntime")
+            .field("token_url", &self.token_url)
+            .field("client_id", &"<redacted>")
+            .field("client_secret", &"<redacted>")
+            .field("request_format", &self.request_format)
+            .field("scope", &self.scope)
+            .field("refresh_skew", &self.refresh_skew)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedSourceToken {
+    access_token: String,
+    refresh_after: Instant,
+}
+
+impl SourceAuthRuntime {
+    async fn bearer_token(
+        &self,
+        client: &reqwest::Client,
+        fetch_url_policy: &FetchUrlPolicy,
+        force_refresh: bool,
+    ) -> Result<String, EvidenceError> {
+        match self {
+            SourceAuthRuntime::StaticBearer(token) => Ok(token.to_string()),
+            SourceAuthRuntime::Oauth2ClientCredentials(runtime) => {
+                runtime
+                    .bearer_token(client, fetch_url_policy, force_refresh)
+                    .await
+            }
+        }
+    }
+
+    fn can_refresh(&self) -> bool {
+        matches!(self, SourceAuthRuntime::Oauth2ClientCredentials(_))
+    }
+}
+
+impl Oauth2ClientCredentialsRuntime {
+    async fn bearer_token(
+        &self,
+        client: &reqwest::Client,
+        fetch_url_policy: &FetchUrlPolicy,
+        force_refresh: bool,
+    ) -> Result<String, EvidenceError> {
+        let mut cache = self.cache.lock().await;
+        let now = Instant::now();
+        if !force_refresh {
+            if let Some(token) = cache.as_ref() {
+                if token.refresh_after > now {
+                    return Ok(token.access_token.clone());
+                }
+            }
+        }
+        let token = self.fetch_token(client, fetch_url_policy).await?;
+        let access_token = token.access_token.clone();
+        *cache = Some(token);
+        Ok(access_token)
+    }
+
+    async fn fetch_token(
+        &self,
+        client: &reqwest::Client,
+        fetch_url_policy: &FetchUrlPolicy,
+    ) -> Result<CachedSourceToken, EvidenceError> {
+        if let Err(error) = fetch_url_policy.validate(&self.token_url) {
+            tracing::warn!(
+                target: "registry_notary_server::outbound",
+                scheme = self.token_url.scheme(),
+                host = self.token_url.host_str().unwrap_or("<missing>"),
+                error = %error,
+                "source OAuth token URL rejected by fetch policy",
+            );
+            return Err(EvidenceError::SourceUnavailable);
+        }
+        let mut request = client
+            .post(self.token_url.clone())
+            .timeout(SOURCE_REQUEST_TIMEOUT)
+            .header("accept", "application/json");
+        let mut params = BTreeMap::new();
+        params.insert("grant_type", "client_credentials");
+        params.insert("client_id", self.client_id.as_str());
+        params.insert("client_secret", self.client_secret.as_str());
+        if !self.scope.trim().is_empty() {
+            params.insert("scope", self.scope.as_str());
+        }
+        request = match self.request_format.as_str() {
+            "json" => request.json(&params),
+            "form" => request.form(&params),
+            _ => return Err(EvidenceError::SourceUnavailable),
+        };
+        let response = request.send().await.map_err(|error| {
+            tracing::error!(
+                target: "registry_notary_server::outbound",
+                scheme = self.token_url.scheme(),
+                host = self.token_url.host_str().unwrap_or("<missing>"),
+                path = self.token_url.path(),
+                error = %error,
+                "source OAuth token request failed",
+            );
+            EvidenceError::SourceUnavailable
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            tracing::error!(
+                target: "registry_notary_server::outbound",
+                scheme = self.token_url.scheme(),
+                host = self.token_url.host_str().unwrap_or("<missing>"),
+                path = self.token_url.path(),
+                status = %status,
+                "source OAuth token endpoint returned error status",
+            );
+            return Err(EvidenceError::SourceUnavailable);
+        }
+        let body = match read_source_json(response).await {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::error!(
+                    target: "registry_notary_server::outbound",
+                    scheme = self.token_url.scheme(),
+                    host = self.token_url.host_str().unwrap_or("<missing>"),
+                    path = self.token_url.path(),
+                    "source OAuth token response could not be parsed",
+                );
+                return Err(error);
+            }
+        };
+        let access_token = body
+            .get("access_token")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| {
+                tracing::error!(
+                    target: "registry_notary_server::outbound",
+                    scheme = self.token_url.scheme(),
+                    host = self.token_url.host_str().unwrap_or("<missing>"),
+                    path = self.token_url.path(),
+                    "source OAuth token response was missing access_token",
+                );
+                EvidenceError::SourceUnavailable
+            })?
+            .to_string();
+        let expires_in = body
+            .get("expires_in")
+            .and_then(Value::as_u64)
+            .unwrap_or(300);
+        let ttl = Duration::from_secs(expires_in);
+        let refresh_after = Instant::now()
+            + ttl
+                .checked_sub(self.refresh_skew)
+                .unwrap_or_else(|| Duration::from_secs(0));
+        Ok(CachedSourceToken {
+            access_token,
+            refresh_after,
+        })
+    }
+}
+
 impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedEvidenceSourceConnection")
             .field("id", &self.id)
             .field("base_url", &self.base_url)
-            .field("bearer_token", &"<redacted>")
+            .field("auth", &self.auth)
             .field("fetch_url_policy", &self.fetch_url_policy)
             .field("dci", &self.dci)
             .field("max_in_flight", &self.max_in_flight)
@@ -383,20 +573,15 @@ impl HttpEvidenceSources {
     ) -> Result<Self, StandaloneServerError> {
         let mut source_connections = BTreeMap::new();
         for (id, connection) in &config.source_connections {
-            let bearer_token = env::var(&connection.token_env)
-                .ok()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    StandaloneServerError::MissingSourceTokenEnv(connection.token_env.clone())
-                })?;
+            let auth = resolve_source_auth(connection)?;
             source_connections.insert(
                 id.clone(),
                 ResolvedEvidenceSourceConnection {
                     id: id.clone(),
                     base_url: connection.base_url.clone(),
-                    bearer_token,
+                    auth,
                     fetch_url_policy: source_fetch_url_policy(connection),
-                    dci: connection.dci.clone(),
+                    dci: connection.effective_dci()?,
                     semaphore: Arc::new(Semaphore::new(connection.max_in_flight)),
                     max_in_flight: connection.max_in_flight,
                     retry_on_5xx: connection.retry_on_5xx,
@@ -426,6 +611,57 @@ impl HttpEvidenceSources {
             .as_deref()
             .and_then(|connection| self.source_connections.get(connection))
     }
+}
+
+fn resolve_source_auth(
+    connection: &SourceConnectionConfig,
+) -> Result<SourceAuthRuntime, StandaloneServerError> {
+    if let Some(source_auth) = &connection.source_auth {
+        return match source_auth {
+            SourceAuthConfig::Oauth2ClientCredentials(config) => {
+                Ok(SourceAuthRuntime::Oauth2ClientCredentials(Arc::new(
+                    resolve_oauth_source_auth(config)?,
+                )))
+            }
+        };
+    }
+    let bearer_token = env::var(&connection.token_env)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            StandaloneServerError::MissingSourceTokenEnv(connection.token_env.clone())
+        })?;
+    Ok(SourceAuthRuntime::StaticBearer(Arc::from(
+        bearer_token.into_boxed_str(),
+    )))
+}
+
+fn resolve_oauth_source_auth(
+    config: &Oauth2ClientCredentialsSourceAuthConfig,
+) -> Result<Oauth2ClientCredentialsRuntime, StandaloneServerError> {
+    let client_id = env::var(&config.client_id_env)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            StandaloneServerError::MissingSourceTokenEnv(config.client_id_env.clone())
+        })?;
+    let client_secret = env::var(&config.client_secret_env)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            StandaloneServerError::MissingSourceTokenEnv(config.client_secret_env.clone())
+        })?;
+    let token_url = reqwest::Url::parse(&config.token_url)
+        .map_err(|_| StandaloneServerError::InvalidSourceAuth("invalid token_url".to_string()))?;
+    Ok(Oauth2ClientCredentialsRuntime {
+        token_url,
+        client_id,
+        client_secret,
+        request_format: config.request_format.clone(),
+        scope: config.scope.clone(),
+        refresh_skew: Duration::from_secs(config.refresh_skew_seconds),
+        cache: Mutex::new(None),
+    })
 }
 
 fn source_fetch_url_policy(connection: &SourceConnectionConfig) -> FetchUrlPolicy {
@@ -1691,13 +1927,13 @@ async fn read_remote_registry_data_api_one(
         (lookup_field.clone(), value_query_string(&lookup_value)?),
     ];
     let request_url = url.clone();
-    let body = send_request_with_retry(sources, connection, "rda", &url, move || {
+    let body = send_request_with_retry(sources, connection, "rda", &url, move |token| {
         add_correlation_header(
             sources
                 .client
                 .get(request_url.clone())
                 .timeout(sources.request_timeout)
-                .bearer_auth(&connection.bearer_token)
+                .bearer_auth(token)
                 .header("accept", "application/json")
                 .header("data-purpose", purpose),
         )
@@ -1729,13 +1965,13 @@ async fn read_external_dci_http_one(
     let url = source_url(&connection.base_url, &connection.dci.search_path)?;
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
     let request_url = url.clone();
-    let body = send_request_with_retry(sources, connection, "dci", &url, move || {
+    let body = send_request_with_retry(sources, connection, "dci", &url, move |token| {
         add_correlation_header(
             sources
                 .client
                 .post(request_url.clone())
                 .timeout(sources.request_timeout)
-                .bearer_auth(&connection.bearer_token)
+                .bearer_auth(token)
                 .header("accept", "application/json")
                 .header("content-type", "application/json")
                 .header("data-purpose", purpose),
@@ -1818,19 +2054,20 @@ async fn read_remote_registry_data_api_many(
     ];
     let timeout_budget = bulk_timeout(connection, n);
     let request_url = url.clone();
-    let body_result = send_request_with_retry(sources, connection, "rda_bulk", &url, move || {
-        add_correlation_header(
-            sources
-                .client
-                .get(request_url.clone())
-                .timeout(timeout_budget)
-                .bearer_auth(&connection.bearer_token)
-                .header("accept", "application/json")
-                .header("data-purpose", purpose),
-        )
-        .query(&query_pairs)
-    })
-    .await;
+    let body_result =
+        send_request_with_retry(sources, connection, "rda_bulk", &url, move |token| {
+            add_correlation_header(
+                sources
+                    .client
+                    .get(request_url.clone())
+                    .timeout(timeout_budget)
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .query(&query_pairs)
+        })
+        .await;
     let body = match body_result {
         Ok(body) => body,
         Err(e) => {
@@ -1991,20 +2228,21 @@ async fn read_external_dci_http_many(
     add_dci_envelope_options(&connection.dci, &mut request_body);
     let timeout_budget = bulk_timeout(connection, n_valid);
     let request_url = url.clone();
-    let body_result = send_request_with_retry(sources, connection, "dci_bulk", &url, move || {
-        add_correlation_header(
-            sources
-                .client
-                .post(request_url.clone())
-                .timeout(timeout_budget)
-                .bearer_auth(&connection.bearer_token)
-                .header("accept", "application/json")
-                .header("content-type", "application/json")
-                .header("data-purpose", purpose),
-        )
-        .json(&request_body)
-    })
-    .await;
+    let body_result =
+        send_request_with_retry(sources, connection, "dci_bulk", &url, move |token| {
+            add_correlation_header(
+                sources
+                    .client
+                    .post(request_url.clone())
+                    .timeout(timeout_budget)
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .json(&request_body)
+        })
+        .await;
     let body = match body_result {
         Ok(body) => body,
         Err(e) => {
@@ -2105,11 +2343,17 @@ fn dci_search_criteria(
         ("query".to_string(), query),
         (
             "pagination".to_string(),
-            json!({ "page_size": dci.max_results.max(batch_size) }),
+            json!({ "page_size": dci.max_results.max(batch_size), "page_number": 1 }),
         ),
     ]);
     if let Some(registry_type) = &dci.registry_type {
         search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
+    }
+    if let Some(registry_event_type) = &dci.registry_event_type {
+        search_criteria.insert(
+            "reg_event_type".to_string(),
+            Value::String(registry_event_type.clone()),
+        );
     }
     if let Some(record_type) = &dci.record_type {
         search_criteria.insert(
@@ -2130,7 +2374,7 @@ async fn send_request_with_retry(
     connection: &ResolvedEvidenceSourceConnection,
     connector: &'static str,
     url: &reqwest::Url,
-    build_request: impl Fn() -> reqwest::RequestBuilder,
+    build_request: impl Fn(String) -> reqwest::RequestBuilder,
 ) -> Result<Value, EvidenceError> {
     if let Err(error) = connection.fetch_url_policy.validate(url) {
         tracing::warn!(
@@ -2166,13 +2410,43 @@ async fn send_request_with_retry(
     let start = Instant::now();
     let mut attempt: u32 = 0;
     let max_attempts = if connection.retry_on_5xx { 2 } else { 1 };
+    let mut refreshed_after_401 = false;
+    let mut force_refresh_next = false;
     let result = loop {
         attempt += 1;
-        let outcome = build_request().send().await;
+        let force_refresh = force_refresh_next;
+        force_refresh_next = false;
+        let token = match connection
+            .auth
+            .bearer_token(&sources.client, &connection.fetch_url_policy, force_refresh)
+            .await
+        {
+            Ok(token) => token,
+            Err(error) => break Err(error),
+        };
+        let outcome = build_request(token).send().await;
         let retryable = match &outcome {
             Err(_) => true,
             Ok(response) => response.status().is_server_error(),
         };
+        if let Ok(response) = &outcome {
+            if response.status() == StatusCode::UNAUTHORIZED
+                && connection.auth.can_refresh()
+                && !refreshed_after_401
+            {
+                refreshed_after_401 = true;
+                force_refresh_next = true;
+                sources.metrics.record_source_retry(connector);
+                tracing::info!(
+                    target: "registry_notary_server::outbound",
+                    connection_id = %connection.id,
+                    connector = connector,
+                    attempt = attempt,
+                    "oauth_refresh_after_401",
+                );
+                continue;
+            }
+        }
         if attempt < max_attempts && retryable {
             sources.metrics.record_source_retry(connector);
             tracing::info!(
@@ -2315,11 +2589,17 @@ fn dci_search_request_body(
         ("query".to_string(), query),
         (
             "pagination".to_string(),
-            json!({ "page_size": dci.max_results.max(2) }),
+            json!({ "page_size": dci.max_results.max(2), "page_number": 1 }),
         ),
     ]);
     if let Some(registry_type) = &dci.registry_type {
         search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
+    }
+    if let Some(registry_event_type) = &dci.registry_event_type {
+        search_criteria.insert(
+            "reg_event_type".to_string(),
+            Value::String(registry_event_type.clone()),
+        );
     }
     if let Some(record_type) = &dci.record_type {
         search_criteria.insert(
@@ -2688,6 +2968,7 @@ mod tests {
                     allow_insecure_localhost,
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_POLICY_TOKEN".to_string(),
+                    source_auth: None,
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
                     retry_on_5xx: true,
@@ -3484,7 +3765,7 @@ sources:
         let connection = ResolvedEvidenceSourceConnection {
             id: "registry".to_string(),
             base_url: "https://registry.example.test".to_string(),
-            bearer_token: "source-token".to_string(),
+            auth: SourceAuthRuntime::StaticBearer(Arc::from("source-token")),
             fetch_url_policy: FetchUrlPolicy::strict(),
             dci: DciSourceConnectionConfig::default(),
             semaphore: Arc::new(Semaphore::new(8)),
@@ -3590,6 +3871,7 @@ sources:
                     allow_insecure_localhost: true,
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN".to_string(),
+                    source_auth: None,
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
                     retry_on_5xx: true,
@@ -3693,6 +3975,7 @@ sources:
                     allow_insecure_localhost: false,
                     allow_insecure_private_network: false,
                     token_env: "TEST_EVIDENCE_SOURCE_TIMEOUT_TOKEN".to_string(),
+                    source_auth: None,
                     dci: DciSourceConnectionConfig::default(),
                     max_in_flight: 8,
                     retry_on_5xx: true,

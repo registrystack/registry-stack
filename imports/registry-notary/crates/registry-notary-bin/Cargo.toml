@@ -18,11 +18,24 @@ registry-notary-cel = ["registry-notary-server/registry-notary-cel"]
 
 [dependencies]
 axum.workspace = true
+base64.workspace = true
 clap.workspace = true
+ed25519-dalek = { version = "2" }
+getrandom.workspace = true
 registry-notary-core.workspace = true
 registry-notary-server = { workspace = true, default-features = false }
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
 serde_norway.workspace = true
+sha2.workspace = true
+time.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+axum-test = { version = "20" }

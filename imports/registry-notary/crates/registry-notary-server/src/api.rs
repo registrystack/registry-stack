@@ -1795,6 +1795,7 @@ async fn issue_credential(
     state.metrics.record_credential("direct", "issued");
     let mut response = Json(json!({
         "credential_id": signed.credential_id,
+        "credential_profile": profile_id,
         "format": FORMAT_SD_JWT_VC,
         "issuer": signed.issuer,
         "expires_at": signed.expires_at,

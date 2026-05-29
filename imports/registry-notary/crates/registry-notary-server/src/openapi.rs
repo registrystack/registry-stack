@@ -1515,6 +1515,7 @@ fn credential_response_schema() -> Value {
         "required": ["credential"],
         "properties": {
             "credential": { "type": "string" },
+            "credential_profile": { "type": "string" },
             "format": { "type": "string" },
             "c_nonce": { "type": "string" },
             "c_nonce_expires_in": { "type": "integer", "format": "uint64" }
@@ -1922,6 +1923,7 @@ fn provenance_example() -> Value {
 fn credential_issue_example() -> Value {
     json!({
         "credential_id": "urn:registry-notary:credential:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+        "credential_profile": "climate_smart_input_voucher_sd_jwt",
         "format": "application/dc+sd-jwt",
         "issuer": "did:web:agriculture.demo.example.gov",
         "expires_at": "2026-05-25T12:00:00Z",

@@ -116,3 +116,58 @@ fn openspp_disability_demo_config_loads_validates_and_builds_router() {
 
     let _ = standalone_router(config).expect("OpenSPP config builds standalone router");
 }
+
+#[test]
+fn opencrvs_dci_demo_config_loads_validates_and_builds_router() {
+    unsafe {
+        std::env::set_var(
+            "REGISTRY_NOTARY_API_KEY_HASH",
+            "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+        );
+        std::env::set_var("DCI_CLIENT_ID", "test-opencrvs-dci-client");
+        std::env::set_var("DCI_CLIENT_SECRET", "test-opencrvs-dci-secret");
+        std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
+    }
+
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let config_path = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root")
+        .join("demo/config/opencrvs-dci-registry-notary.yaml");
+    let raw = std::fs::read_to_string(config_path).expect("OpenCRVS config is readable");
+    let mut config: StandaloneRegistryNotaryConfig =
+        serde_norway::from_str(&raw).expect("OpenCRVS config deserializes");
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    config.audit.path = Some(
+        temp.path()
+            .join("opencrvs-dci-registry-notary-audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    config.validate().expect("OpenCRVS config validates");
+    let source = config
+        .evidence
+        .source_connections
+        .get("opencrvs_crvs")
+        .expect("OpenCRVS source exists");
+    assert_eq!(source.bulk_mode, BulkMode::None);
+    assert_eq!(source.dci.search_path, "/registry/sync/search");
+    assert_eq!(source.dci.query_type, "idtype-value");
+    assert_eq!(
+        source.dci.registry_type.as_deref(),
+        Some("ns:org:RegistryType:Civil")
+    );
+    assert_eq!(source.dci.registry_event_type.as_deref(), Some("birth"));
+
+    let claim = config
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "opencrvs-birth-record-exists")
+        .expect("OpenCRVS existence claim exists");
+    assert_eq!(claim.value.value_type, "boolean");
+
+    let _ = standalone_router(config).expect("OpenCRVS config builds standalone router");
+}

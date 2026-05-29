@@ -32,6 +32,16 @@ not import or link Registry Relay code.
 - [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
   OpenSPP Disability Registry DCI demo backend setup, known interop boundaries,
   and demo SD-JWT VC caveats.
+- [`docs/opencrvs-dci.md`](docs/opencrvs-dci.md):
+  OpenCRVS DCI demo setup notes and current interop boundaries.
+- [`docs/opencrvs-dci-standalone-tutorial.md`](docs/opencrvs-dci-standalone-tutorial.md):
+  standalone quickstart for `init dci`, the explicit OpenCRVS DCI config edits,
+  `doctor`, `explain-config`, `--env-file`, source OAuth, and demo SD-JWT VC
+  issuance.
+- [`docs/opencrvs-dci-setup-simplification-spec.md`](docs/opencrvs-dci-setup-simplification-spec.md):
+  implementation-aligned setup simplification spec for the generic env-file,
+  source-auth, diagnostics, initializer, API-key hash, and demo issuer
+  workflows.
 - [`docs/federated-notary-manifest-spec.md`](docs/federated-notary-manifest-spec.md):
   Registry Manifest-backed federation, peer discovery, trust, delegated
   evaluation, credential issuance, and audit checkpoint design.
@@ -159,6 +169,15 @@ export REGISTRY_NOTARY_AUDIT_HASH_SECRET=dev-registry-notary-audit-hash-secret
 export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN=dev-source-token
 export REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
 cargo run -p registry-notary-bin -- --config demo/config/registry-notary.yaml
+```
+
+Config-aware commands and server startup also accept `--env-file` for
+env-backed local runs:
+
+```bash
+cargo run -p registry-notary-bin -- \
+  --config demo/config/registry-notary.yaml \
+  --env-file .env.local
 ```
 
 The demo config uses HTTP source connections, so claim evaluation requires a
