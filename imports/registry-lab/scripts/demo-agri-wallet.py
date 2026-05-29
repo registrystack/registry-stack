@@ -47,13 +47,13 @@ def main() -> int:
 
     load_dotenv()
     out = prepare_output_dir(args.output_dir)
-    witness_url = env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")
-    witness_token = env("AGRI_EVIDENCE_CLIENT_BEARER")
+    notary_url = env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")
+    notary_token = env("AGRI_EVIDENCE_CLIENT_BEARER")
     flow = load_agri_flow_module()
 
     offer = {
         "artifact_type": "nagdi.wallet-holder-credential-offer.v1",
-        "issuer": "nagdi-agriculture-witness",
+        "issuer": "nagdi-agriculture-notary",
         "credential_profile": "climate_smart_input_voucher_sd_jwt",
         "format": SD_JWT_FORMAT,
         "claim": CLAIM,
@@ -65,9 +65,9 @@ def main() -> int:
     eligible_eval = require(
         request(
             "POST",
-            witness_url,
+            notary_url,
             "/claims/evaluate",
-            witness_token,
+            notary_token,
             evaluation_payload("FARMER-1001", CLAIM, "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
         ),
@@ -81,14 +81,14 @@ def main() -> int:
         "climate_smart_input_voucher_sd_jwt",
         [CLAIM],
         "predicate",
-        "nagdi-agriculture-witness",
+        "nagdi-agriculture-notary",
     )
     credential = require(
         request(
             "POST",
-            witness_url,
+            notary_url,
             "/credentials/issue",
-            witness_token,
+            notary_token,
             {
                 "evaluation_id": first_result_id(eligible_eval),
                 "credential_profile": "climate_smart_input_voucher_sd_jwt",
@@ -108,9 +108,9 @@ def main() -> int:
         evaluation = require(
             request(
                 "POST",
-                witness_url,
+                notary_url,
                 "/claims/evaluate",
-                witness_token,
+                notary_token,
                 evaluation_payload(subject, CLAIM),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             ),

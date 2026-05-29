@@ -22,19 +22,21 @@ x-relay-common: &relay-common
     timeout: 10s
     retries: 3
 
-x-witness-common: &witness-common
-  image: registry-witness:demo
+x-notary-common: &notary-common
+  image: registry-notary:demo
   build:
     context: .
-    dockerfile: Dockerfile.registry-witness
+    dockerfile: Dockerfile.registry-notary
     additional_contexts:
-      witness_src: ${REGISTRY_WITNESS_SOURCE_DIR:-./vendor/registry-witness}
-      registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+      notary_src: ${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}
+      registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
       cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
   env_file:
     - .env
   environment:
     RUST_LOG: info
+    REGISTRY_NOTARY_REDIS_URL: redis://redis:6379/
+    REGISTRY_PLATFORM_REDIS_TEST_URL: redis://redis:6379/
   restart: unless-stopped
 
 services:
@@ -55,6 +57,18 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REGISTRY_LAB_REDIS_PORT:-63799}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   zitadel-seed-init:
     image: alpine:3.20
@@ -150,44 +164,44 @@ services:
       - ./data/health:/demo/data/health:ro
       - health-registry-cache:/var/lib/registry-relay/cache
 
-  civil-witness:
-    <<: *witness-common
-    command: ["--config", "/etc/registry-witness/civil-witness.yaml"]
+  civil-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/civil-notary.yaml"]
     ports:
       - "4321:8080"
     volumes:
-      - ./config/witness/civil-witness.yaml:/etc/registry-witness/civil-witness.yaml:ro
+      - ./config/notary/civil-notary.yaml:/etc/registry-notary/civil-notary.yaml:ro
     depends_on:
       - civil-registry-relay
       - static-metadata-publisher
 
-  social-protection-witness:
-    <<: *witness-common
-    command: ["--config", "/etc/registry-witness/social-protection-witness.yaml"]
+  social-protection-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/social-protection-notary.yaml"]
     ports:
       - "4322:8080"
     volumes:
-      - ./config/witness/social-protection-witness.yaml:/etc/registry-witness/social-protection-witness.yaml:ro
+      - ./config/notary/social-protection-notary.yaml:/etc/registry-notary/social-protection-notary.yaml:ro
     depends_on:
       - social-protection-registry-relay
       - static-metadata-publisher
 
-  shared-eligibility-witness:
-    <<: *witness-common
-    command: ["--config", "/etc/registry-witness/shared-eligibility-witness.yaml"]
+  shared-eligibility-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/shared-eligibility-notary.yaml"]
     ports:
       - "4323:8080"
     volumes:
-      - ./config/witness/shared-eligibility-witness.yaml:/etc/registry-witness/shared-eligibility-witness.yaml:ro
+      - ./config/notary/shared-eligibility-notary.yaml:/etc/registry-notary/shared-eligibility-notary.yaml:ro
 
   openfn-mock-registry:
-    image: registry-witness-openfn-sidecar:demo
+    image: registry-notary-openfn-sidecar:demo
     build:
       context: .
-      dockerfile: Dockerfile.registry-witness-openfn-sidecar
+      dockerfile: Dockerfile.registry-notary-openfn-sidecar
       additional_contexts:
-        witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
-        registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     entrypoint: ["/bin/sh", "-eu", "-c"]
     command:
@@ -211,13 +225,13 @@ services:
       retries: 20
 
   openfn-civil-sidecar:
-    image: registry-witness-openfn-sidecar:demo
+    image: registry-notary-openfn-sidecar:demo
     build:
       context: .
-      dockerfile: Dockerfile.registry-witness-openfn-sidecar
+      dockerfile: Dockerfile.registry-notary-openfn-sidecar
       additional_contexts:
-        witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
-        registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
     env_file:
       - .env
@@ -231,9 +245,9 @@ services:
       - |
         : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
         : "$${OPENFN_MOCK_REGISTRY_TOKEN_RAW:?missing OPENFN_MOCK_REGISTRY_TOKEN_RAW; run scripts/generate-demo-secrets.py}"
-        exec registry-witness-openfn-sidecar --config /etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template
+        exec registry-notary-openfn-sidecar --config /etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template
     volumes:
-      - ./config/openfn/openfn-civil-sidecar.yaml.template:/etc/registry-witness-openfn/openfn-civil-sidecar.yaml.template:ro
+      - ./config/openfn/openfn-civil-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-civil-sidecar.yaml.template:ro
     networks:
       - openfn-internal
     healthcheck:
@@ -247,23 +261,23 @@ services:
       openfn-mock-registry:
         condition: service_healthy
 
-  openfn-civil-witness:
-    <<: *witness-common
+  openfn-civil-notary:
+    <<: *notary-common
     build:
       context: .
-      dockerfile: Dockerfile.registry-witness
+      dockerfile: Dockerfile.registry-notary
       additional_contexts:
-        witness_src: ${REGISTRY_OPENFN_WITNESS_SOURCE_DIR:-${REGISTRY_WITNESS_SOURCE_DIR:-../registry-witness}}
-        registry_platform_src: ${REGISTRY_WITNESS_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
-    command: ["--config", "/etc/registry-witness/openfn-civil-witness.yaml"]
+    command: ["--config", "/etc/registry-notary/openfn-civil-notary.yaml"]
     environment:
       RUST_LOG: info
       OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
     ports:
       - "4324:8080"
     volumes:
-      - ./config/witness/openfn-civil-witness.yaml:/etc/registry-witness/openfn-civil-witness.yaml:ro
+      - ./config/notary/openfn-civil-notary.yaml:/etc/registry-notary/openfn-civil-notary.yaml:ro
     networks:
       - default
       - openfn-internal
@@ -292,14 +306,14 @@ services:
       - ./data/agriculture:/demo/data/agriculture:ro
       - agri-registry-cache:/var/lib/registry-relay/cache
 
-  nagdi-agriculture-witness:
-    <<: *witness-common
+  nagdi-agriculture-notary:
+    <<: *notary-common
     profiles: ["agri"]
-    command: ["--config", "/etc/registry-witness/nagdi-agriculture-witness.yaml"]
+    command: ["--config", "/etc/registry-notary/nagdi-agriculture-notary.yaml"]
     ports:
       - "4342:8080"
     volumes:
-      - ./config/witness/nagdi-agriculture-witness.yaml:/etc/registry-witness/nagdi-agriculture-witness.yaml:ro
+      - ./config/notary/nagdi-agriculture-notary.yaml:/etc/registry-notary/nagdi-agriculture-notary.yaml:ro
     depends_on:
       - agri-registry-relay
       - agri-static-metadata-publisher
@@ -324,9 +338,9 @@ services:
       CIVIL_RELAY_URL: http://civil-registry-relay:8080
       SOCIAL_RELAY_URL: http://social-protection-registry-relay:8080
       HEALTH_RELAY_URL: http://health-registry-relay:8080
-      CIVIL_EVIDENCE_URL: http://civil-witness:8080
-      SOCIAL_EVIDENCE_URL: http://social-protection-witness:8080
-      SHARED_EVIDENCE_URL: http://shared-eligibility-witness:8080
+      CIVIL_EVIDENCE_URL: http://civil-notary:8080
+      SOCIAL_EVIDENCE_URL: http://social-protection-notary:8080
+      SHARED_EVIDENCE_URL: http://shared-eligibility-notary:8080
       STATIC_METADATA_URL: http://static-metadata-publisher:8080
       DEMO_OUTPUT_DIR: /demo/output
     working_dir: /workspace
@@ -338,9 +352,9 @@ services:
       - civil-registry-relay
       - social-protection-registry-relay
       - health-registry-relay
-      - civil-witness
-      - social-protection-witness
-      - shared-eligibility-witness
+      - civil-notary
+      - social-protection-notary
+      - shared-eligibility-notary
       - static-metadata-publisher
 
   agri-demo-client:
@@ -350,8 +364,8 @@ services:
       - .env
     environment:
       AGRI_RELAY_URL: http://agri-registry-relay:8080
-      AGRI_WITNESS_URL: http://nagdi-agriculture-witness:8080
-      AGRI_EVIDENCE_URL: http://nagdi-agriculture-witness:8080
+      AGRI_WITNESS_URL: http://nagdi-agriculture-notary:8080
+      AGRI_EVIDENCE_URL: http://nagdi-agriculture-notary:8080
       AGRI_STATIC_METADATA_URL: http://agri-static-metadata-publisher:8080
       DEMO_OUTPUT_DIR: /demo/output/agri-client
     working_dir: /workspace
@@ -361,11 +375,12 @@ services:
       - ./output:/demo/output
     depends_on:
       - agri-registry-relay
-      - nagdi-agriculture-witness
+      - nagdi-agriculture-notary
       - agri-static-metadata-publisher
 
 volumes:
   postgres-data:
+  redis-data:
   zitadel-seed:
   civil-registry-cache:
   social-protection-registry-cache:

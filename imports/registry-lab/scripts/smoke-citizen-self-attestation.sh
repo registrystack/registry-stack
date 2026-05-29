@@ -4,11 +4,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 demo_dir="$(cd "${script_dir}/.." && pwd)"
 compose_file="${demo_dir}/compose.yaml"
-witness_dir="${REGISTRY_WITNESS_SOURCE_DIR:-"${demo_dir}/../registry-witness"}"
+notary_dir="${REGISTRY_NOTARY_SOURCE_DIR:-"${demo_dir}/../registry-notary"}"
 output_dir="${demo_dir}/output/citizen-self-attestation"
-config_path="${output_dir}/citizen-civil-witness.yaml"
-log_path="${output_dir}/citizen-civil-witness.log"
-discovery_path="${output_dir}/citizen-witness-discovery.json"
+config_path="${output_dir}/citizen-civil-notary.yaml"
+log_path="${output_dir}/citizen-civil-notary.log"
+discovery_path="${output_dir}/citizen-notary-discovery.json"
 self_eval_path="${output_dir}/citizen-self-evaluation.json"
 other_eval_path="${output_dir}/citizen-other-subject-denied.json"
 token_claims_path="${output_dir}/citizen-access-token-claims.json"
@@ -119,7 +119,7 @@ wait_http() {
       args+=(-H "Authorization: Bearer ${token}")
     fi
     if [[ -n "${request_id_token}" ]]; then
-      args+=(-H "x-registry-witness-oidc-id-token: ${request_id_token}")
+      args+=(-H "x-registry-notary-oidc-id-token: ${request_id_token}")
     fi
     status="$(curl "${args[@]}" "${url}" 2>/dev/null || true)"
     if [[ "${status}" =~ ^2[0-9][0-9]$ ]]; then
@@ -127,17 +127,17 @@ wait_http() {
     fi
     sleep 1
   done
-  explain_witness_status "${status}" "${url}" >&2 || true
+  explain_notary_status "${status}" "${url}" >&2 || true
   fail "${name} did not become ready within ${deadline}s, last status ${status}"
 }
 
-explain_witness_status() {
+explain_notary_status() {
   local status="$1"
   local url="$2"
   [[ -f "${log_path}" ]] || return 0
   case "${status}" in
     401)
-      echo "Hint: Witness rejected the OIDC token while checking ${url}."
+      echo "Hint: Notary rejected the OIDC token while checking ${url}."
       if grep -q 'TokenTypeNotAllowed' "${log_path}"; then
         echo "Hint: token type mismatch. For eSignet access tokens without typ, leave ESIGNET_TOKEN_TYPE unset so allowed_typ is []."
       elif grep -q 'AlgorithmNotAllowed' "${log_path}"; then
@@ -147,7 +147,7 @@ explain_witness_status() {
       elif grep -q 'AudienceMismatch' "${log_path}"; then
         echo "Hint: audience mismatch. Check ESIGNET_CLIENT_ID and ESIGNET_AUDIENCES_JSON."
       else
-        echo "Hint: inspect ${log_path} for registry_witness_server::auth debug lines."
+        echo "Hint: inspect ${log_path} for registry_notary_server::auth debug lines."
       fi
       ;;
     403)
@@ -159,7 +159,7 @@ explain_witness_status() {
       fi
       ;;
     429)
-      echo "Hint: the in-Witness self-attestation rate limiter fired, usually after repeated invalid-token checks. Wait for the minute window or rerun after fixing token/config inputs."
+      echo "Hint: the in-Notary self-attestation rate limiter fired, usually after repeated invalid-token checks. Wait for the minute window or rerun after fixing token/config inputs."
       ;;
   esac
 }
@@ -815,9 +815,9 @@ lines = [
     "",
     "## What Was Proven",
     "",
-    "- Witness accepted the citizen token chain and classified the request as `self_attestation`.",
-    "- Witness evaluated `person-is-alive` for the token-bound subject.",
-    "- Witness denied the `NID-1002` request as a subject-binding violation before a civil registry read.",
+    "- Notary accepted the citizen token chain and classified the request as `self_attestation`.",
+    "- Notary evaluated `person-is-alive` for the token-bound subject.",
+    "- Notary denied the `NID-1002` request as a subject-binding violation before a civil registry read.",
     "- Audit output records hashed identifiers, not raw token subject values.",
     "",
     "## Discovery Summary",
@@ -860,7 +860,7 @@ Path(report_path).write_text("\n".join(lines), encoding="utf-8")
 PY
 }
 
-write_witness_config() {
+write_notary_config() {
   local issuer="$1"
   local jwks_uri="$2"
   local userinfo_endpoint="$3"
@@ -1002,11 +1002,11 @@ auth:
 
 audit:
   sink: stdout
-  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
 evidence:
   enabled: true
-  service_id: citizen-civil-witness
+  service_id: citizen-civil-notary
   api_base_url: http://127.0.0.1:{port}
   inline_batch_limit: 20
   source_connections:
@@ -1024,9 +1024,9 @@ evidence:
   credential_profiles:
     citizen_civil_status_sd_jwt:
       format: application/dc+sd-jwt
-      issuer: did:web:citizen-civil-witness.demo.example
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
-      issuer_kid: did:web:citizen-civil-witness.demo.example#citizen-civil-demo-key-1
+      issuer: did:web:citizen-civil-notary.demo.example
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
+      issuer_kid: did:web:citizen-civil-notary.demo.example#citizen-civil-demo-key-1
       vct: https://demo.example/credentials/citizen-civil-status/v1
       validity_seconds: 600
       allowed_claims:
@@ -1076,7 +1076,7 @@ evidence:
           - predicate
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - citizen_civil_status_sd_jwt
@@ -1109,7 +1109,7 @@ self_attestation:
   allowed_claims:
     - person-is-alive
   allowed_formats:
-    - application/vnd.registry-witness.claim-result+json
+    - application/vnd.registry-notary.claim-result+json
     - application/dc+sd-jwt
   allowed_disclosures:
     - predicate
@@ -1145,13 +1145,13 @@ curl_json() {
     -H "Content-Type: application/json"
     -H "x-request-id: ${correlation_id}")
   if [[ -n "${id_token:-}" ]]; then
-    args+=(-H "x-registry-witness-oidc-id-token: ${id_token}")
+    args+=(-H "x-registry-notary-oidc-id-token: ${id_token}")
   fi
   status="$(curl "${args[@]}" "$@" "${url}")"
   if [[ "${status}" != "${expected}" ]]; then
     echo "Expected ${url} to return ${expected}, got ${status}" >&2
     cat "${output}" >&2 || true
-    explain_witness_status "${status}" "${url}" >&2 || true
+    explain_notary_status "${status}" "${url}" >&2 || true
     exit 1
   fi
 }
@@ -1187,13 +1187,13 @@ if [[ -f "${demo_dir}/.env" ]]; then
   # shellcheck disable=SC1091
   . "${demo_dir}/.env"
   set +a
-  restore_dotenv_value REGISTRY_WITNESS_ISSUER_JWK
+  restore_dotenv_value REGISTRY_NOTARY_ISSUER_JWK
 else
   fail "missing .env; run scripts/generate-demo-secrets.py first"
 fi
 : "${CIVIL_METADATA_CLIENT_RAW:?missing CIVIL_METADATA_CLIENT_RAW; rerun scripts/generate-demo-secrets.py}"
 : "${CIVIL_EVIDENCE_SOURCE_RAW:?missing CIVIL_EVIDENCE_SOURCE_RAW; rerun scripts/generate-demo-secrets.py}"
-: "${REGISTRY_WITNESS_AUDIT_HASH_SECRET:?missing REGISTRY_WITNESS_AUDIT_HASH_SECRET; rerun scripts/generate-demo-secrets.py}"
+: "${REGISTRY_NOTARY_AUDIT_HASH_SECRET:?missing REGISTRY_NOTARY_AUDIT_HASH_SECRET; rerun scripts/generate-demo-secrets.py}"
 
 issuer="${ESIGNET_ISSUER:-}"
 if [[ -z "${issuer}" && -n "${ESIGNET_CITIZEN_ACCESS_TOKEN:-}" ]]; then
@@ -1326,9 +1326,9 @@ PY
   )"
 fi
 
-step 5 "Generate Witness config" "Writing ${config_path} with eSignet issuer, JWKS, client, algorithm, and self-attestation policy."
-write_witness_config "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${alg}" "${client_id}" "${audiences_json}" "${self_attestation_scope}" "${userinfo_issuer}" "${userinfo_alg}" "${token_typ}"
-transcript "Witness config: ${config_path}"
+step 5 "Generate Notary config" "Writing ${config_path} with eSignet issuer, JWKS, client, algorithm, and self-attestation policy."
+write_notary_config "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${alg}" "${client_id}" "${audiences_json}" "${self_attestation_scope}" "${userinfo_issuer}" "${userinfo_alg}" "${token_typ}"
+transcript "Notary config: ${config_path}"
 transcript "scope_policy=${self_attestation_scope_policy}"
 transcript "allowed_algorithms=$(python3 - "${config_path}" <<'PY'
 import re
@@ -1339,27 +1339,27 @@ print(" ".join(line.strip()[2:].strip() for line in match.group(1).splitlines())
 PY
 )"
 
-step 6 "Start civil Relay and citizen Witness" "Witness listens on http://127.0.0.1:${port}."
+step 6 "Start civil Relay and citizen Notary" "Notary listens on http://127.0.0.1:${port}."
 docker compose -f "${compose_file}" up -d civil-registry-relay
 wait_http "civil relay health" "http://127.0.0.1:4311/health" "${CIVIL_METADATA_CLIENT_RAW}"
 
 rm -f "${log_path}"
 (
-  cd "${witness_dir}"
-  cargo run -p registry-witness-bin -- --config "${config_path}"
+  cd "${notary_dir}"
+  cargo run -p registry-notary-bin -- --config "${config_path}"
 ) >"${log_path}" 2>&1 &
-witness_pid="$!"
-trap 'kill "${witness_pid}" >/dev/null 2>&1 || true' EXIT
+notary_pid="$!"
+trap 'kill "${notary_pid}" >/dev/null 2>&1 || true' EXIT
 
-wait_http "citizen civil witness discovery" "http://127.0.0.1:${port}/.well-known/evidence-service" "${access_token}"
+wait_http "citizen civil notary discovery" "http://127.0.0.1:${port}/.well-known/evidence-service" "${access_token}"
 
-step 7 "Call Witness discovery" "Confirming the citizen token can see the self-attestation capability."
+step 7 "Call Notary discovery" "Confirming the citizen token can see the self-attestation capability."
 curl_json GET "http://127.0.0.1:${port}/.well-known/evidence-service" "${discovery_path}" 200
 print_discovery_status
 
 step 8 "Evaluate self claim" "Requesting person-is-alive for ${self_subject}."
 curl_json POST "http://127.0.0.1:${port}/claims/evaluate" "${self_eval_path}" 200 \
-  --data "{\"subject\":{\"id\":\"${self_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-witness.claim-result+json\"}"
+  --data "{\"subject\":{\"id\":\"${self_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-notary.claim-result+json\"}"
 
 python3 - "${self_eval_path}" <<'PY'
 import json
@@ -1377,12 +1377,12 @@ print_self_evaluation_status
 
 step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before any source read."
 curl_json POST "http://127.0.0.1:${port}/claims/evaluate" "${other_eval_path}" 403 \
-  --data "{\"subject\":{\"id\":\"${other_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-witness.claim-result+json\"}"
+  --data "{\"subject\":{\"id\":\"${other_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-notary.claim-result+json\"}"
 print_denial_status
 
 sleep 1
 grep -q '"access_mode":"self_attestation"' "${log_path}" ||
-  fail "Witness audit log did not include access_mode=self_attestation"
+  fail "Notary audit log did not include access_mode=self_attestation"
 print_audit_status
 
 step 10 "Write redacted evidence report" "Collecting summary, transcript, artifacts, and audit excerpt."
@@ -1403,9 +1403,9 @@ Citizen self-attestation smoke passed.
 
 What happened:
   1. eSignet authenticated demo citizen ${self_subject}.
-  2. Witness bound the request to ${subject_claim_source}.${subject_claim}.
-  3. Witness fetched person-is-alive for ${self_subject}.
-  4. Witness denied ${other_subject} before a registry source read.
+  2. Notary bound the request to ${subject_claim_source}.${subject_claim}.
+  3. Notary fetched person-is-alive for ${self_subject}.
+  4. Notary denied ${other_subject} before a registry source read.
   5. Audit records show self_attestation with hashed identifiers.
 
 Artifacts:

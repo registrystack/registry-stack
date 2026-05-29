@@ -292,13 +292,13 @@ aggregate_status="$(curl_status GET http://127.0.0.1:4312/datasets/social_protec
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-aggregate-denial.json"
 check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke-aggregate-denial.json" code auth.scope_denied
 
-check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/claims/evaluate "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["person-is-alive"],"disclosure":"predicate","format":"application/vnd.registry-witness.claim-result+json"}'
+check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/claims/evaluate "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["person-is-alive"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}'
 check "civil evidence evaluation results" json_has_key "${output_dir}/smoke-civil-evaluation.json" results
 
-check "health evidence evaluation" curl_json POST http://127.0.0.1:4323/claims/evaluate "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-health-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["health-service-available"],"disclosure":"predicate","format":"application/vnd.registry-witness.claim-result+json"}'
+check "health evidence evaluation" curl_json POST http://127.0.0.1:4323/claims/evaluate "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-health-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["health-service-available"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}'
 check "health evidence evaluation results" json_has_key "${output_dir}/smoke-health-evaluation.json" results
 
-check "shared evidence evaluation" curl_json POST http://127.0.0.1:4323/claims/evaluate "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["eligible-for-combined-support"],"disclosure":"predicate","format":"application/vnd.registry-witness.claim-result+json"}'
+check "shared evidence evaluation" curl_json POST http://127.0.0.1:4323/claims/evaluate "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["eligible-for-combined-support"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}'
 check "shared evidence source count" python - "${output_dir}/smoke-shared-evaluation.json" <<'PY'
 import json
 import sys
@@ -311,7 +311,7 @@ if source_count < 2:
     raise SystemExit(1)
 PY
 
-missing_status="$(curl_status POST http://127.0.0.1:4323/claims/evaluate "${SHARED_EVIDENCE_CLIENT_BEARER}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-9999","id_type":"national_id"},"claims":["eligible-for-combined-support"],"disclosure":"predicate","format":"application/vnd.registry-witness.claim-result+json"}')"
+missing_status="$(curl_status POST http://127.0.0.1:4323/claims/evaluate "${SHARED_EVIDENCE_CLIENT_BEARER}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-9999","id_type":"national_id"},"claims":["eligible-for-combined-support"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}')"
 [[ "${missing_status}" =~ ^(200|404|422)$ ]] || fail "missing-subject evaluation expected stable 200/404/422, got ${missing_status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-missing-subject.json"
 
@@ -324,7 +324,7 @@ decision_artifact="$(find "${output_dir}" -maxdepth 1 -name '*household-benefit-
 check "household decision has no Relay write-back" json_path_equals "${decision_artifact}" boundary.relay_write_back false
 
 log_file="/tmp/decentralized-smoke-service-logs.txt"
-docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-witness social-protection-witness shared-eligibility-witness > "${log_file}"
+docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-notary social-protection-notary shared-eligibility-notary > "${log_file}"
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
 grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit event"
@@ -332,8 +332,8 @@ grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit 
 for secret_var in \
   CLAIM_VERIFICATION_BINDING_KEY \
   REGISTRY_RELAY_AUDIT_HASH_SECRET \
-  REGISTRY_WITNESS_AUDIT_HASH_SECRET \
-  REGISTRY_WITNESS_ISSUER_JWK \
+  REGISTRY_NOTARY_AUDIT_HASH_SECRET \
+  REGISTRY_NOTARY_ISSUER_JWK \
   CIVIL_EVIDENCE_ISSUER_JWK \
   SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK \
   SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK \

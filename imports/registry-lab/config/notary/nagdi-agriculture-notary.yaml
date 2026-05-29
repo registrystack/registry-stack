@@ -18,21 +18,21 @@ auth:
 
 audit:
   sink: stdout
-  hash_secret_env: REGISTRY_WITNESS_AUDIT_HASH_SECRET
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
 federation:
   enabled: true
-  node_id: did:web:nagdi-agriculture-witness.demo.example.gov
-  issuer: https://nagdi-agriculture-witness.demo.example.gov
-  jwks_uri: https://nagdi-agriculture-witness.demo.example.gov/federation/jwks.json
-  federation_api: https://nagdi-agriculture-witness.demo.example.gov/federation/v1
+  node_id: did:web:nagdi-agriculture-notary.demo.example.gov
+  issuer: https://nagdi-agriculture-notary.demo.example.gov
+  jwks_uri: https://nagdi-agriculture-notary.demo.example.gov/federation/jwks.json
+  federation_api: https://nagdi-agriculture-notary.demo.example.gov/federation/v1
   supported_protocol_versions:
-    - registry-witness-federation/v0.1
+    - registry-notary-federation/v0.1
   inbound_body_limit_bytes: 16384
   max_request_lifetime_seconds: 300
   clock_leeway_seconds: 60
   signing:
-    kid: did:web:nagdi-agriculture-witness.demo.example.gov#federation-response-1
+    kid: did:web:nagdi-agriculture-notary.demo.example.gov#federation-response-1
     key_env: AGRI_FEDERATION_RESPONSE_JWK
     alg: EdDSA
   pairwise_subject_hash:
@@ -52,7 +52,7 @@ federation:
       jwks_uri: http://agri-static-metadata-publisher:8080/federation/benefits-jwks.json
       allow_insecure_private_network: true
       allowed_protocol_versions:
-        - registry-witness-federation/v0.1
+        - registry-notary-federation/v0.1
       allowed_purposes:
         - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
         - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
@@ -77,8 +77,8 @@ federation:
 
 evidence:
   enabled: true
-  service_id: nagdi-agriculture-witness
-  api_base_url: http://nagdi-agriculture-witness:8080
+  service_id: nagdi-agriculture-notary
+  api_base_url: http://nagdi-agriculture-notary:8080
   inline_batch_limit: 20
   source_connections:
     agriculture:
@@ -89,7 +89,7 @@ evidence:
     climate_smart_input_voucher_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       issuer_kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
       vct: https://demo.example.gov/credentials/nagdi/climate-smart-input-voucher/v1
       validity_seconds: 86400
@@ -118,7 +118,7 @@ evidence:
     livestock_movement_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       issuer_kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
       vct: https://demo.example.gov/credentials/nagdi/livestock-movement-permit/v1
       validity_seconds: 86400
@@ -215,7 +215,7 @@ evidence:
           - predicate
           - redacted
       formats: &json_formats
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
     - id: data-use-authorized-for-purpose
       title: Data use authorized for purpose
       version: 2026-05
@@ -421,7 +421,7 @@ evidence:
           max_subjects: 10
       disclosure: *predicate_disclosure
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       cccev:
         requirement_type: InformationRequirement
@@ -458,7 +458,7 @@ evidence:
           max_subjects: 10
       disclosure: *predicate_disclosure
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
@@ -704,7 +704,7 @@ evidence:
           max_subjects: 10
       disclosure: *predicate_disclosure
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       cccev:
         requirement_type: InformationRequirement

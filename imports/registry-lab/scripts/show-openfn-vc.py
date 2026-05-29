@@ -92,13 +92,13 @@ def print_json(title: str, value: Any) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--subject", default="person-123")
-    parser.add_argument("--witness-url", default="http://127.0.0.1:4324")
+    parser.add_argument("--notary-url", default="http://127.0.0.1:4324")
     parser.add_argument("--env-file", type=Path, default=DEMO_ROOT / ".env")
     args = parser.parse_args()
 
     load_dotenv(args.env_file)
     token = env("CIVIL_EVIDENCE_CLIENT_BEARER")
-    base_url = args.witness_url.rstrip("/")
+    base_url = args.notary_url.rstrip("/")
 
     evaluation = post_json(
         f"{base_url}/claims/evaluate",

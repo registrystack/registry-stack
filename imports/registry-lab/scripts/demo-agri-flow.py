@@ -30,7 +30,7 @@ MARKET_PURPOSE = os.environ.get(
     "AGRI_MARKET_DATA_PURPOSE",
     "https://demo.example.gov/purpose/nagdi/agricultural-market-sizing",
 )
-CLAIM_RESULT_FORMAT = "application/vnd.registry-witness.claim-result+json"
+CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 CORRELATION_ID = os.environ.get("DEMO_CORRELATION_ID", "nagdi-agri-demo-correlation-001")
 LIVESTOCK_PURPOSE = os.environ.get(
@@ -402,7 +402,7 @@ def resolve_service_base_url(metadata_url: str, transport_override: str | None) 
     override = urllib.parse.urlparse(transport_override)
     compose_names = {
         "agri-registry-relay",
-        "nagdi-agriculture-witness",
+        "nagdi-agriculture-notary",
         "agri-static-metadata-publisher",
     }
     local_hosts = {"127.0.0.1", "localhost", "::1"}
@@ -484,7 +484,7 @@ def scenario_summary(
         "demo_surfaces": {
             "static_metadata": "service, policy, requirement, and offering discovery",
             "registry_relay": "purpose-bound row reads and aggregate-only market sizing",
-            "registry_witness": "voucher and livestock evidence evaluation plus credential issuance",
+            "registry_notary": "voucher and livestock evidence evaluation plus credential issuance",
         },
         "golden_subjects": {
             subject: {
@@ -547,7 +547,7 @@ def main() -> int:
     out = output_dir(args.output_dir)
 
     relay = Endpoint("agri-registry-relay", env("AGRI_RELAY_URL", "http://127.0.0.1:4341"), "AGRI_METADATA_CLIENT_RAW")
-    witness = Endpoint("nagdi-agriculture-witness", env("AGRI_WITNESS_URL", "http://127.0.0.1:4342"), "AGRI_EVIDENCE_CLIENT_BEARER")
+    notary = Endpoint("nagdi-agriculture-notary", env("AGRI_WITNESS_URL", "http://127.0.0.1:4342"), "AGRI_EVIDENCE_CLIENT_BEARER")
     static = Endpoint("agri-static-metadata-publisher", env("AGRI_STATIC_METADATA_URL", "http://127.0.0.1:4343"))
 
     dataset = env("AGRI_FARMER_DATASET", "agri_registry")
@@ -613,9 +613,9 @@ def main() -> int:
     voucher_access = offering_access(offerings, purpose=PURPOSE) or offering_access(offerings, offering_id="climate_smart_input_voucher_evidence_service")
     livestock_access = offering_access(offerings, purpose=LIVESTOCK_PURPOSE) or offering_access(offerings, offering_id="composed_livestock_movement_eligibility_service")
     if not voucher_access.get("discovery_url"):
-        raise DemoError("static metadata did not advertise a climate-smart input voucher Witness discovery URL")
-    witness = Endpoint(
-        "nagdi-agriculture-witness",
+        raise DemoError("static metadata did not advertise a climate-smart input voucher Notary discovery URL")
+    notary = Endpoint(
+        "nagdi-agriculture-notary",
         resolve_service_base_url(str(voucher_access["discovery_url"]), env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")),
         "AGRI_EVIDENCE_CLIENT_BEARER",
     )
@@ -641,37 +641,37 @@ def main() -> int:
     discovered_urls.update(extract_evidence_urls(relay_offerings, story_purposes, {"agri_registry"}))
     relay_voucher_access = offering_access(relay_offerings, purpose=PURPOSE)
     if relay_voucher_access.get("discovery_url"):
-        witness = Endpoint(
-            "nagdi-agriculture-witness",
-            resolve_service_base_url(str(relay_voucher_access["discovery_url"]), witness.url),
+        notary = Endpoint(
+            "nagdi-agriculture-notary",
+            resolve_service_base_url(str(relay_voucher_access["discovery_url"]), notary.url),
             "AGRI_EVIDENCE_CLIENT_BEARER",
         )
     add_transcript(transcript, "Relay exposed metadata, row, aggregate, and evidence-offering surfaces under scoped access.")
     step += 1
 
     wait_for(
-        "agriculture Witness discovery",
+        "agriculture Notary discovery",
         lambda: require(
-            request("GET", witness.url, "/.well-known/evidence-service", env(witness.token_env or "")),
+            request("GET", notary.url, "/.well-known/evidence-service", env(notary.token_env or "")),
             200,
-            "agriculture Witness discovery",
+            "agriculture Notary discovery",
         ),
     )
 
-    print("\nDiscover Witness claims")
-    witness_token = env(witness.token_env or "")
-    discovery = require(request("GET", witness.url, "/.well-known/evidence-service", witness_token), 200, "Witness discovery")
-    save(out, step, "witness-discovery", discovery)
+    print("\nDiscover Notary claims")
+    notary_token = env(notary.token_env or "")
+    discovery = require(request("GET", notary.url, "/.well-known/evidence-service", notary_token), 200, "Notary discovery")
+    save(out, step, "notary-discovery", discovery)
     discovery_resolution = {
         "voucher_metadata_discovery_url": voucher_access.get("discovery_url"),
         "livestock_metadata_discovery_url": livestock_access.get("discovery_url"),
-        "resolved_witness_base_url": witness.url,
+        "resolved_notary_base_url": notary.url,
         "transport_override_env": "AGRI_WITNESS_URL",
     }
     step += 1
-    claims = require(request("GET", witness.url, "/claims", witness_token), 200, "Witness claims")
-    save(out, step, "witness-claims", claims)
-    add_transcript(transcript, f"Selected `{claim}` from the agriculture Witness claim catalog.")
+    claims = require(request("GET", notary.url, "/claims", notary_token), 200, "Notary claims")
+    save(out, step, "notary-claims", claims)
+    add_transcript(transcript, f"Selected `{claim}` from the agriculture Notary claim catalog.")
     step += 1
     save(out, step, "discovered-evidence-urls", {"discovery_urls": sorted(discovered_urls), "resolution": discovery_resolution})
     step += 1
@@ -757,9 +757,9 @@ def main() -> int:
         body = require(
             request(
                 "POST",
-                witness.url,
+                notary.url,
                 "/claims/evaluate",
-                witness_token,
+                notary_token,
                 evaluation_payload(subject, claim),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             ),
@@ -783,9 +783,9 @@ def main() -> int:
         reason_body = require(
             request(
                 "POST",
-                witness.url,
+                notary.url,
                 "/claims/evaluate",
-                witness_token,
+                notary_token,
                 evaluation_payload(subject, manual_review_claim, "value"),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             ),
@@ -803,9 +803,9 @@ def main() -> int:
     credential_eval = require(
         request(
             "POST",
-            witness.url,
+            notary.url,
             "/claims/evaluate",
-            witness_token,
+            notary_token,
             evaluation_payload("FARMER-1001", claim, "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
         ),
@@ -819,14 +819,14 @@ def main() -> int:
         "climate_smart_input_voucher_sd_jwt",
         [claim],
         "predicate",
-        witness.name,
+        notary.name,
     )
     credential = require(
         request(
             "POST",
-            witness.url,
+            notary.url,
             "/credentials/issue",
-            witness_token,
+            notary_token,
             {
                 "evaluation_id": first_result_id(credential_eval),
                 "credential_profile": "climate_smart_input_voucher_sd_jwt",
@@ -845,9 +845,9 @@ def main() -> int:
 
     credential_without_holder = request(
         "POST",
-        witness.url,
+        notary.url,
         "/credentials/issue",
-        witness_token,
+        notary_token,
         {
             "evaluation_id": first_result_id(credential_eval),
             "credential_profile": "climate_smart_input_voucher_sd_jwt",
@@ -883,9 +883,9 @@ def main() -> int:
         body = require(
             request(
                 "POST",
-                witness.url,
+                notary.url,
                 "/claims/evaluate",
-                witness_token,
+                notary_token,
                 evaluation_payload(subject, livestock_claim, id_type="herd_id"),
                 {"Data-Purpose": LIVESTOCK_PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             ),
@@ -901,9 +901,9 @@ def main() -> int:
         reason_body = require(
             request(
                 "POST",
-                witness.url,
+                notary.url,
                 "/claims/evaluate",
-                witness_token,
+                notary_token,
                 evaluation_payload(subject, livestock_reason_claim, "value", id_type="herd_id"),
                 {"Data-Purpose": LIVESTOCK_PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             ),

@@ -3,7 +3,7 @@
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
 This demo runs three independent Registry Relay authorities, four Registry
-Witness verifiers, a live Postgres source, a live Zitadel IdP, a default OpenFn
+Notary verifiers, a live Postgres source, a live Zitadel IdP, a default OpenFn
 sidecar scenario, a static metadata publisher, and a narrated client. It uses
 functional domains only. The services simulate civil, social protection, and
 health registry patterns, but they are not real OpenCRVS, OpenSPP, DHIS2,
@@ -15,18 +15,19 @@ OpenIMIS, MOSIP, or other product integrations.
 - `social-protection-registry-relay`: XLSX-backed social protection authority on host port `4312`.
 - `health-registry-relay`: Parquet-backed health authority on host port `4313`.
 - `postgres`: live Postgres service for Relay database-source scenarios on host port `54329`.
+- `redis`: live Redis service for Notary replay/status storage checks on host port `63799`.
 - `zitadel`: live Zitadel IdP for Relay OIDC scenarios on host port `4380`.
-- `civil-witness`: civil evidence verifier on host port `4321`.
-- `social-protection-witness`: social protection verifier on host port `4322`.
-- `shared-eligibility-witness`: cross-authority civil, social, and health verifier on host port `4323`.
-- `openfn-civil-witness`: OpenFn sidecar-backed civil verifier on host port `4324`.
+- `civil-notary`: civil evidence verifier on host port `4321`.
+- `social-protection-notary`: social protection verifier on host port `4322`.
+- `shared-eligibility-notary`: cross-authority civil, social, and health verifier on host port `4323`.
+- `openfn-civil-notary`: OpenFn sidecar-backed civil verifier on host port `4324`.
 - `openfn-civil-sidecar`: OpenFn adaptor sidecar on the private Compose network.
 - `openfn-mock-registry`: registry-like HTTP API on the private OpenFn network.
 - `static-metadata-publisher`: generated static metadata on host port `4331`.
 
 Inside Compose, services use DNS names like
 `http://civil-registry-relay:8080` and
-`http://shared-eligibility-witness:8080`. Registry Witness containers do
+`http://shared-eligibility-notary:8080`. Registry Notary containers do
 not mount source data. They read registry facts over HTTP from Relay. The demo
 client also has no `data/` mount.
 
@@ -89,26 +90,26 @@ Core setup and lifecycle:
 just setup       # initialize submodules
 just generate    # write fixtures, .env secrets, and static metadata
 just build       # build the default topology
-just up          # start Relay, Witness, Postgres, Zitadel, OpenFn, metadata
+just up          # start Relay, Notary, Postgres, Zitadel, OpenFn, metadata
 just ps          # show service status
 just logs        # follow all logs
-just logs -- zitadel openfn-civil-witness
+just logs -- zitadel openfn-civil-notary
 just down        # stop containers and remove demo volumes
 ```
 
 Run the default API-key demo:
 
 ```bash
-just smoke       # API-level smoke for Relay and Witness
-just federation  # signed Witness-to-Witness delegated evaluation smoke
-just openfn      # OpenFn sidecar-backed Witness smoke
+just smoke       # API-level smoke for Relay and Notary
+just federation  # signed Notary-to-Notary delegated evaluation smoke
+just openfn      # OpenFn sidecar-backed Notary smoke
 just client      # narrated default client flow
 just quick       # generate, build, up, smoke, openfn, client
 ```
 
 `just federation` proves the default non-agricultural federation slice. A demo
 benefits peer signs compact JWS requests to the civil and social protection
-Witnesses, verifies their signed responses, composes a local benefit-screen
+Notaries, verifies their signed responses, composes a local benefit-screen
 artifact from `age-band`, `person-is-alive`, `beneficiary-active`, and
 `household-eligibility-band`, and writes artifacts to `output/federation/`. It
 also proves replay and unsupported-purpose denials without embedding raw
@@ -119,6 +120,7 @@ Run the live-service demos:
 ```bash
 just relay-postgres  # Relay ignored Postgres integration test
 just relay-zitadel   # Relay ignored Zitadel integration test
+just notary-redis   # Notary and Platform live Redis integration tests
 just oidc-relay      # separate OIDC-protected Relay node
 just citizen-login  # print local eSignet login URL
 just citizen-code   # exchange returned code and run flow
@@ -131,10 +133,10 @@ Run the NAgDI agricultural registries demo:
 
 ```bash
 just agri-generate  # write agricultural XLSX fixtures, AGRI_* secrets, and static metadata
-just agri-build     # build the agricultural Relay, Witness, and metadata publisher
+just agri-build     # build the agricultural Relay, Notary, and metadata publisher
 just agri-up        # start the agricultural profile
 just agri-smoke     # API-level agricultural smoke and narrated client assertions
-just agri-federation # signed Witness-to-Witness delegated evaluation smoke
+just agri-federation # signed Notary-to-Notary delegated evaluation smoke
 just agri-client    # narrated agricultural client flow only
 just agri-down      # stop agricultural services
 ```
@@ -142,7 +144,7 @@ just agri-down      # stop agricultural services
 The agricultural flow expects:
 
 - `agri-registry-relay` on host port `4341`
-- `nagdi-agriculture-witness` on host port `4342`
+- `nagdi-agriculture-notary` on host port `4342`
 - `agri-static-metadata-publisher` on host port `4343`
 - credentials in `.env` named with the `AGRI_*` prefix, including
   `AGRI_METADATA_CLIENT_RAW`, `AGRI_EVIDENCE_ONLY_RAW`,
@@ -166,20 +168,20 @@ The default agricultural smoke/client paths follow the NAgDI spec:
   `/datasets/agri_registry/aggregates/livestock_herds_by_species_district`
 
 Agricultural metadata discovery should distinguish the two evidence surfaces:
-voucher and livestock eligibility are Registry Witness offerings, while market
+voucher and livestock eligibility are Registry Notary offerings, while market
 sizing and livestock herd planning are Registry Relay aggregate offerings served
 from the default aggregate paths above.
 The narrated agricultural client also proves demo-grade holder-bound SD-JWT
 credential issuance from the successful voucher evaluation. Full wallet or
 OID4VCI ceremonies are outside the default agricultural smoke path.
 
-`just agri-federation` proves the first Registry Witness federation slice. The
+`just agri-federation` proves the first Registry Notary federation slice. The
 demo benefits peer signs compact JWS requests to
-`POST /federation/v1/evaluations` on `nagdi-agriculture-witness`, verifies the
+`POST /federation/v1/evaluations` on `nagdi-agriculture-notary`, verifies the
 signed responses, composes a local benefits decision from the returned
 predicates, and writes artifacts to `output/agri-federation/`. It also proves a
 replay denial and an unsupported-purpose denial. This is delegated evaluation
-only: it does not enable open federation, outbound Witness composition, or
+only: it does not enable open federation, outbound Notary composition, or
 federated credential issuance.
 
 Use environment overrides such as `AGRI_RELAY_URL`, `AGRI_WITNESS_URL`,
@@ -213,11 +215,30 @@ when you want to keep the current Postgres, Zitadel, or OpenFn containers
 running for inspection.
 
 The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
-`REGISTRY_WITNESS_SOURCE_DIR`, `REGISTRY_OPENFN_WITNESS_SOURCE_DIR`, and
+`REGISTRY_NOTARY_SOURCE_DIR`, `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, and
 `REGISTRY_PLATFORM_SOURCE_DIR` to sibling checkouts when present. It also
 defaults `CEL_MAPPING_SOURCE_DIR` to `../cel-mapping`, because current Relay and
-Witness builds use the Crosswalk crates from that checkout. Override those
+Notary builds use the Crosswalk crates from that checkout. Override those
 variables when you want to build from pinned sources or another local path.
+
+## Live Notary Redis Checks
+
+The lab includes a Redis service so the Redis-backed replay and credential
+status paths can be tested against a real backend without requiring a local
+Redis install:
+
+```bash
+just notary-redis
+```
+
+That recipe starts the `redis` Compose service, waits for `redis-cli ping`, and
+runs the focused live Redis tests from sibling `registry-platform` and
+`registry-notary` checkouts with
+`REGISTRY_PLATFORM_REDIS_TEST_URL=redis://127.0.0.1:63799/`. Override
+`REGISTRY_LAB_REDIS_PORT`, `REGISTRY_PLATFORM_SOURCE_DIR`, or
+`REGISTRY_NOTARY_SOURCE_DIR` if your local layout differs. Inside Compose,
+Notary containers also receive `REGISTRY_NOTARY_REDIS_URL=redis://redis:6379/`
+for configs that opt into Redis-backed storage.
 
 ## Live Relay Scenarios
 
@@ -245,7 +266,7 @@ Zitadel access token. Today the script accepts either a `200` row read or a
 machine-user token did not emit the mapped Zitadel roles.
 
 `smoke-citizen-self-attestation.sh` is an optional eSignet-oriented story for a
-citizen-facing Registry Witness on port `4325`. It supports either a JWT access
+citizen-facing Registry Notary on port `4325`. It supports either a JWT access
 token carrying the subject-binding claim and `auth_time`, or the eSignet-style
 split where UserInfo carries the subject claim and the ID token carries
 `auth_time`/`acr`. For stock local eSignet tokens that omit `scope`, the demo
@@ -254,8 +275,8 @@ client/audience, assurance, and subject binding instead. If a live eSignet
 profile uses a separate signed UserInfo issuer, mixed token/UserInfo algorithms,
 missing access-token `typ`, or a 1200s token lifetime, the script detects or
 accepts explicit env overrides for those settings. The script generates
-`output/citizen-self-attestation/citizen-civil-witness.yaml`, starts a host-side
-Witness against the existing civil Relay, evaluates `person-is-alive` for the
+`output/citizen-self-attestation/citizen-civil-notary.yaml`, starts a host-side
+Notary against the existing civil Relay, evaluates `person-is-alive` for the
 token-bound citizen, and proves `NID-1002` is denied. See
 `output/citizen-self-attestation/report.md` and
 `output/citizen-self-attestation/flow-transcript.txt` for the evidence trail,
@@ -290,7 +311,7 @@ just citizen-code
 created `/tmp/esignet-live-test/client-private.pem`, it uses that client key;
 otherwise set `ESIGNET_CLIENT_PRIVATE_KEY_FILE=/path/to/client-private-key.pem`.
 The command narrates the verified token metadata, UserInfo subject binding,
-Witness discovery, successful self claim, other-person denial, and audit check
+Notary discovery, successful self claim, other-person denial, and audit check
 without printing raw tokens.
 
 If you already have tokens:
@@ -308,7 +329,7 @@ just citizen-report
 ```
 
 The optional OID4VCI probe is deliberately outside `just quick`. It reuses the
-same citizen eSignet login/code/token flow, starts the citizen Witness with an
+same citizen eSignet login/code/token flow, starts the citizen Notary with an
 OID4VCI config block, and writes evidence under `output/citizen-oid4vci`:
 
 ```bash
@@ -332,12 +353,12 @@ bearer tokens or credential values to the terminal, but it intentionally writes
 raw local replay/debug artifacts under `output/`, including proof JWTs,
 credential request and response bodies, and seeded demo civil IDs where present.
 The nonce request is bound to the selected `credential_configuration_id`,
-matching the Witness nonce replay checks. To test the same facade with Walt
+matching the Notary nonce replay checks. To test the same facade with Walt
 Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
 ## OpenFn Sidecar Demo
 
-The OpenFn nodes prove the Registry Witness `registry_data_api` connector can
+The OpenFn nodes prove the Registry Notary `registry_data_api` connector can
 source one-item civil lookups from an OpenFn HTTP adaptor sidecar:
 
 ```bash
@@ -347,9 +368,9 @@ just up
 just openfn
 ```
 
-The default OpenFn build uses `../registry-witness` through
-`REGISTRY_OPENFN_WITNESS_SOURCE_DIR` until the vendored Witness pin contains
-`crates/registry-witness-openfn-sidecar`.
+The default OpenFn build uses `../registry-notary` through
+`REGISTRY_OPENFN_NOTARY_SOURCE_DIR` until the vendored Notary pin contains
+`crates/registry-notary-openfn-sidecar`.
 
 OpenFn is part of the default Compose topology. The sidecar and mock registry
 are not published to host ports; they run only on the private
@@ -357,8 +378,8 @@ are not published to host ports; they run only on the private
 containers with `--force-recreate --remove-orphans` so repeated local runs do
 not get stuck on stale Compose container IDs.
 
-The smoke writes `output/smoke-openfn-witness-evaluation.json`. The sidecar is
-not published to the host; use the Witness API for evidence requests:
+The smoke writes `output/smoke-openfn-notary-evaluation.json`. The sidecar is
+not published to the host; use the Notary API for evidence requests:
 
 ```bash
 set -a
@@ -371,7 +392,7 @@ curl -fsS \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
   http://127.0.0.1:4324/claims/evaluate \
-  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-witness.claim-result+json"}' | jq
+  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}' | jq
 ```
 
 ## Live-Service Story Runner
@@ -389,8 +410,8 @@ presented as a guided case file rather than a pile of API responses:
    invokes the Atlas semantic discovery CLI and `service-view` command, selects
    the health-linked child support service, maps grouped CCCEV evidence options
    to evidence types and providers, follows BRegDCAT/DCAT-style access-service
-   endpoints into Witness claim discovery, validates a sample form payload
-   against the published form JSON Schema, then evaluates the relevant Witness
+   endpoints into Notary claim discovery, validates a sample form payload
+   against the published form JSON Schema, then evaluates the relevant Notary
    claims in that service context.
 2. **Zitadel-issued JWT at a separate OIDC Relay node** starts a temporary
    OIDC-protected Relay on port `4316`, mints a Zitadel machine-user token,
@@ -399,8 +420,8 @@ presented as a guided case file rather than a pile of API responses:
 3. **Database-source cutover with live Postgres** starts a temporary
    Postgres-backed Relay on port `4315`, reads benefit cases, inserts a new
    database row, then proves the live Relay sees it without a restart.
-4. **OpenFn sidecar lookup behind Registry Witness** calls the default
-   OpenFn-backed Witness on port `4324` and records the date-of-birth claim
+4. **OpenFn sidecar lookup behind Registry Notary** calls the default
+   OpenFn-backed Notary on port `4324` and records the date-of-birth claim
    result while keeping the sidecar private to the Compose network.
 
 ```bash
@@ -428,7 +449,7 @@ Definition of done for a live story run:
 - Atlas `service-view` provides the public service, requirements, grouped
   evidence options, providers, access services, source evidence, gaps, and
   report summary without a Lab-local Rust helper.
-- Witness calls are derived from Atlas access-service `endpoint_url` values,
+- Notary calls are derived from Atlas access-service `endpoint_url` values,
   with only local Compose hostname-to-host-port translation.
 - The generated `output/live-stories/index.html` shows API responses and the
   value from each response that drives the next call, plus important HTTP
@@ -436,11 +457,11 @@ Definition of done for a live story run:
 - No bearer tokens, client secrets, JWKS private keys, database credentials, or
   unrelated row data are written to the terminal or artifacts.
 
-In the service-first story, Registry Witness dispatch uses access-service
+In the service-first story, Registry Notary dispatch uses access-service
 `endpoint_url` values discovered from Atlas output. The runner records the
 discovered endpoint and validates that the host URL used for the HTTP call is
 derived from it. The only local rewrite is Compose hostname-to-host-port
-translation, for example `http://shared-eligibility-witness:8080` to
+translation, for example `http://shared-eligibility-notary:8080` to
 `http://127.0.0.1:4323`, so the host-side story runner can reach the same
 container service.
 
@@ -452,12 +473,12 @@ behavior.
 
 This demo keeps runtime orchestration, fixtures, static metadata config, and
 walkthrough scripts in this repository. Registry Platform, Registry Relay, and
-Registry Witness are submodules under `vendor/`:
+Registry Notary are submodules under `vendor/`:
 
-- `vendor/registry-platform`: shared platform crates used by Relay and Witness.
+- `vendor/registry-platform`: shared platform crates used by Relay and Notary.
 - `vendor/registry-relay`: Relay source used by `Dockerfile.registry-relay`.
-- `vendor/registry-witness`: Registry Witness source used by
-  `Dockerfile.registry-witness`.
+- `vendor/registry-notary`: Registry Notary source used by
+  `Dockerfile.registry-notary`.
 
 The Compose build uses Docker named contexts so local source checkouts can be
 used without changing `compose.yaml`:
@@ -465,7 +486,7 @@ used without changing `compose.yaml`:
 ```bash
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
-REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
+REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
 CEL_MAPPING_SOURCE_DIR=../cel-mapping \
 just build
 ```
@@ -476,11 +497,11 @@ that script to use a sibling Relay checkout instead of the
 the Registry Manifest CLI from `REGISTRY_MANIFEST_REPO`, defaulting to the
 `../registry-manifest` sibling checkout. For a release, pin the submodules to
 commits that already include the Registry Platform, Registry Relay, and Registry
-Witness behavior required by this demo.
+Notary behavior required by this demo.
 
-OpenFn image builds can use `REGISTRY_OPENFN_WITNESS_SOURCE_DIR` separately from
-the core Witness image. The current lab default points OpenFn at
-`../registry-witness` because the vendored Witness pin does not yet include the
+OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
+the core Notary image. The current lab default points OpenFn at
+`../registry-notary` because the vendored Notary pin does not yet include the
 OpenFn sidecar crate.
 
 ## Fixture Data
@@ -502,30 +523,30 @@ subjects, and health-linked support cases.
 ## Credentials
 
 `scripts/generate-demo-secrets.py` writes `.env` with local demo credentials and
-matching SHA-256 fingerprints for Relay, Witness, and OpenFn sidecar auth. The
+matching SHA-256 fingerprints for Relay, Notary, and OpenFn sidecar auth. The
 committed `.env.example` contains inert examples only.
 
 Credential classes:
 
 - metadata client tokens for each Relay;
-- evidence source tokens used by Registry Witness instances when calling Relay;
+- evidence source tokens used by Registry Notary instances when calling Relay;
 - evidence-only Relay tokens used to prove verification scope does not imply
   row or aggregate access;
 - row-reader tokens for the explicit positive row-read check;
 - aggregate-reader tokens for the aggregate consultation;
 - OpenFn sidecar tokens, stored as raw caller tokens plus `OPENFN_SIDECAR_TOKEN_HASH`;
 - OpenFn mock registry target tokens, used only inside the private OpenFn network;
-- separate Registry Witness client API keys and bearer tokens;
-- distinct shared Registry Witness source tokens for civil, social, and health;
-- per-deployment audit hash secrets for Relay and Witness redaction.
+- separate Registry Notary client API keys and bearer tokens;
+- distinct shared Registry Notary source tokens for civil, social, and health;
+- per-deployment audit hash secrets for Relay and Notary redaction.
 
 The social protection Relay config keeps row and aggregate scopes on separate
 credentials so the smoke flow can prove row-reader credentials cannot run the
 aggregate endpoint. Civil and health aggregate credentials are generated for
 future symmetry but are not used by the v1 walkthrough.
 
-Relay and Registry Witness auth configs should reference only `*_HASH` env vars.
-Registry Witness upstream source connections still reference raw `token_env`
+Relay and Registry Notary auth configs should reference only `*_HASH` env vars.
+Registry Notary upstream source connections still reference raw `token_env`
 names for outbound calls to Relay. The OpenFn sidecar auth config also requires
 `OPENFN_SIDECAR_TOKEN_HASH`; plaintext sidecar token config is rejected. No raw
 token should be committed.
@@ -553,7 +574,7 @@ or backend runtime details.
 
 `scripts/demo-flow.py` narrates three scenarios:
 
-1. Birth Registration To Child Support: Registry Witness verifies civil facts and
+1. Birth Registration To Child Support: Registry Notary verifies civil facts and
    issues a demo-grade credential without exposing raw civil rows.
 2. Household Benefit Review From Registry Data: the client performs a protected
    Relay row read, dataset-scoped aggregate consultation, and OGC EDR `/area`
@@ -561,7 +582,7 @@ or backend runtime details.
    writes a demo household-benefit decision artifact without writing back to
    Relay.
 3. Cross-Authority Conditional Support: static metadata leads the client to a
-   shared Registry Witness claim that depends on civil, social protection, and
+   shared Registry Notary claim that depends on civil, social protection, and
    health authorities.
 
 Every client request sends `x-request-id` using
@@ -583,6 +604,6 @@ The social protection walkthrough uses the dataset-scoped aggregate endpoint at
 and the EDR collection at
 `/ogc/edr/v1/collections/social_protection_households_by_district`.
 
-Registry Witness exposes OpenAPI at `/openapi.json` under the same auth boundary
-as the rest of the Registry Witness API. The demo client and smoke script fetch
-that document from all three Registry Witness instances.
+Registry Notary exposes OpenAPI at `/openapi.json` under the same auth boundary
+as the rest of the Registry Notary API. The demo client and smoke script fetch
+that document from all three Registry Notary instances.

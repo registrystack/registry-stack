@@ -52,17 +52,17 @@ def main() -> int:
     load_dotenv()
     out = prepare_output_dir(args.output_dir)
     relay_url = env("AGRI_RELAY_URL", "http://127.0.0.1:4341")
-    witness_url = env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")
-    witness_token = env("AGRI_EVIDENCE_CLIENT_BEARER")
+    notary_url = env("AGRI_WITNESS_URL", "http://127.0.0.1:4342")
+    notary_token = env("AGRI_EVIDENCE_CLIENT_BEARER")
 
     cases: dict[str, dict[str, object]] = {}
     for subject, (expected_state, expected_reason) in EXPECTED.items():
         evaluation = require(
             request(
                 "POST",
-                witness_url,
+                notary_url,
                 "/claims/evaluate",
-                witness_token,
+                notary_token,
                 evaluation_payload(subject, CLAIM),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
             ),
@@ -75,9 +75,9 @@ def main() -> int:
             reason_doc = require(
                 request(
                     "POST",
-                    witness_url,
+                    notary_url,
                     "/claims/evaluate",
-                    witness_token,
+                    notary_token,
                     evaluation_payload(subject, REASON_CLAIM, "value"),
                     {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
                 ),

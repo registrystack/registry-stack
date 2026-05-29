@@ -8,7 +8,7 @@ output_dir="${AGRI_SMOKE_OUTPUT_DIR:-${demo_dir}/output/agri-smoke}"
 correlation_id="${DEMO_CORRELATION_ID:-nagdi-agri-demo-correlation-001}"
 
 relay_url="${AGRI_RELAY_URL:-http://127.0.0.1:4341}"
-witness_url="${AGRI_WITNESS_URL:-http://127.0.0.1:4342}"
+notary_url="${AGRI_WITNESS_URL:-http://127.0.0.1:4342}"
 static_url="${AGRI_STATIC_METADATA_URL:-http://127.0.0.1:4343}"
 purpose="${AGRI_DATA_PURPOSE:-https://demo.example.gov/purpose/nagdi/climate-smart-input-support}"
 market_purpose="${AGRI_MARKET_DATA_PURPOSE:-https://demo.example.gov/purpose/nagdi/agricultural-market-sizing}"
@@ -23,7 +23,7 @@ aggregate_path="${AGRI_MARKET_SIZING_PATH:-/datasets/agri_registry/aggregates/vo
 suppressed_aggregate_path="${AGRI_SUPPRESSED_AGGREGATE_PATH:-/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input}"
 suppressed_aggregate_filter="${AGRI_SUPPRESSED_AGGREGATE_FILTER_DISTRICT:-D-WEST}"
 livestock_aggregate_path="${AGRI_LIVESTOCK_AGGREGATE_PATH:-/datasets/agri_registry/aggregates/livestock_herds_by_species_district}"
-claim_result_format="application/vnd.registry-witness.claim-result+json"
+claim_result_format="application/vnd.registry-notary.claim-result+json"
 
 if [[ -f "${demo_dir}/.env" ]]; then
   set -a
@@ -324,8 +324,8 @@ urls = body.get("discovery_urls") or []
 bad = [url for url in urls if "agri-" not in url and "nagdi-agriculture" not in url]
 if bad:
     raise SystemExit(f"non-agricultural discovery URLs leaked into agri story: {bad!r}")
-if not any("nagdi-agriculture-witness" in url for url in urls):
-    raise SystemExit("agriculture Witness discovery URL missing")
+if not any("nagdi-agriculture-notary" in url for url in urls):
+    raise SystemExit("agriculture Notary discovery URL missing")
 if not any("agri-registry-relay" in url for url in urls):
     raise SystemExit("agriculture Relay aggregate URL missing")
 PY
@@ -390,7 +390,7 @@ mkdir -p "${output_dir}"
 
 wait_http "agricultural relay health" "${relay_url}/health" "${AGRI_METADATA_CLIENT_RAW}"
 wait_http "agricultural relay ready" "${relay_url}/ready" "${AGRI_METADATA_CLIENT_RAW}"
-wait_http "agriculture Witness discovery" "${witness_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}"
+wait_http "agriculture Notary discovery" "${notary_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}"
 wait_http "agricultural static metadata publisher" "${static_url}/.well-known/api-catalog" ""
 
 check "agricultural relay health" curl_json GET "${relay_url}/health" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-relay-health.json"
@@ -399,9 +399,9 @@ check "agricultural relay OpenAPI" curl_json GET "${relay_url}/openapi.json" "${
 check "agricultural datasets" curl_json GET "${relay_url}/datasets" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-datasets.json"
 check "agricultural evidence offerings" curl_json GET "${relay_url}/metadata/evidence-offerings" "${AGRI_METADATA_CLIENT_RAW}" "${output_dir}/agri-relay-evidence-offerings.json"
 
-check "agriculture Witness discovery" curl_json GET "${witness_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-witness-discovery.json"
-check "agriculture Witness OpenAPI" curl_json GET "${witness_url}/openapi.json" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-witness-openapi.json"
-check "agriculture Witness claims" curl_json GET "${witness_url}/claims" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-witness-claims.json"
+check "agriculture Notary discovery" curl_json GET "${notary_url}/.well-known/evidence-service" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-notary-discovery.json"
+check "agriculture Notary OpenAPI" curl_json GET "${notary_url}/openapi.json" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-notary-openapi.json"
+check "agriculture Notary claims" curl_json GET "${notary_url}/claims" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-notary-claims.json"
 
 check "agricultural static api catalog" curl_json GET "${static_url}/.well-known/api-catalog" "" "${output_dir}/agri-static-api-catalog.json"
 check "agricultural static metadata index" curl_json GET "${static_url}/metadata/index.json" "" "${output_dir}/agri-static-metadata-index.json"
@@ -444,93 +444,93 @@ suppressed_status="$(curl_status POST "${relay_url}${suppressed_aggregate_path%/
 check "filtered agricultural aggregate proves suppression" assert_aggregate_suppression "${output_dir}/agri-suppressed-aggregate.json"
 check "filtered agricultural aggregate publishes no rows" assert_aggregate_empty_rows "${output_dir}/agri-suppressed-aggregate.json"
 
-check "eligible voucher evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1001.json" \
+check "eligible voucher evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1001.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1001\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1001 is eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1001.json" "${claim}" eligible
 
-check "denied voucher evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1002.json" \
+check "denied voucher evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1002.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1002\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1002 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1002.json" "${claim}" not_eligible
-check "FARMER-1002 reason evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1002-reason.json" \
+check "FARMER-1002 reason evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1002-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1002\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1002 inactive parcel reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1002-reason.json" "${manual_review_claim}" "parcel.status:not_active"
 
-check "already-redeemed farmer evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003.json" \
+check "already-redeemed farmer evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1003\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1003 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1003.json" "${claim}" not_eligible
-check "FARMER-1003 reason evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003-reason.json" \
+check "FARMER-1003 reason evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1003\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1003 redeemed voucher reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1003-reason.json" "${manual_review_claim}" "voucher.redemption:already_redeemed"
 
-check "stale registration farmer evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1004.json" \
+check "stale registration farmer evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1004.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1004\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1004 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1004.json" "${claim}" not_eligible
-check "FARMER-1004 reason evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1004-reason.json" \
+check "FARMER-1004 reason evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1004-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1004\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1004 inactive registration reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1004-reason.json" "${manual_review_claim}" "farmer.registration_status:not_active"
 
-check "manual-review farmer evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1005.json" \
+check "manual-review farmer evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1005.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1005\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1005 is not auto-eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1005.json" "${claim}" not_eligible
 
-check "manual-review reason evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1005-reason.json" \
+check "manual-review reason evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1005-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"FARMER-1005\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
 check "FARMER-1005 requires manual review" assert_claim_value "${output_dir}/agri-evaluation-farmer-1005-reason.json" "${manual_review_claim}" "data_quality:manual_review_required"
 
-check "eligible livestock movement evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2001.json" \
+check "eligible livestock movement evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2001.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"HERD-2001\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "HERD-2001 is eligible" assert_claim_outcome "${output_dir}/agri-evaluation-herd-2001.json" "${livestock_claim}" eligible
 
-check "expired-vaccination livestock movement evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2002.json" \
+check "expired-vaccination livestock movement evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2002.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"HERD-2002\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "HERD-2002 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-herd-2002.json" "${livestock_claim}" not_eligible
-check "HERD-2002 reason evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2002-reason.json" \
+check "HERD-2002 reason evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2002-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"HERD-2002\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_reason_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
 check "HERD-2002 expired vaccination reason" assert_claim_value "${output_dir}/agri-evaluation-herd-2002-reason.json" "${livestock_reason_claim}" "livestock.vaccination:expired"
 
-check "quarantine livestock movement evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2003.json" \
+check "quarantine livestock movement evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2003.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
   --data "{\"subject\":{\"id\":\"HERD-2003\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
 check "HERD-2003 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-herd-2003.json" "${livestock_claim}" not_eligible
-check "HERD-2003 reason evaluation" curl_json POST "${witness_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2003-reason.json" \
+check "HERD-2003 reason evaluation" curl_json POST "${notary_url}/claims/evaluate" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2003-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
@@ -554,9 +554,9 @@ credential_artifact="$(find "${demo_dir}/output/agri-client" -maxdepth 1 -name "
 check "agricultural client issued credential artifact" json_has_key "${credential_artifact}" credential
 
 log_file="${output_dir}/agri-service-logs.txt"
-if docker compose -f "${compose_file}" logs --no-color agri-registry-relay nagdi-agriculture-witness > "${log_file}" 2>/dev/null; then
+if docker compose -f "${compose_file}" logs --no-color agri-registry-relay nagdi-agriculture-notary > "${log_file}" 2>/dev/null; then
   grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
-  grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Witness evaluation audit event"
+  grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Notary evaluation audit event"
 else
   echo "warning: could not collect agri service logs from compose; skipping audit log grep" >&2
 fi
