@@ -7,7 +7,8 @@ Notary verifiers, a live Postgres source, a live Zitadel IdP, a default OpenFn
 sidecar scenario, a static metadata publisher, and a narrated client. It uses
 functional domains only. The services simulate civil, social protection, and
 health registry patterns, but they are not real OpenCRVS, OpenSPP, DHIS2,
-OpenIMIS, MOSIP, or other product integrations.
+OpenIMIS, MOSIP, or other product integrations unless an optional live-service
+profile explicitly says otherwise.
 
 ## Topology
 
@@ -23,6 +24,8 @@ OpenIMIS, MOSIP, or other product integrations.
 - `openfn-civil-notary`: OpenFn sidecar-backed civil verifier on host port `4324`.
 - `openfn-civil-sidecar`: OpenFn adaptor sidecar on the private Compose network.
 - `openfn-mock-registry`: registry-like HTTP API on the private OpenFn network.
+- `dhis2-health-notary`: optional live DHIS2/OpenFn health evidence verifier on host port `4326`.
+- `openfn-dhis2-sidecar`: optional OpenFn DHIS2 adaptor sidecar on the private Compose network.
 - `static-metadata-publisher`: generated static metadata on host port `4331`.
 
 Inside Compose, services use DNS names like
@@ -103,6 +106,8 @@ Run the default API-key demo:
 just smoke       # API-level smoke for Relay and Notary
 just federation  # signed Notary-to-Notary delegated evaluation smoke
 just openfn      # OpenFn sidecar-backed Notary smoke
+just opencrvs-dci # live OpenCRVS DCI-backed Notary smoke
+just dhis2-openfn # live DHIS2/OpenFn health evidence smoke
 just client      # narrated default client flow
 just quick       # generate, build, up, smoke, openfn, client
 ```
@@ -174,6 +179,46 @@ from the default aggregate paths above.
 The narrated agricultural client also proves demo-grade holder-bound SD-JWT
 credential issuance from the successful voucher evaluation. Full wallet or
 OID4VCI ceremonies are outside the default agricultural smoke path.
+
+Run the live OpenCRVS DCI demo:
+
+```bash
+just opencrvs-dci
+```
+
+The OpenCRVS DCI smoke starts `opencrvs-dci-notary` on host port `4352` by
+default and evaluates four claims against the Farajaland integration DCI API:
+
+- `opencrvs-birth-record-exists`
+- `opencrvs-date-of-birth`
+- `opencrvs-sex`
+- `opencrvs-age-band`
+
+It also issues a demo `application/dc+sd-jwt` VC with credential profile
+`opencrvs_birth_summary_sd_jwt` and writes the full response to
+`output/opencrvs-dci/credential.json`.
+
+Put the live OpenCRVS values in `.env.local`, which is ignored by Git:
+
+```bash
+OPENCRVS_DCI_CLIENT_ID='<client id>'
+OPENCRVS_DCI_CLIENT_SECRET='<client secret>'
+OPENCRVS_DCI_SHA_SECRET='<sha secret, reserved for signed-request testing>'
+OPENCRVS_EVIDENCE_CLIENT_TOKEN='api-token'
+OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH='sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51'
+OPENCRVS_DCI_NOTARY_PORT=4352
+```
+
+The script refreshes the short-lived OpenCRVS access token and stores it back
+in `.env.local` as `OPENCRVS_DCI_TOKEN` for the Compose service. Leave
+`OPENCRVS_DEMO_SUBJECT_UIN` unset to let the script discover a seeded demo UIN
+without writing it to disk, or set it locally for a fixed smoke subject.
+
+The VC profile uses `holder_binding.mode: none` so the lab can show direct
+machine-to-machine issuance without wallet ceremony. Use a holder-bound
+`did:jwk` proof profile before presenting this as citizen-wallet issuance.
+See [`docs/opencrvs-dci-notary-tutorial.md`](docs/opencrvs-dci-notary-tutorial.md)
+for the non-developer step-by-step walkthrough.
 
 `just agri-federation` proves the first Registry Notary federation slice. The
 demo benefits peer signs compact JWS requests to
@@ -394,6 +439,34 @@ curl -fsS \
   http://127.0.0.1:4324/claims/evaluate \
   --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}' | jq
 ```
+
+## Live DHIS2 OpenFn Demo
+
+The optional DHIS2 profile uses the public DHIS2 2.43 demo at
+`https://play.im.dhis2.org/stable-2-43-0` through pinned OpenFn HTTP adaptor
+jobs against the DHIS2 Tracker API. It keeps the sidecar private on the Compose
+network and exposes only the Registry Notary API on host port `4326`.
+Because the DHIS2 demo is a live public sandbox, this smoke is outside
+`just quick` and may need sample subject refreshes if the upstream demo data is
+reset.
+
+```bash
+just generate
+just build
+just dhis2-openfn
+```
+
+The DHIS2 Notary exposes four predicate claims:
+
+- `dhis2-child-program-active`
+- `dhis2-maternal-pnc-active`
+- `dhis2-child-health-visit-recorded`
+- `dhis2-tb-program-active`
+
+The smoke writes positive and negative predicate responses under
+`output/smoke-dhis2-*.json`, then issues a demo `application/dc+sd-jwt`
+credential with profile `dhis2_health_status_sd_jwt` at
+`output/smoke-dhis2-health-status-credential.json`.
 
 ## Live-Service Story Runner
 

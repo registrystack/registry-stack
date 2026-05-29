@@ -285,6 +285,91 @@ services:
       openfn-civil-sidecar:
         condition: service_healthy
 
+  openfn-dhis2-sidecar:
+    image: registry-notary-openfn-sidecar:demo
+    profiles: ["dhis2"]
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-notary-openfn-sidecar
+      additional_contexts:
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
+    env_file:
+      - .env
+    environment:
+      RUST_LOG: info
+      OPENFN_SIDECAR_TOKEN_HASH: ${OPENFN_SIDECAR_TOKEN_HASH:-}
+      OPENFN_DHIS2_HOST_URL: ${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}
+      OPENFN_DHIS2_USERNAME: ${OPENFN_DHIS2_USERNAME:-admin}
+      OPENFN_DHIS2_PASSWORD: ${OPENFN_DHIS2_PASSWORD:-district}
+      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-https://play.im.dhis2.org/stable-2-43-0}","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        : "$${OPENFN_SIDECAR_TOKEN_HASH:?missing OPENFN_SIDECAR_TOKEN_HASH; run scripts/generate-demo-secrets.py}"
+        exec registry-notary-openfn-sidecar --config /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template
+    volumes:
+      - ./config/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro
+    networks:
+      - default
+      - openfn-internal
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e 'fetch(\"http://127.0.0.1:8080/ready\").then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  dhis2-health-notary:
+    <<: *notary-common
+    profiles: ["dhis2"]
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-notary
+      additional_contexts:
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
+    command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]
+    environment:
+      RUST_LOG: info
+      OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
+    ports:
+      - "4326:8080"
+    volumes:
+      - ./config/notary/dhis2-health-notary.yaml:/etc/registry-notary/dhis2-health-notary.yaml:ro
+    networks:
+      - default
+      - openfn-internal
+    depends_on:
+      openfn-dhis2-sidecar:
+        condition: service_healthy
+
+  opencrvs-dci-notary:
+    image: registry-notary:demo
+    build:
+      context: .
+      dockerfile: Dockerfile.registry-notary
+      additional_contexts:
+        notary_src: ${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}
+        registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
+        cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}
+    profiles: ["opencrvs"]
+    command: ["--config", "/etc/registry-notary/opencrvs-dci-notary.yaml"]
+    environment:
+      RUST_LOG: info
+      REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:?missing REGISTRY_NOTARY_AUDIT_HASH_SECRET; run scripts/generate-demo-secrets.py}
+      REGISTRY_NOTARY_ISSUER_JWK: ${REGISTRY_NOTARY_ISSUER_JWK:?missing REGISTRY_NOTARY_ISSUER_JWK; run scripts/generate-demo-secrets.py}
+      OPENCRVS_DCI_TOKEN: ${OPENCRVS_DCI_TOKEN:-}
+      OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH:-}
+    restart: unless-stopped
+    ports:
+      - "${OPENCRVS_DCI_NOTARY_PORT:-4352}:8080"
+    volumes:
+      - ./config/notary/opencrvs-dci-notary.yaml:/etc/registry-notary/opencrvs-dci-notary.yaml:ro
+
   static-metadata-publisher:
     image: python:3.12.3-slim-bookworm
     command: ["python", "/usr/local/bin/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]

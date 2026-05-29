@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: "0.0.0.0:8080"
+
+auth:
+  bearer_tokens:
+    - id: dhis2_health_notary
+      hash_env: OPENFN_SIDECAR_TOKEN_HASH
+
+limits:
+  max_workers: 2
+  worker_timeout_ms: 15000
+  max_worker_memory_mb: 12288
+  max_output_bytes: 1048576
+  max_request_bytes: 16384
+  max_query_parameter_bytes: 1024
+  liveness_window_ms: 30000
+  retry_after_seconds: 1
+
+openfn:
+  cli_build_tool: "1.2.5"
+  runtime: "1.9.3"
+
+worker:
+  command: "node"
+  args:
+    - "--experimental-vm-modules"
+    - "/opt/openfn/openfn_worker.mjs"
+  version_args:
+    - "--experimental-vm-modules"
+    - "/opt/openfn/openfn_worker.mjs"
+    - "--version"
+    - "--require-adaptor"
+    - "@openfn/language-http@7.2.0"
+    - "--require-adaptor"
+    - "@openfn/language-common@3.2.3"
+
+sources:
+  dhis2_health:
+    dataset: dhis2_tracker
+    entity: person
+    workflow:
+      steps:
+        - id: lookup
+          expression: /opt/openfn/jobs/dhis2-health-lookup.js
+          adaptors:
+            - "@openfn/language-http@7.2.0"
+    credential_env: OPENFN_DHIS2_DEMO_CREDENTIAL_JSON
+    allowed_base_urls:
+      - https://play.im.dhis2.org/stable-2-43-0
+    smoke_lookup:
+      field: tracked_entity
+      value: PQfMcpmXeFE
+      fields: ["tracked_entity", "child_program_active", "tb_program_active"]
+      purpose: startup-readiness-smoke

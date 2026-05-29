@@ -31,6 +31,7 @@ COPY --from=builder /usr/local/bin/registry-notary-openfn-sidecar /usr/local/bin
 COPY --from=notary_src crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
 COPY --from=notary_src crates/registry-notary-openfn-sidecar/examples/jobs/http-person-lookup.js ./jobs/http-person-lookup.js
 COPY --from=notary_src crates/registry-notary-openfn-sidecar/examples/mock-registry-server.mjs ./mock-registry-server.mjs
+COPY config/openfn/jobs/dhis2-*.js ./jobs/
 
 USER node
 EXPOSE 8080

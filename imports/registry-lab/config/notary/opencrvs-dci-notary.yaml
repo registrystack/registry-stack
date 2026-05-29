@@ -1,0 +1,209 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: opencrvs_dci_lab_client
+      hash_env: OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
+      scopes:
+        - civil_registry:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: opencrvs-dci-notary
+  api_base_url: http://opencrvs-dci-notary:8080
+  inline_batch_limit: 20
+  source_connections:
+    opencrvs_crvs:
+      base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
+      token_env: OPENCRVS_DCI_TOKEN
+      bulk_mode: none
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: idtype-value
+        registry_type: ns:org:RegistryType:Civil
+        registry_event_type: birth
+        records_path: /message/search_response/0/data/reg_records
+  credential_profiles:
+    opencrvs_birth_summary_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:opencrvs-dci.demo.example.gov
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
+      issuer_kid: did:web:opencrvs-dci.demo.example.gov#registry-notary-demo-key-1
+      vct: https://demo.example.gov/credentials/opencrvs-birth-summary/v1
+      validity_seconds: 86400
+      allowed_claims:
+        - opencrvs-birth-record-exists
+        - opencrvs-date-of-birth
+        - opencrvs-sex
+        - opencrvs-age-band
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+  claims:
+    - id: opencrvs-birth-record-exists
+      title: OpenCRVS birth record exists
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: subject_id
+            field: UIN
+            op: eq
+            cardinality: one
+      rule:
+        type: exists
+        source: birth_record
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-date-of-birth
+      title: OpenCRVS date of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: subject_id
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-sex
+      title: OpenCRVS sex
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: subject_id
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            sex:
+              field: sex
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: sex
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-age-band
+      title: OpenCRVS age band
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: subject_id
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "date_age_on(source.birth_record.birth_date, vars.as_of_date) < 18 ? 'child' : (date_age_on(source.birth_record.birth_date, vars.as_of_date) >= 65 ? 'elderly' : 'adult')"
+        bindings:
+          vars:
+            as_of_date: "2026-05-29"
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
