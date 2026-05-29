@@ -104,6 +104,15 @@ flowchart TD
 Registry Notary uses static local config for the trusted peer:
 
 ```yaml
+evidence:
+  signing_keys:
+    federation-response:
+      provider: local_jwk_env
+      alg: EdDSA
+      kid: notary-fed-2026-05
+      status: active
+      private_jwk_env: REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK
+
 federation:
   enabled: true
   node_id: did:web:agency-a.example.gov
@@ -116,9 +125,7 @@ federation:
   max_request_lifetime_seconds: 300
   clock_leeway_seconds: 60
   signing:
-    kid: notary-fed-2026-05
-    key_env: REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK
-    alg: EdDSA
+    signing_key: federation-response
   pairwise_subject_hash:
     secret_env: REGISTRY_NOTARY_PAIRWISE_SUBJECT_HASH_SECRET
   peers:

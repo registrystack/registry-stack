@@ -149,7 +149,8 @@ align:
 - each claim's `formats`
 - each claim's `credential_profiles`
 - profile `allowed_claims`
-- issuer key env vars
+- profile `signing_key` references
+- signing key env vars
 - request-time evaluation format and disclosure
 
 This is correct from a policy perspective, but error-prone for a first-run demo.
@@ -429,7 +430,7 @@ Generated local values:
 - local Registry Notary API key
 - local Registry Notary API key hash
 - audit hash secret
-- demo issuer key, if demo issuance is enabled
+- demo signing key, if demo issuance is enabled
 - stable correlation id prefix for tutorial commands, if useful for logs
 
 Options:
@@ -604,10 +605,18 @@ signing.
 Proposed config:
 
 ```yaml
+evidence:
+  signing_keys:
+    opencrvs-dci-sender:
+      provider: local_jwk_env
+      alg: EdDSA
+      kid: did:web:example.gov#dci-sender-key-1
+      status: active
+      private_jwk_env: OPENCRVS_DCI_SIGNING_JWK
+
 dci:
   signing:
-    key_env: OPENCRVS_DCI_SIGNING_JWK
-    key_id: did:web:example.gov#dci-sender-key-1
+    signing_key: opencrvs-dci-sender
 ```
 
 Acceptance criteria:
@@ -744,7 +753,7 @@ Parallel work:
 - Worker A: implement `registry-notary doctor --config ... --env-file ...`.
 - Worker B: add OAuth probe, DCI dry-run/live probe, and records-path checks.
 - Worker C: add VC wiring diagnostics for claim formats, profile cross-links,
-  issuer key envs, disclosure compatibility, and holder binding requirements.
+  signing key envs, disclosure compatibility, and holder binding requirements.
 
 Done for Wave 2:
 
@@ -770,7 +779,7 @@ Parallel work:
 - Worker A: implement `opencrvs_birth_dci` preset expansion and
   `registry-notary explain-config`.
 - Worker B: implement `registry-notary init opencrvs-dci` file generation.
-- Worker C: implement `registry-notary hash-api-key` and demo issuer key
+- Worker C: implement `registry-notary hash-api-key` and demo signing key
   generation commands.
 
 Done for Wave 3:

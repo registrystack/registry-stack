@@ -140,6 +140,7 @@ impl StandaloneRegistryNotaryConfig {
         // Registry Notary currently resolves holder material only from
         // did:jwk. Reject any other configured method so discovery metadata
         // cannot advertise support that issuance cannot satisfy.
+        self.evidence.validate_signing_keys()?;
         for (profile_id, profile) in &self.evidence.credential_profiles {
             if profile.format != FORMAT_SD_JWT_VC {
                 return Err(EvidenceConfigError::UnsupportedCredentialProfileFormat {
@@ -176,6 +177,21 @@ impl StandaloneRegistryNotaryConfig {
                     profile: profile_id.clone(),
                 });
             }
+            let key = self
+                .evidence
+                .signing_keys
+                .get(profile.signing_key.as_str())
+                .ok_or_else(|| EvidenceConfigError::UnknownCredentialProfileSigningKey {
+                    profile: profile_id.clone(),
+                    key: profile.signing_key.clone(),
+                })?;
+            if !key.status.may_sign() {
+                return Err(EvidenceConfigError::CredentialProfileSigningKeyNotActive {
+                    profile: profile_id.clone(),
+                    key: profile.signing_key.clone(),
+                });
+            }
+            validate_profile_signing_key_issuer_binding(profile_id, profile, key)?;
         }
         // Finding 8: detect cycles in the depends_on graph using DFS with
         // grey (in-progress) and black (done) sets.
@@ -600,11 +616,21 @@ impl FederationConfig {
                 "federation.max_request_lifetime_seconds must be greater than zero",
             );
         }
-        if self.signing.alg != FEDERATION_SIGNING_ALG_EDDSA {
-            return invalid_federation("federation.signing.alg must be EdDSA");
+        validate_federation_non_empty("federation.signing.signing_key", &self.signing.signing_key)?;
+        let signing_key = evidence
+            .signing_keys
+            .get(self.signing.signing_key.as_str())
+            .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                reason: format!(
+                    "federation.signing.signing_key references unknown signing key '{}'",
+                    self.signing.signing_key
+                ),
+            })?;
+        if !signing_key.status.may_sign() {
+            return invalid_federation(
+                "federation.signing.signing_key must reference an active signing key",
+            );
         }
-        validate_federation_non_empty("federation.signing.kid", &self.signing.kid)?;
-        validate_federation_non_empty("federation.signing.key_env", &self.signing.key_env)?;
         validate_federation_non_empty(
             "federation.pairwise_subject_hash.secret_env",
             &self.pairwise_subject_hash.secret_env,
@@ -717,27 +743,10 @@ impl FederationConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FederationSigningConfig {
-    pub kid: String,
-    pub key_env: String,
-    #[serde(default = "default_federation_signing_alg")]
-    pub alg: String,
-}
-
-impl Default for FederationSigningConfig {
-    fn default() -> Self {
-        Self {
-            kid: String::new(),
-            key_env: String::new(),
-            alg: default_federation_signing_alg(),
-        }
-    }
-}
-
-fn default_federation_signing_alg() -> String {
-    FEDERATION_SIGNING_ALG_EDDSA.to_string()
+    pub signing_key: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -2484,6 +2493,18 @@ pub enum EvidenceConfigError {
          supported credential format is application/dc+sd-jwt"
     )]
     UnsupportedCredentialProfileFormat { profile: String, format: String },
+    #[error("signing key '{key}' is invalid: {reason}")]
+    InvalidSigningKeyConfig { key: String, reason: String },
+    #[error("credential profile '{profile}' references unknown signing key '{key}'")]
+    UnknownCredentialProfileSigningKey { profile: String, key: String },
+    #[error("credential profile '{profile}' references non-active signing key '{key}'")]
+    CredentialProfileSigningKeyNotActive { profile: String, key: String },
+    #[error("credential profile '{profile}' issuer does not match signing key '{key}': {reason}")]
+    CredentialProfileSigningKeyIssuerMismatch {
+        profile: String,
+        key: String,
+        reason: String,
+    },
     /// `rda_in_filter` requires the operator to attest that lookup values are
     /// unique per subject. Without this we cannot disambiguate per-subject
     /// rows from a single collection response.
@@ -2543,6 +2564,8 @@ pub struct EvidenceConfig {
     #[serde(default)]
     pub claims: Vec<ClaimDefinition>,
     #[serde(default)]
+    pub signing_keys: BTreeMap<String, SigningKeyConfig>,
+    #[serde(default)]
     pub credential_profiles: BTreeMap<String, CredentialProfileConfig>,
     #[serde(default)]
     pub source_connections: BTreeMap<String, SourceConnectionConfig>,
@@ -2550,6 +2573,33 @@ pub struct EvidenceConfig {
     /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
+}
+
+impl EvidenceConfig {
+    fn validate_signing_keys(&self) -> Result<(), EvidenceConfigError> {
+        let mut published_kids = HashSet::new();
+        for (key_id, key) in &self.signing_keys {
+            validate_signing_key_id(key_id)?;
+            key.validate(key_id)?;
+            if key.status.may_publish() && !published_kids.insert(key.kid.as_str()) {
+                return Err(EvidenceConfigError::InvalidSigningKeyConfig {
+                    key: key_id.clone(),
+                    reason: format!("duplicate published kid '{}'", key.kid),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_signing_key_id(key_id: &str) -> Result<(), EvidenceConfigError> {
+    if key_id.trim().is_empty() {
+        return Err(EvidenceConfigError::InvalidSigningKeyConfig {
+            key: key_id.to_string(),
+            reason: "signing key id must not be empty".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn default_service_id() -> String {
@@ -3083,9 +3133,7 @@ fn default_disclosure_downgrade() -> String {
 pub struct CredentialProfileConfig {
     pub format: String,
     pub issuer: String,
-    pub issuer_key_env: String,
-    #[serde(default)]
-    pub issuer_kid: Option<String>,
+    pub signing_key: String,
     pub vct: String,
     #[serde(default = "default_credential_validity_seconds")]
     pub validity_seconds: i64,
@@ -3095,6 +3143,198 @@ pub struct CredentialProfileConfig {
     pub allowed_claims: Vec<String>,
     #[serde(default)]
     pub disclosure: CredentialDisclosureConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum SigningKeyProviderConfig {
+    LocalJwkEnv,
+    Pkcs11,
+    LocalPkcs12File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum SigningKeyStatus {
+    Active,
+    PublishOnly,
+    Disabled,
+}
+
+impl SigningKeyStatus {
+    #[must_use]
+    pub const fn may_sign(self) -> bool {
+        matches!(self, Self::Active)
+    }
+
+    #[must_use]
+    pub const fn may_publish(self) -> bool {
+        matches!(self, Self::Active | Self::PublishOnly)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SigningKeyConfig {
+    pub provider: SigningKeyProviderConfig,
+    pub alg: String,
+    pub kid: String,
+    pub status: SigningKeyStatus,
+    #[serde(default)]
+    pub private_jwk_env: String,
+    #[serde(default)]
+    pub public_jwk_env: String,
+    #[serde(default)]
+    pub module_path: String,
+    #[serde(default)]
+    pub token_label: String,
+    #[serde(default)]
+    pub pin_env: String,
+    #[serde(default)]
+    pub key_label: String,
+    #[serde(default)]
+    pub key_id_hex: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub password_env: String,
+}
+
+impl SigningKeyConfig {
+    fn validate(&self, key_id: &str) -> Result<(), EvidenceConfigError> {
+        validate_signing_key_non_empty(key_id, "alg", &self.alg)?;
+        if self.alg != SD_JWT_VC_SIGNING_ALG {
+            return invalid_signing_key(key_id, format!("alg must be {SD_JWT_VC_SIGNING_ALG}"));
+        }
+        validate_signing_key_non_empty(key_id, "kid", &self.kid)?;
+        match self.provider {
+            SigningKeyProviderConfig::LocalJwkEnv => {
+                if self.status.may_sign() {
+                    validate_signing_key_non_empty(
+                        key_id,
+                        "private_jwk_env",
+                        &self.private_jwk_env,
+                    )?;
+                }
+                if matches!(self.status, SigningKeyStatus::PublishOnly) {
+                    validate_signing_key_non_empty(key_id, "public_jwk_env", &self.public_jwk_env)?;
+                    validate_signing_key_absent(key_id, "private_jwk_env", &self.private_jwk_env)?;
+                }
+                validate_signing_key_absent(key_id, "module_path", &self.module_path)?;
+                validate_signing_key_absent(key_id, "token_label", &self.token_label)?;
+                validate_signing_key_absent(key_id, "pin_env", &self.pin_env)?;
+                validate_signing_key_absent(key_id, "key_label", &self.key_label)?;
+                validate_signing_key_absent(key_id, "key_id_hex", &self.key_id_hex)?;
+                validate_signing_key_absent(key_id, "path", &self.path)?;
+                validate_signing_key_absent(key_id, "password_env", &self.password_env)?;
+            }
+            SigningKeyProviderConfig::Pkcs11 => {
+                if self.status.may_publish() {
+                    validate_signing_key_non_empty(key_id, "public_jwk_env", &self.public_jwk_env)?;
+                }
+                if self.status.may_sign() {
+                    validate_signing_key_non_empty(key_id, "module_path", &self.module_path)?;
+                    if !std::path::Path::new(&self.module_path).is_absolute() {
+                        return invalid_signing_key(key_id, "module_path must be absolute");
+                    }
+                    validate_signing_key_non_empty(key_id, "token_label", &self.token_label)?;
+                    validate_signing_key_non_empty(key_id, "pin_env", &self.pin_env)?;
+                    validate_signing_key_non_empty(key_id, "key_label", &self.key_label)?;
+                    validate_signing_key_non_empty(key_id, "key_id_hex", &self.key_id_hex)?;
+                    if !self.key_id_hex.len().is_multiple_of(2)
+                        || !self.key_id_hex.chars().all(|ch| ch.is_ascii_hexdigit())
+                    {
+                        return invalid_signing_key(key_id, "key_id_hex must be even-length hex");
+                    }
+                }
+                if matches!(self.status, SigningKeyStatus::PublishOnly) {
+                    validate_signing_key_absent(key_id, "module_path", &self.module_path)?;
+                    validate_signing_key_absent(key_id, "token_label", &self.token_label)?;
+                    validate_signing_key_absent(key_id, "pin_env", &self.pin_env)?;
+                    validate_signing_key_absent(key_id, "key_label", &self.key_label)?;
+                    validate_signing_key_absent(key_id, "key_id_hex", &self.key_id_hex)?;
+                }
+                validate_signing_key_absent(key_id, "private_jwk_env", &self.private_jwk_env)?;
+                validate_signing_key_absent(key_id, "path", &self.path)?;
+                validate_signing_key_absent(key_id, "password_env", &self.password_env)?;
+            }
+            SigningKeyProviderConfig::LocalPkcs12File => {
+                invalid_signing_key(
+                    key_id,
+                    "local_pkcs12_file provider is intentionally not implemented yet",
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_signing_key_non_empty(
+    key_id: &str,
+    field: &str,
+    value: &str,
+) -> Result<(), EvidenceConfigError> {
+    if value.trim().is_empty() {
+        return invalid_signing_key(key_id, format!("{field} must not be empty"));
+    }
+    Ok(())
+}
+
+fn validate_signing_key_absent(
+    key_id: &str,
+    field: &str,
+    value: &str,
+) -> Result<(), EvidenceConfigError> {
+    if !value.trim().is_empty() {
+        return invalid_signing_key(
+            key_id,
+            format!("{field} is not valid for this signing key provider"),
+        );
+    }
+    Ok(())
+}
+
+fn invalid_signing_key<T>(
+    key_id: &str,
+    reason: impl Into<String>,
+) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidSigningKeyConfig {
+        key: key_id.to_string(),
+        reason: reason.into(),
+    })
+}
+
+fn validate_profile_signing_key_issuer_binding(
+    profile_id: &str,
+    profile: &CredentialProfileConfig,
+    key: &SigningKeyConfig,
+) -> Result<(), EvidenceConfigError> {
+    if let Some(kid_did) = key
+        .kid
+        .split('#')
+        .next()
+        .filter(|did| did.starts_with("did:web:"))
+    {
+        if profile.issuer.starts_with("did:web:") && profile.issuer != kid_did {
+            return Err(
+                EvidenceConfigError::CredentialProfileSigningKeyIssuerMismatch {
+                    profile: profile_id.to_string(),
+                    key: profile.signing_key.clone(),
+                    reason: "did:web issuer must match signing key kid DID".to_string(),
+                },
+            );
+        }
+        if profile.issuer.starts_with("https://") {
+            validate_did_web_https_issuer_binding(kid_did, &profile.issuer).map_err(|error| {
+                EvidenceConfigError::CredentialProfileSigningKeyIssuerMismatch {
+                    profile: profile_id.to_string(),
+                    key: profile.signing_key.clone(),
+                    reason: error.to_string(),
+                }
+            })?;
+        }
+    }
+    Ok(())
 }
 
 const fn default_credential_validity_seconds() -> i64 {
@@ -3173,6 +3413,13 @@ mod tests {
             r#"
 evidence:
   enabled: true
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: ISSUER_KEY
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
 auth:
   mode: api_key
   api_keys:
@@ -3207,11 +3454,18 @@ evidence:
     crvs:
       base_url: https://registry.example/source
       token_env: SOURCE_TOKEN
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: ISSUER_KEY
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
   credential_profiles:
     civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:issuer.example
-      issuer_key_env: ISSUER_KEY
+      signing_key: issuer-key
       vct: https://issuer.example/credentials/civil-status
       validity_seconds: 600
       holder_binding:
@@ -3532,9 +3786,7 @@ syslog_socket_path: /dev/log
             federation_api: "https://agency-a.example.gov/federation/v1".to_string(),
             supported_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
             signing: FederationSigningConfig {
-                kid: "agency-a-fed-1".to_string(),
-                key_env: "FEDERATION_SIGNING_KEY".to_string(),
-                alg: FEDERATION_SIGNING_ALG_EDDSA.to_string(),
+                signing_key: "federation-key".to_string(),
             },
             pairwise_subject_hash: FederationPairwiseSubjectHashConfig {
                 secret_env: "FEDERATION_PAIRWISE_SECRET".to_string(),
@@ -3561,6 +3813,24 @@ syslog_socket_path: /dev/log
             }],
             ..FederationConfig::default()
         };
+        config.evidence.signing_keys.insert(
+            "federation-key".to_string(),
+            SigningKeyConfig {
+                provider: SigningKeyProviderConfig::LocalJwkEnv,
+                alg: FEDERATION_SIGNING_ALG_EDDSA.to_string(),
+                kid: "agency-a-fed-1".to_string(),
+                status: SigningKeyStatus::Active,
+                private_jwk_env: "FEDERATION_SIGNING_KEY".to_string(),
+                public_jwk_env: String::new(),
+                module_path: String::new(),
+                token_label: String::new(),
+                pin_env: String::new(),
+                key_label: String::new(),
+                key_id_hex: String::new(),
+                path: String::new(),
+                password_env: String::new(),
+            },
+        );
         config
     }
 
@@ -3569,6 +3839,32 @@ syslog_socket_path: /dev/log
         valid_federation_config()
             .validate()
             .expect("federation config validates");
+    }
+
+    #[test]
+    fn federation_signing_key_must_reference_active_named_signing_key() {
+        let mut config = valid_federation_config();
+        config.federation.signing.signing_key = "missing-key".to_string();
+        let reason = expect_federation_error(&config);
+        assert!(
+            reason.contains("unknown signing key 'missing-key'"),
+            "unexpected: {reason}"
+        );
+
+        config = valid_federation_config();
+        let federation_key = config
+            .evidence
+            .signing_keys
+            .get_mut("federation-key")
+            .expect("federation signing key exists");
+        federation_key.status = SigningKeyStatus::PublishOnly;
+        federation_key.private_jwk_env = String::new();
+        federation_key.public_jwk_env = "FEDERATION_SIGNING_PUBLIC_KEY".to_string();
+        let reason = expect_federation_error(&config);
+        assert!(
+            reason.contains("must reference an active signing key"),
+            "unexpected: {reason}"
+        );
     }
 
     #[test]
@@ -3673,7 +3969,7 @@ source_scopes:
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 holder_binding:
   mode: did
@@ -3702,7 +3998,7 @@ allowed_claims:
             r#"
 format: sd_jwt_vc
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 allowed_claims:
   - some-claim
@@ -3732,7 +4028,7 @@ allowed_claims:
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 allowed_claims:
   - some-claim
@@ -3749,7 +4045,7 @@ allowed_claims:
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 validity_seconds: 300
 allowed_claims:
@@ -3762,13 +4058,254 @@ allowed_claims:
     }
 
     #[test]
+    fn signing_keys_are_configured_separately_from_credential_profiles() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-2026:
+  provider: local_jwk_env
+  private_jwk_env: ISSUER_KEY
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-2026
+  status: active
+issuer-2025:
+  provider: local_jwk_env
+  public_jwk_env: OLD_ISSUER_PUBLIC_KEY
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-2025
+  status: publish_only
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: https://issuer.example
+signing_key: issuer-2026
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+
+        config
+            .validate()
+            .expect("profile may reference an active signing key");
+    }
+
+    #[test]
+    fn credential_profiles_must_reference_active_signing_keys() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-2025:
+  provider: local_jwk_env
+  public_jwk_env: OLD_ISSUER_PUBLIC_KEY
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-2025
+  status: publish_only
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: https://issuer.example
+signing_key: issuer-2025
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+
+        let err = config
+            .validate()
+            .expect_err("publish-only keys must not be used for new issuance");
+        match err {
+            EvidenceConfigError::CredentialProfileSigningKeyNotActive { profile, key } => {
+                assert_eq!(profile, "test-profile");
+                assert_eq!(key, "issuer-2025");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn publish_only_local_jwk_uses_public_jwk_env_only() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-2025:
+  provider: local_jwk_env
+  private_jwk_env: OLD_ISSUER_KEY
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-2025
+  status: publish_only
+"#,
+        )
+        .expect("signing key YAML is valid");
+
+        let err = config
+            .validate()
+            .expect_err("publish-only local keys must not require private material");
+        assert!(
+            err.to_string().contains("public_jwk_env must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pkcs11_signing_key_shape_validates_without_loading_module() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-hsm:
+  provider: pkcs11
+  module_path: /usr/lib/softhsm/libsofthsm2.so
+  token_label: registry-notary
+  pin_env: REGISTRY_NOTARY_PKCS11_PIN
+  key_label: issuer-signing-key
+  key_id_hex: 01ab23cd
+  public_jwk_env: REGISTRY_NOTARY_ISSUER_PUBLIC_JWK
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-hsm
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: did:web:issuer.example
+signing_key: issuer-hsm
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("test-profile".to_string(), profile);
+
+        config.validate().expect("PKCS#11 key shape validates");
+    }
+
+    #[test]
+    fn pkcs11_signing_key_requires_absolute_module_path() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-hsm:
+  provider: pkcs11
+  module_path: libsofthsm2.so
+  token_label: registry-notary
+  pin_env: REGISTRY_NOTARY_PKCS11_PIN
+  key_label: issuer-signing-key
+  key_id_hex: 01ab23cd
+  public_jwk_env: REGISTRY_NOTARY_ISSUER_PUBLIC_JWK
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-hsm
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+
+        let err = config
+            .validate()
+            .expect_err("relative module path must fail validation");
+        assert!(
+            err.to_string().contains("module_path must be absolute"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn publish_only_pkcs11_key_uses_public_jwk_env_only() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-hsm-old:
+  provider: pkcs11
+  public_jwk_env: REGISTRY_NOTARY_OLD_ISSUER_PUBLIC_JWK
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-hsm-old
+  status: publish_only
+"#,
+        )
+        .expect("signing key YAML is valid");
+
+        config
+            .validate()
+            .expect("publish-only PKCS#11 key needs only public metadata");
+
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-hsm-old:
+  provider: pkcs11
+  module_path: /usr/lib/softhsm/libsofthsm2.so
+  public_jwk_env: REGISTRY_NOTARY_OLD_ISSUER_PUBLIC_JWK
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-hsm-old
+  status: publish_only
+"#,
+        )
+        .expect("signing key YAML is valid");
+        let err = config
+            .validate()
+            .expect_err("publish-only PKCS#11 key must not require HSM access");
+        assert!(
+            err.to_string()
+                .contains("module_path is not valid for this signing key provider"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn local_pkcs12_file_provider_is_deferred_without_partial_support() {
+        let mut config = minimal_config();
+        config.evidence.signing_keys = serde_norway::from_str(
+            r#"
+issuer-p12:
+  provider: local_pkcs12_file
+  path: /run/secrets/issuer.p12
+  password_env: REGISTRY_NOTARY_P12_PASSWORD
+  alg: EdDSA
+  kid: did:web:issuer.example#issuer-p12
+  status: active
+"#,
+        )
+        .expect("signing key YAML is valid");
+
+        let err = config
+            .validate()
+            .expect_err("PKCS#12 support must fail closed until it is implemented");
+        assert!(
+            err.to_string()
+                .contains("local_pkcs12_file provider is intentionally not implemented yet"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn proof_of_possession_required_with_non_jwk_method_is_rejected() {
         let mut config = minimal_config();
         let profile: CredentialProfileConfig = serde_norway::from_str(
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 holder_binding:
   mode: did
@@ -3812,7 +4349,7 @@ allowed_claims:
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 holder_binding:
   mode: did
@@ -3937,7 +4474,7 @@ allowed_claims:
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 "#,
         )
@@ -4572,7 +5109,7 @@ bulk_mode: unsupported_mode
             r#"
 format: application/dc+sd-jwt
 issuer: https://issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://vct.example/test
 allowed_claims: ["", "   "]
 "#,
@@ -5118,7 +5655,7 @@ self_attestation:
             r#"
 format: application/dc+sd-jwt
 issuer: did:web:issuer.example
-issuer_key_env: ISSUER_KEY
+signing_key: issuer-key
 vct: https://issuer.example/credentials/civil-status
 holder_binding:
   mode: did

@@ -1254,8 +1254,7 @@ fn test_credential_profile() -> CredentialProfileConfig {
     CredentialProfileConfig {
         format: FORMAT_SD_JWT_VC.to_string(),
         issuer: "did:web:issuer.test".to_string(),
-        issuer_key_env: "TEST_MEMO_ISSUER_JWK".to_string(),
-        issuer_kid: Some("did:web:issuer.test#key-1".to_string()),
+        signing_key: "issuer-key".to_string(),
         vct: "https://vct.example/test".to_string(),
         validity_seconds: 60,
         holder_binding: Default::default(),

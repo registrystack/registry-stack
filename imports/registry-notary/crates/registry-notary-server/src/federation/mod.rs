@@ -58,7 +58,7 @@ async fn federated_evaluate(
     let outcome =
         handle_federated_evaluate(&headers, Arc::clone(&state), Arc::clone(&runtime), body).await;
     let (mut response, audit) = match outcome {
-        Ok(outcome) => outcome.into_response(&runtime.response_signer),
+        Ok(outcome) => outcome.into_response(&runtime.response_signer).await,
         Err(problem) => {
             apply_denial_latency(
                 started,

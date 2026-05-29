@@ -24,6 +24,7 @@ use registry_notary_core::{
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::PublicJwk;
+use registry_platform_crypto::SigningProvider;
 use registry_platform_oid4vci::{
     validate_proof_jwt, CredentialConfigurationMetadata, CredentialIssuerMetadata, CredentialOffer,
     CredentialRequest as Oid4vciCredentialRequest, CredentialResponse as Oid4vciCredentialResponse,
@@ -474,12 +475,19 @@ impl RegistryNotaryApiState {
         source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
+        federation_signing_provider: Option<Arc<dyn SigningProvider>>,
     ) -> Result<Self, crate::standalone::StandaloneServerError> {
         let federation_runtime = federation
             .enabled
             .then(|| {
+                let signing_provider = federation_signing_provider.clone().ok_or_else(|| {
+                    crate::standalone::StandaloneServerError::InvalidFederationConfig(
+                        "federation signing provider was not built".to_string(),
+                    )
+                })?;
                 crate::federation::FederationRuntimeState::from_config(
                     &federation,
+                    signing_provider,
                     federation_audit,
                     replay.store(),
                     Arc::clone(&metrics),
@@ -3180,7 +3188,7 @@ fn self_attestation_policy_hash(
             "id": profile_id,
             "format": profile.format,
             "issuer": profile.issuer,
-            "issuer_kid": profile.issuer_kid,
+            "signing_key": profile.signing_key,
             "vct": profile.vct,
             "validity_seconds": profile.validity_seconds,
             "holder_binding": {
@@ -3601,7 +3609,7 @@ mod tests {
             serde_json::from_value(json!({
                 "format": FORMAT_SD_JWT_VC,
                 "issuer": "did:web:issuer.example",
-                "issuer_key_env": "ISSUER_KEY",
+                "signing_key": "issuer-key",
                 "vct": "https://issuer.example/credentials/civil-status",
                 "validity_seconds": 600,
                 "holder_binding": {
@@ -3730,7 +3738,7 @@ mod tests {
             serde_json::from_value(json!({
                 "format": FORMAT_SD_JWT_VC,
                 "issuer": "did:web:issuer.example",
-                "issuer_key_env": "ISSUER_KEY",
+                "signing_key": "issuer-key",
                 "vct": "https://issuer.example/credentials/civil-status",
                 "validity_seconds": 600,
                 "holder_binding": {
@@ -4282,7 +4290,7 @@ mod tests {
             serde_json::from_value(json!({
                 "format": FORMAT_SD_JWT_VC,
                 "issuer": "did:web:issuer.example",
-                "issuer_key_env": "ISSUER_KEY",
+                "signing_key": "issuer-key",
                 "vct": "https://issuer.example/credentials/civil-status",
                 "validity_seconds": 600,
                 "holder_binding": {
@@ -4619,7 +4627,7 @@ mod tests {
             serde_json::from_value(json!({
                 "format": FORMAT_SD_JWT_VC,
                 "issuer": "did:web:issuer.example",
-                "issuer_key_env": "ISSUER_KEY",
+                "signing_key": "issuer-key",
                 "vct": "https://issuer.example/credentials/civil-status",
                 "validity_seconds": 600,
                 "allowed_claims": ["person-is-alive"],
@@ -4680,6 +4688,7 @@ mod tests {
                 Arc::new(CountingSource::default()),
                 Arc::clone(&store),
                 Arc::new(TestIssuerResolver),
+                None,
             )
             .expect("state builds"),
         );
@@ -4727,7 +4736,7 @@ mod tests {
         serde_json::from_value(json!({
             "format": FORMAT_SD_JWT_VC,
             "issuer": "did:web:issuer.example",
-            "issuer_key_env": "ISSUER_KEY",
+            "signing_key": "issuer-key",
             "vct": "https://issuer.example/credentials/civil-status",
             "validity_seconds": 600,
             "holder_binding": {

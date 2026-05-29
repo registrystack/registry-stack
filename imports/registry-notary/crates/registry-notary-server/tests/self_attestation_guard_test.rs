@@ -235,12 +235,18 @@ fn credential_issuance_config() -> TestRuntimeConfig {
 evidence:
   enabled: true
   service_id: evidence.test
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: TEST_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
   credential_profiles:
     civil_status_sd_jwt:
       format: {FORMAT_SD_JWT_VC}
       issuer: did:web:issuer.example
-      issuer_key_env: TEST_ISSUER_JWK
-      issuer_kid: did:web:issuer.example#key-1
+      signing_key: issuer-key
       vct: https://issuer.example/credentials/civil-status
       validity_seconds: 600
       holder_binding:

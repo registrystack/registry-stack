@@ -42,6 +42,9 @@ not import or link Registry Relay code.
   implementation-aligned setup simplification spec for the generic env-file,
   source-auth, diagnostics, initializer, API-key hash, and demo issuer
   workflows.
+- [`docs/signing-key-provider.md`](docs/signing-key-provider.md):
+  SD-JWT VC signing-key provider configuration, rotation, PKCS#11 setup, and
+  verification checklist.
 - [`docs/federated-notary-manifest-spec.md`](docs/federated-notary-manifest-spec.md):
   Registry Manifest-backed federation, peer discovery, trust, delegated
   evaluation, credential issuance, and audit checkpoint design.
@@ -59,12 +62,18 @@ not import or link Registry Relay code.
 ## Credential Conformance
 
 Registry Notary currently issues SD-JWT VC credentials using
-`application/dc+sd-jwt`, EdDSA over Ed25519 issuer keys, and `did:jwk` holder
-binding. Credential profiles default to a short-lived 600-second validity when
-`validity_seconds` is omitted, and explicit values remain bounded by the
-self-attestation token policy ceiling. The supported wire contract and explicit
-non-support list are defined in
+`application/dc+sd-jwt`, EdDSA over named Ed25519 signing keys, and `did:jwk`
+holder binding. Credential profiles reference keys from `evidence.signing_keys`
+instead of carrying key material themselves. Local JWK keys support development
+and mounted-secret deployments; PKCS#11 keys are available behind the optional
+server feature for HSM-backed signing. Credential profiles default to a
+short-lived 600-second validity when `validity_seconds` is omitted, and explicit
+values remain bounded by the self-attestation token policy ceiling.
+
+The supported wire contract and explicit non-support list are defined in
 [`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
+Signing key configuration and rotation are covered in
+[`docs/signing-key-provider.md`](docs/signing-key-provider.md).
 
 ## Federated Evaluation
 

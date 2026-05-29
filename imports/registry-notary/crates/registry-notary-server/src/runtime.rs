@@ -2942,8 +2942,7 @@ mod tests {
             CredentialProfileConfig {
                 format: FORMAT_SD_JWT_VC.to_string(),
                 issuer: "did:web:issuer.test".to_string(),
-                issuer_key_env: "ISSUER_JWK".to_string(),
-                issuer_kid: Some("did:web:issuer.test#key-1".to_string()),
+                signing_key: "issuer-key".to_string(),
                 vct: "https://issuer.test/credentials/profile-a".to_string(),
                 validity_seconds: 600,
                 holder_binding: registry_notary_core::HolderBindingConfig {
@@ -3570,18 +3569,31 @@ claims:
       source: src
     credential_profiles:
       - profile_a
+signing_keys:
+  issuer-key:
+    provider: local_jwk_env
+    private_jwk_env: ISSUER_KEY
+    alg: EdDSA
+    kid: did:web:issuer.example#key-1
+    status: active
+  issuer-key-b:
+    provider: local_jwk_env
+    private_jwk_env: ISSUER_KEY_B
+    alg: EdDSA
+    kid: did:web:issuer.example#key-2
+    status: active
 credential_profiles:
   profile_a:
     format: application/dc+sd-jwt
     issuer: https://issuer.example
-    issuer_key_env: ISSUER_KEY
+    signing_key: issuer-key
     vct: https://vct.example/a
     allowed_claims:
       - claim-a
   profile_b:
     format: application/dc+sd-jwt
     issuer: https://issuer.example
-    issuer_key_env: ISSUER_KEY_B
+    signing_key: issuer-key-b
     vct: https://vct.example/b
     allowed_claims:
       - claim-a

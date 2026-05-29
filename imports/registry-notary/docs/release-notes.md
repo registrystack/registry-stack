@@ -7,6 +7,9 @@
 - Added OpenID4VCI issuer primitives and HTTP routes for credential issuer
   metadata, credential offers, nonce creation, and credential issuance.
 - Added the OpenFn sidecar source for isolated worker execution.
+- Added named SD-JWT VC signing keys under `evidence.signing_keys`, including
+  local JWK signing, publish-only rotation keys, disabled keys, and optional
+  PKCS#11-backed Ed25519 signing.
 - Hardened SD-JWT VC conformance for `dc+sd-jwt`, holder binding, proof
   validation, and OpenAPI documentation.
 - Replaced fake Problem Details type URLs with
@@ -14,8 +17,9 @@
 - Changed self-attestation subject-binding hashes to keyed HMAC values and
   stopped recording raw query strings in request spans or audit paths.
 - Known limitations: this release is `dc+sd-jwt` only, does not serve
-  `/.well-known/jwt-vc-issuer`, does not provide credential revocation/status,
-  and leaves retention/erasure workflows to the operator.
+  `/.well-known/jwt-vc-issuer`, does not implement PKCS#12 issuer keys, does
+  not certify a vendor HSM, and leaves retention/erasure workflows to the
+  operator.
 
 ## 0.2.1
 

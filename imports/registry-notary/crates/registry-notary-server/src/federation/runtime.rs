@@ -5,11 +5,10 @@ use std::{env, sync::Arc, time::Duration};
 
 use jsonwebtoken::Algorithm;
 use registry_notary_core::{FederationConfig, FederationPeerConfig, FEDERATION_REQUEST_JWT_TYP};
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::SigningProvider;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use registry_platform_replay::ReplayStore;
-use zeroize::Zeroizing;
 
 use super::signing::FederationResponseSigner;
 use crate::metrics::AppMetrics;
@@ -33,26 +32,11 @@ pub(super) struct FederationResolvedPeer {
 impl FederationRuntimeState {
     pub(crate) fn from_config(
         config: &FederationConfig,
+        signing_provider: Arc<dyn SigningProvider>,
         audit: Option<crate::standalone::AuditPipeline>,
         replay: Arc<dyn ReplayStore>,
         metrics: Arc<AppMetrics>,
     ) -> Result<Self, crate::standalone::StandaloneServerError> {
-        let signing_key = Zeroizing::new(
-            env::var(&config.signing.key_env)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    crate::standalone::StandaloneServerError::MissingFederationSecretEnv(
-                        config.signing.key_env.clone(),
-                    )
-                })?,
-        );
-        let key = PrivateJwk::parse(signing_key.as_str()).map_err(|error| {
-            crate::standalone::StandaloneServerError::InvalidFederationSigningKeyEnv(
-                config.signing.key_env.clone(),
-                error.to_string(),
-            )
-        })?;
         let pairwise_subject_hash_secret = env::var(&config.pairwise_subject_hash.secret_env)
             .ok()
             .filter(|value| !value.is_empty())
@@ -106,8 +90,7 @@ impl FederationRuntimeState {
         }
         Ok(Self {
             response_signer: FederationResponseSigner {
-                kid: config.signing.kid.clone(),
-                key,
+                provider: signing_provider,
             },
             pairwise_subject_hash_secret: Arc::new(pairwise_subject_hash_secret),
             peers_by_issuer: Arc::new(peers_by_issuer),

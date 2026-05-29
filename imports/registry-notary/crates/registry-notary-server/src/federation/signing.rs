@@ -8,8 +8,9 @@ use registry_notary_core::{
     FederationConfig, FederationEvaluationProfileConfig, FederationPeerConfig,
     FEDERATION_RESPONSE_JWT_TYP,
 };
-use registry_platform_crypto::{sign, PrivateJwk};
+use registry_platform_crypto::SigningProvider;
 use serde_json::{json, Map, Value};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
@@ -132,11 +133,11 @@ impl FederationSignedOutcome {
         }
     }
 
-    pub(super) fn into_response(
+    pub(super) async fn into_response(
         self,
         signer: &FederationResponseSigner,
     ) -> (Response, FederationAuditOutcome) {
-        match sign_federation_response(signer, &self.claims) {
+        match sign_federation_response(signer, &self.claims).await {
             Ok(jwt) => {
                 let mut response = (StatusCode::OK, jwt).into_response();
                 response.headers_mut().insert(
@@ -181,14 +182,14 @@ fn federation_base_response_claims(
     Value::Object(claims)
 }
 
-fn sign_federation_response(
+async fn sign_federation_response(
     signer: &FederationResponseSigner,
     claims: &Value,
 ) -> Result<String, FederationProblem> {
     let header = json!({
         "alg": "EdDSA",
         "typ": FEDERATION_RESPONSE_JWT_TYP,
-        "kid": signer.kid,
+        "kid": signer.provider.key_id(),
     });
     let signing_input = format!(
         "{}.{}",
@@ -199,7 +200,10 @@ fn sign_federation_response(
             FederationProblem::server_error("failed to encode response claims")
         })?)
     );
-    let signature = sign(signing_input.as_bytes(), &signer.key)
+    let signature = signer
+        .provider
+        .sign(signing_input.as_bytes())
+        .await
         .map_err(|_| FederationProblem::server_error("failed to sign response"))?;
     Ok(format!(
         "{}.{}",
@@ -210,6 +214,5 @@ fn sign_federation_response(
 
 #[derive(Clone)]
 pub(super) struct FederationResponseSigner {
-    pub(super) kid: String,
-    pub(super) key: PrivateJwk,
+    pub(super) provider: Arc<dyn SigningProvider>,
 }

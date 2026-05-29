@@ -52,12 +52,18 @@ evidence:
         records_path: /message/search_response/0/data/reg_records
         field_paths:
           farmed_land_size_hectares: /farmed_land_size_hectares
+  signing_keys:
+    registry-notary-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:agriculture.demo.example.gov#registry-notary-demo-key-1
+      status: active
   credential_profiles:
     smallholder_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:agriculture.demo.example.gov
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:agriculture.demo.example.gov#registry-notary-demo-key-1
+      signing_key: registry-notary-demo
       vct: https://demo.example.gov/credentials/smallholder-farmer/v1
       validity_seconds: 86400
       allowed_claims:

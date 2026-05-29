@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Minimal SD-JWT VC issuer for Registry Notary claim views.
 
-use registry_platform_crypto::{parse_did_jwk, PrivateJwk, PublicJwk};
+use registry_platform_crypto::{parse_did_jwk, PrivateJwk, PublicJwk, SigningProvider};
 use registry_platform_sdjwt::{
     new_credential_id as platform_new_credential_id, Disclosure, HolderConfirmation,
     SdJwtIssuanceInput, SdJwtIssuer,
 };
 use serde_json::{json, Value};
 use std::fmt;
+use std::sync::Arc;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -55,17 +56,6 @@ impl fmt::Debug for EvidenceIssuer {
 }
 
 impl EvidenceIssuer {
-    pub fn from_profile_key(
-        profile: &CredentialProfileConfig,
-        raw: &str,
-    ) -> Result<Self, EvidenceError> {
-        let verification_method_id = profile
-            .issuer_kid
-            .clone()
-            .unwrap_or_else(|| format!("{}#evidence-issuer", profile.issuer));
-        Self::from_jwk_str(raw, verification_method_id)
-    }
-
     pub fn from_jwk_str(raw: &str, verification_method_id: String) -> Result<Self, EvidenceError> {
         let mut jwk =
             PrivateJwk::parse(raw).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
@@ -77,6 +67,27 @@ impl EvidenceIssuer {
             serde_json::to_value(public).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
         let issuer =
             SdJwtIssuer::from_jwk(jwk).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        Ok(Self {
+            verification_method_id,
+            issuer,
+            public_jwk,
+        })
+    }
+
+    pub fn from_signing_provider(
+        provider: Arc<dyn SigningProvider>,
+    ) -> Result<Self, EvidenceError> {
+        let verification_method_id = provider.key_id().to_string();
+        if verification_method_id.trim().is_empty() {
+            return Err(EvidenceError::CredentialIssuanceFailed);
+        }
+        let public = provider.public_jwk();
+        if public.kid.as_deref() != Some(verification_method_id.as_str()) {
+            return Err(EvidenceError::CredentialIssuanceFailed);
+        }
+        let public_jwk =
+            serde_json::to_value(public).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
+        let issuer = SdJwtIssuer::from_signing_provider(provider);
         Ok(Self {
             verification_method_id,
             issuer,
@@ -252,6 +263,41 @@ mod tests {
         .expect("header decodes as JSON");
         assert_eq!(header["alg"], SD_JWT_VC_SIGNING_ALG);
         assert_eq!(header["typ"], SD_JWT_VC_JWT_TYP);
+    }
+
+    #[test]
+    fn evidence_issuer_can_be_backed_by_signing_provider() {
+        let mut jwk = PrivateJwk::parse(RAW_JWK).expect("test JWK parses");
+        jwk.kid = Some("did:web:issuer.test#provider-key".to_string());
+        jwk.alg = Some(SD_JWT_VC_SIGNING_ALG.to_string());
+        let signer =
+            registry_platform_crypto::LocalJwkSigner::new(jwk).expect("local signer builds");
+        let issuer = EvidenceIssuer::from_signing_provider(std::sync::Arc::new(signer))
+            .expect("provider-backed issuer builds");
+
+        assert_eq!(
+            issuer.public_jwk()["kid"],
+            "did:web:issuer.test#provider-key"
+        );
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("first")],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions::default(),
+        )
+        .expect("credential issues");
+        let compact = signed.compact.split('~').next().expect("compact jwt");
+        let header = compact.split('.').next().expect("compact jwt has header");
+        let header: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(header)
+                .expect("header decodes as base64url"),
+        )
+        .expect("header decodes as JSON");
+        assert_eq!(header["kid"], "did:web:issuer.test#provider-key");
     }
 
     #[test]
@@ -618,8 +664,7 @@ mod tests {
         CredentialProfileConfig {
             format: FORMAT_SD_JWT_VC.to_string(),
             issuer: "did:web:issuer.test".to_string(),
-            issuer_key_env: "REGISTRY_NOTARY_ISSUER_JWK".to_string(),
-            issuer_kid: Some("did:web:issuer.test#key-1".to_string()),
+            signing_key: "issuer-key".to_string(),
             vct: "https://vct.example/test".to_string(),
             validity_seconds: 60,
             holder_binding: Default::default(),

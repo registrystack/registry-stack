@@ -29,8 +29,7 @@ fn build_profile() -> CredentialProfileConfig {
     CredentialProfileConfig {
         format: registry_notary_core::FORMAT_SD_JWT_VC.to_string(),
         issuer: "did:web:perf.registry-notary.example".to_string(),
-        issuer_key_env: "REGISTRY_NOTARY_ISSUER_JWK".to_string(),
-        issuer_kid: Some(VM_ID.to_string()),
+        signing_key: "perf-key".to_string(),
         vct: "https://data.example.gov/credentials/smallholder/v1".to_string(),
         validity_seconds: 24 * 60 * 60,
         holder_binding: HolderBindingConfig::default(),

@@ -27,12 +27,18 @@ evidence:
   enabled: true
   service_id: openspp-disability.registry-notary
   api_base_url: http://127.0.0.1:4255
+  signing_keys:
+    registry-notary-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:openspp-disability.demo.example.gov#registry-notary-demo-key-1
+      status: active
   credential_profiles:
     openspp_disability_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:openspp-disability.demo.example.gov
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:openspp-disability.demo.example.gov#registry-notary-demo-key-1
+      signing_key: registry-notary-demo
       vct: https://demo.example.gov/credentials/openspp-disability/v1
       validity_seconds: 86400
       allowed_claims:

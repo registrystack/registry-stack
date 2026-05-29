@@ -25,8 +25,9 @@ use registry_notary_core::{
     EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal,
     Hashed, Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
     SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
-    SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind,
-    StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
+    SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig,
+    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest,
+    VerifiedClaimName, VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState, JsonlFileSink,
@@ -34,6 +35,9 @@ use registry_platform_audit::{
 };
 use registry_platform_authcommon::{
     parse_bearer_token, parse_fingerprint, verify_api_key, FingerprintFormatError,
+};
+use registry_platform_crypto::{
+    sign, verify, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
 };
 use registry_platform_httputil::{
     read_bounded, url as httputil_url, FetchUrlPolicy, OutboundClientBuilder,
@@ -102,7 +106,25 @@ pub fn standalone_router(
         Arc::clone(&metrics),
     )?);
     let store = Arc::new(EvidenceStore::default());
-    let issuers = Arc::new(EvidenceIssuerRegistry::from_config(&config.evidence)?);
+    let signing_keys = Arc::new(SigningKeyRegistry::from_config(&config.evidence)?);
+    let issuers = Arc::new(EvidenceIssuerRegistry::from_signing_keys(
+        &config.evidence,
+        &signing_keys,
+    )?);
+    let federation_signing_provider = if config.federation.enabled {
+        Some(
+            signing_keys
+                .signing_provider(config.federation.signing.signing_key.as_str())
+                .ok_or_else(|| {
+                    invalid_signing_key(
+                        config.federation.signing.signing_key.as_str(),
+                        "active federation signing key was not built",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let cors_policy = registry_platform_httpsec::CorsPolicy {
         allowed_origins: config.server.cors.allowed_origins.clone(),
         allowed_methods: Vec::new(),
@@ -125,6 +147,7 @@ pub fn standalone_router(
         source,
         store,
         issuers,
+        federation_signing_provider,
     )?);
     let mut routes = router();
     if config.federation.enabled {
@@ -303,12 +326,12 @@ pub enum StandaloneServerError {
     MissingSourceTokenEnv(String),
     #[error("invalid source auth configuration: {0}")]
     InvalidSourceAuth(String),
-    #[error("credential issuer environment variable is missing or invalid: {0}")]
-    InvalidIssuerEnv(String),
+    #[error("signing key '{key}' is invalid: {reason}")]
+    InvalidSigningKey { key: String, reason: String },
+    #[error("signing key provider '{provider}' is not enabled")]
+    SigningKeyProviderUnavailable { provider: String },
     #[error("federation secret environment variable is missing or empty: {0}")]
     MissingFederationSecretEnv(String),
-    #[error("federation signing key environment variable is invalid: {0}: {1}")]
-    InvalidFederationSigningKeyEnv(String, String),
     #[error("audit sink path is required when sink=file or sink=jsonl")]
     MissingAuditPath,
     #[error("audit.hash_secret_env is required")]
@@ -840,26 +863,35 @@ fn bulk_timeout(connection: &ResolvedEvidenceSourceConnection, batch_size: usize
 #[derive(Debug, Clone, Default)]
 pub struct EvidenceIssuerRegistry {
     issuers: BTreeMap<String, EvidenceIssuer>,
+    public_jwks: Vec<Value>,
 }
 
 impl EvidenceIssuerRegistry {
     pub fn from_config(config: &EvidenceConfig) -> Result<Self, StandaloneServerError> {
+        let signing_keys = SigningKeyRegistry::from_config(config)?;
+        Self::from_signing_keys(config, &signing_keys)
+    }
+
+    fn from_signing_keys(
+        config: &EvidenceConfig,
+        signing_keys: &SigningKeyRegistry,
+    ) -> Result<Self, StandaloneServerError> {
         let mut issuers = BTreeMap::new();
         for (profile_id, profile) in &config.credential_profiles {
-            let raw = Zeroizing::new(
-                env::var(&profile.issuer_key_env)
-                    .ok()
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        StandaloneServerError::InvalidIssuerEnv(profile.issuer_key_env.clone())
-                    })?,
-            );
-            let issuer = EvidenceIssuer::from_profile_key(profile, raw.as_str()).map_err(|_| {
-                StandaloneServerError::InvalidIssuerEnv(profile.issuer_key_env.clone())
-            })?;
-            issuers.insert(profile_id.clone(), issuer);
+            let issuer = signing_keys
+                .issuer(profile.signing_key.as_str())
+                .ok_or_else(|| {
+                    invalid_signing_key(
+                        profile.signing_key.as_str(),
+                        "active signing key was not built",
+                    )
+                })?;
+            issuers.insert(profile_id.clone(), issuer.clone());
         }
-        Ok(Self { issuers })
+        Ok(Self {
+            issuers,
+            public_jwks: signing_keys.public_jwks(),
+        })
     }
 }
 
@@ -869,6 +901,519 @@ impl EvidenceIssuerResolver for EvidenceIssuerRegistry {
             .get(profile_id)
             .cloned()
             .ok_or(EvidenceError::CredentialIssuerNotConfigured)
+    }
+
+    fn public_jwks(&self, _evidence: &EvidenceConfig) -> Result<Vec<Value>, EvidenceError> {
+        Ok(self.public_jwks.clone())
+    }
+}
+
+#[derive(Clone, Default)]
+struct SigningKeyRegistry {
+    issuers: BTreeMap<String, EvidenceIssuer>,
+    providers: BTreeMap<String, Arc<dyn SigningProvider>>,
+    public_jwks: Vec<Value>,
+}
+
+impl SigningKeyRegistry {
+    fn from_config(config: &EvidenceConfig) -> Result<Self, StandaloneServerError> {
+        let mut issuers = BTreeMap::new();
+        let mut providers = BTreeMap::new();
+        let mut public_jwks_by_kid = BTreeMap::new();
+        for (key_id, key) in &config.signing_keys {
+            if !key.status.may_publish() {
+                continue;
+            }
+            let public_jwk = match key.provider {
+                SigningKeyProviderConfig::LocalJwkEnv => {
+                    if key.status.may_sign() {
+                        let provider: Arc<dyn SigningProvider> =
+                            Arc::new(build_local_jwk_signer(key_id, key)?);
+                        let issuer = EvidenceIssuer::from_signing_provider(Arc::clone(&provider))
+                            .map_err(|_| {
+                            invalid_signing_key(key_id, "local signer failed self-test")
+                        })?;
+                        let public_jwk = issuer.public_jwk();
+                        issuers.insert(key_id.clone(), issuer);
+                        providers.insert(key_id.clone(), provider);
+                        public_jwk
+                    } else {
+                        build_public_jwk_value(key_id, key)?
+                    }
+                }
+                SigningKeyProviderConfig::Pkcs11 => {
+                    if key.status.may_sign() {
+                        #[cfg(feature = "pkcs11")]
+                        {
+                            let provider: Arc<dyn SigningProvider> =
+                                Arc::new(pkcs11::Pkcs11SigningProvider::from_config(key_id, key)?);
+                            let issuer =
+                                EvidenceIssuer::from_signing_provider(Arc::clone(&provider))
+                                    .map_err(|_| {
+                                        invalid_signing_key(
+                                            key_id,
+                                            "PKCS#11 signer failed self-test",
+                                        )
+                                    })?;
+                            let public_jwk = issuer.public_jwk();
+                            issuers.insert(key_id.clone(), issuer);
+                            providers.insert(key_id.clone(), provider);
+                            public_jwk
+                        }
+                        #[cfg(not(feature = "pkcs11"))]
+                        {
+                            return Err(StandaloneServerError::SigningKeyProviderUnavailable {
+                                provider: "pkcs11".to_string(),
+                            });
+                        }
+                    } else {
+                        build_public_jwk_value(key_id, key)?
+                    }
+                }
+                SigningKeyProviderConfig::LocalPkcs12File => {
+                    return Err(StandaloneServerError::SigningKeyProviderUnavailable {
+                        provider: "local_pkcs12_file".to_string(),
+                    });
+                }
+            };
+            public_jwks_by_kid.insert(key.kid.clone(), public_jwk);
+        }
+        Ok(Self {
+            issuers,
+            providers,
+            public_jwks: public_jwks_by_kid.into_values().collect(),
+        })
+    }
+
+    fn issuer(&self, key_id: &str) -> Option<&EvidenceIssuer> {
+        self.issuers.get(key_id)
+    }
+
+    fn public_jwks(&self) -> Vec<Value> {
+        self.public_jwks.clone()
+    }
+
+    fn signing_provider(&self, key_id: &str) -> Option<Arc<dyn SigningProvider>> {
+        self.providers.get(key_id).cloned()
+    }
+}
+
+fn build_local_jwk_signer(
+    key_id: &str,
+    key: &SigningKeyConfig,
+) -> Result<LocalJwkSigner, StandaloneServerError> {
+    let raw = Zeroizing::new(
+        env::var(&key.private_jwk_env)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_signing_key(key_id, "private_jwk_env is missing or empty"))?,
+    );
+    let mut jwk = PrivateJwk::parse(raw.as_str()).map_err(|_| {
+        invalid_signing_key(
+            key_id,
+            "private_jwk_env does not contain a valid private JWK",
+        )
+    })?;
+    if jwk.kid.as_deref().is_some_and(|kid| kid != key.kid) {
+        return Err(invalid_signing_key(
+            key_id,
+            "private JWK kid does not match configured kid",
+        ));
+    }
+    if jwk.alg.as_deref().is_some_and(|alg| alg != key.alg) {
+        return Err(invalid_signing_key(
+            key_id,
+            "private JWK alg does not match configured alg",
+        ));
+    }
+    jwk.kid = Some(key.kid.clone());
+    jwk.alg = Some(key.alg.clone());
+    let public = jwk.public();
+    let signature = sign(b"registry-notary signing self-test", &jwk)
+        .map_err(|_| invalid_signing_key(key_id, "local signer self-test failed"))?;
+    verify(b"registry-notary signing self-test", &signature, &public)
+        .map_err(|_| invalid_signing_key(key_id, "local signer self-test verification failed"))?;
+    LocalJwkSigner::new(jwk)
+        .map_err(|_| invalid_signing_key(key_id, "local signer could not be constructed"))
+}
+
+fn build_public_jwk_value(
+    key_id: &str,
+    key: &SigningKeyConfig,
+) -> Result<Value, StandaloneServerError> {
+    let raw = env::var(&key.public_jwk_env)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid_signing_key(key_id, "public_jwk_env is missing or empty"))?;
+    let public = PublicJwk::parse(&raw).map_err(|_| {
+        invalid_signing_key(key_id, "public_jwk_env does not contain a valid public JWK")
+    })?;
+    if public.kid.as_deref() != Some(key.kid.as_str()) {
+        return Err(invalid_signing_key(
+            key_id,
+            "public JWK kid does not match configured kid",
+        ));
+    }
+    if public.alg.as_deref() != Some(key.alg.as_str()) {
+        return Err(invalid_signing_key(
+            key_id,
+            "public JWK alg does not match configured alg",
+        ));
+    }
+    serde_json::to_value(public)
+        .map_err(|_| invalid_signing_key(key_id, "public JWK could not be serialized"))
+}
+
+fn invalid_signing_key(key: &str, reason: &str) -> StandaloneServerError {
+    StandaloneServerError::InvalidSigningKey {
+        key: key.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+#[cfg(feature = "pkcs11")]
+mod pkcs11 {
+    use std::fmt;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
+    use cryptoki::error::{Error as CryptokiError, RvError};
+    use cryptoki::mechanism::eddsa::{EddsaParams, EddsaSignatureScheme};
+    use cryptoki::mechanism::{Mechanism, MechanismType};
+    use cryptoki::object::{Attribute, ObjectClass, ObjectHandle};
+    use cryptoki::session::{Session, UserType};
+    use cryptoki::slot::Slot;
+    use cryptoki::types::AuthPin;
+    use registry_notary_core::SigningKeyConfig;
+    use registry_platform_crypto::{
+        verify, PublicJwk, SigningAlgorithm, SigningError, SigningProvider,
+    };
+    use tokio::sync::Semaphore;
+    use zeroize::Zeroizing;
+
+    use super::{invalid_signing_key, StandaloneServerError};
+
+    const SELF_TEST_PAYLOAD: &[u8] = b"registry-notary pkcs11 signing self-test";
+    const SIGN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[derive(Clone)]
+    pub(super) struct Pkcs11SigningProvider {
+        key_id: String,
+        public_jwk: PublicJwk,
+        context: Arc<Pkcs11>,
+        slot: Slot,
+        pin: Arc<Zeroizing<String>>,
+        session: Arc<std::sync::Mutex<Pkcs11SessionState>>,
+        sign_permit: Arc<Semaphore>,
+        key_label: String,
+        key_id_bytes: Vec<u8>,
+    }
+
+    struct Pkcs11SessionState {
+        session: Session,
+        private_key: ObjectHandle,
+    }
+
+    impl Pkcs11SigningProvider {
+        pub(super) fn from_config(
+            config_key_id: &str,
+            config: &SigningKeyConfig,
+        ) -> Result<Self, StandaloneServerError> {
+            let public_raw = Zeroizing::new(read_required_env(
+                config_key_id,
+                &config.public_jwk_env,
+                "public_jwk_env",
+            )?);
+            let public_jwk = PublicJwk::parse(public_raw.as_str()).map_err(|_| {
+                invalid_signing_key(config_key_id, "public_jwk_env is not a valid public JWK")
+            })?;
+            if public_jwk.kid.as_deref() != Some(config.kid.as_str()) {
+                return Err(invalid_signing_key(
+                    config_key_id,
+                    "public JWK kid does not match configured kid",
+                ));
+            }
+            if public_jwk.alg.as_deref() != Some(config.alg.as_str()) {
+                return Err(invalid_signing_key(
+                    config_key_id,
+                    "public JWK alg does not match configured alg",
+                ));
+            }
+
+            let pin = Arc::new(Zeroizing::new(read_required_env(
+                config_key_id,
+                &config.pin_env,
+                "pin_env",
+            )?));
+            let key_id_bytes = hex::decode(&config.key_id_hex)
+                .map_err(|_| invalid_signing_key(config_key_id, "key_id_hex is not valid hex"))?;
+            let context = Pkcs11::new(&config.module_path)
+                .map_err(|_| invalid_signing_key(config_key_id, "could not load PKCS#11 module"))?;
+            match context.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)) {
+                Ok(()) | Err(CryptokiError::Pkcs11(RvError::CryptokiAlreadyInitialized, _)) => {}
+                Err(_) => {
+                    return Err(invalid_signing_key(
+                        config_key_id,
+                        "could not initialize PKCS#11 module",
+                    ));
+                }
+            }
+            let slot = find_token_slot(&context, config_key_id, &config.token_label)?;
+            ensure_eddsa_mechanism(&context, slot, config_key_id)?;
+            let session = open_logged_in_session(&context, slot, &pin, config_key_id)?;
+            let private_key =
+                find_private_key(&session, &config.key_label, &key_id_bytes, config_key_id)?;
+
+            let provider = Self {
+                key_id: config.kid.clone(),
+                public_jwk,
+                context: Arc::new(context),
+                slot,
+                pin,
+                session: Arc::new(std::sync::Mutex::new(Pkcs11SessionState {
+                    session,
+                    private_key,
+                })),
+                sign_permit: Arc::new(Semaphore::new(1)),
+                key_label: config.key_label.clone(),
+                key_id_bytes,
+            };
+            provider.self_test(config_key_id)?;
+            Ok(provider)
+        }
+
+        fn self_test(&self, config_key_id: &str) -> Result<(), StandaloneServerError> {
+            let signature = self.sign_sync(SELF_TEST_PAYLOAD).map_err(|_| {
+                invalid_signing_key(config_key_id, "PKCS#11 signer self-test failed")
+            })?;
+            verify(SELF_TEST_PAYLOAD, &signature, &self.public_jwk).map_err(|_| {
+                invalid_signing_key(
+                    config_key_id,
+                    "PKCS#11 signer self-test verification failed",
+                )
+            })
+        }
+
+        fn sign_sync(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            if let Ok(signature) = self.sign_with_current_session(payload) {
+                return Ok(signature);
+            }
+
+            let session = open_logged_in_session_for_signing(&self.context, self.slot, &self.pin)?;
+            let private_key =
+                find_private_key_for_signing(&session, &self.key_label, &self.key_id_bytes)?;
+            {
+                let mut state = self
+                    .session
+                    .lock()
+                    .map_err(|_| SigningError::external("PKCS#11 session lock poisoned"))?;
+                state.session = session;
+                state.private_key = private_key;
+            }
+            self.sign_with_current_session(payload)
+        }
+
+        fn sign_with_current_session(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            let session = self
+                .session
+                .lock()
+                .map_err(|_| SigningError::external("PKCS#11 session lock poisoned"))?;
+            let mechanism = eddsa_mechanism();
+            session
+                .session
+                .sign(&mechanism, session.private_key, payload)
+                .map_err(|_| SigningError::external("PKCS#11 sign failed"))
+        }
+    }
+
+    impl fmt::Debug for Pkcs11SigningProvider {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Pkcs11SigningProvider")
+                .field("kid", &self.key_id)
+                .field("key_label", &self.key_label)
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[async_trait]
+    impl SigningProvider for Pkcs11SigningProvider {
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::EdDsa
+        }
+
+        fn key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.public_jwk.clone()
+        }
+
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+            let permit =
+                tokio::time::timeout(SIGN_TIMEOUT, self.sign_permit.clone().acquire_owned())
+                    .await
+                    .map_err(|_| SigningError::external("PKCS#11 sign timed out"))?
+                    .map_err(|_| SigningError::external("PKCS#11 signing gate was closed"))?;
+            let provider = self.clone();
+            let payload = payload.to_vec();
+            let task = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                provider.sign_sync(&payload)
+            });
+            tokio::time::timeout(SIGN_TIMEOUT, task)
+                .await
+                .map_err(|_| SigningError::external("PKCS#11 sign timed out"))?
+                .map_err(|_| SigningError::external("PKCS#11 sign task failed"))?
+        }
+    }
+
+    fn read_required_env(
+        config_key_id: &str,
+        env_name: &str,
+        field: &str,
+    ) -> Result<String, StandaloneServerError> {
+        std::env::var(env_name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                invalid_signing_key(config_key_id, &format!("{field} is missing or empty"))
+            })
+    }
+
+    fn find_token_slot(
+        context: &Pkcs11,
+        config_key_id: &str,
+        token_label: &str,
+    ) -> Result<Slot, StandaloneServerError> {
+        let matches = context
+            .get_slots_with_token()
+            .map_err(|_| invalid_signing_key(config_key_id, "could not list PKCS#11 slots"))?
+            .into_iter()
+            .filter(|slot| {
+                context
+                    .get_token_info(*slot)
+                    .map(|info| info.label().trim() == token_label)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [slot] => Ok(*slot),
+            [] => Err(invalid_signing_key(
+                config_key_id,
+                "PKCS#11 token was not found",
+            )),
+            _ => Err(invalid_signing_key(
+                config_key_id,
+                "multiple PKCS#11 tokens matched token_label",
+            )),
+        }
+    }
+
+    fn ensure_eddsa_mechanism(
+        context: &Pkcs11,
+        slot: Slot,
+        config_key_id: &str,
+    ) -> Result<(), StandaloneServerError> {
+        let supported = context
+            .get_mechanism_list(slot)
+            .map_err(|_| invalid_signing_key(config_key_id, "could not list PKCS#11 mechanisms"))?;
+        if supported.contains(&MechanismType::EDDSA) {
+            Ok(())
+        } else {
+            Err(invalid_signing_key(
+                config_key_id,
+                "PKCS#11 token does not support CKM_EDDSA",
+            ))
+        }
+    }
+
+    fn open_logged_in_session(
+        context: &Pkcs11,
+        slot: Slot,
+        pin: &Zeroizing<String>,
+        config_key_id: &str,
+    ) -> Result<Session, StandaloneServerError> {
+        let session = context
+            .open_ro_session(slot)
+            .map_err(|_| invalid_signing_key(config_key_id, "PKCS#11 session open failed"))?;
+        let auth_pin = AuthPin::new(pin.as_str().to_string().into_boxed_str());
+        match session.login(UserType::User, Some(&auth_pin)) {
+            Ok(()) => Ok(session),
+            Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => Ok(session),
+            Err(_) => Err(invalid_signing_key(config_key_id, "PKCS#11 login failed")),
+        }
+    }
+
+    fn find_private_key(
+        session: &Session,
+        key_label: &str,
+        key_id_bytes: &[u8],
+        config_key_id: &str,
+    ) -> Result<ObjectHandle, StandaloneServerError> {
+        let template = vec![
+            Attribute::Class(ObjectClass::PRIVATE_KEY),
+            Attribute::Label(key_label.as_bytes().to_vec()),
+            Attribute::Id(key_id_bytes.to_vec()),
+        ];
+        let matches = session
+            .find_objects(&template)
+            .map_err(|_| invalid_signing_key(config_key_id, "PKCS#11 private-key lookup failed"))?;
+        match matches.as_slice() {
+            [handle] => Ok(*handle),
+            [] => Err(invalid_signing_key(
+                config_key_id,
+                "PKCS#11 private key was not found",
+            )),
+            _ => Err(invalid_signing_key(
+                config_key_id,
+                "multiple PKCS#11 private keys matched lookup",
+            )),
+        }
+    }
+
+    fn open_logged_in_session_for_signing(
+        context: &Pkcs11,
+        slot: Slot,
+        pin: &Zeroizing<String>,
+    ) -> Result<Session, SigningError> {
+        let session = context
+            .open_ro_session(slot)
+            .map_err(|_| SigningError::external("PKCS#11 session open failed"))?;
+        let auth_pin = AuthPin::new(pin.as_str().to_string().into_boxed_str());
+        match session.login(UserType::User, Some(&auth_pin)) {
+            Ok(()) => Ok(session),
+            Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => Ok(session),
+            Err(_) => Err(SigningError::external("PKCS#11 login failed")),
+        }
+    }
+
+    fn find_private_key_for_signing(
+        session: &Session,
+        key_label: &str,
+        key_id_bytes: &[u8],
+    ) -> Result<ObjectHandle, SigningError> {
+        let template = vec![
+            Attribute::Class(ObjectClass::PRIVATE_KEY),
+            Attribute::Label(key_label.as_bytes().to_vec()),
+            Attribute::Id(key_id_bytes.to_vec()),
+        ];
+        let matches = session
+            .find_objects(&template)
+            .map_err(|_| SigningError::external("PKCS#11 private-key lookup failed"))?;
+        match matches.as_slice() {
+            [handle] => Ok(*handle),
+            [] => Err(SigningError::external("PKCS#11 private key was not found")),
+            _ => Err(SigningError::external(
+                "multiple PKCS#11 private keys matched lookup",
+            )),
+        }
+    }
+
+    fn eddsa_mechanism() -> Mechanism<'static> {
+        Mechanism::Eddsa(EddsaParams::new(EddsaSignatureScheme::Ed25519))
     }
 }
 
@@ -2795,6 +3340,10 @@ mod tests {
     use axum::response::Redirect;
     use axum::routing::get;
     use axum_test::TestServer;
+    #[cfg(feature = "pkcs11")]
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    #[cfg(feature = "pkcs11")]
+    use base64::Engine;
     use registry_notary_core::{
         EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
         SourceConnectionConfig, SourceLookupConfig, FORMAT_CLAIM_RESULT_JSON,
@@ -2808,6 +3357,11 @@ mod tests {
         "sha256:42f3b7ab760b221b8a166aad9d82b76286e310f878e2d6cbac7583586ca1e225";
     const OPENFN_SPIKE_PURPOSE: &str = "https://purpose.example.test/eligibility";
     const TEST_AUDIT_HASH_SECRET_ENV: &str = "REGISTRY_NOTARY_TEST_AUDIT_HASH_SECRET";
+    const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+    const TEST_OLD_ISSUER_PUBLIC_JWK: &str = r##"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#old"}"##;
+    const TEST_OLD_HSM_PUBLIC_JWK: &str = r##"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#hsm-old"}"##;
+    #[cfg(feature = "pkcs11")]
+    static SOFTHSM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn audit_event() -> EvidenceAuditEvent {
         EvidenceAuditEvent {
@@ -2858,6 +3412,377 @@ mod tests {
             self_attestation_invalid_token_limiter: None,
             self_attestation_rate_keys: None,
         })
+    }
+
+    #[test]
+    fn issuer_registry_uses_active_key_and_publishes_rotated_keys_once() {
+        unsafe {
+            std::env::set_var("TEST_ACTIVE_SIGNING_JWK", TEST_ISSUER_JWK);
+            std::env::set_var("TEST_OLD_SIGNING_PUBLIC_JWK", TEST_OLD_ISSUER_PUBLIC_JWK);
+            std::env::set_var("TEST_OLD_HSM_PUBLIC_JWK", TEST_OLD_HSM_PUBLIC_JWK);
+            std::env::set_var("TEST_DISABLED_SIGNING_JWK", TEST_ISSUER_JWK);
+        }
+        let evidence: EvidenceConfig = serde_norway::from_str(
+            r#"
+enabled: true
+signing_keys:
+  active-key:
+    provider: local_jwk_env
+    private_jwk_env: TEST_ACTIVE_SIGNING_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#active
+    status: active
+  old-key:
+    provider: local_jwk_env
+    public_jwk_env: TEST_OLD_SIGNING_PUBLIC_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#old
+    status: publish_only
+  old-hsm-key:
+    provider: pkcs11
+    public_jwk_env: TEST_OLD_HSM_PUBLIC_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#hsm-old
+    status: publish_only
+  disabled-key:
+    provider: local_jwk_env
+    private_jwk_env: TEST_DISABLED_SIGNING_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#disabled
+    status: disabled
+credential_profiles:
+  profile-a:
+    format: application/dc+sd-jwt
+    issuer: did:web:issuer.example
+    signing_key: active-key
+    vct: https://issuer.example/credentials/a
+    allowed_claims: [claim-a]
+  profile-b:
+    format: application/dc+sd-jwt
+    issuer: did:web:issuer.example
+    signing_key: active-key
+    vct: https://issuer.example/credentials/b
+    allowed_claims: [claim-b]
+"#,
+        )
+        .expect("evidence config parses");
+        let registry = EvidenceIssuerRegistry::from_config(&evidence).expect("registry builds");
+
+        assert!(registry.issuer("profile-a").is_ok());
+        assert!(registry.issuer("profile-b").is_ok());
+        let jwks = registry.public_jwks(&evidence).expect("JWKS builds");
+        assert_eq!(jwks.len(), 3);
+        assert!(jwks.iter().all(|jwk| jwk.get("d").is_none()));
+        assert!(jwks
+            .iter()
+            .any(|jwk| jwk["kid"] == "did:web:issuer.example#active"));
+        assert!(jwks
+            .iter()
+            .any(|jwk| jwk["kid"] == "did:web:issuer.example#old"));
+        assert!(jwks
+            .iter()
+            .any(|jwk| jwk["kid"] == "did:web:issuer.example#hsm-old"));
+        assert!(!jwks
+            .iter()
+            .any(|jwk| jwk["kid"] == "did:web:issuer.example#disabled"));
+    }
+
+    #[test]
+    fn local_jwk_signing_key_rejects_mismatched_embedded_kid() {
+        let jwk = r#"{"kty":"OKP","crv":"Ed25519","kid":"did:web:issuer.example#wrong","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+        unsafe {
+            std::env::set_var("TEST_MISMATCHED_SIGNING_JWK", jwk);
+        }
+        let evidence: EvidenceConfig = serde_norway::from_str(
+            r#"
+enabled: true
+signing_keys:
+  active-key:
+    provider: local_jwk_env
+    private_jwk_env: TEST_MISMATCHED_SIGNING_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#active
+    status: active
+credential_profiles:
+  profile-a:
+    format: application/dc+sd-jwt
+    issuer: did:web:issuer.example
+    signing_key: active-key
+    vct: https://issuer.example/credentials/a
+    allowed_claims: [claim-a]
+"#,
+        )
+        .expect("evidence config parses");
+
+        let err = EvidenceIssuerRegistry::from_config(&evidence)
+            .expect_err("mismatched key id must fail startup");
+        assert!(
+            err.to_string().contains("kid does not match"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "pkcs11"))]
+    #[test]
+    fn pkcs11_signing_key_fails_closed_when_feature_is_disabled() {
+        unsafe {
+            std::env::set_var(
+                "TEST_PKCS11_PUBLIC_JWK",
+                r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#hsm"}"#,
+            );
+            std::env::set_var("TEST_PKCS11_PIN", "1234");
+        }
+        let evidence: EvidenceConfig = serde_norway::from_str(
+            r#"
+enabled: true
+signing_keys:
+  hsm-key:
+    provider: pkcs11
+    module_path: /usr/lib/softhsm/libsofthsm2.so
+    token_label: registry-notary
+    pin_env: TEST_PKCS11_PIN
+    key_label: issuer-signing-key
+    key_id_hex: 01ab23cd
+    public_jwk_env: TEST_PKCS11_PUBLIC_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#hsm
+    status: active
+credential_profiles:
+  profile-a:
+    format: application/dc+sd-jwt
+    issuer: did:web:issuer.example
+    signing_key: hsm-key
+    vct: https://issuer.example/credentials/a
+    allowed_claims: [claim-a]
+"#,
+        )
+        .expect("evidence config parses");
+
+        let err = EvidenceIssuerRegistry::from_config(&evidence)
+            .expect_err("PKCS#11 must fail closed without feature");
+        assert!(
+            err.to_string().contains("provider 'pkcs11' is not enabled"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(feature = "pkcs11")]
+    #[test]
+    fn pkcs11_signing_key_signs_with_softhsm_when_available() {
+        let _guard = SOFTHSM_ENV_LOCK.lock().expect("SoftHSM env lock");
+        let Some(module_path) = softhsm_module_path() else {
+            assert!(
+                !require_softhsm(),
+                "REGISTRY_NOTARY_REQUIRE_SOFTHSM=1 but softhsm2-util is not available"
+            );
+            eprintln!("skipping SoftHSM signing test: softhsm2-util is not available");
+            return;
+        };
+        if command_output(std::process::Command::new("openssl").arg("version")).is_none() {
+            assert!(
+                !require_softhsm(),
+                "REGISTRY_NOTARY_REQUIRE_SOFTHSM=1 but openssl is not available"
+            );
+            eprintln!("skipping SoftHSM signing test: openssl is not available");
+            return;
+        }
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let token_dir = tmp.path().join("tokens");
+        std::fs::create_dir(&token_dir).expect("token dir is created");
+        let softhsm_conf = tmp.path().join("softhsm2.conf");
+        std::fs::write(
+            &softhsm_conf,
+            format!(
+                "directories.tokendir = {}\nobjectstore.backend = file\nlog.level = ERROR\nslots.removable = false\n",
+                token_dir.display()
+            ),
+        )
+        .expect("SoftHSM config is written");
+
+        let token_label = format!("registry-notary-test-{}", std::process::id());
+        let pin = "1234";
+        unsafe {
+            std::env::set_var("SOFTHSM2_CONF", &softhsm_conf);
+        }
+        run_command(
+            std::process::Command::new("softhsm2-util")
+                .arg("--init-token")
+                .arg("--free")
+                .arg("--label")
+                .arg(&token_label)
+                .arg("--so-pin")
+                .arg("123456")
+                .arg("--pin")
+                .arg(pin),
+        );
+
+        let key_path = tmp.path().join("issuer-ed25519.pem");
+        run_command(
+            std::process::Command::new("openssl")
+                .arg("genpkey")
+                .arg("-algorithm")
+                .arg("ED25519")
+                .arg("-out")
+                .arg(&key_path),
+        );
+        run_command(
+            std::process::Command::new("softhsm2-util")
+                .arg("--import")
+                .arg(&key_path)
+                .arg("--token")
+                .arg(&token_label)
+                .arg("--pin")
+                .arg(pin)
+                .arg("--label")
+                .arg("issuer-signing-key")
+                .arg("--id")
+                .arg("01ab23cd")
+                .arg("--force"),
+        );
+
+        let public_der = command_output(
+            std::process::Command::new("openssl")
+                .arg("pkey")
+                .arg("-in")
+                .arg(&key_path)
+                .arg("-pubout")
+                .arg("-outform")
+                .arg("DER"),
+        )
+        .expect("openssl exports public key");
+        assert!(
+            public_der.len() >= 32,
+            "Ed25519 SubjectPublicKeyInfo has key bytes"
+        );
+        let x = URL_SAFE_NO_PAD.encode(&public_der[public_der.len() - 32..]);
+        let public_jwk_primary = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": x,
+            "alg": "EdDSA",
+            "kid": "did:web:issuer.example#softhsm"
+        })
+        .to_string();
+        let public_jwk_secondary = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": x,
+            "alg": "EdDSA",
+            "kid": "did:web:issuer.example#softhsm-secondary"
+        })
+        .to_string();
+        unsafe {
+            std::env::set_var("TEST_SOFTHSM_PIN", pin);
+            std::env::set_var("TEST_SOFTHSM_PUBLIC_JWK", public_jwk_primary);
+            std::env::set_var("TEST_SOFTHSM_PUBLIC_JWK_SECONDARY", public_jwk_secondary);
+        }
+
+        let evidence: EvidenceConfig = serde_norway::from_str(&format!(
+            r#"
+enabled: true
+signing_keys:
+  hsm-key:
+    provider: pkcs11
+    module_path: {module_path}
+    token_label: {token_label}
+    pin_env: TEST_SOFTHSM_PIN
+    key_label: issuer-signing-key
+    key_id_hex: 01ab23cd
+    public_jwk_env: TEST_SOFTHSM_PUBLIC_JWK
+    alg: EdDSA
+    kid: did:web:issuer.example#softhsm
+    status: active
+  hsm-key-secondary:
+    provider: pkcs11
+    module_path: {module_path}
+    token_label: {token_label}
+    pin_env: TEST_SOFTHSM_PIN
+    key_label: issuer-signing-key
+    key_id_hex: 01ab23cd
+    public_jwk_env: TEST_SOFTHSM_PUBLIC_JWK_SECONDARY
+    alg: EdDSA
+    kid: did:web:issuer.example#softhsm-secondary
+    status: active
+credential_profiles:
+  profile-a:
+    format: application/dc+sd-jwt
+    issuer: did:web:issuer.example
+    signing_key: hsm-key
+    vct: https://issuer.example/credentials/a
+    allowed_claims: [claim-a]
+  profile-b:
+    format: application/dc+sd-jwt
+    issuer: did:web:issuer.example
+    signing_key: hsm-key-secondary
+    vct: https://issuer.example/credentials/b
+    allowed_claims: [claim-b]
+"#,
+        ))
+        .expect("evidence config parses");
+
+        let registry =
+            EvidenceIssuerRegistry::from_config(&evidence).expect("SoftHSM signer builds");
+        let jwks = registry.public_jwks(&evidence).expect("JWKS builds");
+        assert_eq!(jwks.len(), 2);
+        assert!(jwks
+            .iter()
+            .any(|jwk| jwk["kid"] == "did:web:issuer.example#softhsm"));
+        assert!(jwks
+            .iter()
+            .any(|jwk| jwk["kid"] == "did:web:issuer.example#softhsm-secondary"));
+        assert!(registry.issuer("profile-a").is_ok());
+        assert!(registry.issuer("profile-b").is_ok());
+    }
+
+    #[cfg(feature = "pkcs11")]
+    fn softhsm_module_path() -> Option<String> {
+        if let Some(path) = command_output(
+            std::process::Command::new("softhsm2-util")
+                .arg("--show-config")
+                .arg("default-pkcs11-lib"),
+        )
+        .and_then(|output| String::from_utf8(output).ok())
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty() && std::path::Path::new(path).is_absolute())
+        {
+            return Some(path);
+        }
+
+        [
+            "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so",
+            "/usr/lib/softhsm/libsofthsm2.so",
+            "/usr/local/lib/softhsm/libsofthsm2.so",
+            "/opt/homebrew/opt/softhsm/lib/softhsm/libsofthsm2.so",
+            "/usr/local/opt/softhsm/lib/softhsm/libsofthsm2.so",
+        ]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .map(str::to_string)
+    }
+
+    #[cfg(feature = "pkcs11")]
+    fn require_softhsm() -> bool {
+        std::env::var("REGISTRY_NOTARY_REQUIRE_SOFTHSM")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    #[cfg(feature = "pkcs11")]
+    fn command_output(command: &mut std::process::Command) -> Option<Vec<u8>> {
+        let output = command.output().ok()?;
+        output.status.success().then_some(output.stdout)
+    }
+
+    #[cfg(feature = "pkcs11")]
+    fn run_command(command: &mut std::process::Command) {
+        let output = command.output().expect("command starts");
+        assert!(
+            output.status.success(),
+            "command failed: stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn test_audit_config(sink: &str) -> registry_notary_core::EvidenceAuditConfig {

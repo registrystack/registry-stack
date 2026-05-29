@@ -480,15 +480,28 @@ Notary should add an optional `federation` runtime config block. It is disabled
 by default.
 
 ```yaml
+evidence:
+  signing_keys:
+    federation-document:
+      provider: local_jwk_env
+      alg: EdDSA
+      kid: notary-fed-2026-05
+      status: active
+      private_jwk_env: REGISTRY_NOTARY_FEDERATION_JWK
+    federation-request:
+      provider: local_jwk_env
+      alg: EdDSA
+      kid: notary-request-2026-05
+      status: active
+      private_jwk_env: REGISTRY_NOTARY_FEDERATION_REQUEST_JWK
+
 federation:
   enabled: true
   node_id: did:web:district-a.example.gov
   issuer: https://district-a.example.gov
   signing:
-    federation_document_key_id: notary-fed-2026-05
-    federation_document_key_env: REGISTRY_NOTARY_FEDERATION_JWK
-    request_signing_key_id: notary-request-2026-05
-    request_signing_key_env: REGISTRY_NOTARY_FEDERATION_REQUEST_JWK
+    federation_document_signing_key: federation-document
+    request_signing_key: federation-request
   metadata:
     manifest_path: /etc/registry-notary/metadata.yaml
     signed_federation_document_ttl_seconds: 3600

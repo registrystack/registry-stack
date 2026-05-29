@@ -32,6 +32,10 @@ fn app(config: StandaloneRegistryNotaryConfig) -> Result<axum::Router, Standalon
 - Default: `registry-notary-cel`.
 - `registry-notary-cel`: enables CEL-backed claim expression evaluation through
   `crosswalk-core`.
+- `pkcs11`: enables HSM-backed SD-JWT VC issuer signing through PKCS#11. The
+  provider supports Ed25519 EdDSA keys and is configured through
+  `evidence.signing_keys`. See
+  [`../../docs/signing-key-provider.md`](../../docs/signing-key-provider.md).
 
 Run server tests without default features when checking the non-CEL binary
 shape:
@@ -39,6 +43,15 @@ shape:
 ```sh
 cargo test -p registry-notary-server --no-default-features
 ```
+
+Run the PKCS#11 feature path separately:
+
+```sh
+cargo test -p registry-notary-server --no-default-features --features pkcs11 --lib
+```
+
+When SoftHSM and OpenSSL are installed, that feature test includes a live
+PKCS#11 signing smoke test.
 
 ## Replay Store Configuration
 

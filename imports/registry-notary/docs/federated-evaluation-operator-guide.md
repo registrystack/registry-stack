@@ -27,11 +27,23 @@ export EVIDENCE_SOURCE_TOKEN='source-token-issued-by-the-registry'
 ```
 
 Do not reuse the pairwise subject hash secret for audit hashing, cookies,
-source tokens, credential signing, or federation response signing.
+source tokens, credential signing, or federation response signing. Federation
+response signing references a named key from `evidence.signing_keys`, so the
+same local JWK and PKCS#11 providers are used for evidence and federation
+signatures.
 
 ## Minimal Config Shape
 
 ```yaml
+evidence:
+  signing_keys:
+    federation-response:
+      provider: local_jwk_env
+      alg: EdDSA
+      kid: agency-a-fed-1
+      status: active
+      private_jwk_env: REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK
+
 federation:
   enabled: true
   node_id: did:web:agency-a.example.gov
@@ -44,9 +56,7 @@ federation:
   max_request_lifetime_seconds: 300
   clock_leeway_seconds: 60
   signing:
-    kid: agency-a-fed-1
-    key_env: REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK
-    alg: EdDSA
+    signing_key: federation-response
   pairwise_subject_hash:
     secret_env: REGISTRY_NOTARY_PAIRWISE_SUBJECT_HASH_SECRET
   response_shaping:

@@ -18,11 +18,12 @@ use base64::Engine;
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use registry_notary_core::{
-    Oauth2ClientCredentialsSourceAuthConfig, SourceAuthConfig, StandaloneRegistryNotaryConfig,
+    Oauth2ClientCredentialsSourceAuthConfig, SigningKeyProviderConfig, SourceAuthConfig,
+    StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::{openapi_document, standalone_router};
-use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
-use registry_platform_httputil::FetchUrlPolicy;
+use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
+use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use reqwest::Client;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -570,6 +571,13 @@ fn local_env_diagnostics(
             "credential status Redis URL",
         ));
     }
+    if config.federation.enabled {
+        diagnostics.push(check_present_env(
+            &config.federation.pairwise_subject_hash.secret_env,
+            env_report,
+            "federation pairwise subject hash secret",
+        ));
+    }
     for (connection_id, connection) in &config.evidence.source_connections {
         if !connection.token_env.trim().is_empty() {
             diagnostics.push(check_present_env(
@@ -591,12 +599,41 @@ fn local_env_diagnostics(
             ));
         }
     }
-    for (profile_id, profile) in &config.evidence.credential_profiles {
-        diagnostics.push(check_issuer_key_env(
-            &profile.issuer_key_env,
-            profile_id,
-            env_report,
-        ));
+    for (key_id, key) in &config.evidence.signing_keys {
+        if matches!(key.provider, SigningKeyProviderConfig::LocalJwkEnv) && key.status.may_sign() {
+            diagnostics.push(check_local_jwk_env(
+                &key.private_jwk_env,
+                key_id,
+                &key.kid,
+                env_report,
+            ));
+        }
+        if matches!(key.provider, SigningKeyProviderConfig::LocalJwkEnv)
+            && key.status.may_publish()
+            && !key.status.may_sign()
+        {
+            diagnostics.push(check_public_jwk_env(
+                &key.public_jwk_env,
+                key_id,
+                &key.kid,
+                env_report,
+            ));
+        }
+        if matches!(key.provider, SigningKeyProviderConfig::Pkcs11) && key.status.may_sign() {
+            diagnostics.push(check_present_env(
+                &key.pin_env,
+                env_report,
+                &format!("PKCS#11 PIN for signing key {key_id}"),
+            ));
+        }
+        if matches!(key.provider, SigningKeyProviderConfig::Pkcs11) && key.status.may_publish() {
+            diagnostics.push(check_public_jwk_env(
+                &key.public_jwk_env,
+                key_id,
+                &key.kid,
+                env_report,
+            ));
+        }
     }
     diagnostics
 }
@@ -627,21 +664,59 @@ fn check_present_env(env: &str, env_report: &EnvFileReport, label: &str) -> Diag
     }
 }
 
-fn check_issuer_key_env(env: &str, profile_id: &str, env_report: &EnvFileReport) -> Diagnostic {
+fn check_local_jwk_env(
+    env: &str,
+    key_id: &str,
+    expected_kid: &str,
+    env_report: &EnvFileReport,
+) -> Diagnostic {
     match std::env::var(env) {
         Ok(value) => {
             let result = PrivateJwk::parse(&value)
+                .and_then(|mut jwk| {
+                    if jwk.kid.as_deref().is_some_and(|kid| kid != expected_kid) {
+                        return Err(registry_platform_crypto::JwkError::Invalid("kid mismatch"));
+                    }
+                    jwk.kid = Some(expected_kid.to_string());
+                    Ok(jwk)
+                })
                 .map_err(|err| err.to_string())
                 .and_then(|jwk| LocalJwkSigner::new(jwk).map_err(|err| err.to_string()));
             match result {
-                Ok(_) => Diagnostic::ok(format!("{env} is a usable issuer JWK for {profile_id}")),
+                Ok(_) => Diagnostic::ok(format!("{env} is a usable local JWK for {key_id}")),
                 Err(err) => Diagnostic::fail(
-                    format!("{env} is not a usable issuer JWK for {profile_id}: {err}"),
+                    format!("{env} is not a usable local JWK for {key_id}: {err}"),
                     "generate a local demo key with `registry-notary demo-issuer-key`",
                 ),
             }
         }
-        Err(_) => missing_env_diag(env, env_report, &format!("issuer key for {profile_id}")),
+        Err(_) => missing_env_diag(env, env_report, &format!("local JWK for {key_id}")),
+    }
+}
+
+fn check_public_jwk_env(
+    env: &str,
+    key_id: &str,
+    expected_kid: &str,
+    env_report: &EnvFileReport,
+) -> Diagnostic {
+    match std::env::var(env) {
+        Ok(value) => {
+            let result = PublicJwk::parse(&value).and_then(|jwk| {
+                if jwk.kid.as_deref() != Some(expected_kid) {
+                    return Err(registry_platform_crypto::JwkError::Invalid("kid mismatch"));
+                }
+                Ok(jwk)
+            });
+            match result {
+                Ok(_) => Diagnostic::ok(format!("{env} is a usable public JWK for {key_id}")),
+                Err(err) => Diagnostic::fail(
+                    format!("{env} is not a usable public JWK for {key_id}: {err}"),
+                    "set it to a public JWK with the configured kid",
+                ),
+            }
+        }
+        Err(_) => missing_env_diag(env, env_report, &format!("public JWK for {key_id}")),
     }
 }
 
@@ -1015,17 +1090,19 @@ fn first_dci_binding_for_connection<'a>(
 }
 
 fn source_url_for_cli(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
-    if path.starts_with("http://") || path.starts_with("https://") {
+    if reqwest::Url::parse(path).is_ok() {
         return Err("dci.search_path must be relative".to_string());
     }
-    let mut base = reqwest::Url::parse(base_url).map_err(|err| err.to_string())?;
-    let normalized_path = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    };
-    base.set_path(&normalized_path);
-    Ok(base)
+    let base = reqwest::Url::parse(base_url).map_err(|err| err.to_string())?;
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(base);
+    }
+    let segments = trimmed
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    httputil_url::append_path_segments(&base, &segments).map_err(|err| err.to_string())
 }
 
 fn dci_probe_body(
@@ -1165,6 +1242,9 @@ fn required_env_vars(config: &StandaloneRegistryNotaryConfig) -> BTreeSet<String
     if config.credential_status.enabled && config.credential_status.storage == "redis" {
         vars.insert(config.credential_status.redis.url_env.clone());
     }
+    if config.federation.enabled {
+        vars.insert(config.federation.pairwise_subject_hash.secret_env.clone());
+    }
     for connection in config.evidence.source_connections.values() {
         if !connection.token_env.trim().is_empty() {
             vars.insert(connection.token_env.clone());
@@ -1174,8 +1254,19 @@ fn required_env_vars(config: &StandaloneRegistryNotaryConfig) -> BTreeSet<String
             vars.insert(auth.client_secret_env.clone());
         }
     }
-    for profile in config.evidence.credential_profiles.values() {
-        vars.insert(profile.issuer_key_env.clone());
+    for key in config.evidence.signing_keys.values() {
+        if !key.private_jwk_env.trim().is_empty() {
+            vars.insert(key.private_jwk_env.clone());
+        }
+        if !key.public_jwk_env.trim().is_empty() {
+            vars.insert(key.public_jwk_env.clone());
+        }
+        if !key.pin_env.trim().is_empty() {
+            vars.insert(key.pin_env.clone());
+        }
+        if !key.password_env.trim().is_empty() {
+            vars.insert(key.password_env.clone());
+        }
     }
     vars
 }
@@ -1312,6 +1403,11 @@ fn write_generated_file(
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    #[cfg(unix)]
+    if secret {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     file.write_all(contents.as_bytes())?;
     Ok(())
 }
@@ -1325,12 +1421,18 @@ fn dci_config_yaml(options: &InitDciOptions) -> String {
     let credential_profile = if options.demo_issuer {
         format!(
             r#"
+  signing_keys:
+    registry-notary-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:localhost#registry-notary-demo
+      status: active
   credential_profiles:
     dci_record_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:localhost
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:localhost#registry-notary-demo
+      signing_key: registry-notary-demo
       vct: https://registry-notary.local/credentials/dci-record
       allowed_claims: [{claim_id}]
 "#
@@ -1849,6 +1951,83 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
                 "value": "secret-subject-123"
             })
         );
+    }
+
+    #[test]
+    fn doctor_source_url_preserves_base_path_prefix() {
+        let url = source_url_for_cli("https://dci.example.test/api/v1", "/registry/sync/search")
+            .expect("relative DCI path builds");
+
+        assert_eq!(
+            url.as_str(),
+            "https://dci.example.test/api/v1/registry/sync/search"
+        );
+    }
+
+    #[test]
+    fn doctor_source_url_ignores_empty_relative_path_segments() {
+        let url = source_url_for_cli("https://dci.example.test/api/v1/", "registry//sync/search")
+            .expect("relative DCI path builds");
+
+        assert_eq!(
+            url.as_str(),
+            "https://dci.example.test/api/v1/registry/sync/search"
+        );
+    }
+
+    #[test]
+    fn public_jwk_diagnostic_rejects_mismatched_kid() {
+        let env = format!("TEST_REGISTRY_NOTARY_PUBLIC_JWK_{}", Ulid::new());
+        unsafe {
+            std::env::set_var(
+                &env,
+                json!({
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "11qYAYdkdABYXknkTDYUs_NflZt9-QJxBWpukhfQq8Q",
+                    "alg": "EdDSA",
+                    "kid": "did:web:issuer.example#wrong"
+                })
+                .to_string(),
+            );
+        }
+
+        let diagnostic = check_public_jwk_env(
+            &env,
+            "hsm-key",
+            "did:web:issuer.example#expected",
+            &EnvFileReport::default(),
+        );
+        unsafe {
+            std::env::remove_var(&env);
+        }
+
+        assert!(!diagnostic.ok);
+        assert!(diagnostic.label.contains("kid mismatch"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_secret_file_overwrite_forces_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "registry-notary-secret-permissions-{}",
+            Ulid::new()
+        ));
+        std::fs::write(&path, "old").expect("test file is written");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("test file permissions are set");
+
+        write_generated_file(&path, "secret", true, true).expect("secret file is overwritten");
+
+        let mode = std::fs::metadata(&path)
+            .expect("test file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        std::fs::remove_file(&path).expect("test file is removed");
+        assert_eq!(mode, 0o600);
     }
 
     #[tokio::test]

@@ -70,7 +70,7 @@ def _b64url(raw: bytes) -> str:
 def generate_issuer_jwk() -> str:
     """Return a JSON-encoded Ed25519 private JWK with kid + alg fields.
 
-    Matches the issuer_kid declared in perf/config/{small,medium}.yaml.
+    Matches the signing key kid declared in perf/config/{small,medium}.yaml.
     Notary reads this via REGISTRY_NOTARY_ISSUER_JWK at startup.
     """
     private = Ed25519PrivateKey.generate()

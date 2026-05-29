@@ -14,9 +14,12 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
     EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, SelfAttestationClaimSource,
-    StandaloneRegistryNotaryConfig,
+    SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
+    SD_JWT_VC_SIGNING_ALG,
 };
 use registry_notary_server::{standalone_router, StandaloneServerError};
 use registry_platform_audit::{verify_jsonl_lines, AuditEnvelope};
@@ -369,6 +372,24 @@ fn federation_config_for(
     peer_jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
     let mut config = registry_data_api_config(base_url, audit_path);
+    config.evidence.signing_keys.insert(
+        "federation-key".to_string(),
+        SigningKeyConfig {
+            provider: SigningKeyProviderConfig::LocalJwkEnv,
+            alg: SD_JWT_VC_SIGNING_ALG.to_string(),
+            kid: "agency-a-fed-1".to_string(),
+            status: SigningKeyStatus::Active,
+            private_jwk_env: "TEST_FEDERATION_SIGNING_KEY".to_string(),
+            public_jwk_env: String::new(),
+            module_path: String::new(),
+            token_label: String::new(),
+            pin_env: String::new(),
+            key_label: String::new(),
+            key_id_hex: String::new(),
+            path: String::new(),
+            password_env: String::new(),
+        },
+    );
     config.federation = serde_norway::from_str(&format!(
         r#"
 enabled: true
@@ -379,9 +400,7 @@ federation_api: {issuer}/federation/v1
 supported_protocol_versions:
   - registry-notary-federation/v0.1
 signing:
-  kid: agency-a-fed-1
-  key_env: TEST_FEDERATION_SIGNING_KEY
-  alg: EdDSA
+  signing_key: federation-key
 pairwise_subject_hash:
   secret_env: TEST_FEDERATION_PAIRWISE_SECRET
 replay:
@@ -507,6 +526,15 @@ fn tamper_jwt_signature(jwt: &str) -> String {
 fn verified_federation_response_claims(jwt: &str) -> Value {
     let parts = jwt.split('.').collect::<Vec<_>>();
     assert_eq!(parts.len(), 3, "compact JWT response has three segments");
+    let header: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .expect("response header is base64url"),
+    )
+    .expect("response header is JSON");
+    assert_eq!(header["alg"], json!("EdDSA"));
+    assert_eq!(header["typ"], json!(FEDERATION_RESPONSE_JWT_TYP));
+    assert_eq!(header["kid"], json!("agency-a-fed-1"));
     let signing_input = format!("{}.{}", parts[0], parts[1]);
     let signature = URL_SAFE_NO_PAD
         .decode(parts[2])
@@ -571,11 +599,18 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: TEST_SELF_ATTESTATION_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
   credential_profiles:
     civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:issuer.example
-      issuer_key_env: TEST_SELF_ATTESTATION_ISSUER_JWK
+      signing_key: issuer-key
       vct: https://issuer.example/credentials/civil-status
       validity_seconds: 600
       holder_binding:
@@ -1588,6 +1623,19 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     }));
     let authorization = format!("Bearer {token}");
 
+    let jwks = server
+        .get("/.well-known/evidence/jwks.json")
+        .add_header("authorization", authorization.clone())
+        .await;
+    jwks.assert_status_ok();
+    let jwks_body: Value = jwks.json();
+    assert_eq!(jwks_body["keys"].as_array().expect("JWKS keys").len(), 1);
+    assert_eq!(
+        jwks_body["keys"][0]["kid"],
+        json!("did:web:issuer.example#key-1")
+    );
+    assert!(jwks_body["keys"][0].get("d").is_none());
+
     let evaluate = server
         .post("/claims/evaluate")
         .add_header("authorization", authorization.clone())
@@ -2182,6 +2230,22 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
         issue_body["credential_profile"],
         json!("civil_status_sd_jwt")
     );
+    let issuer_signed_jwt = issue_body["issuer_signed_jwt"]
+        .as_str()
+        .expect("issuer signed JWT returned");
+    let header_segment = issuer_signed_jwt
+        .split('.')
+        .next()
+        .expect("issuer signed JWT has protected header");
+    let header: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(header_segment)
+            .expect("issuer signed JWT header is base64url"),
+    )
+    .expect("issuer signed JWT header is JSON");
+    assert_eq!(header["alg"], json!("EdDSA"));
+    assert_eq!(header["typ"], json!("dc+sd-jwt"));
+    assert_eq!(header["kid"], json!("did:web:issuer.example#key-1"));
     let credential_id = issue_body["credential_id"]
         .as_str()
         .expect("credential id returned");

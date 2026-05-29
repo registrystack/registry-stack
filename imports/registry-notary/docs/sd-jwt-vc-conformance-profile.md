@@ -29,11 +29,15 @@ the SD-JWT value. The protected header has these Registry Notary invariants:
 
 - `alg` is `EdDSA`.
 - `typ` is `dc+sd-jwt`.
-- `kid` is the configured credential profile `issuer_kid`, or the derived
-  fallback `{issuer}#evidence-issuer`.
+- `kid` is the `kid` on the credential profile's configured signing key.
 
-Only Ed25519 private JWK issuer keys are supported. Adding ES256, RS256, PS256,
-or other algorithms requires a separate design and test pass.
+Only Ed25519 EdDSA signing keys are supported. Local JWK keys are supported for
+development and tests; PKCS#11 keys are available behind the optional server
+feature. Adding ES256, RS256, PS256, or other algorithms requires a separate
+design and test pass.
+
+Signing key configuration examples are documented in
+[signing-key-provider.md](signing-key-provider.md).
 
 ## Issuer-Signed JWT Payload
 
@@ -94,7 +98,7 @@ the same constants listed in this profile:
 - supported credential media types;
 - SD-JWT VC JWT `typ`;
 - signing algorithms;
-- issuer key types;
+- issuer signing key types;
 - holder binding methods;
 - configured credential profiles;
 - unsupported adjacent features.
