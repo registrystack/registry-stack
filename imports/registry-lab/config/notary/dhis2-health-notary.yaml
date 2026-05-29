@@ -31,12 +31,18 @@ evidence:
       allow_insecure_private_network: true
       retry_on_5xx: false
       token_env: OPENFN_SIDECAR_TOKEN_RAW
+  signing_keys:
+    dhis2-health-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:dhis2-health-notary.demo.example.gov#dhis2-health-demo-key-1
+      status: active
   credential_profiles:
     dhis2_health_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:dhis2-health-notary.demo.example.gov
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:dhis2-health-notary.demo.example.gov#dhis2-health-demo-key-1
+      signing_key: dhis2-health-demo
       vct: https://demo.example.gov/credentials/dhis2/health-status/v1
       validity_seconds: 86400
       allowed_claims:

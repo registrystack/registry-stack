@@ -23,7 +23,12 @@ evidence:
   source_connections:
     opencrvs_crvs:
       base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
-      token_env: OPENCRVS_DCI_TOKEN
+      source_auth:
+        type: oauth2_client_credentials
+        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
+        client_id_env: OPENCRVS_DCI_CLIENT_ID
+        client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
+        request_format: json
       bulk_mode: none
       dci:
         search_path: /registry/sync/search
@@ -32,12 +37,18 @@ evidence:
         registry_type: ns:org:RegistryType:Civil
         registry_event_type: birth
         records_path: /message/search_response/0/data/reg_records
+  signing_keys:
+    opencrvs-dci-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:opencrvs-dci.demo.example.gov#registry-notary-demo-key-1
+      status: active
   credential_profiles:
     opencrvs_birth_summary_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:opencrvs-dci.demo.example.gov
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:opencrvs-dci.demo.example.gov#registry-notary-demo-key-1
+      signing_key: opencrvs-dci-demo
       vct: https://demo.example.gov/credentials/opencrvs-birth-summary/v1
       validity_seconds: 86400
       allowed_claims:

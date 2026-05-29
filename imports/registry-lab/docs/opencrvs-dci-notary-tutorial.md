@@ -105,9 +105,9 @@ just opencrvs-dci
 The script will:
 
 1. Read `.env` and `.env.local`.
-2. Fetch a fresh OpenCRVS OAuth access token.
-3. Store the short-lived access token in `.env.local` as
-   `OPENCRVS_DCI_TOKEN`.
+2. Fetch a fresh OpenCRVS OAuth access token for seeded-subject discovery.
+3. Let Registry Notary fetch its own OpenCRVS source tokens with OAuth
+   client credentials.
 4. Discover one seeded OpenCRVS demo UIN if `OPENCRVS_DEMO_SUBJECT_UIN` is not
    already set.
 5. Start `opencrvs-dci-notary` on port `4352`.
@@ -295,7 +295,9 @@ Run the smoke again:
 just opencrvs-dci
 ```
 
-The script fetches and stores a fresh `OPENCRVS_DCI_TOKEN`.
+The script and Registry Notary fetch fresh OpenCRVS OAuth tokens from the
+configured client credentials. Re-check `OPENCRVS_DCI_CLIENT_ID` and
+`OPENCRVS_DCI_CLIENT_SECRET` in `.env.local` if authentication still fails.
 
 ### Port 4352 Is Already In Use
 
@@ -331,4 +333,3 @@ just opencrvs-dci
 - For citizen-wallet issuance, create a holder-bound profile with
   `holder_binding.mode: did`, require proof-of-possession, and issue only after
   validating a holder proof such as `did:jwk`.
-

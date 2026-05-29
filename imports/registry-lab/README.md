@@ -209,10 +209,10 @@ OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH='sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1
 OPENCRVS_DCI_NOTARY_PORT=4352
 ```
 
-The script refreshes the short-lived OpenCRVS access token and stores it back
-in `.env.local` as `OPENCRVS_DCI_TOKEN` for the Compose service. Leave
-`OPENCRVS_DEMO_SUBJECT_UIN` unset to let the script discover a seeded demo UIN
-without writing it to disk, or set it locally for a fixed smoke subject.
+Registry Notary fetches OpenCRVS source tokens with OAuth client credentials.
+The smoke script also fetches a short-lived token to discover a seeded demo UIN
+when `OPENCRVS_DEMO_SUBJECT_UIN` is unset, but it does not store that token.
+Set `OPENCRVS_DEMO_SUBJECT_UIN` locally for a fixed smoke subject.
 
 The VC profile uses `holder_binding.mode: none` so the lab can show direct
 machine-to-machine issuance without wallet ceremony. Use a holder-bound

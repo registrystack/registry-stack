@@ -42,12 +42,18 @@ evidence:
       base_url: http://health-registry-relay:8080
       allow_insecure_private_network: true
       token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  signing_keys:
+    shared-eligibility-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
+      status: active
   credential_profiles:
     combined_support_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:shared-eligibility-evidence.demo.example
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:shared-eligibility-evidence.demo.example#shared-eligibility-evidence-demo-key-1
+      signing_key: shared-eligibility-evidence-demo
       vct: https://demo.example/credentials/combined-support-eligibility/v1
       validity_seconds: 86400
       allowed_claims:

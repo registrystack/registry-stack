@@ -31,12 +31,18 @@ evidence:
       allow_insecure_private_network: true
       retry_on_5xx: false
       token_env: OPENFN_SIDECAR_TOKEN_RAW
+  signing_keys:
+    openfn-civil-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:openfn-civil-notary.demo.example#openfn-civil-demo-key-1
+      status: active
   credential_profiles:
     openfn_civil_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:openfn-civil-notary.demo.example
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:openfn-civil-notary.demo.example#openfn-civil-demo-key-1
+      signing_key: openfn-civil-demo
       vct: https://demo.example/credentials/openfn-civil/date-of-birth/v1
       validity_seconds: 86400
       allowed_claims:

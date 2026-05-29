@@ -19,10 +19,14 @@ DEMO_ROOT = Path(__file__).resolve().parents[1]
 RELAY_ROOT = Path(os.environ.get("REGISTRY_RELAY_SOURCE_DIR", DEMO_ROOT / "vendor" / "registry-relay")).resolve()
 sys.path.insert(0, str(RELAY_ROOT / "demo/scripts"))
 
-from generate_demo_keys import (  # noqa: E402
-    generate_registry_notary_issuer_jwk,
-    generate_raw_key,
-)
+from generate_demo_keys import generate_raw_key  # noqa: E402
+
+try:  # noqa: E402
+    from generate_demo_keys import generate_registry_notary_issuer_jwk
+except ImportError:  # noqa: E402
+    from generate_demo_keys import (
+        generate_registry_witness_issuer_jwk as generate_registry_notary_issuer_jwk,
+    )
 
 TOKEN_NAMES = [
     "CIVIL_METADATA_CLIENT",

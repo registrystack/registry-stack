@@ -29,9 +29,7 @@ federation:
   supported_protocol_versions:
     - registry-notary-federation/v0.1
   signing:
-    kid: did:web:civil-notary.demo.example.gov#federation-response-1
-    key_env: CIVIL_FEDERATION_RESPONSE_JWK
-    alg: EdDSA
+    signing_key: civil-federation-response
   pairwise_subject_hash:
     secret_env: CIVIL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
   response_shaping:
@@ -83,12 +81,24 @@ evidence:
           birth_date: /person/birth_date
           civil_status: /person/civil_status
           deceased: /person/deceased
+  signing_keys:
+    civil-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
+      status: active
+    civil-federation-response:
+      provider: local_jwk_env
+      private_jwk_env: CIVIL_FEDERATION_RESPONSE_JWK
+      alg: EdDSA
+      kid: did:web:civil-notary.demo.example.gov#federation-response-1
+      status: active
   credential_profiles:
     civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:civil-evidence.demo.example
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
+      signing_key: civil-evidence-demo
       vct: https://demo.example/credentials/civil-status/v1
       validity_seconds: 86400
       allowed_claims:

@@ -1021,12 +1021,18 @@ evidence:
         field_paths:
           national_id: /person/national_id
           deceased: /person/deceased
+  signing_keys:
+    citizen-civil-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:citizen-civil-notary.demo.example#citizen-civil-demo-key-1
+      status: active
   credential_profiles:
     citizen_civil_status_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:citizen-civil-notary.demo.example
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:citizen-civil-notary.demo.example#citizen-civil-demo-key-1
+      signing_key: citizen-civil-demo
       vct: https://demo.example/credentials/citizen-civil-status/v1
       validity_seconds: 600
       allowed_claims:

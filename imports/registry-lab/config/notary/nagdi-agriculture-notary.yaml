@@ -32,9 +32,7 @@ federation:
   max_request_lifetime_seconds: 300
   clock_leeway_seconds: 60
   signing:
-    kid: did:web:nagdi-agriculture-notary.demo.example.gov#federation-response-1
-    key_env: AGRI_FEDERATION_RESPONSE_JWK
-    alg: EdDSA
+    signing_key: nagdi-agriculture-federation-response
   pairwise_subject_hash:
     secret_env: AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
   replay:
@@ -85,12 +83,24 @@ evidence:
       base_url: http://agri-registry-relay:8080
       allow_insecure_private_network: true
       token_env: AGRI_EVIDENCE_SOURCE_RAW
+  signing_keys:
+    nagdi-agriculture-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
+      status: active
+    nagdi-agriculture-federation-response:
+      provider: local_jwk_env
+      private_jwk_env: AGRI_FEDERATION_RESPONSE_JWK
+      alg: EdDSA
+      kid: did:web:nagdi-agriculture-notary.demo.example.gov#federation-response-1
+      status: active
   credential_profiles:
     climate_smart_input_voucher_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
+      signing_key: nagdi-agriculture-evidence-demo
       vct: https://demo.example.gov/credentials/nagdi/climate-smart-input-voucher/v1
       validity_seconds: 86400
       allowed_claims:
@@ -118,8 +128,7 @@ evidence:
     livestock_movement_sd_jwt:
       format: application/dc+sd-jwt
       issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
-      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
-      issuer_kid: did:web:nagdi-agriculture-evidence.demo.example.gov#nagdi-agriculture-evidence-demo-key-1
+      signing_key: nagdi-agriculture-evidence-demo
       vct: https://demo.example.gov/credentials/nagdi/livestock-movement-permit/v1
       validity_seconds: 86400
       allowed_claims:

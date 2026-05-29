@@ -153,17 +153,15 @@ export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-../registry-not
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-../registry-platform}}"
 export CEL_MAPPING_SOURCE_DIR="${CEL_MAPPING_SOURCE_DIR:-../cel-mapping}"
 
-OPENCRVS_DCI_TOKEN="$(fetch_opencrvs_token)"
-export OPENCRVS_DCI_TOKEN
+opencrvs_dci_token="$(fetch_opencrvs_token)"
 update_local_env "OPENCRVS_DCI_BASE_URL" "${OPENCRVS_DCI_BASE_URL}"
-update_local_env "OPENCRVS_DCI_TOKEN" "${OPENCRVS_DCI_TOKEN}"
 update_local_env "OPENCRVS_EVIDENCE_CLIENT_TOKEN" "${OPENCRVS_EVIDENCE_CLIENT_TOKEN}"
 update_local_env "OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH" "${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH}"
 update_local_env "OPENCRVS_DCI_NOTARY_PORT" "${OPENCRVS_DCI_NOTARY_PORT}"
 
 subject_uin="${OPENCRVS_DEMO_SUBJECT_UIN:-}"
 if [[ -z "${subject_uin}" ]]; then
-  subject_uin="$(discover_subject_uin "${OPENCRVS_DCI_TOKEN}")"
+  subject_uin="$(discover_subject_uin "${opencrvs_dci_token}")"
 fi
 [[ -n "${subject_uin}" ]] || fail "could not find an OpenCRVS demo UIN"
 
