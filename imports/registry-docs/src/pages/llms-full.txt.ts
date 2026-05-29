@@ -14,7 +14,7 @@ async function docs(dir: string): Promise<string[]> {
 }
 
 export const GET: APIRoute = async () => {
-  const parts = ['# Registry Legend Full Documentation\n'];
+  const parts = ['# Registry Docs Full Documentation\n'];
   for (const file of await docs('src/content/docs')) {
     const text = await readFile(file, 'utf8');
     parts.push(`\n\n## ${relative('src/content/docs', file)}\n\n${text}`);

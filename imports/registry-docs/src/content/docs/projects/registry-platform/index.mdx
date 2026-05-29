@@ -1,12 +1,12 @@
 ---
 title: Registry Platform overview
-description: Explains the shared Rust workspace that owns registry security and operational primitives used by Relay, Witness, and related services.
+description: Explains the shared Rust workspace that owns registry security and operational primitives used by Relay, Notary, and related services.
 status: draft
 owner: registry-platform
 source_repos:
   - registry-platform
   - registry-relay
-  - registry-witness
+  - registry-notary
 last_reviewed: "2026-05-26"
 doc_type: explanation
 locale: en
@@ -17,7 +17,7 @@ standards_referenced:
 
 Registry Platform is the shared Rust workspace for behavior that must stay consistent across registry services.
 It is not a runtime service and does not expose an HTTP API by itself.
-Relay, Witness, and future registry services consume its crates for security, operational, and test primitives.
+Relay, Notary, and future registry services consume its crates for security, operational, and test primitives.
 
 The workspace exists so fixes in authentication, audit chaining, outbound HTTP policy, OIDC verification, crypto, HTTP security, and SD-JWT VC handling land once and are reused everywhere.
 
@@ -42,18 +42,18 @@ Registry Platform deliberately does not decide product policy.
 Consumers still own their application boundaries:
 
 - Registry Relay owns runtime config, entity routes, caller-scoped metadata publication, Relay-native evidence offering verification, and route-level scope checks.
-- Registry Witness owns claim definitions, evaluation rules, disclosure policy decisions, service routes, and claim-to-credential mapping.
+- Registry Notary owns claim definitions, evaluation rules, disclosure policy decisions, service routes, and claim-to-credential mapping.
 - Operators own tenant isolation, audit retention, secret provisioning, deployment configuration, and incident response.
 
 ## Current consumers
 
 Registry Relay depends on Platform crates for auth helpers, audit envelopes, crypto, HTTP security, outbound HTTP utilities, OIDC, and SD-JWT support.
 
-Registry Witness depends on Platform crates for auth helpers, audit envelopes, crypto, HTTP security, outbound HTTP utilities, OIDC, SD-JWT support, and integration-test fixtures.
+Registry Notary depends on Platform crates for auth helpers, audit envelopes, crypto, HTTP security, outbound HTTP utilities, OIDC, SD-JWT support, and integration-test fixtures.
 
 ## Next
 
 - [Registry Platform reference](./reference/)
 - [Boundaries and map](../../map/boundaries-and-map/)
 - [Registry Relay overview](../registry-relay/)
-- [Registry Witness overview](../registry-witness/)
+- [Registry Notary overview](../registry-notary/)

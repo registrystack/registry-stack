@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 440" role="img"
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
-  <title>Registry Witness claim dependency graph</title>
-  <desc>Registry Witness can evaluate simple extracted claims and derived claims in dependency order. Source connectors fetch facts. Extracted claims can feed a CEL rule. Disclosure policy then shapes claim results, CCCEV evidence, or SD-JWT VC credentials.</desc>
+  <title>Registry Notary claim dependency graph</title>
+  <desc>Registry Notary can evaluate simple extracted claims and derived claims in dependency order. Source connectors fetch facts. Extracted claims can feed a CEL rule. Disclosure policy then shapes claim results, CCCEV evidence, or SD-JWT VC credentials.</desc>
 
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
     <text x="24" y="32">FACTS</text>

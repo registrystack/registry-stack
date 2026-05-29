@@ -2,11 +2,11 @@
 title: Entity identity and matching are unclear
 description: Why registry exchange must carry entity keys, subject identifiers, and matching assumptions without claiming to solve foundational identity.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
 last_reviewed: "2026-05-28"
 doc_type: explanation
 locale: en
@@ -73,7 +73,7 @@ exposes, including which identifier fields the entity is keyed on.
 asks for an entity by a declared identifier, and the route either returns the entity or
 does not match: there is no implicit join hidden in the response.
 
-**Registry Witness** evaluates configured claims against named subject inputs and records
+**Registry Notary** evaluates configured claims against named subject inputs and records
 the claim result, including which source record the subject input was bound to.
 
 The cadastral service can still answer "owner confirmed" to the tax authority. The answer
@@ -86,7 +86,7 @@ deployment configures that behavior. For the broader model, see the
 
 Registry Relay documents public entity routes, configured identifiers, declared fields,
 and scope-controlled reads.
-Registry Witness documents claim definitions with subject types, inputs, source bindings,
+Registry Notary documents claim definitions with subject types, inputs, source bindings,
 evaluation rules, and disclosure policy.
 Registry Manifest documents entity schemas and evidence-offering metadata.
 
@@ -106,6 +106,6 @@ decisions.
 ## Next
 
 - [Registry Relay overview](../../projects/registry-relay/)
-- [Registry Witness overview](../../projects/registry-witness/)
+- [Registry Notary overview](../../projects/registry-notary/)
 - [Glossary](../../reference/glossary/)
 - Planned explanation: federation boundaries

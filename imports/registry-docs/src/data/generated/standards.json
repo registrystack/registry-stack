@@ -156,7 +156,7 @@
     "claim_level": "emits",
     "used_by": [
       "registry-relay",
-      "registry-witness"
+      "registry-notary"
     ],
     "surfaces": [
       "generated API reference",
@@ -168,12 +168,12 @@
         "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
       },
       {
-        "label": "Registry Witness README",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/README.md"
+        "label": "Registry Notary README",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/README.md"
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "Relay and Witness generate OpenAPI. These docs publish pinned artifacts through Redoc."
+    "notes": "Relay and Notary generate OpenAPI. These docs publish pinned artifacts through Redoc."
   },
   {
     "id": "shacl",
@@ -244,7 +244,7 @@
     "used_by": [
       "registry-relay",
       "registry-manifest",
-      "registry-witness"
+      "registry-notary"
     ],
     "surfaces": [
       "catalog JSON-LD",
@@ -259,8 +259,8 @@
         "url": "https://github.com/jeremi/registry-relay/blob/main/src/metadata/shacl.rs"
       },
       {
-        "label": "Registry Witness CCCEV renderer",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs"
+        "label": "Registry Notary CCCEV renderer",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/runtime.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -275,7 +275,7 @@
     "status": "used",
     "claim_level": "emits",
     "used_by": [
-      "registry-witness",
+      "registry-notary",
       "registry-platform"
     ],
     "surfaces": [
@@ -285,8 +285,8 @@
     ],
     "evidence_docs": [
       {
-        "label": "Registry Witness README",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/README.md"
+        "label": "Registry Notary README",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/README.md"
       },
       {
         "label": "Registry Platform SD-JWT crate",
@@ -294,7 +294,7 @@
       }
     ],
     "last_checked": "2026-05-24",
-    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Registry Witness owns the claim-to-credential workflow and service routes that use them."
+    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Registry Notary owns the claim-to-credential workflow and service routes that use them."
   },
   {
     "id": "verifiable-credentials",
@@ -306,7 +306,7 @@
     "claim_level": "aligns_with",
     "used_by": [
       "registry-relay",
-      "registry-witness"
+      "registry-notary"
     ],
     "surfaces": [
       "provenance contexts",
@@ -323,12 +323,12 @@
         "url": "https://github.com/jeremi/registry-relay/tree/main/tests/fixtures/vc"
       },
       {
-        "label": "Registry Witness README",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/README.md"
+        "label": "Registry Notary README",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/README.md"
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "Relay has VC-oriented provenance fixtures and contexts, and Witness issues SD-JWT VC. Keep this below an emits claim until a reviewed VC profile and validation fixtures are pinned."
+    "notes": "Relay has VC-oriented provenance fixtures and contexts, and Notary issues SD-JWT VC. Keep this below an emits claim until a reviewed VC profile and validation fixtures are pinned."
   },
   {
     "id": "cccev",
@@ -340,7 +340,7 @@
     "claim_level": "emits",
     "used_by": [
       "registry-manifest",
-      "registry-witness",
+      "registry-notary",
       "registry-atlas",
       "registry-lab"
     ],
@@ -361,16 +361,16 @@
         "url": "https://github.com/jeremi/registry-atlas/blob/main/crates/semantic-asset-discovery-core/src/navigation.rs"
       },
       {
-        "label": "Registry Witness CCCEV renderer",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/runtime.rs"
+        "label": "Registry Notary CCCEV renderer",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/runtime.rs"
       },
       {
-        "label": "Registry Witness media type constants",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs"
+        "label": "Registry Notary media type constants",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-25",
-    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. Atlas treats each EvidenceTypeList as one grouped option and multiple lists as alternatives. Witness renders CCCEV-shaped claim results. Profile conformance is not claimed."
+    "notes": "Manifest emits CCCEV requirement and evidence type list metadata. Atlas treats each EvidenceTypeList as one grouped option and multiple lists as alternatives. Notary renders CCCEV-shaped claim results. Profile conformance is not claimed."
   },
   {
     "id": "odrl",
@@ -411,7 +411,7 @@
     "claim_level": "inspired_by",
     "used_by": [
       "registry-relay",
-      "registry-witness"
+      "registry-notary"
     ],
     "surfaces": [
       "provenance model discussion",
@@ -423,8 +423,8 @@
         "url": "https://github.com/jeremi/registry-relay/blob/main/src/config/provenance.rs"
       },
       {
-        "label": "Registry Witness claim model",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/model.rs"
+        "label": "Registry Notary claim model",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -464,7 +464,7 @@
     "claim_level": "maps_to",
     "used_by": [
       "registry-relay",
-      "registry-witness"
+      "registry-notary"
     ],
     "surfaces": [
       "optional sync adapter",
@@ -476,12 +476,12 @@
         "url": "https://github.com/jeremi/registry-relay/blob/main/README.md"
       },
       {
-        "label": "Registry Witness source connector",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs"
+        "label": "Registry Notary source connector",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/config.rs"
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. Witness ships an HTTP source connector that maps SP-DCI search and sync responses into claim evaluation inputs."
+    "notes": "Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. Notary ships an HTTP source connector that maps SP-DCI search and sync responses into claim evaluation inputs."
   },
   {
     "id": "oid4vci",
@@ -492,7 +492,7 @@
     "status": "used",
     "claim_level": "emits",
     "used_by": [
-      "registry-witness",
+      "registry-notary",
       "registry-platform",
       "registry-lab"
     ],
@@ -505,8 +505,8 @@
     ],
     "evidence_docs": [
       {
-        "label": "Registry Witness OID4VCI routes",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs"
+        "label": "Registry Notary OID4VCI routes",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform OID4VCI crate",
@@ -518,7 +518,7 @@
       }
     ],
     "last_checked": "2026-05-25",
-    "notes": "Registry Witness exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. Registry Lab exercises the full flow through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted; the surfaces emit the protocol shape and have been validated against the lab smoke script."
+    "notes": "Registry Notary exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. Registry Lab exercises the full flow through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted; the surfaces emit the protocol shape and have been validated against the lab smoke script."
   },
   {
     "id": "w3c-did",
@@ -530,7 +530,7 @@
     "claim_level": "implements",
     "used_by": [
       "registry-relay",
-      "registry-witness",
+      "registry-notary",
       "registry-platform"
     ],
     "surfaces": [
@@ -549,8 +549,8 @@
         "url": "https://github.com/jeremi/registry-relay/blob/main/src/api/did.rs"
       },
       {
-        "label": "Registry Witness did:jwk handling",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs"
+        "label": "Registry Notary did:jwk handling",
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform crypto crate",
@@ -558,6 +558,6 @@
       }
     ],
     "last_checked": "2026-05-24",
-    "notes": "Relay publishes a did:web document, Witness parses did:jwk values for credential subjects, and Platform owns shared DID and Ed25519 JWK helpers. The site does not claim conformance to the wider DID method registry beyond did:web and did:jwk."
+    "notes": "Relay publishes a did:web document, Notary parses did:jwk values for credential subjects, and Platform owns shared DID and Ed25519 JWK helpers. The site does not claim conformance to the wider DID method registry beyond did:web and did:jwk."
   }
 ]

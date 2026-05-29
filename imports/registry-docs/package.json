@@ -1,5 +1,5 @@
 {
-  "name": "registry-legend",
+  "name": "registry-docs",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,13 +16,13 @@
     "check:markdown": "markdownlint-cli2",
     "check:style": "node scripts/run-vale.mjs --no-exit src/content/docs README.md",
     "check:style:fixtures": "node scripts/check-vale-fixtures.mjs",
-    "check:openapi": "redocly lint registry-relay registry-witness",
+    "check:openapi": "redocly lint registry-relay registry-notary",
     "check:tutorial": "scripts/check-tutorial.sh",
     "check:tutorial:dry-run": "scripts/check-tutorial.sh --dry-run",
     "check:links": "npm run build && npm run check:links:built",
     "check": "npm run generate && npm run check:content && npm run check:markdown && npm run check:style && npm run check:style:fixtures && npm run check:openapi && npm run check:tutorial:dry-run && npm run check:svg && npm run build && npm run check:links:built",
     "check:links:built": "node scripts/check-built-links.mjs",
-    "redoc": "redocly build-docs registry-relay --output public/api/registry-relay.html && redocly build-docs registry-witness --output public/api/registry-witness.html"
+    "redoc": "redocly build-docs registry-relay --output public/api/registry-relay.html && redocly build-docs registry-notary --output public/api/registry-notary.html"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.2",

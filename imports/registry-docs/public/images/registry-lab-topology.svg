@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Lab topology</title>
-  <desc>The Registry Lab compose demo wires static manifest output and locally generated demo secrets into Registry Relay and Registry Witness, then exposes both services to Registry Atlas and a demo client. The smoke script verifies the running stack.</desc>
+  <desc>The Registry Lab compose demo wires static manifest output and locally generated demo secrets into Registry Relay and Registry Notary, then exposes both services to Registry Atlas and a demo client. The smoke script verifies the running stack.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">REGISTRY LAB — COMPOSE TOPOLOGY</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -43,9 +43,9 @@
   <text x="280" y="158" fill="#3a3a3a" font-size="12">Protected entity</text>
   <text x="280" y="176" fill="#3a3a3a" font-size="12">and metadata API.</text>
 
-  <text x="280" y="210" fill="#161616" font-size="14" font-weight="700">Registry Witness</text>
+  <text x="280" y="210" fill="#161616" font-size="14" font-weight="700">Registry Notary</text>
   <text x="280" y="228" fill="#6a6a6a" font-size="11.5"
-        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-witness</text>
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-notary</text>
   <text x="280" y="252" fill="#3a3a3a" font-size="12">Claim evaluation</text>
   <text x="280" y="270" fill="#3a3a3a" font-size="12">and credential issuance.</text>
 

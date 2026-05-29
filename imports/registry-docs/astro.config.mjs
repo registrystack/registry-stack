@@ -4,8 +4,7 @@ import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://jeremi.github.io/registry-legend',
-  base: '/registry-legend',
+  site: 'https://docs.registrystack.org',
   trailingSlash: 'always',
   integrations: [
     starlight({
@@ -28,13 +27,13 @@ export default defineConfig({
         MobileMenuFooter: './src/components/RegistryMobileMenuFooter.astro',
       },
       editLink: {
-        baseUrl: 'https://github.com/jeremi/registry-legend/edit/main/',
+        baseUrl: 'https://github.com/jeremi/registry-docs/edit/main/',
       },
       social: [
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/jeremi/registry-legend',
+          href: 'https://github.com/jeremi/registry-docs',
         },
       ],
       sidebar: [
@@ -113,7 +112,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Registry Relay', slug: 'projects/registry-relay' },
-            { label: 'Registry Witness', slug: 'projects/registry-witness' },
+            { label: 'Registry Notary', slug: 'projects/registry-notary' },
             { label: 'Registry metadata', slug: 'projects/registry-manifest' },
           ],
         },
@@ -127,7 +126,7 @@ export default defineConfig({
               items: [
                 { label: 'Overview', slug: 'reference/apis' },
                 { label: 'Registry Relay', slug: 'reference/apis/registry-relay' },
-                { label: 'Registry Witness', slug: 'reference/apis/registry-witness' },
+                { label: 'Registry Notary', slug: 'reference/apis/registry-notary' },
               ],
             },
             { label: 'Contracts', slug: 'reference/contracts' },

@@ -3,12 +3,12 @@ title: Boundaries and map
 description: The six registry stack projects, their responsibilities, flow across them, and what each project does not own.
 wide: true
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-lab
 last_reviewed: "2026-05-25"
@@ -31,10 +31,10 @@ Use this page to decide which repository owns a question before opening implemen
 and to understand how the six repositories connect at runtime.
 
 <figure>
-  <img src="/registry-legend/images/registry-family-map.svg"
+  <img src="/images/registry-family-map.svg"
        alt="Six registry stack projects and how they connect. Registry Platform provides shared
             primitives. Registry Manifest compiles portable metadata. Registry Relay binds metadata
-            to runtime sources and exposes protected APIs. Registry Witness evaluates claims and
+            to runtime sources and exposes protected APIs. Registry Notary evaluates claims and
             issues credentials. Registry Atlas inspects published artifacts in a browser.
             Registry Lab runs the runtime services together as a compose topology." />
 </figure>
@@ -47,20 +47,20 @@ and to understand how the six repositories connect at runtime.
 ## Flow across the stack
 
 [Registry Platform](../../projects/registry-platform/) provides shared Rust primitives that Relay and
-Witness compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy,
+Notary compose for auth, audit, OIDC, HTTP security, crypto, SD-JWT VC handling, outbound HTTP policy,
 and testing.
 [Registry Manifest](../../projects/registry-manifest/) defines portable metadata and compiles it into
-standards-facing service, registry, schema, form, policy, evidence, and public Witness federation
+standards-facing service, registry, schema, form, policy, evidence, and public Notary federation
 artifacts.
 [Registry Relay](../../projects/registry-relay/) binds logical datasets and entities to protected runtime
 sources and exposes them as authorized read-only APIs.
-[Registry Witness](../../projects/registry-witness/) evaluates configured claims against registry sources,
+[Registry Notary](../../projects/registry-notary/) evaluates configured claims against registry sources,
 serves static-peer delegated evaluation, and issues SD-JWT VC credentials.
 [Registry Atlas](../../projects/registry-atlas/) inspects published discovery artifacts, parses service
 catalogues and registry metadata, and navigates service-first requirements, evidence options, providers,
 forms, and access routes.
 [Registry Lab](../../projects/registry-lab/) runs the smallest local ecosystem demo, composing three Relay
-authorities, four Witness services, live Postgres and Zitadel services, a private OpenFn sidecar path,
+authorities, four Notary services, live Postgres and Zitadel services, a private OpenFn sidecar path,
 a static metadata publisher, and narrated clients.
 
 ## Ownership quick reference
@@ -70,7 +70,7 @@ a static metadata publisher, and narrated clients.
 | Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](../../projects/registry-platform/) |
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../projects/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](../../projects/registry-manifest/) |
-| How is a claim evaluated, delegated to a trusted Witness, or turned into an attestation or credential? | [Registry Witness](../../projects/registry-witness/) |
+| How is a claim evaluated, delegated to a trusted Notary, or turned into an attestation or credential? | [Registry Notary](../../projects/registry-notary/) |
 | How are discovery artifacts inspected or matched against capability needs? | [Registry Atlas](../../projects/registry-atlas/) |
 | How do the services run together in a local demo? | [Registry Lab](../../projects/registry-lab/) |
 
@@ -85,7 +85,7 @@ Registry Platform is a shared crate workspace. It does not run a service or deci
 **Does not own:**
 
 - Registry Relay route behavior, runtime source binding, metadata publication, or Relay-specific scope semantics.
-- Registry Witness claim definitions, evaluation rules, disclosure decisions, service routes, or claim-to-credential mapping.
+- Registry Notary claim definitions, evaluation rules, disclosure decisions, service routes, or claim-to-credential mapping.
 - Operator responsibilities such as tenant isolation, audit retention, secret provisioning, deployment configuration, and incident response.
 
 Use Registry Platform when a primitive needs to behave identically across services. Use the consuming
@@ -100,7 +100,7 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 - Registry Relay runtime data access. Manifest doesn't serve HTTP, doesn't talk to databases, doesn't run inside a gateway. {/* Evidence: registry-manifest README lines 88-92, commit 77125ec. */}
 - Auth, audit, observability, or secret handling. These are intentionally excluded so the library can be used without running any runtime service. {/* Evidence: registry-manifest README lines 88-92. */}
 - Production source configuration. Source paths, table IDs, scopes, cache paths, and backend runtime details belong in Registry Relay configuration, not in portable manifests. {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
-- Runtime federation policy. Manifest can publish public Witness federation metadata, but peer allowlists, signing keys, replay stores, purpose policy, and source scopes belong in Registry Witness config.
+- Runtime federation policy. Manifest can publish public Notary federation metadata, but peer allowlists, signing keys, replay stores, purpose policy, and source scopes belong in Registry Notary config.
 
 No HTTP serving, no database queries, no authorization scoping. The manifest compiles and renders only.
 
@@ -110,26 +110,26 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
 
 - Record provisioning or writes. The README explicitly states write operations are out of scope for v1. {/* Evidence: registry-relay README line 14, commit 85d32f0. */}
 - Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are owned by Registry Manifest. Registry Relay may serve compiled artifacts over HTTP and scope them for callers, but the schema is defined and versioned in Registry Manifest. {/* Evidence: registry-manifest README lines 88-92; registry-relay evidence packet, metadata publication section. */}
-- Standalone claim service internals owned by Registry Witness. Registry Relay can declare evidence offerings and route clients to a Registry Witness endpoint, but claim evaluation, disclosure policy, and credential issuance run in Registry Witness. {/* Evidence: registry-relay evidence packet, evidence offering verification section. */}
+- Standalone claim service internals owned by Registry Notary. Registry Relay can declare evidence offerings and route clients to a Registry Notary endpoint, but claim evaluation, disclosure policy, and credential issuance run in Registry Notary. {/* Evidence: registry-relay evidence packet, evidence offering verification section. */}
 - Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives owned by Registry Platform. Registry Relay owns how those primitives are configured and enforced on Relay routes.
 - Storage table IDs or arbitrary SQL in public APIs. Public route paths use dataset and entity identifiers; internal table names and query shapes are configuration internals. {/* Evidence: projects.yaml, registry-relay does_not_own; registry-relay evidence packet configuration surface. */}
 
 Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized
 systems only. {/* Evidence: registry-relay README line 10. */}
 
-## Registry Witness
+## Registry Notary
 
-Registry Witness evaluates claims and issues SD-JWT VC credentials. It does not own:
+Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not own:
 
-- Registry Relay source code or runtime internals. Registry Witness calls Registry Relay over HTTP using a source connector; it does not import or link Registry Relay libraries. Both services can depend on Registry Platform. {/* Evidence: registry-witness README lines 5-9, commit b4128a3; platform dependency in current Cargo.toml. */}
-- Portable metadata renderers owned by Registry Manifest. Registry Witness does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. {/* Evidence: registry-witness evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
-- Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives owned by Registry Platform. Registry Witness owns the claim service behavior that composes those primitives.
+- Registry Relay source code or runtime internals. Registry Notary calls Registry Relay over HTTP using a source connector; it does not import or link Registry Relay libraries. Both services can depend on Registry Platform. {/* Evidence: registry-notary README lines 5-9, commit b4128a3; platform dependency in current Cargo.toml. */}
+- Portable metadata renderers owned by Registry Manifest. Registry Notary does not produce DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts. {/* Evidence: registry-notary evidence packet, standards not found in code section: "DCAT: no data.europa.eu/r8g references", "OGC API Records: no OGC references". */}
+- Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives owned by Registry Platform. Registry Notary owns the claim service behavior that composes those primitives.
 - Open federation, dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, or federated credential issuance. The current federation implementation is static-peer delegated evaluation only.
 - Browser inspection workflows owned by Registry Atlas. Inspecting published discovery artifacts, parsing DCAT catalogs, and running capability queries are Atlas responsibilities.
 
-Registry Witness credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
+Registry Notary credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
 Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present
-in the issued credential. {/* Evidence: registry-witness evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT". */}
+in the issued credential. {/* Evidence: registry-notary evidence packet, credential issuance section, "W3C Verifiable Credentials Data Model: NOT PRESENT". */}
 
 ## Registry Atlas
 
@@ -148,7 +148,7 @@ not be published back into metadata catalogs as if they were source-verified cla
 Registry Lab is a compose-based local demo. It does not own:
 
 - Production deployment guidance. The demo uses CSV, XLSX, and Parquet fixtures and demo-grade credentials. It is not a reference for production configuration. {/* Evidence: registry-lab README, explicit non-goals section, commit aaa6f80. */}
-- Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry Witness; metadata contracts are owned by Registry Manifest. {/* Evidence: projects.yaml, registry-lab does_not_own. */}
+- Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry Notary; metadata contracts are owned by Registry Manifest. {/* Evidence: projects.yaml, registry-lab does_not_own. */}
 - Real product integrations. The services simulate civil, social protection, and health registry patterns but are not real integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems. {/* Evidence: registry-lab README, explicit non-goals section. */}
 
 ## Documentation rule

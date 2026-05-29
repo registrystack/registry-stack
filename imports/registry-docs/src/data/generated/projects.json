@@ -4,16 +4,16 @@
     "name": "Registry Platform",
     "repo_path": "../registry-platform",
     "target_repo_path": "../registry-platform",
-    "role": "Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Witness, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.",
+    "role": "Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Notary, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.",
     "owns": [
       "Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.",
       "OID4VCI credential offer, nonce, credential request, and issuer metadata primitives via the `registry-platform-oid4vci` crate.",
-      "Cross-service crate APIs that must behave consistently in Relay, Witness, and future registry services.",
+      "Cross-service crate APIs that must behave consistently in Relay, Notary, and future registry services.",
       "Shared Rust hygiene templates and supported integration-test fixtures."
     ],
     "does_not_own": [
       "Registry Relay runtime data access, entity routing, metadata publication, or scope policy semantics.",
-      "Registry Witness claim configuration, evaluation rules, disclosure policy decisions, or service routes.",
+      "Registry Notary claim configuration, evaluation rules, disclosure policy decisions, or service routes.",
       "Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration."
     ],
     "source_docs": [
@@ -33,11 +33,11 @@
     "name": "Registry Manifest",
     "repo_path": "../registry-manifest",
     "target_repo_path": "../registry-manifest",
-    "role": "Renders standards-compliant catalog, service, schema, form, policy, evidence-offering, and public Witness federation metadata artifacts (DCAT, CPSV-AP, CCCEV, BRegDCAT-AP, SHACL, JSON Schema, OGC Records, ODRL) from a single YAML metadata manifest, so a registry's published surface stays consistent across formats.",
+    "role": "Renders standards-compliant catalog, service, schema, form, policy, evidence-offering, and public Notary federation metadata artifacts (DCAT, CPSV-AP, CCCEV, BRegDCAT-AP, SHACL, JSON Schema, OGC Records, ODRL) from a single YAML metadata manifest, so a registry's published surface stays consistent across formats.",
     "owns": [
       "Metadata manifest model and compiled metadata model.",
       "Pure renderers for catalog, DCAT, CPSV-AP service catalogues, CCCEV requirements and evidence type lists, BRegDCAT-AP, SHACL, JSON Schema, form JSON Schema, OGC Records, policies, and evidence offerings.",
-      "Public Registry Witness federation metadata and evaluation profile validation.",
+      "Public Registry Notary federation metadata and evaluation profile validation.",
       "CLI validation, rendering, static publication, and profile fixture validation."
     ],
     "does_not_own": [
@@ -73,7 +73,7 @@
     "does_not_own": [
       "Record provisioning or writes in v1.",
       "Portable metadata schema ownership.",
-      "Standalone claim service internals owned by Registry Witness.",
+      "Standalone claim service internals owned by Registry Notary.",
       "Shared security and operational primitives owned by Registry Platform.",
       "Storage table ids or arbitrary SQL in public APIs."
     ],
@@ -94,15 +94,15 @@
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
   },
   {
-    "id": "registry-witness",
-    "name": "Registry Witness",
-    "repo_path": "../registry-witness",
-    "target_repo_path": "../registry-witness",
+    "id": "registry-notary",
+    "name": "Registry Notary",
+    "repo_path": "../registry-notary",
+    "target_repo_path": "../registry-notary",
     "role": "Standalone service that evaluates eligibility claims against registry data, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials with selective disclosure, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.",
     "owns": [
       "Claim configuration and evaluation.",
       "Disclosure policy and redacted audit event semantics.",
-      "Registry Witness API routes.",
+      "Registry Notary API routes.",
       "Static-peer delegated evaluation at `/federation/v1/evaluations`.",
       "Credential issuance workflow and claim-to-credential mapping.",
       "OID4VCI Draft 13 credential offer flow (credential-offer, nonce, credential endpoints) and the `/.well-known/openid-credential-issuer` metadata endpoint.",
@@ -118,11 +118,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-witness"
+        "url": "https://github.com/jeremi/registry-notary"
       },
       {
         "label": "OpenAPI source",
-        "url": "https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/openapi.rs"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -163,11 +163,11 @@
     "name": "Registry Lab",
     "repo_path": "../registry-lab",
     "target_repo_path": "../registry-lab",
-    "role": "Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, four Witness instances, live Postgres and Zitadel services, a private OpenFn sidecar scenario, a static metadata publisher, and narrated demo clients together with Registry Platform, Relay, and Witness source pins, fixtures, and smoke tests.",
+    "role": "Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, four Notary instances, live Postgres and Zitadel services, a private OpenFn sidecar scenario, a static metadata publisher, and narrated demo clients together with Registry Platform, Relay, and Notary source pins, fixtures, and smoke tests.",
     "owns": [
-      "End-to-end local topology for Relay, Witness, live Postgres, live Zitadel, the private OpenFn sidecar path, the static metadata publisher, and demo-client fixtures (Atlas is run separately and is not in the compose topology at v0.1).",
+      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, the private OpenFn sidecar path, the static metadata publisher, and demo-client fixtures (Atlas is run separately and is not in the compose topology at v0.1).",
       "Demo scripts, smoke checks, generated local credentials, live-service checks, service-first discovery checks, and narrated client flows.",
-      "Citizen self-attestation walkthrough that exercises the Witness OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.",
+      "Citizen self-attestation walkthrough that exercises the Notary OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.",
       "Acceptance rehearsal after rename waves land."
     ],
     "does_not_own": [
@@ -182,7 +182,7 @@
       },
       {
         "label": "Rename plan",
-        "url": "https://github.com/jeremi/registry-legend/blob/main/rename-plan-2026-05-23.md"
+        "url": "https://github.com/jeremi/registry-docs/blob/main/rename-plan-2026-05-23.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-lab`; stable demo identifiers may still contain `decentralized-demo` as protocol and artifact values."

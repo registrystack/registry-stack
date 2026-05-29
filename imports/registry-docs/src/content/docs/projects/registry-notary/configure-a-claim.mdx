@@ -2,9 +2,9 @@
 title: Configure a claim
 description: How to author a YAML claim definition that evaluates against a source connector and produces a credential with the right disclosure policy.
 status: draft
-owner: registry-witness
+owner: registry-notary
 source_repos:
-  - registry-witness
+  - registry-notary
 last_reviewed: "2026-05-24"
 doc_type: how-to
 locale: en
@@ -14,17 +14,17 @@ standards_referenced:
   - sp-dci
 ---
 
-Author a new claim definition in the Registry Witness YAML config. By the end, you will have a claim that fetches a value from a source registry, evaluates a rule, and returns a result at the disclosure level you choose. The same procedure covers changing disclosure policy, switching source connectors, and adding CEL-based derived claims.
+Author a new claim definition in the Registry Notary YAML config. By the end, you will have a claim that fetches a value from a source registry, evaluates a rule, and returns a result at the disclosure level you choose. The same procedure covers changing disclosure policy, switching source connectors, and adding CEL-based derived claims.
 
 ## Prerequisites
 
-- A running Registry Witness instance.
+- A running Registry Notary instance.
   See [run locally](../run-locally/) if you need one.
-- Access to edit the YAML config file loaded by `registry-witness-bin`.
-- A source registry (Registry Data API or SP DCI endpoint) reachable from the Witness host,
+- Access to edit the YAML config file loaded by `registry-notary-bin`.
+- A source registry (Registry Data API or SP DCI endpoint) reachable from the Notary host,
   or a local stub for testing.
 - The environment variable named by `token_env` for your source connection set in the shell
-  where Registry Witness runs.
+  where Registry Notary runs.
 
 ## Steps
 
@@ -123,7 +123,7 @@ evidence:
           - value
           - redacted
       formats:
-        - application/vnd.registry-witness.claim-result+json
+        - application/vnd.registry-notary.claim-result+json
 ```
 
 Key fields explained:
@@ -208,7 +208,7 @@ Declare `depends_on` to ensure the upstream claims are evaluated first.
       - predicate
       - redacted
   formats:
-    - application/vnd.registry-witness.claim-result+json
+    - application/vnd.registry-notary.claim-result+json
 ```
 
 CEL bindings under `bindings.claims` map a local variable name to a claim ID.
@@ -225,7 +225,7 @@ evidence:
     my_profile:
       format: application/dc+sd-jwt
       issuer: did:web:my-issuer.example.gov
-      issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK
+      issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK
       vct: https://my-issuer.example.gov/credentials/my-claim/v1
       validity_seconds: 86400
       holder_binding:
@@ -250,7 +250,7 @@ Then reference the profile from the claim:
 Set the issuer key environment variable before starting or restarting the service:
 
 ```sh
-export REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"<private>","x":"<public>","alg":"EdDSA"}'
+export REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"<private>","x":"<public>","alg":"EdDSA"}'
 ```
 
 > **Caution:** The issuer private key must not be committed to source control or logged.
@@ -258,12 +258,12 @@ export REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"<private>"
 
 ### 6. Restart the service and validate
 
-Registry Witness loads config at startup.
+Registry Notary loads config at startup.
 After editing the YAML, restart the process.
 The config validator runs before the listener binds.
 
 ```sh
-cargo run -p registry-witness-bin -- --config <your-config>.yaml
+cargo run -p registry-notary-bin -- --config <your-config>.yaml
 ```
 
 If the process exits immediately, check the tracing output for a startup error.

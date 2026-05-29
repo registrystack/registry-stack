@@ -43,12 +43,12 @@ EXPECTED_SERVICES=(
 	health-registry-relay
 	postgres
 	zitadel
-	civil-witness
-	social-protection-witness
-	shared-eligibility-witness
+	civil-notary
+	social-protection-notary
+	shared-eligibility-notary
 	openfn-mock-registry
 	openfn-civil-sidecar
-	openfn-civil-witness
+	openfn-civil-notary
 	static-metadata-publisher
 )
 

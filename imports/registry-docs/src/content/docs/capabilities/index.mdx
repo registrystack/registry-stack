@@ -2,11 +2,11 @@
 title: Capabilities
 description: What Registry Stack does for registry owners, service integrators, and reviewers.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-platform
 last_reviewed: "2026-05-28"
@@ -36,14 +36,14 @@ A caller cannot safely use a registry if the fields, schemas, services, policies
 offerings, and confidence boundaries are not inspectable.
 After the registry surface is described, Registry Relay can expose scoped routes over the existing
 source.
-Registry Witness can then evaluate configured claims and return a minimized evidence response when
+Registry Notary can then evaluate configured claims and return a minimized evidence response when
 the caller does not need the whole record.
 
 | Capability | Use it when | Primary project |
 | --- | --- | --- |
 | [Describe registries](./describe-registries/) | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | Registry Manifest |
 | [Expose protected APIs](./expose-protected-apis/) | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | Registry Relay |
-| [Certify evidence](./certify-evidence/) | A caller needs a status, predicate, selected value, or supported credential instead of the source record. | Registry Witness |
+| [Certify evidence](./certify-evidence/) | A caller needs a status, predicate, selected value, or supported credential instead of the source record. | Registry Notary |
 
 ## Supporting capabilities
 
@@ -53,7 +53,7 @@ Registry Atlas reads generated metadata artifacts and runs strict capability que
 machine terms.
 
 [Audit and operate](./audit-and-operate/) explains the shared audit and operational behavior that
-makes Registry Relay and Registry Witness reviewable.
+makes Registry Relay and Registry Notary reviewable.
 Registry Platform supplies shared primitives for authentication, HTTP security, audit envelopes,
 cryptography, and credential support.
 

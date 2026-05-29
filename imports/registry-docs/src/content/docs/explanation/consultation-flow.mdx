@@ -26,6 +26,18 @@ For the broader scope of what each project owns, see the
 The lifecycle has one startup phase (Bind) and four per-request phases (Match scope, Query,
 Audit, Respond).
 
+{/* SVG diagram. Essential labels are restated in the sections that follow. */}
+<figure>
+  <img src="/images/registry-relay-request-lifecycle.svg"
+       alt="Registry Relay request lifecycle. Bind runs once at startup: validate the manifest
+            and bind datasets, entities, sources, columns, scopes, and filters from config;
+            the process exits non-zero on any mismatch. Every authorized request then flows
+            through four phases in order: Match scope (verify credential and require route
+            scope), Query (project only declared fields, no raw SQL), Audit (write one JSONL
+            record with names and operators only), and Respond (return projected fields,
+            never storage identifiers)." />
+</figure>
+
 ### Startup: Bind
 
 At startup, Registry Relay loads `config.yaml` and validates it against `metadata.yaml`.

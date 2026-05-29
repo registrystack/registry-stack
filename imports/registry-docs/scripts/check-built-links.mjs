@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, normalize, relative } from 'node:path';
 
 const distDir = 'dist';
-const base = '/registry-legend';
+const base = '/registry-docs';
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
 

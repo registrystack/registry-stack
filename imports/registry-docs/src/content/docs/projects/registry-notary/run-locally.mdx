@@ -1,10 +1,10 @@
 ---
-title: Run Registry Witness locally
-description: How to start a Registry Witness instance on your laptop and confirm the service responds to a claims evaluation request.
+title: Run Registry Notary locally
+description: How to start a Registry Notary instance on your laptop and confirm the service responds to a claims evaluation request.
 status: draft
-owner: registry-witness
+owner: registry-notary
 source_repos:
-  - registry-witness
+  - registry-notary
   - registry-platform
 last_reviewed: "2026-05-24"
 doc_type: how-to
@@ -14,13 +14,13 @@ standards_referenced:
   - openapi
 ---
 
-The steps below start Registry Witness with the demo config and use `curl` to probe the claims list, the JWKS endpoint, and the service capabilities document. Full claim evaluation requires a source registry at the configured `base_url`; [configure a claim](../configure-a-claim/) covers that step, and [Registry Lab](../../registry-lab/) wires the full topology together.
+The steps below start Registry Notary with the demo config and use `curl` to probe the claims list, the JWKS endpoint, and the service capabilities document. Full claim evaluation requires a source registry at the configured `base_url`; [configure a claim](../configure-a-claim/) covers that step, and [Registry Lab](../../registry-lab/) wires the full topology together.
 
 ## Prerequisites
 
 - Rust toolchain (stable) installed and `cargo` on your `PATH`.
   The workspace has been tested with the edition in
-  [Cargo.toml](https://github.com/jeremi/registry-witness/blob/main/Cargo.toml).
+  [Cargo.toml](https://github.com/jeremi/registry-notary/blob/main/Cargo.toml).
 - `curl` available on your `PATH`.
 - A shell that reads environment variables (any POSIX shell).
 
@@ -33,51 +33,51 @@ is running, but all other routes respond normally.
 ### 1. Clone the repository
 
 ```sh
-git clone https://github.com/jeremi/registry-witness.git
-cd registry-witness
+git clone https://github.com/jeremi/registry-notary.git
+cd registry-notary
 ```
 
 ### 2. Set required environment variables
 
-Registry Witness starts fail-closed: no protected route is served unless static credentials or OIDC auth are configured.
+Registry Notary starts fail-closed: no protected route is served unless static credentials or OIDC auth are configured.
 The demo config uses static credentials. It stores API-key and bearer-token fingerprints in environment variables named by `hash_env`, plus a separate audit hash secret.
 
 ```sh
-export REGISTRY_WITNESS_API_KEY_HASH=sha256:ca2b7917b5d2bdc05d445ce8d50c3adad19ac355d6d40ede18b1f341d7c6e546
-export REGISTRY_WITNESS_BEARER_TOKEN_HASH=sha256:f2721a9dae064d1fdbc74cae1fb1baf26fac01b8aac160ae5acab97c35667d7f
-export REGISTRY_WITNESS_AUDIT_HASH_SECRET=dev-registry-witness-audit-hash-secret
+export REGISTRY_NOTARY_API_KEY_HASH=sha256:7fa1836768f03f0926a4ccc8de0c01ab493654dc9455b1703015098d0718ae57
+export REGISTRY_NOTARY_BEARER_TOKEN_HASH=sha256:f2721a9dae064d1fdbc74cae1fb1baf26fac01b8aac160ae5acab97c35667d7f
+export REGISTRY_NOTARY_AUDIT_HASH_SECRET=dev-registry-notary-audit-hash-secret
 export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN=dev-source-token
 ```
 
 For credential issuance, you also need an Ed25519 OKP JWK.
 The variable name is set by `credential_profiles.<id>.issuer_key_env` in the config.
-The demo config uses `REGISTRY_WITNESS_ISSUER_JWK`.
+The demo config uses `REGISTRY_NOTARY_ISSUER_JWK`.
 
 A development-only key (never use in production) is hardcoded in the
-[`sd_jwt.rs` tests](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/sd_jwt.rs):
+[`sd_jwt.rs` tests](https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/sd_jwt.rs):
 
 ```sh
-export REGISTRY_WITNESS_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}'
+export REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}'
 ```
 
 ### 3. Start the service
 
 ```sh
-cargo run -p registry-witness-bin -- --config demo/config/registry-witness.yaml
+cargo run -p registry-notary-bin -- --config demo/config/registry-notary.yaml
 ```
 
 The demo config binds to `127.0.0.1:4255`
-([demo/config/registry-witness.yaml:7](https://github.com/jeremi/registry-witness/blob/main/demo/config/registry-witness.yaml)).
+([demo/config/registry-notary.yaml:7](https://github.com/jeremi/registry-notary/blob/main/demo/config/registry-notary.yaml)).
 The default bind address when no config specifies one is `127.0.0.1:8081`
-([config.rs:143](https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-core/src/config.rs)).
+([config.rs:143](https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-core/src/config.rs)).
 
 You will see tracing output on startup.
-The service is ready when you see a line containing `registry witness listening` followed by the bind address.
+The service is ready when you see a line containing `registry notary listening` followed by the bind address.
 
 ### 4. Confirm the OpenAPI document
 
 ```sh
-curl -s -H "x-api-key: dev-registry-witness-api-key" \
+curl -s -H "x-api-key: dev-registry-notary-api-key" \
   http://127.0.0.1:4255/openapi.json | head -c 200
 ```
 
@@ -87,7 +87,7 @@ running and authenticating correctly.
 ### 5. List available claims
 
 ```sh
-curl -s -H "x-api-key: dev-registry-witness-api-key" \
+curl -s -H "x-api-key: dev-registry-notary-api-key" \
   http://127.0.0.1:4255/claims
 ```
 
@@ -98,7 +98,7 @@ The demo config defines three claims: `date-of-birth`, `farmed-land-size`, and
 ### 6. Fetch the issuer JWKS
 
 ```sh
-curl -s -H "x-api-key: dev-registry-witness-api-key" \
+curl -s -H "x-api-key: dev-registry-notary-api-key" \
   http://127.0.0.1:4255/.well-known/evidence/jwks.json
 ```
 
@@ -108,7 +108,7 @@ and that the public key is exported correctly.
 ### 7. Inspect the service capabilities document
 
 ```sh
-curl -s -H "x-api-key: dev-registry-witness-api-key" \
+curl -s -H "x-api-key: dev-registry-notary-api-key" \
   http://127.0.0.1:4255/.well-known/evidence-service
 ```
 
@@ -126,10 +126,10 @@ The service is working correctly when:
 To generate the full OpenAPI document to a file (useful for Redocly or Swagger UI):
 
 ```sh
-cargo run -p registry-witness-bin -- openapi > target/registry-witness.openapi.json
+cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
 ```
 
-([README](https://github.com/jeremi/registry-witness/blob/main/README.md))
+([README](https://github.com/jeremi/registry-notary/blob/main/README.md))
 
 ## Troubleshooting
 
@@ -142,7 +142,7 @@ or `audit.hash_secret_env` is missing.
 
 **`401 Unauthorized` on every request.**
 Confirm the raw token you send matches the fingerprint stored in the environment variable named by `hash_env` in the YAML config.
-The demo config expects `REGISTRY_WITNESS_API_KEY_HASH` and `REGISTRY_WITNESS_BEARER_TOKEN_HASH`.
+The demo config expects `REGISTRY_NOTARY_API_KEY_HASH` and `REGISTRY_NOTARY_BEARER_TOKEN_HASH`.
 
 **`GET /claims` returns an empty array.**
 The demo config scopes claims to `civil_registry:evidence_verification` and
@@ -155,6 +155,6 @@ Claim evaluation contacts the source registry at the URL in `source_connections.
 If no source registry is running, you will receive a source fetch error.
 The [configure a claim](../configure-a-claim/) page covers source connector setup.
 
-**`REGISTRY_WITNESS_ISSUER_JWK` parse error.**
+**`REGISTRY_NOTARY_ISSUER_JWK` parse error.**
 The JWK must be a valid OKP Ed25519 key with both `d` (private) and `x` (public) components
 present and base64url-encoded without padding.

@@ -1,12 +1,12 @@
 ---
 title: API references
-description: Generated Redoc API reference pages for Registry Relay and Registry Witness, built from pinned OpenAPI artifacts.
+description: Generated Redoc API reference pages for Registry Relay and Registry Notary, built from pinned OpenAPI artifacts.
 wide: true
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
-  - registry-witness
+  - registry-notary
 last_reviewed: "2026-05-23"
 doc_type: reference
 locale: en
@@ -16,7 +16,7 @@ standards_referenced:
 
 import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
 
-Use this section to browse the HTTP API for Registry Relay or Registry Witness. Each page is built from a pinned OpenAPI artifact owned by the project it describes.
+Use this section to browse the HTTP API for Registry Relay or Registry Notary. Each page is built from a pinned OpenAPI artifact owned by the project it describes.
 
 Generated API reference pages are published using Redoc.
 {/* Do not duplicate endpoint reference content in narrative pages. */}
@@ -32,7 +32,7 @@ The table is generated from `src/data/openapi-sources.yaml`.
 
 - [Registry Relay API](./registry-relay/) documents the Protected Registry Data API, metadata API,
   evidence offering verification, health and readiness endpoints, and optional standards adapters.
-- [Registry Witness API](./registry-witness/) documents the claim discovery, evaluation, batch
+- [Registry Notary API](./registry-notary/) documents the claim discovery, evaluation, batch
   evaluation, rendering, JWKS, service discovery, and credential issuance endpoints.
 
 ## Provenance and freshness
@@ -43,10 +43,10 @@ The contract lives in `registry-relay/openapi/registry-relay.openapi.json` and i
 Feature-gated surfaces (OGC API Features, OGC API Records, OGC API EDR, SP DCI, provenance, VC-JWT) are included with notes in each tag description explaining the build feature that mounts them.
 For the instance-specific shape of `{dataset_id}` and `{entity}` in a given deployment, fetch the auth-gated `GET /openapi.json` from that gateway.
 
-[Registry Witness](../../../projects/registry-witness/) generates its OpenAPI document via a subcommand:
+[Registry Notary](../../../projects/registry-notary/) generates its OpenAPI document via a subcommand:
 
 ```sh
-cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.json
+cargo run -p registry-notary-bin -- openapi > openapi/registry-notary.openapi.json
 ```
 
-Regenerate and re-pin the artifact when the Witness API changes.
+Regenerate and re-pin the artifact when the Notary API changes.

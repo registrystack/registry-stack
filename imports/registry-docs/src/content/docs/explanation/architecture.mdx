@@ -2,12 +2,12 @@
 title: Architecture overview
 description: How the registry stack uses a two-layer design of portable metadata and runtime services to publish, consult, and prove registry facts.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-platform
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-lab
 last_reviewed: "2026-05-25"
@@ -30,8 +30,8 @@ standards_referenced:
 The registry stack is organized around two layers: a portable metadata layer and a runtime services layer.
 The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
 exposes, without touching production sources.
-The runtime services layer (Registry Relay, Registry Witness) binds those artifacts to real data, enforces
-access control, evaluates claims, serves delegated evaluation between trusted Witnesses, and issues
+The runtime services layer (Registry Relay, Registry Notary) binds those artifacts to real data, enforces
+access control, evaluates claims, serves delegated evaluation between trusted Notaries, and issues
 credentials.
 Registry Platform provides shared Rust primitives consumed by both runtime services.
 Registry Atlas inspects the published artifacts.
@@ -45,10 +45,10 @@ updated policy documents without touching deployment config.
 
 {/* SVG diagram. Essential labels are restated in the HTML list that follows. */}
 <figure>
-  <img src="/registry-legend/images/registry-architecture-flow.svg"
+  <img src="/images/registry-architecture-flow.svg"
        alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
             metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
-            Registry Witness evaluates claims against HTTP sources and issues credentials.
+            Registry Notary evaluates claims against HTTP sources and issues credentials.
             Registry Atlas inspects published discovery outputs.
             Registry Lab wires runtime services into a local compose topology." />
 </figure>
@@ -64,12 +64,12 @@ updated policy documents without touching deployment config.
 4. Registry Relay starts with runtime config that binds the manifest's logical datasets and entities
    to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering
    endpoints through configured auth.
-5. Registry Witness evaluates claims against configured HTTP sources (Registry Data API or SP DCI
-   connectors). It renders results as `application/vnd.registry-witness.claim-result+json`,
+5. Registry Notary evaluates claims against configured HTTP sources (`registry_data_api` or `dci`
+   connectors). It renders results as `application/vnd.registry-notary.claim-result+json`,
    CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), or SD-JWT VCs (`application/dc+sd-jwt`).
-6. A trusted Registry Witness can call another trusted Registry Witness through
+6. A trusted Registry Notary can call another trusted Registry Notary through
    `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish
-   discovery metadata for that relationship, but local Witness peer policy grants access.
+   discovery metadata for that relationship, but local Notary peer policy grants access.
 7. Registry Atlas fetches published catalog and discovery artifacts through its proxy, classifies them
    by artifact kind, and runs strict capability queries over the indexed metadata terms.
 
@@ -83,4 +83,4 @@ For what each project does and does not own, see
 - [Consultation flow](../consultation-flow/) explains how Registry Relay serves authorized
   callers and scopes metadata by caller visibility.
 - [Evidence issuance](../evidence-issuance/) explains claim evaluation, disclosure policy,
-  delegated evaluation, and credential issuance in Registry Witness.
+  delegated evaluation, and credential issuance in Registry Notary.

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 264" role="img"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title>Publishing pipeline: one manifest, two publication paths</title>
+  <desc>Registry Manifest's CLI and Registry Relay's /metadata/* endpoints both render the same metadata.yaml using the same renderer code. The static path emits portable files (DCAT, BRegDCAT-AP, SHACL, JSON Schema, CPSV-AP, ODRL) without a running service. The runtime path serves those same artifacts at /metadata/* filtered by the caller's metadata scope, with one JSONL audit record per request.</desc>
+
+  <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">INPUT · SINGLE DECLARATIVE SOURCE</text>
+  <rect x="16" y="30" width="32" height="2" fill="#000091"/>
+
+  <text x="16" y="64" fill="#161616" font-size="14" font-weight="700">metadata.yaml</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="120" y="64">Catalog, dataset, entity, and policy blocks. No source paths,</text>
+    <text x="120" y="82">no credentials, no environment-specific values.</text>
+  </g>
+
+  <line x1="0" y1="108" x2="720" y2="108" stroke="#e5e5e5" stroke-width="1"/>
+
+  <text x="16" y="130" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">PUBLICATION · TWO PATHS · SAME RENDERERS</text>
+  <rect x="16" y="138" width="32" height="2" fill="#000091"/>
+
+  <g fill="#000091" font-size="16" font-weight="700">
+    <text x="16" y="170">1</text>
+    <text x="368" y="170">2</text>
+  </g>
+
+  <g fill="#161616" font-size="14" font-weight="700">
+    <text x="16" y="194">Static path</text>
+    <text x="368" y="194">Runtime path</text>
+  </g>
+
+  <g fill="#6a6a6a" font-size="11.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="16" y="214">registry-manifest-cli publish</text>
+    <text x="368" y="214">GET /metadata/*</text>
+  </g>
+
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="16" y="238">Emits DCAT, BRegDCAT-AP, SHACL, JSON</text>
+    <text x="16" y="256">Schema, CPSV-AP, ODRL. No service, no auth.</text>
+
+    <text x="368" y="238">Served by a running Relay. Same renderers,</text>
+    <text x="368" y="256">filtered by caller scope. Per-request audit.</text>
+  </g>
+</svg>

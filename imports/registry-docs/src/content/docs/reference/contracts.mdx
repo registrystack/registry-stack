@@ -3,12 +3,12 @@ title: Contracts
 description: Machine-readable surfaces owned by the registry stack, with status and source-of-truth links.
 wide: true
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-lab
 last_reviewed: "2026-05-23"
@@ -32,7 +32,7 @@ A contract is a machine-readable surface that integrators can depend on:
 - **Shared crate API**: Rust library surface consumed by registry services for common behavior.
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
 - **Static publication bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
-- **Capability query envelope**: the JSON structure returned by `/.well-known/evidence-service` describing a Witness instance's claim catalog and capabilities.
+- **Capability query envelope**: the JSON structure returned by `/.well-known/evidence-service` describing a Notary instance's claim catalog and capabilities.
 - **Demo acceptance path**: the sequence of HTTP calls that smoke tests exercise to confirm a running topology is wired correctly.
 
 Each contract has one owning project. When a contract changes, the owning repo is the source of truth. Shared crate APIs belong to Registry Platform; product routes and config behavior belong to the consuming service.

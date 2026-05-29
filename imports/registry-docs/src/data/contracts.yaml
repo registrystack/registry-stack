@@ -6,7 +6,7 @@
   source_of_truth:
     label: Registry Platform crates
     url: https://github.com/jeremi/registry-platform/tree/main/crates
-  consumer_note: Relay, Witness, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
+  consumer_note: Relay, Notary, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
 - id: registry-relay.openapi
   name: Registry Relay OpenAPI
   owner: registry-relay
@@ -16,32 +16,32 @@
     label: Registry Relay abstract OpenAPI contract
     url: https://github.com/jeremi/registry-relay/blob/main/openapi/registry-relay.openapi.json
   consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch the auth-gated `GET /openapi.json` from a configured gateway.
-- id: registry-witness.openapi
-  name: Registry Witness OpenAPI
-  owner: registry-witness
+- id: registry-notary.openapi
+  name: Registry Notary OpenAPI
+  owner: registry-notary
   status: pinned-generated-snapshot
   surface: Claim discovery, claim evaluation, batch evaluation, federated delegated evaluation, rendering, JWKS, service metadata, and credential issuance.
   source_of_truth:
-    label: Registry Witness OpenAPI generator
-    url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/openapi.rs
-  consumer_note: Generate with `cargo run -p registry-witness-bin -- openapi`.
-- id: registry-witness.oid4vci
-  name: Registry Witness OID4VCI surface
-  owner: registry-witness
+    label: Registry Notary OpenAPI generator
+    url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/openapi.rs
+  consumer_note: Generate with `cargo run -p registry-notary-bin -- openapi`.
+- id: registry-notary.oid4vci
+  name: Registry Notary OID4VCI surface
+  owner: registry-notary
   status: current-source
   surface: OID4VCI credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), credential request (`POST /oid4vci/credential`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.
   source_of_truth:
-    label: Registry Witness OID4VCI routes
-    url: https://github.com/jeremi/registry-witness/blob/main/crates/registry-witness-server/src/api.rs
+    label: Registry Notary OID4VCI routes
+    url: https://github.com/jeremi/registry-notary/blob/main/crates/registry-notary-server/src/api.rs
   consumer_note: Wallet-compatible Draft 13 flow. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Conformance to the full OID4VCI profile is not asserted at this version.
-- id: registry-witness.federated-evaluation
-  name: Registry Witness Federated Evaluation MVP
-  owner: registry-witness
+- id: registry-notary.federated-evaluation
+  name: Registry Notary Federated Evaluation MVP
+  owner: registry-notary
   status: current-source
   surface: Static-peer delegated evaluation over `POST /federation/v1/evaluations`, compact JWS request and response JWTs, peer policy checks, pairwise subject handles, replay protection, and federation audit fields.
   source_of_truth:
-    label: Registry Witness federation module
-    url: https://github.com/jeremi/registry-witness/tree/main/crates/registry-witness-server/src/federation
+    label: Registry Notary federation module
+    url: https://github.com/jeremi/registry-notary/tree/main/crates/registry-notary-server/src/federation
   consumer_note: This is delegated evaluation only. Open federation, trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are outside the MVP.
 - id: registry-manifest.metadata-yaml
   name: Metadata Manifest

@@ -2,12 +2,12 @@
 title: Glossary
 description: Shared product names and domain terms for the registry stack documentation.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-lab
 last_reviewed: "2026-05-26"
@@ -36,10 +36,10 @@ Product names are always in English, including on future translated pages.
   <dd>SEMIC profile of DCAT-AP for base registries. Registry Relay and Registry Manifest emit BRegDCAT-AP-shaped registry and data-service metadata.</dd>
 
   <dt>CCCEV</dt>
-  <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Registry Atlas consumes those lists as grouped evidence options. Registry Witness renders CCCEV-shaped JSON-LD for claim evaluation results. Media type: `application/ld+json; profile="cccev"`.</dd>
+  <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Registry Atlas consumes those lists as grouped evidence options. Registry Notary renders CCCEV-shaped JSON-LD for claim evaluation results. Media type: `application/ld+json; profile="cccev"`.</dd>
 
   <dt>claim evaluation</dt>
-  <dd>Registry Witness process that evaluates configured evidence rules against data from one or more source services and returns a structured claim result.</dd>
+  <dd>Registry Notary process that evaluates configured evidence rules against data from one or more source services and returns a structured claim result.</dd>
 
   <dt>claim level</dt>
   <dd>The evidence discipline these docs use for standards claims: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`. Defined fully in the <a href="../standards/">standards register</a>.</dd>
@@ -54,10 +54,10 @@ Product names are always in English, including on future translated pages.
   <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. These projects cover the registry-consultation slice of a DPI deployment. See <a href="../../explanation/dpi-safeguards-alignment/">DPI safeguards alignment</a>.</dd>
 
   <dt>DID</dt>
-  <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when provenance is enabled. Registry Witness parses `did:jwk` values for credential subjects.</dd>
+  <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when provenance is enabled. Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
   <dt>disclosure profile</dt>
-  <dd>Registry Witness control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
+  <dd>Registry Notary control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
 
   <dt>distributed custody</dt>
   <dd>The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody.</dd>
@@ -69,7 +69,7 @@ Product names are always in English, including on future translated pages.
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. Can point to a Relay-native verification endpoint or to an external evidence service.</dd>
 
   <dt>evidence claim</dt>
-  <dd>Registry Stack product term for a verifiable claim, attestation, credential claim, or status assertion that Registry Witness evaluates from configured sources.</dd>
+  <dd>Registry Stack product term for a verifiable claim, attestation, credential claim, or status assertion that Registry Notary evaluates from configured sources.</dd>
 
   <dt>evidence type list</dt>
   <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest and Registry Atlas, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
@@ -102,7 +102,7 @@ Product names are always in English, including on future translated pages.
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
 
   <dt>registry stack</dt>
-  <dd>The six related projects: <a href="../../projects/registry-platform/">Registry Platform</a>, <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-witness/">Registry Witness</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
+  <dd>The six related projects: <a href="../../projects/registry-platform/">Registry Platform</a>, <a href="../../projects/registry-relay/">Registry Relay</a>, <a href="../../projects/registry-manifest/">Registry Manifest</a>, <a href="../../projects/registry-notary/">Registry Notary</a>, <a href="../../projects/registry-atlas/">Registry Atlas</a>, and <a href="../../projects/registry-lab/">Registry Lab</a>. Use lowercase when referring to the concept.</dd>
 
   <dt>purpose-bound request</dt>
   <dd>Registry Stack product term for a request that carries or is evaluated against purpose limitation, policy-based access control, or context-aware authorization. Relay records the `Data-Purpose` header in audit records where present.</dd>
@@ -111,7 +111,7 @@ Product names are always in English, including on future translated pages.
   <dd>Browser SPA with a Rust/WASM semantic analysis engine for inspecting published service catalogue, catalog, and registry discovery artifacts. Repo slug: `registry-atlas`.</dd>
 
   <dt>Registry Lab</dt>
-  <dd>Compose-based runnable local demo that starts three Registry Relay instances, four Registry Witness instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated clients. Repo slug: `registry-lab`.</dd>
+  <dd>Compose-based runnable local demo that starts three Registry Relay instances, four Registry Notary instances, live Postgres and Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated clients. Repo slug: `registry-lab`.</dd>
 
   <dt>Registry Manifest</dt>
   <dd>Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
@@ -122,8 +122,8 @@ Product names are always in English, including on future translated pages.
   <dt>Registry Relay</dt>
   <dd>Config-driven Rust service that turns sensitive government tabular files and database tables into protected, read-only, domain-oriented consultation APIs. Repo slug: `registry-relay`.</dd>
 
-  <dt>Registry Witness</dt>
-  <dd>Standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. Decoupled from Registry Relay application code by design, while sharing Registry Platform primitives. Repo slug: `registry-witness`.</dd>
+  <dt>Registry Notary</dt>
+  <dd>Standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. Decoupled from Registry Relay application code by design, while sharing Registry Platform primitives. Repo slug: `registry-notary`.</dd>
 
   <dt>`registry-manifest/v1`</dt>
   <dd>Schema version string for portable metadata manifests.</dd>
@@ -138,13 +138,13 @@ Product names are always in English, including on future translated pages.
   <dd>Commitment that every exchange the stack mediates is authorized, scoped, and audited. Concretely: authentication by API key or OIDC; scope-checked routes; per-claim disclosure control (value, predicate, or redacted); no write paths in v0; audit envelopes for every request that touches person-level data.</dd>
 
   <dt>SD-JWT VC</dt>
-  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Witness issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>
+  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>
 
   <dt>SHACL</dt>
   <dd>Shapes Constraint Language. W3C recommendation. Relay and Manifest emit SHACL node shapes for entity validation.</dd>
 
   <dt>SP DCI</dt>
-  <dd>Social Protection Digital Convergence Initiative. Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag. Registry Witness ships an HTTP source connector that maps SP DCI search responses into claim evaluation inputs.</dd>
+  <dd>Social Protection Digital Convergence Initiative. Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag. Registry Notary ships an HTTP source connector that maps SP DCI search responses into claim evaluation inputs.</dd>
 
   <dt>static publication bundle</dt>
   <dd>Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, evidence offering JSON, and policy JSON-LD. Can be hosted as static files without running Registry Relay.</dd>
@@ -155,7 +155,7 @@ Product names are always in English, including on future translated pages.
 
 ## Style notes
 
-- Product names (Registry Platform, Registry Relay, Registry Manifest, Registry Witness, Registry Atlas, Registry Lab) are always title case.
-- Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-witness`, `registry-atlas`, `registry-lab`) are always lowercase and monospace.
+- Product names (Registry Platform, Registry Relay, Registry Manifest, Registry Notary, Registry Atlas, Registry Lab) are always title case.
+- Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-notary`, `registry-atlas`, `registry-lab`) are always lowercase and monospace.
 - Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields. Do not use them in prose on current pages.
 - Spell out standards acronyms on first use per page. The glossary provides a reference but does not replace per-page first-use expansion.

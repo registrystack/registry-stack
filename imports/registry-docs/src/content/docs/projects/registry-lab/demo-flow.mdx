@@ -1,6 +1,6 @@
 ---
 title: Demo flow walkthrough
-description: Step through the three Registry Lab narrated scenarios to observe each Relay and Witness interaction once the compose topology is already running.
+description: Step through the three Registry Lab narrated scenarios to observe each Relay and Notary interaction once the compose topology is already running.
 status: draft
 owner: registry-lab
 source_repos:
@@ -27,7 +27,7 @@ For starting the topology from the beginning, see the
 Use this walkthrough when the core topology is already up (services started with
 `docker compose -f compose.yaml up -d`) and you want to trace what the demo client does,
 understand how scope enforcement works across services, or verify that a change
-to a Relay or Witness configuration changes the client output in the expected way.
+to a Relay or Notary configuration changes the client output in the expected way.
 
 ## Prerequisites
 
@@ -63,14 +63,14 @@ Every request in the demo carries this value as `x-request-id`.
 
 ### Scenario 1: Birth registration to child support
 
-This scenario exercises `civil-witness` (port 4321 on the host,
-`http://civil-witness:8080` inside compose).
+This scenario exercises `civil-notary` (port 4321 on the host,
+`http://civil-notary:8080` inside compose).
 
 The demo client:
 
-1. Calls `GET /.well-known/evidence-service` on `civil-witness` to discover the available claims.
+1. Calls `GET /.well-known/evidence-service` on `civil-notary` to discover the available claims.
    This endpoint requires the `CIVIL_EVIDENCE_CLIENT_BEARER` token.
-2. Sends `POST /claims/evaluate` to `civil-witness` with a subject identifier and a
+2. Sends `POST /claims/evaluate` to `civil-notary` with a subject identifier and a
    birth-registration claim.
    The claim uses predicate disclosure: the credential does not return the raw civil registry row,
    only whether the predicate (born in a registered district, caregiver present) is satisfied.
@@ -78,9 +78,9 @@ The demo client:
    a Selective Disclosure JWT Verifiable Credential (SD-JWT VC) signed with the issuer JWK.
 
 What you'll see / What this proves for your integration:
-The Witness fetches facts from the Relay on your behalf, using a configured bearer token.
+The Notary fetches facts from the Relay on your behalf, using a configured bearer token.
 The civil Relay does not write any result back.
-The Witness applies the configured disclosure profile (predicate) and returns
+The Notary applies the configured disclosure profile (predicate) and returns
 a structured JSON-LD credential body that calling systems can parse for the claim result.
 CCCEV stands for Core Criterion and Core Evidence Vocabulary.
 
@@ -91,8 +91,8 @@ caregiver present) without exposing the underlying registry row to the caller.
 
 - `output/scenario1-civil-credential.json`: the claim result artifact.
 - Relay logs: `docker compose logs civil-registry-relay`.
-  Look for the `evaluate` event and the `200` response to the Witness source call.
-- Witness logs: `docker compose logs civil-witness`.
+  Look for the `evaluate` event and the `200` response to the Notary source call.
+- Notary logs: `docker compose logs civil-notary`.
   Look for the evaluation event with the correlation ID.
 
 ### Scenario 2: Household benefit review from registry data
@@ -131,33 +131,33 @@ can read aggregate bands but cannot reach individual household rows.
 ### Scenario 3: Cross-authority conditional support
 
 This scenario exercises `static-metadata-publisher` (port 4331 on the host),
-`shared-eligibility-witness` (port 4323),
+`shared-eligibility-notary` (port 4323),
 and the three Relay instances acting as sources.
 
 The demo client:
 
 1. Fetches `GET /metadata/evidence-offerings.json` from `static-metadata-publisher`.
    No authentication is required. The client uses this to discover that
-   `shared-eligibility-witness` handles cross-authority claims.
-2. Calls `GET /.well-known/evidence-service` on `shared-eligibility-witness`
+   `shared-eligibility-notary` handles cross-authority claims.
+2. Calls `GET /.well-known/evidence-service` on `shared-eligibility-notary`
    using the `SHARED_EVIDENCE_CLIENT_BEARER` token.
-3. Sends `POST /claims/evaluate` to `shared-eligibility-witness` with a cross-authority claim
+3. Sends `POST /claims/evaluate` to `shared-eligibility-notary` with a cross-authority claim
    that requires evidence from civil, social protection, and health registries.
 
 What you'll see / What this proves for your integration:
-The Witness fans out to all three Relay services using per-source bearer tokens configured in
-[`config/witness/shared-eligibility-witness.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml).
+The Notary fans out to all three Relay services using per-source bearer tokens configured in
+[`config/notary/shared-eligibility-notary.yaml`](https://github.com/jeremi/registry-lab/blob/main/config/notary/shared-eligibility-notary.yaml).
 The result carries `source_count >= 2` when at least two sources contributed evidence.
 
-**What to take away:** a single Witness can aggregate evidence across independently operated registries
+**What to take away:** a single Notary can aggregate evidence across independently operated registries
 and report how many authorities contributed, without merging or exposing the underlying rows.
 
 **What to inspect:**
 
 - `output/scenario3-cross-authority-result.json`: the multi-source claim result.
-- Witness logs: `docker compose logs shared-eligibility-witness`.
+- Notary logs: `docker compose logs shared-eligibility-notary`.
   Look for source-fetch events to each Relay and the final evaluation result.
-- Relay logs for all three services: look for the Witness source-read requests,
+- Relay logs for all three services: look for the Notary source-read requests,
   identifiable by the correlation ID header.
 
 ## Verification
@@ -215,14 +215,14 @@ on its first HTTP request.
 **403 on evidence discovery (`/.well-known/evidence-service`).**
 The bearer token in `.env` may be stale or mismatched.
 Regenerate credentials with `scripts/generate-demo-secrets.py` and restart the affected
-Witness service: `docker compose restart civil-witness`.
+Notary service: `docker compose restart civil-notary`.
 
 **Missing `source_count` field in scenario 3 output.**
-The shared eligibility witness received responses from fewer than two Relay sources.
+The shared eligibility notary received responses from fewer than two Relay sources.
 Check that all three Relay services are running and reachable inside the compose network:
 
 ```sh
-docker compose exec shared-eligibility-witness wget -q -O- http://civil-registry-relay:8080/health
+docker compose exec shared-eligibility-notary wget -q -O- http://civil-registry-relay:8080/health
 ```
 
 **`openssl` not found when running `demo-flow.py` directly on the host.**

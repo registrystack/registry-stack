@@ -2,11 +2,11 @@
 title: Why safer registry surfaces matter now
 description: Why Registry Stack makes registry interoperability more usable, enforceable, and reviewable for human and automated integrations.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-platform
 last_reviewed: "2026-05-28"
 doc_type: explanation
@@ -52,7 +52,7 @@ Registry Stack provides registry-facing tools that make existing data usable and
   schemas, policies, services, and evidence offerings.
 - Registry Relay exposes configured read-only routes over existing sources.
   A caller cannot widen the route at request time to fetch extra fields or broader source records.
-- Registry Witness can answer configured evidence questions instead of forcing source-record access.
+- Registry Notary can answer configured evidence questions instead of forcing source-record access.
 - Audit behavior records trust-critical access and evidence events for review.
 - Semantic metadata makes meaning, sensitivity, and assumptions visible before integration code is
   written.

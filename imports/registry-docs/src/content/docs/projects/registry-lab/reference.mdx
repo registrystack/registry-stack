@@ -30,21 +30,21 @@ Full Compose file: [`compose.yaml`](https://github.com/jeremi/registry-lab/blob/
 | `zitadel` | `ghcr.io/zitadel/zitadel:v2.66.4` (pulled) | Live Zitadel identity provider for Relay OIDC scenarios | 4380 |
 | `zitadel-seed-init` | `alpine:3.20` (pulled) | One-shot volume permission initializer for Zitadel bootstrap state | None |
 | `zitadel-init` | `alpine:3.20` (pulled) | One-shot Zitadel bootstrap script that writes `output/zitadel.env` via `scripts/check-relay-zitadel.sh` | None |
-| `civil-witness` | `registry-witness:demo` (local build) | Registry Witness for civil claims; reads civil facts from `civil-registry-relay` over HTTP | 4321 |
-| `social-protection-witness` | `registry-witness:demo` (local build) | Registry Witness for social protection claims; reads social facts from `social-protection-registry-relay` over HTTP | 4322 |
-| `shared-eligibility-witness` | `registry-witness:demo` (local build) | Registry Witness for cross-authority claims spanning civil, social, and health registries | 4323 |
-| `openfn-mock-registry` | `registry-witness-openfn-sidecar:demo` (local build) | Private registry-like HTTP API used by the OpenFn sidecar smoke path | None |
-| `openfn-civil-sidecar` | `registry-witness-openfn-sidecar:demo` (local build) | Private OpenFn adaptor sidecar that exposes a Registry Data API-shaped lookup surface to Witness | None |
-| `openfn-civil-witness` | `registry-witness:demo` (local build) | Registry Witness for civil claims sourced through `openfn-civil-sidecar` | 4324 |
+| `civil-notary` | `registry-notary:demo` (local build) | Registry Notary for civil claims; reads civil facts from `civil-registry-relay` over HTTP | 4321 |
+| `social-protection-notary` | `registry-notary:demo` (local build) | Registry Notary for social protection claims; reads social facts from `social-protection-registry-relay` over HTTP | 4322 |
+| `shared-eligibility-notary` | `registry-notary:demo` (local build) | Registry Notary for cross-authority claims spanning civil, social, and health registries | 4323 |
+| `openfn-mock-registry` | `registry-notary-openfn-sidecar:demo` (local build) | Private registry-like HTTP API used by the OpenFn sidecar smoke path | None |
+| `openfn-civil-sidecar` | `registry-notary-openfn-sidecar:demo` (local build) | Private OpenFn adaptor sidecar that exposes a Registry Data API-shaped lookup surface to Notary | None |
+| `openfn-civil-notary` | `registry-notary:demo` (local build) | Registry Notary for civil claims sourced through `openfn-civil-sidecar` | 4324 |
 | `static-metadata-publisher` | `python:3.12.3-slim-bookworm` (pulled) | Python HTTP server serving the portable metadata static bundle at `/srv/static` | 4331 |
 | `demo-client` | `python:3.12.3-slim-bookworm` (pulled) | Narrated demo client (one-shot, `--profile client` only); runs `scripts/demo-flow.py` | None |
 
-Relay and Witness build contexts include `vendor/registry-platform` plus the owning service source
-submodule, `vendor/registry-relay` or `vendor/registry-witness`.
-All core Relay and Witness services use `env_file: .env`, `RUST_LOG: info`, and `restart: unless-stopped`.
+Relay and Notary build contexts include `vendor/registry-platform` plus the owning service source
+submodule, `vendor/registry-relay` or `vendor/registry-notary`.
+All core Relay and Notary services use `env_file: .env`, `RUST_LOG: info`, and `restart: unless-stopped`.
 Relay services have a healthcheck (`registry-relay --help`, 30 s interval, 10 s timeout, 3 retries).
-Core Witness services have no healthcheck in the compose file.
-`openfn-civil-sidecar` has an HTTP readiness healthcheck, and `openfn-civil-witness`
+Core Notary services have no healthcheck in the compose file.
+`openfn-civil-sidecar` has an HTTP readiness healthcheck, and `openfn-civil-notary`
 waits for that healthcheck before starting.
 Inside the compose network, services reach each other via DNS names on port 8080.
 The OpenFn sidecar and mock registry are attached only to the private `openfn-internal` network.
@@ -81,12 +81,12 @@ Source: [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/sc
 More than 30 checks:
 
 - Health and ready endpoints on all Relay services
-- Discovery endpoints on all Witness services with bearer-token and `x-api-key` credentials
+- Discovery endpoints on all Notary services with bearer-token and `x-api-key` credentials
 - OpenAPI endpoints on all services
 - Evidence-offering endpoints
 - Authorization scope denial (403 `auth.scope_denied`)
 - Positive row-read and aggregate-read on social Relay
-- Claim evaluation on civil, social, and shared Witnesses
+- Claim evaluation on civil, social, and shared Notaries
 - Cross-authority `source_count >= 2`
 - Credential-bound SD-JWT VC evaluation
 - Demo-client artifact presence
@@ -108,7 +108,7 @@ The cleanup trap removes named volumes; run the focused scripts when you want to
 
 | Script | Source path | What it verifies |
 | --- | --- | --- |
-| `scripts/smoke-openfn.sh` | [`scripts/smoke-openfn.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke-openfn.sh) | `openfn-civil-witness` can issue evidence from a one-item OpenFn sidecar lookup while the sidecar and mock registry remain off host ports |
+| `scripts/smoke-openfn.sh` | [`scripts/smoke-openfn.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke-openfn.sh) | `openfn-civil-notary` can issue evidence from a one-item OpenFn sidecar lookup while the sidecar and mock registry remain off host ports |
 | `scripts/check-relay-postgres.sh` | [`scripts/check-relay-postgres.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/check-relay-postgres.sh) | Relay's ignored live Postgres integration tests pass against the lab Postgres service |
 | `scripts/check-relay-zitadel.sh` | [`scripts/check-relay-zitadel.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/check-relay-zitadel.sh) | Relay's ignored Zitadel OIDC integration test passes against the lab Zitadel service |
 | `scripts/smoke-oidc-relay.sh` | [`scripts/smoke-oidc-relay.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke-oidc-relay.sh) | A temporary OIDC-protected Relay verifies a real Zitadel access token, then returns either row access or a scope denial |
@@ -126,32 +126,32 @@ The committed `.env.example` contains inert placeholder values only.
 | Metadata client token (civil) | `CIVIL_METADATA_CLIENT_RAW` / `CIVIL_METADATA_CLIENT_HASH` | Smoke checks (`/health`, `/ready`, `/openapi.json`, `/metadata/*` on civil Relay) |
 | Metadata client token (social) | `SOCIAL_METADATA_CLIENT_RAW` / `SOCIAL_METADATA_CLIENT_HASH` | Smoke checks on social protection Relay |
 | Metadata client token (health) | `HEALTH_METADATA_CLIENT_RAW` / `HEALTH_METADATA_CLIENT_HASH` | Smoke checks on health Relay |
-| Evidence source token (civil) | `CIVIL_EVIDENCE_SOURCE_RAW` | `civil-witness` when fetching civil facts from `civil-registry-relay` ([`config/witness/civil-witness.yaml` L29](https://github.com/jeremi/registry-lab/blob/main/config/witness/civil-witness.yaml#L29)) |
-| Evidence source token (social) | `SOCIAL_EVIDENCE_SOURCE_RAW` | `social-protection-witness` when fetching social facts ([`config/witness/social-protection-witness.yaml` L29](https://github.com/jeremi/registry-lab/blob/main/config/witness/social-protection-witness.yaml#L29)) |
-| Evidence source token (civil, shared) | `SHARED_CIVIL_EVIDENCE_SOURCE_RAW` | `shared-eligibility-witness` civil source reads ([`config/witness/shared-eligibility-witness.yaml` L33](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L33)) |
-| Evidence source token (social, shared) | `SHARED_SOCIAL_EVIDENCE_SOURCE_RAW` | `shared-eligibility-witness` social source reads ([`config/witness/shared-eligibility-witness.yaml` L36](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L36)) |
-| Evidence source token (health, shared) | `SHARED_HEALTH_EVIDENCE_SOURCE_RAW` | `shared-eligibility-witness` health source reads ([`config/witness/shared-eligibility-witness.yaml` L39](https://github.com/jeremi/registry-lab/blob/main/config/witness/shared-eligibility-witness.yaml#L39)) |
+| Evidence source token (civil) | `CIVIL_EVIDENCE_SOURCE_RAW` | `civil-notary` when fetching civil facts from `civil-registry-relay` ([`config/notary/civil-notary.yaml` L29](https://github.com/jeremi/registry-lab/blob/main/config/notary/civil-notary.yaml#L29)) |
+| Evidence source token (social) | `SOCIAL_EVIDENCE_SOURCE_RAW` | `social-protection-notary` when fetching social facts ([`config/notary/social-protection-notary.yaml` L29](https://github.com/jeremi/registry-lab/blob/main/config/notary/social-protection-notary.yaml#L29)) |
+| Evidence source token (civil, shared) | `SHARED_CIVIL_EVIDENCE_SOURCE_RAW` | `shared-eligibility-notary` civil source reads ([`config/notary/shared-eligibility-notary.yaml` L33](https://github.com/jeremi/registry-lab/blob/main/config/notary/shared-eligibility-notary.yaml#L33)) |
+| Evidence source token (social, shared) | `SHARED_SOCIAL_EVIDENCE_SOURCE_RAW` | `shared-eligibility-notary` social source reads ([`config/notary/shared-eligibility-notary.yaml` L36](https://github.com/jeremi/registry-lab/blob/main/config/notary/shared-eligibility-notary.yaml#L36)) |
+| Evidence source token (health, shared) | `SHARED_HEALTH_EVIDENCE_SOURCE_RAW` | `shared-eligibility-notary` health source reads ([`config/notary/shared-eligibility-notary.yaml` L39](https://github.com/jeremi/registry-lab/blob/main/config/notary/shared-eligibility-notary.yaml#L39)) |
 | Evidence-only token (civil) | `CIVIL_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
 | Evidence-only token (social) | `SOCIAL_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
 | Evidence-only token (health) | `HEALTH_EVIDENCE_ONLY_RAW` | Scope denial proof: has evidence scope, no row or aggregate scope |
 | Row-reader token (social) | `SOCIAL_ROW_READER_RAW` | Protected row read in scenario 2 and scope denial checks |
 | Aggregate-reader token (social) | `SOCIAL_AGGREGATE_READER_RAW` | Aggregate consultation in scenario 2 and scope denial checks |
-| OpenFn sidecar caller token | `OPENFN_SIDECAR_TOKEN_RAW` / `OPENFN_SIDECAR_TOKEN_HASH` | `openfn-civil-witness` authenticates to `openfn-civil-sidecar` with the raw token; the sidecar config reads only the hash |
+| OpenFn sidecar caller token | `OPENFN_SIDECAR_TOKEN_RAW` / `OPENFN_SIDECAR_TOKEN_HASH` | `openfn-civil-notary` authenticates to `openfn-civil-sidecar` with the raw token; the sidecar config reads only the hash |
 | OpenFn mock registry token | `OPENFN_MOCK_REGISTRY_TOKEN_RAW` | Private target token injected into the OpenFn sidecar credential JSON for `openfn-mock-registry` |
-| Witness client API key (civil) | `CIVIL_EVIDENCE_CLIENT_TOKEN` / `CIVIL_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `civil-witness` |
-| Witness client API key (social) | `SOCIAL_EVIDENCE_CLIENT_TOKEN` / `SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `social-protection-witness` |
-| Witness client API key (shared) | `SHARED_EVIDENCE_CLIENT_TOKEN` / `SHARED_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `shared-eligibility-witness` |
-| Witness client bearer (civil) | `CIVIL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `civil-witness` |
-| Witness client bearer (social) | `SOCIAL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `social-protection-witness` |
-| Witness client bearer (shared) | `SHARED_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `shared-eligibility-witness` |
+| Notary client API key (civil) | `CIVIL_EVIDENCE_CLIENT_TOKEN` / `CIVIL_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `civil-notary` |
+| Notary client API key (social) | `SOCIAL_EVIDENCE_CLIENT_TOKEN` / `SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `social-protection-notary` |
+| Notary client API key (shared) | `SHARED_EVIDENCE_CLIENT_TOKEN` / `SHARED_EVIDENCE_CLIENT_TOKEN_HASH` | Smoke checks `x-api-key` auth on `shared-eligibility-notary` |
+| Notary client bearer (civil) | `CIVIL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `civil-notary` |
+| Notary client bearer (social) | `SOCIAL_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `social-protection-notary` |
+| Notary client bearer (shared) | `SHARED_EVIDENCE_CLIENT_BEARER` | Demo client and smoke: discovery and evaluation on `shared-eligibility-notary` |
 | Audit hash secret (Relay) | `REGISTRY_RELAY_AUDIT_HASH_SECRET` | Relay audit redaction and keyed hashes |
-| Audit hash secret (Witness) | `REGISTRY_WITNESS_AUDIT_HASH_SECRET` | Witness audit redaction and keyed hashes |
-| Issuer JWK (all Witnesses) | `REGISTRY_WITNESS_ISSUER_JWK` | SD-JWT VC signing key; Witness configs use `issuer_key_env: REGISTRY_WITNESS_ISSUER_JWK` ([`config/witness/civil-witness.yaml` L43](https://github.com/jeremi/registry-lab/blob/main/config/witness/civil-witness.yaml#L43)) |
+| Audit hash secret (Notary) | `REGISTRY_NOTARY_AUDIT_HASH_SECRET` | Notary audit redaction and keyed hashes |
+| Issuer JWK (all Notaries) | `REGISTRY_NOTARY_ISSUER_JWK` | SD-JWT VC signing key; Notary configs use `issuer_key_env: REGISTRY_NOTARY_ISSUER_JWK` ([`config/notary/civil-notary.yaml` L43](https://github.com/jeremi/registry-lab/blob/main/config/notary/civil-notary.yaml#L43)) |
 
 :::note[How credentials flow]
 Relay configs reference only `*_HASH` env vars (SHA-256 fingerprints of the raw tokens).
-Witness auth configs reference `*_HASH` env vars for client credentials.
-Witness upstream source connections still reference `token_env` names for outbound calls to Relay.
+Notary auth configs reference `*_HASH` env vars for client credentials.
+Notary upstream source connections still reference `token_env` names for outbound calls to Relay.
 The OpenFn sidecar auth config references `OPENFN_SIDECAR_TOKEN_HASH`; plaintext sidecar token
 config is rejected by the sidecar.
 No raw token is committed to the repository.
@@ -170,7 +170,7 @@ No authentication is required for any of these endpoints.
 | `/metadata/catalog.json` | DCAT (Data Catalog Vocabulary) catalog for the demo registry | JSON |
 | `/metadata/cpsv-ap` | Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue for Atlas service-first discovery | JSON-LD |
 | `/metadata/cpsv-ap.jsonld` | CPSV-AP service catalogue for clients that require a file extension | JSON-LD |
-| `/metadata/evidence-offerings.json` | Evidence offering descriptors pointing to Witness services | JSON |
+| `/metadata/evidence-offerings.json` | Evidence offering descriptors pointing to Notary services | JSON |
 | `/metadata/forms/health_linked_child_support_form/schema.json` | JSON Schema for the linked demo form | JSON Schema |
 | `/metadata/policies.jsonld` | ODRL (Open Digital Rights Language) policy documents | JSON-LD |
 
@@ -196,8 +196,8 @@ Source: [`config/`](https://github.com/jeremi/registry-lab/blob/main/config/).
 | `config/postgres/init.sql` | Postgres database initialization for lab database-source scenarios |
 | `config/zitadel/zitadel-init.sh` | Zitadel bootstrap script for OIDC Relay scenarios |
 | `config/zitadel/zitadel-bootstrap.md` | Operator notes for the Zitadel bootstrap process |
-| `config/witness/civil-witness.yaml` | Civil Witness: hashed client auth, claim definitions, source connector URL, private-network source opt-in, disclosure policy |
-| `config/witness/social-protection-witness.yaml` | Social protection Witness: hashed client auth, claim definitions, source connector URL, private-network source opt-in, disclosure policy |
-| `config/witness/shared-eligibility-witness.yaml` | Shared eligibility Witness: hashed client auth, cross-authority claim definitions, multiple private-network source connectors |
-| `config/witness/openfn-civil-witness.yaml` | OpenFn-backed civil Witness: uses `registry_data_api` against the private OpenFn sidecar |
+| `config/notary/civil-notary.yaml` | Civil Notary: hashed client auth, claim definitions, source connector URL, private-network source opt-in, disclosure policy |
+| `config/notary/social-protection-notary.yaml` | Social protection Notary: hashed client auth, claim definitions, source connector URL, private-network source opt-in, disclosure policy |
+| `config/notary/shared-eligibility-notary.yaml` | Shared eligibility Notary: hashed client auth, cross-authority claim definitions, multiple private-network source connectors |
+| `config/notary/openfn-civil-notary.yaml` | OpenFn-backed civil Notary: uses `registry_data_api` against the private OpenFn sidecar |
 | `config/static-metadata/metadata.yaml` | Portable metadata manifest (`registry-manifest/v1`) used by the static publisher |

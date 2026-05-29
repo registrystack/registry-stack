@@ -2,9 +2,9 @@
 title: Verify a status fact about a registered entity without sharing the full record
 description: Return a narrow status fact (active, suspended, dissolved) about a registered entity without disclosing the full source record.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
-  - registry-witness
+  - registry-notary
   - registry-relay
   - registry-manifest
 last_reviewed: "2026-05-28"
@@ -39,25 +39,25 @@ history.
 
 ## What you set up
 
-Configure a Registry Witness claim for the active-status fact.
+Configure a Registry Notary claim for the active-status fact.
 The claim definition names the source binding (the business registry table or extract),
 the rule (registration status equals "active"), the disclosure mode (predicate: true/false),
 and the issuer identifier.
 
 Configure Registry Relay to expose the consultation route that accepts a national business
-number or LEI and routes the request to Witness for evaluation.
+number or LEI and routes the request to Notary for evaluation.
 Use Registry Manifest to publish BRegDCAT-AP-shaped catalog metadata for the business registry,
 including a link to the evidence offering document that describes the active-status claim.
 
 ## What a caller does
 
-The procurement platform sends an authorized POST to the Witness evaluation endpoint,
+The procurement platform sends an authorized POST to the Notary evaluation endpoint,
 passing the national business number as the subject identifier and naming the active-status
 claim.
 The platform authenticates with the configured identity provider.
 
 For a credential issuance flow, the supplier (or an agent acting on their behalf) receives an
-SD-JWT VC from Witness. The supplier presents only the active-status disclosure to the
+SD-JWT VC from Notary. The supplier presents only the active-status disclosure to the
 procurement platform, keeping unselected credential fields hidden.
 
 ## What the caller gets back
@@ -74,7 +74,7 @@ configured disclosure if the governing policy permits it.
 
 ## Related patterns
 
-The same Witness predicate pattern fits an eligibility or entitlement check against a different
+The same Notary predicate pattern fits an eligibility or entitlement check against a different
 registry; see
 [Verify an eligibility or entitlement fact without sharing the full record](../eligibility-or-entitlement-evidence/)
 for a social-protection worked example.
@@ -82,6 +82,6 @@ for a social-protection worked example.
 ## Next
 
 - [Evidence issuance, end to end](../../explanation/evidence-issuance/)
-- [Registry Witness overview](../../projects/registry-witness/)
+- [Registry Notary overview](../../projects/registry-notary/)
 - [Publishing pipeline](../../explanation/publishing-pipeline/)
 - [Publish registry metadata](../publish-registry-metadata/)

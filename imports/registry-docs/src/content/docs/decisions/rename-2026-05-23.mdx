@@ -2,11 +2,11 @@
 title: Rename decision 2026-05-23
 description: Record of the decision to rename five registry projects to the registry stack naming convention and the current state of each rename.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-lab
 last_reviewed: "2026-05-23"
@@ -15,7 +15,7 @@ locale: en
 standards_referenced: []
 ---
 
-This is a maintenance record. If you're an integrator using the current project names (Registry Relay, Registry Witness, and the rest of the stack), you can ignore the legacy column.
+This is a maintenance record. If you're an integrator using the current project names (Registry Relay, Registry Notary, and the rest of the stack), you can ignore the legacy column.
 
 Five registry projects were renamed on 2026-05-23 from a mix of snake_case, kebab-case,
 and three competing root metaphors (registry, evidence, dataspace) to a single Docker-style
@@ -34,7 +34,7 @@ The rename is a clean break: no aliases, no fallback strings, no legacy v1 ident
 | --- | --- | --- |
 | `registry_relay` | `registry-relay` | Protected, read-only registry consultation gateway |
 | `registry-metadata` | `registry-manifest` | Portable manifest contracts, validation, and renderers |
-| `evidence-server` | `registry-witness` | Standalone claim evaluation, credential issuance, and attestation |
+| `evidence-server` | `registry-notary` | Standalone claim evaluation, credential issuance, and attestation |
 | `dataspace-atlas` | `registry-atlas` | Standards-first workbench for inspecting registry discovery artifacts |
 | `decentralized-evidence-demo` | `registry-lab` | Compose-based runnable demo of the registry stack |
 
@@ -47,7 +47,7 @@ The rename plan (2026-05-23) documents the rationale:
 nothing is in production, so the cost of half-renaming (legacy machine strings forever)
 exceeds the cost of a single complete sweep.
 The plan defines five sequential phases, one PR per repo, in dependency order:
-Phase 1 (registry-manifest), Phase 2 (registry-atlas), Phase 3 (registry-witness),
+Phase 1 (registry-manifest), Phase 2 (registry-atlas), Phase 3 (registry-notary),
 Phase 4 (registry-relay), Phase 5 (registry-lab).
 
 Machine contracts that rename alongside project labels include:
@@ -55,8 +55,8 @@ Machine contracts that rename alongside project labels include:
 - **Schema version**: `registry-metadata/v1` to `registry-manifest/v1`
 - **JSON-LD CURIE prefix**: `registry_metadata:` to `registry_manifest:`
 - **Canonical IRI**: updated to `https://jeremi.github.io/registry-manifest/ns#`
-- **Access kind enum value**: `evidence-server` to `registry-witness`
-- **Media type**: `application/vnd.evidence-server.claim-result+json` to `application/vnd.registry-witness.claim-result+json`
+- **Access kind enum value**: `evidence-server` to `registry-notary`
+- **Media type**: `application/vnd.evidence-server.claim-result+json` to `application/vnd.registry-notary.claim-result+json`
 - **JWT audience default**: updated to match the new service name
 - **Cargo feature names**: updated in each crate
 - **Project-labeled env vars**: updated across all repos
@@ -96,28 +96,28 @@ renaming them is out of scope per Decision 5 of the rename plan.
 old worktrees under `registry_relay-*` remain for historical evidence."
 
 **Partial rename note:** The rename plan identifies that Phase 4 absorbs cross-repo work:
-updating the Cargo dependency on `registry-manifest-core`, swapping witness contract strings
-(`evidence-server` to `registry-witness` in `access.kind`, `conforms_to`, and OpenAPI enum),
+updating the Cargo dependency on `registry-manifest-core`, swapping notary contract strings
+(`evidence-server` to `registry-notary` in `access.kind`, `conforms_to`, and OpenAPI enum),
 and regenerating snapshot files.
 The evidence packet confirms the current binary and Cargo package name are correct
 but does not confirm Phase 4 cross-repo absorption is complete.
 
 {/* TODO[evidence]: Confirm whether registry-relay has absorbed Phase 4 contract changes:
      (1) Cargo dep updated from registry-metadata-core to registry-manifest-core at tag v0.1.2,
-     (2) access.kind "evidence-server" replaced with "registry-witness" in openapi.rs and validate.rs,
+     (2) access.kind "evidence-server" replaced with "registry-notary" in openapi.rs and validate.rs,
      (3) snapshot files in tests/snapshots/ regenerated.
      The relay evidence packet reports the binary name is correct but does not enumerate schema version
      or kind strings present in the working tree at commit aec4394. */}
 
-### Registry Witness
+### Registry Notary
 
-**Source:** registry-witness evidence packet, "Naming and rename status" section.
+**Source:** registry-notary evidence packet, "Naming and rename status" section.
 
 The rename is fully landed locally.
-Crate names are `registry-witness-core`, `registry-witness-server`, and `registry-witness-bin`.
-The media type constant reads `application/vnd.registry-witness.claim-result+json` (model.rs:9).
-The default service_id is `registry-witness` (config.rs:249).
-The env var is `REGISTRY_WITNESS_ISSUER_JWK` (config.rs:561).
+Crate names are `registry-notary-core`, `registry-notary-server`, and `registry-notary-bin`.
+The media type constant reads `application/vnd.registry-notary.claim-result+json` (model.rs:9).
+The default service_id is `registry-notary` (config.rs:249).
+The env var is `REGISTRY_NOTARY_ISSUER_JWK` (config.rs:561).
 No legacy labels (`evidence-server`, `evidence-server-cel`, `vnd.evidence-server`) found in source.
 `projects.yaml` `rename_status`: "Already using the target repo name locally."
 
@@ -135,9 +135,9 @@ No renaming campaigns detected in commit history.
 **Source:** registry-lab evidence packet, "Naming and rename status" section.
 
 The directory has been renamed from `decentralized-evidence-demo/` to `registry-lab/`.
-The git submodules point to `vendor/registry-relay` and `vendor/registry-witness`
+The git submodules point to `vendor/registry-relay` and `vendor/registry-notary`
 (`.gitmodules`, registry-lab evidence packet "Vendored or third-party content").
-Compose service names use `registry-relay:demo` and `registry-witness:demo` images.
+Compose service names use `registry-relay:demo` and `registry-notary:demo` images.
 
 Remaining references to the legacy name are present in scripts and fixtures:
 

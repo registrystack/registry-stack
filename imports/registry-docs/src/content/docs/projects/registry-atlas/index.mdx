@@ -195,16 +195,16 @@ You can export the raw report JSON from the Evidence tab and use it with the CLI
 analysis.
 The full schema is in the [Registry Atlas reference](./reference/).
 
-## When to use Atlas vs. Relay or Witness
+## When to use Atlas vs. Relay or Notary
 
 Use Atlas when you want to inspect what a registry publishes before you write integration code.
 For live queries against person-level data or runtime API calls, use
 [Registry Relay](../../projects/registry-relay/) or
-[Registry Witness](../../projects/registry-witness/) directly.
+[Registry Notary](../../projects/registry-notary/) directly.
 
 ## Relationship to Registry Lab
 
-Registry Lab runs Registry Relay, Registry Witness, live Postgres and Zitadel services, the private
+Registry Lab runs Registry Relay, Registry Notary, live Postgres and Zitadel services, the private
 OpenFn sidecar path, the static metadata publisher, and demo clients together in a single
 `docker compose up`.
 Atlas is not included in the Registry Lab compose topology at v0.1.

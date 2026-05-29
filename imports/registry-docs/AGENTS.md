@@ -1,4 +1,4 @@
-# Registry Legend Agent Guidance
+# Registry Docs Agent Guidance
 
 This repo is an Astro and Starlight documentation site.
 
@@ -18,7 +18,7 @@ This repo is an Astro and Starlight documentation site.
 Read `docs/style-guide.md` before drafting or editing any page. It covers voice,
 structure, frontmatter, page types, the banned-word list, claim levels for
 standards, and the GitLab rules we adopt, adapt, or skip. The visual design
-language is recorded separately in `../design-registry-legend.md`.
+language is recorded separately in `../design-registry-docs.md`.
 
 Every factual claim about a source repo must be anchored in code, tests,
 fixtures, OpenAPI, or an upstream standard. When evidence is missing, mark the

@@ -1,10 +1,10 @@
 ---
-title: Registry Witness API
-description: Narrative context for the Registry Witness OpenAPI reference, covering API surface, auth modes, disclosure profiles, and documented limitations.
+title: Registry Notary API
+description: Narrative context for the Registry Notary OpenAPI reference, covering API surface, auth modes, disclosure profiles, and documented limitations.
 status: current
-owner: registry-witness
+owner: registry-notary
 source_repos:
-  - registry-witness
+  - registry-notary
   - registry-platform
 last_reviewed: "2026-05-24"
 doc_type: reference
@@ -17,32 +17,32 @@ standards_referenced:
   - w3c-did
 ---
 
-[Open Registry Witness API reference](/registry-legend/api/registry-witness.html)
+[Open Registry Notary API reference](/api/registry-notary.html)
 
 The Redoc page above is generated from a pinned OpenAPI artifact.
 This page provides the narrative context the OpenAPI document does not carry: what surface is documented,
 which auth modes are declared, what disclosure profiles the specification exposes, and what is not in scope.
 
-Evidence source: [Registry Witness](../../../projects/registry-witness/) `main` commit `5b6be8a`, generated after the `v0.2.1` release and reviewed 2026-05-24.
+Evidence source: [Registry Notary](../../../projects/registry-notary/) `main` commit `5b6be8a`, generated after the `v0.2.1` release and reviewed 2026-05-24.
 
 Generate or refresh the artifact:
 
 ```sh
-cargo run -p registry-witness-bin -- openapi > openapi/registry-witness.openapi.json
+cargo run -p registry-notary-bin -- openapi > openapi/registry-notary.openapi.json
 ```
 
 ## API surface
 
-Registry Witness is a standalone Rust workspace for claim evaluation, disclosure policy,
+Registry Notary is a standalone Rust workspace for claim evaluation, disclosure policy,
 credential issuance, and audit.
-Registry Witness runs independently; it does not require Registry Relay to be running.
+Registry Notary runs independently; it does not require Registry Relay to be running.
 
-The pinned OpenAPI document is generated from the Registry Witness source and reports `info.version` as `0.2.1`.
+The pinned OpenAPI document is generated from the Registry Notary source and reports `info.version` as `0.2.1`.
 The artifact includes the crate license metadata, protected API routes, public probe routes,
 the protected admin reload route mounted by the standalone router, and Redoc response examples for the high-value success and problem responses.
-Routes are implemented in `crates/registry-witness-server/src/api.rs` and
-`crates/registry-witness-server/src/standalone.rs`; the OpenAPI generator lives in
-`crates/registry-witness-server/src/openapi.rs`.
+Routes are implemented in `crates/registry-notary-server/src/api.rs` and
+`crates/registry-notary-server/src/standalone.rs`; the OpenAPI generator lives in
+`crates/registry-notary-server/src/openapi.rs`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -60,11 +60,11 @@ Routes are implemented in `crates/registry-witness-server/src/api.rs` and
 | POST | `/evidence/render` | Render evidence in a requested format |
 | POST | `/credentials/issue` | Issue a credential from an evaluation result |
 
-Default bind: `127.0.0.1:8081`. The standalone demo config (`demo/config/registry-witness.yaml`) overrides this to `127.0.0.1:4255`. The Registry Lab topology overrides it to `0.0.0.0:8080` inside the container (mapped to host ports 4321-4324).
+Default bind: `127.0.0.1:8081`. The standalone demo config (`demo/config/registry-notary.yaml`) overrides this to `127.0.0.1:4255`. The Registry Lab topology overrides it to `0.0.0.0:8080` inside the container (mapped to host ports 4321-4324).
 
 ## Auth modes
 
-Registry Witness supports either static credential mode or OIDC mode.
+Registry Notary supports either static credential mode or OIDC mode.
 
 In static mode, two credential lists are checked in order:
 
@@ -82,7 +82,7 @@ The server parses the Bearer header with Registry Platform auth helpers, fingerp
 curl -H "Authorization: Bearer <your-token>" http://localhost:8081/claims
 ```
 
-Both static types are configured in `auth.api_keys` and `auth.bearer_tokens` in the Witness config file. Example:
+Both static types are configured in `auth.api_keys` and `auth.bearer_tokens` in the Notary config file. Example:
 
 ```yaml
 auth:
@@ -100,19 +100,19 @@ auth:
 Each credential carries a `scopes` list.
 Per-claim scope requirements are enforced before evaluation proceeds.
 
-In OIDC mode, `auth.mode: oidc` configures issuer, JWKS URI, audiences, accepted algorithms, scope mapping, and principal claim. Witness delegates token verification to Registry Platform OIDC primitives and still owns the scopes required by its claim routes.
+In OIDC mode, `auth.mode: oidc` configures issuer, JWKS URI, audiences, accepted algorithms, scope mapping, and principal claim. Notary delegates token verification to Registry Platform OIDC primitives and still owns the scopes required by its claim routes.
 
 ## Disclosure profiles
 
-Registry Witness controls what a caller receives through a three-level disclosure system declared in
-`crates/registry-witness-core/src/model.rs`:
+Registry Notary controls what a caller receives through a three-level disclosure system declared in
+`crates/registry-notary-core/src/model.rs`:
 
 - `Value`: the full claim value is disclosed.
 - `Predicate`: only the satisfaction result (true or false) is disclosed.
 - `Redacted`: the value is fully hidden from the caller.
 
 Each claim definition configures a `default` disclosure level and an `allowed` list.
-When a caller requests a level not in the allowed list, Witness applies a downgrade strategy: `Deny`
+When a caller requests a level not in the allowed list, Notary applies a downgrade strategy: `Deny`
 returns an error, `Default` falls back to the claim's configured default, and `Redacted` downgrades
 to the `Redacted` profile.
 
@@ -121,28 +121,28 @@ the request body and response shape.
 
 ## Credential issuance
 
-When a caller requests `POST /credentials/issue`, Registry Witness issues an SD-JWT VC credential.
+When a caller requests `POST /credentials/issue`, Registry Notary issues an SD-JWT VC credential.
 The credential uses:
 
 - Token type: `dc+sd-jwt` (the `typ` header).
 - Signing algorithm: EdDSA (Ed25519).
-- Key source: environment variable `REGISTRY_WITNESS_ISSUER_JWK` (OKP Ed25519 JWK with `d` and `x` components).
+- Key source: environment variable `REGISTRY_NOTARY_ISSUER_JWK` (OKP Ed25519 JWK with `d` and `x` components).
 - Selective disclosure: individual claim fields are wrapped in SD-JWT disclosures with SHA-256 digests.
 - Media type: `application/dc+sd-jwt`.
 
-Reusable issuance and holder-proof helpers come from Registry Platform. Witness owns the credential profile config, claim selection, and route workflow.
+Reusable issuance and holder-proof helpers come from Registry Platform. Notary owns the credential profile config, claim selection, and route workflow.
 
 The issuer public key is available at `GET /.well-known/evidence/jwks.json`.
 
-Registry Witness does not emit W3C Verifiable Credentials Data Model envelopes.
+Registry Notary does not emit W3C Verifiable Credentials Data Model envelopes.
 The credential format is SD-JWT, not a W3C VC JSON object.
-{/* Confirmed absence: witness evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-witness.md). The SD-JWT vs W3C VC distinction is a boundary statement, not an evidence gap. */}
+{/* Confirmed absence: notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). The SD-JWT vs W3C VC distinction is a boundary statement, not an evidence gap. */}
 
 ## CCCEV rendering
 
 `POST /evidence/render` can return CCCEV-shaped JSON-LD when the caller requests
 `application/ld+json; profile="cccev"`.
-The renderer in `crates/registry-witness-server/src/runtime.rs` produces:
+The renderer in `crates/registry-notary-server/src/runtime.rs` produces:
 
 - `@context` including the `cccev`, `dcterms`, `foaf`, `time`, and `xsd` namespaces.
 - Evidence nodes typed as `cccev:Evidence`.
@@ -153,7 +153,7 @@ Profile conformance against CCCEV 2.00 is not claimed. You can consume the rende
 
 ## Source connectors
 
-Registry Witness reads registry facts from external sources over HTTP.
+Registry Notary reads registry facts from external sources over HTTP.
 Two connector kinds are configured in `source_connections`:
 
 **Registry Data API** connector: posts queries to `{base_url}/{dataset}/{entity}` on a Registry Relay instance.
@@ -161,14 +161,14 @@ Authenticates with a bearer token per connection.
 
 **SP DCI** connector: sends DCI-shaped search requests and parses the response using configured field paths.
 Default search path: `/registry/sync/search`.
-Default sender ID: `registry-witness`.
+Default sender ID: `registry-notary`.
 
-There is no generic file-based or database connector in Registry Witness.
+There is no generic file-based or database connector in Registry Notary.
 Source connectors must reach their targets over HTTP.
 
 ## What the OpenAPI specification does not cover
 
-**Plugin rule type.** The `Plugin` rule variant is declared in `crates/registry-witness-core/src/config.rs`
+**Plugin rule type.** The `Plugin` rule variant is declared in `crates/registry-notary-core/src/config.rs`
 but no implementation is present at the reviewed commit.
 {/* Confirmed absence: `config.rs:454-455` defines `RuleConfig::Plugin` but no implementation found in `runtime.rs` at the reviewed commit. Update this page when a plugin runtime lands upstream. */}
 

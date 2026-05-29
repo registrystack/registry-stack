@@ -2,12 +2,12 @@
 title: First run with Registry Lab
 description: Run the Registry Lab compose demo on a laptop and verify the full service topology with smoke tests.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-lab
   - registry-platform
   - registry-relay
-  - registry-witness
+  - registry-notary
 last_reviewed: "2026-05-25"
 doc_type: tutorial
 locale: en
@@ -19,7 +19,7 @@ standards_referenced:
 
 [Registry Lab](../../projects/registry-lab/) is the compose-based local demo for the registry stack.
 It wires Registry Platform source crates, three [Registry Relay](../../projects/registry-relay/) instances,
-four [Registry Witness](../../projects/registry-witness/) instances, live Postgres and Zitadel services,
+four [Registry Notary](../../projects/registry-notary/) instances, live Postgres and Zitadel services,
 a private OpenFn sidecar path, a static metadata publisher, and narrated demo clients into a single
 topology you can run on a laptop.
 
@@ -30,8 +30,8 @@ topology you can run on a laptop.
 - `python3` and `openssl` on your PATH (used by `scripts/generate-demo-secrets.py` and `scripts/demo-flow.py`).
 - GitHub SSH access for submodules, or equivalent local Git configuration for the `vendor/*` submodule URLs.
 - No production secrets in the demo environment. The generated `.env` uses inert local credentials only.
-- A sibling `../registry-witness` checkout when running the OpenFn sidecar path before the
-  `vendor/registry-witness` submodule includes `crates/registry-witness-openfn-sidecar`.
+- A sibling `../registry-notary` checkout when running the OpenFn sidecar path before the
+  `vendor/registry-notary` submodule includes `crates/registry-notary-openfn-sidecar`.
 
 ## Steps
 
@@ -96,24 +96,24 @@ Step 1 uses `uv run` because `generate-fixtures.py` declares inline PEP 723 depe
 
 ## Service topology
 
-The compose file starts three Relay instances, four Witness instances, live Postgres and Zitadel services,
+The compose file starts three Relay instances, four Notary instances, live Postgres and Zitadel services,
 a private OpenFn sidecar, a static metadata publisher, and a narrated demo client.
 For the full service inventory with host ports and network layout, see the
 [Registry Lab reference](../../projects/registry-lab/reference/).
 
 ## Expected output
 
-After step 5, all Relay and Witness services start in the background.
+After step 5, all Relay and Notary services start in the background.
 `scripts/smoke.sh` runs more than 30 checks, including:
 
 - Health and readiness endpoints (`/health`, `/ready`) on all three Relay instances.
-- Discovery endpoint (`/.well-known/evidence-service`) on all three core Witness instances,
+- Discovery endpoint (`/.well-known/evidence-service`) on all three core Notary instances,
   with bearer-token and `x-api-key` coverage.
-- OpenAPI endpoints (`/openapi.json`) on all Relay and Witness instances.
+- OpenAPI endpoints (`/openapi.json`) on all Relay and Notary instances.
 - Authorization scope denial responses (403 with `auth.scope_denied`) for out-of-scope credentials.
 - Positive row-read and aggregate-read responses on the social protection Relay.
-- Evidence evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility witnesses.
-- A cross-authority claim result with `source_count >= 2` on the shared eligibility witness.
+- Evidence evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility notaries.
+- A cross-authority claim result with `source_count >= 2` on the shared eligibility notary.
 - Credential-bound evaluation returning `application/dc+sd-jwt`.
 - Audit log assertions, including a check that generated raw secrets are not emitted in service logs.
 
@@ -141,16 +141,16 @@ The static publisher endpoints require no authentication.
 These steps require sibling checkouts or live credentials and are not needed to verify the core topology.
 Run them after the smoke tests pass.
 
-Run the OpenFn sidecar smoke path (requires a sibling `registry-witness` checkout):
+Run the OpenFn sidecar smoke path (requires a sibling `registry-notary` checkout):
 
 ```sh
-env REGISTRY_OPENFN_WITNESS_SOURCE_DIR=../registry-witness \
-    REGISTRY_WITNESS_SOURCE_DIR=../registry-witness \
+env REGISTRY_OPENFN_NOTARY_SOURCE_DIR=../registry-notary \
+    REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
     REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
     scripts/smoke-openfn.sh
 ```
 
-This writes `output/smoke-openfn-witness-evaluation.json`.
+This writes `output/smoke-openfn-notary-evaluation.json`.
 
 Run the live-service checks (Postgres cutover, Zitadel OIDC flow, OpenFn story, service-first
 discovery story):

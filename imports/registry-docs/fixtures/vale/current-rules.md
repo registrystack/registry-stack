@@ -1,4 +1,4 @@
-<!-- ValeFixture expect: RegistryLegend.EmDash RegistryLegend.Weasel RegistryLegendBase.AIArtifacts RegistryLegendBase.FirstPersonProjectVoice RegistryLegendBase.FuturePromises RegistryLegendBase.TypographicQuotes -->
+<!-- ValeFixture expect: RegistryDocs.EmDash RegistryDocs.Weasel RegistryDocsBase.AIArtifacts RegistryDocsBase.FirstPersonProjectVoice RegistryDocsBase.FuturePromises RegistryDocsBase.TypographicQuotes -->
 
 # Vale fixture
 
