@@ -5,7 +5,7 @@ relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", "../registry-relay"
 notary_src := env_var_or_default("REGISTRY_NOTARY_SOURCE_DIR", "../registry-notary")
 openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", "../registry-notary")
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", "../registry-platform")
-cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "../cel-mapping")
+cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "./vendor/cel-mapping")
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
