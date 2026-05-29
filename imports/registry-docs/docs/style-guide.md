@@ -1,12 +1,12 @@
-# Registry Legend writing style guide
+# Registry Docs writing style guide
 
 **Status:** current
 **Last reviewed:** 2026-05-23
 **Applies to:** every page under `src/content/docs/` and every contributor or agent that writes them.
 
-This guide tells you how to write for Registry Legend. It is short on purpose. When in doubt, prefer clarity over cleverness, evidence over assertion, and the reader's task over the writer's voice. Borrowed from GitLab's documentation style guide, then trimmed and adapted to a 20-page institutional docs site.
+This guide tells you how to write for Registry Docs. It is short on purpose. When in doubt, prefer clarity over cleverness, evidence over assertion, and the reader's task over the writer's voice. Borrowed from GitLab's documentation style guide, then trimmed and adapted to a 20-page institutional docs site.
 
-If a rule here conflicts with `design-registry-legend.md`, follow the design doc for anything visual (typography, color, components) and this guide for anything textual (voice, structure, evidence).
+If a rule here conflicts with `design-registry-docs.md`, follow the design doc for anything visual (typography, color, components) and this guide for anything textual (voice, structure, evidence).
 
 ## Principles
 
@@ -96,9 +96,9 @@ Preferred terms.
 
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
-| Product family        | `registry family` (lowercase) for the concept; `Registry Legend` for the site and repo |
-| Project names         | `Registry Manifest`, `Registry Relay`, `Registry Witness`, `Registry Atlas`, `Registry Lab` (Title Case) |
-| Repo slugs            | `registry-manifest`, `registry-relay`, `registry-witness`, `registry-atlas`, `registry-lab` (monospace) |
+| Product family        | `registry family` (lowercase) for the concept; `Registry Docs` for the site and repo |
+| Project names         | `Registry Manifest`, `Registry Relay`, `Registry Notary`, `Registry Atlas`, `Registry Lab` (Title Case) |
+| Repo slugs            | `registry-manifest`, `registry-relay`, `registry-notary`, `registry-atlas`, `registry-lab` (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
 
@@ -108,7 +108,7 @@ Preferred terms.
 - All items start with a capital letter.
 - Parallel structure. All items are noun phrases, or all are imperative verbs. Do not mix.
 - No period if every item is a fragment. Period on every item if any item is a complete sentence.
-- Use the Oxford comma in prose: `Manifest, Relay, and Witness`.
+- Use the Oxford comma in prose: `Manifest, Relay, and Notary`.
 - Do not use bold inside list items for keywords. Reserve bold for UI labels.
 
 ## Code, commands, paths
@@ -186,8 +186,8 @@ This applies to every page that touches a standard or a contract.
 - When you cannot find evidence for an existing claim, mark it inline with a TODO and propose a demotion:
 
   ```mdx
-  Registry Witness emits SD-JWT VC credentials.
-  {/* TODO[evidence]: no SD-JWT issuer found in registry-witness/crates/.
+  Registry Notary emits SD-JWT VC credentials.
+  {/* TODO[evidence]: no SD-JWT issuer found in registry-notary/crates/.
        Suggest demoting to `aligns_with` until a fixture lands. */}
   ```
 
@@ -219,7 +219,7 @@ This applies to every page that touches a standard or a contract.
 
 ## Rules from GitLab we adapt
 
-- **Version macros.** GitLab supports `**Tier:** Free, Premium, Ultimate` annotations on every feature mention. Registry Legend has no commercial tiers. Use a simple `status:` field in frontmatter and explicit `since v0.4` in body text when a feature is version-gated.
+- **Version macros.** GitLab supports `**Tier:** Free, Premium, Ultimate` annotations on every feature mention. Registry Docs has no commercial tiers. Use a simple `status:` field in frontmatter and explicit `since v0.4` in body text when a feature is version-gated.
 - **Issue links.** GitLab writes `[issue 12345](url)`. We write `[GH#123](url)` for GitHub and link to the actual issue title in text.
 - **Screenshot rules.** GitLab requires PNG, 1000×500, ≤100 KB, with red `#EE2604` callout arrows. We use SVG for diagrams and use screenshots rarely.
 - **Tabs and collapsible panels.** GitLab uses Hugo shortcodes. We do not use tabs in v0. If a page needs tabs, it is probably two pages.
@@ -231,14 +231,14 @@ This applies to every page that touches a standard or a contract.
 - `flag` admonitions for feature flags. We have no public feature flags in v0.
 - Deep release-process governance. Reviews and freshness gates are listed in `AGENTS.md`.
 - The GitLab-specific Vale dictionary. We maintain a project vocabulary in
-  `styles/config/vocabularies/RegistryLegend/` and focused local rules in `.vale.ini`.
+  `styles/config/vocabularies/RegistryDocs/` and focused local rules in `.vale.ini`.
 
 ## Tooling
 
 - **markdownlint** validates Markdown structure. Config at `.markdownlint-cli2.yaml`.
 - **Vale** validates prose against the banned-word list, project vocabulary, and a few
   stylistic rules. Config at `.vale.ini`; vocabulary at
-  `styles/config/vocabularies/RegistryLegend/`. Spelling is staged through that vocabulary,
+  `styles/config/vocabularies/RegistryDocs/`. Spelling is staged through that vocabulary,
   but remains disabled until frontmatter and technical terms are fully covered. Vale
   suggestions and warnings run in CI so style drift is visible before v0 ships.
 - **Link check** runs in CI.

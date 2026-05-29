@@ -2,9 +2,9 @@
 title: Verify an eligibility or entitlement fact without sharing the full record
 description: Return a signed evaluation of an eligibility rule without disclosing the underlying source record.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
-  - registry-witness
+  - registry-notary
   - registry-manifest
   - registry-lab
 last_reviewed: "2026-05-28"
@@ -20,6 +20,10 @@ standards_referenced:
   - openapi
 ---
 
+Use this pattern when a programme needs to confirm a yes/no eligibility fact against another
+ministry's registry, without receiving the underlying case file, income tier, or family
+composition.
+
 ## Starting situation
 
 A social-protection authority operates a household enrollment registry for a national
@@ -31,7 +35,7 @@ composition, or transfer history.
 
 ## What you set up
 
-Configure a Registry Witness claim for the enrolled-household fact.
+Configure a Registry Notary claim for the enrolled-household fact.
 The claim definition names the source binding (the enrollment registry table), the rule (an
 active enrollment exists for the household identifier), the disclosure mode (predicate:
 true/false), and the issuer identifier.
@@ -44,11 +48,11 @@ the claim scope, and the issuer before making runtime calls.
 Registry Lab demonstrates a wallet-facing issuance flow that fits this pattern, but a wallet is
 not required.
 The evaluation endpoint works without a wallet-based credential flow when the relying service
-calls Witness directly.
+calls Notary directly.
 
 ## What a caller does
 
-The school-feeding workflow sends an authorized request to the Witness evaluation endpoint,
+The school-feeding workflow sends an authorized request to the Notary evaluation endpoint,
 passing the household identifier as the subject and naming the enrolled-household claim.
 
 For a credential flow, the head of household receives an SD-JWT VC.
@@ -63,24 +67,18 @@ or false), the evaluation timestamp, and the issuer identifier.
 The household case file, income tier, family composition, transfer history, and internal
 registry notes do not appear in the response.
 
-## What is in scope, what is not
-
-This pattern covers: evaluating a narrow eligibility or entitlement rule near the source
-registry, returning a predicate or signed credential, and publishing requirement and evidence
-metadata for discovery.
-
-The fact returned is narrower than the source record.
-The issuing institution owns the rule, the audit trail, the correction process, and the terms
-under which the relying service may request the fact.
-
-This pattern does not cover: full record sharing, automatic determination of legal entitlement,
-or credential wallet infrastructure.
 Cross-programme eligibility decisions remain a policy responsibility of the issuing and
-relying ministries; the registry surface gives them an auditable answer to work from.
+relying ministries; the signed evaluation gives them an auditable answer to work from.
+
+## Related patterns
+
+The same Notary predicate pattern fits a status-coded registry; see
+[Verify a status fact about a registered entity without sharing the full record](../business-registry-status/)
+for a business-registry worked example.
 
 ## Next
 
 - [Evidence issuance, end to end](../../explanation/evidence-issuance/)
-- [Configure a claim](../../projects/registry-witness/configure-a-claim/)
+- [Configure a claim](../../projects/registry-notary/configure-a-claim/)
 - [Registry Lab demo flow](../../projects/registry-lab/demo-flow/)
 - [Publish registry metadata](../publish-registry-metadata/)

@@ -3,12 +3,12 @@ title: Standards register
 description: Standards referenced by the registry stack, with explicit claim levels and supporting evidence.
 wide: true
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-witness
+  - registry-notary
   - registry-atlas
 last_reviewed: "2026-05-25"
 doc_type: reference
@@ -80,11 +80,11 @@ What these levels mean for integrators:
   Promote to `emits` only after `src/api/ogc/features.rs` is exercised by an integration test.
   {/* TODO[evidence]: relay evidence packet notes "feature-gated; GeoJSON support for spatial features" but no integration test fixture found at commit 85d32f0. */}
 - The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
-  [Registry Relay](../../projects/registry-relay/) has VC-oriented provenance fixtures and [Registry Witness](../../projects/registry-witness/) issues SD-JWT VC credentials,
+  [Registry Relay](../../projects/registry-relay/) has VC-oriented provenance fixtures and [Registry Notary](../../projects/registry-notary/) issues SD-JWT VC credentials,
   but neither project emits a full W3C VC Data Model envelope.
   Promote when a reviewed VC profile and validation fixtures are pinned.
-  {/* Witness evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-witness.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. */}
+  {/* Notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. */}
 - PROV-O is listed as `inspired_by` (`referenced`).
   The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O
   vocabulary terms are emitted as JSON-LD.
-  {/* Confirmed absence: no `prov:` namespace or PROV-O `@context` found in relay or witness source at reviewed commits. PROV-O influences the design (audit fields, claim provenance struct) but no PROV-O vocabulary is emitted. Keep at inspired_by. */}
+  {/* Confirmed absence: no `prov:` namespace or PROV-O `@context` found in relay or notary source at reviewed commits. PROV-O influences the design (audit fields, claim provenance struct) but no PROV-O vocabulary is emitted. Keep at inspired_by. */}

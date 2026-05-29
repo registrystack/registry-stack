@@ -30,6 +30,18 @@ Registry Manifest owns the first path.
 Registry Relay owns the second.
 The two paths share the same manifest input, but they serve different deployment needs.
 
+{/* SVG diagram. Essential labels are restated in the sections that follow. */}
+<figure>
+  <img src="/registry-docs/images/registry-publishing-pipeline.svg"
+       alt="Publishing pipeline. One declarative input (metadata.yaml: catalog, dataset,
+            entity, and policy blocks; no source paths, no credentials). Two publication
+            paths, both using the same renderers. (1) Static path via registry-manifest-cli
+            publish emits DCAT, BRegDCAT-AP, SHACL, JSON Schema, CPSV-AP, and ODRL files
+            with no service and no auth. (2) Runtime path via GET /metadata/* is served by
+            a running Relay using the same renderers, filtered by the caller's scope, with
+            per-request audit." />
+</figure>
+
 ## The two-layer split: portable vs runtime
 
 **Portable metadata** (Registry Manifest only) travels wherever files can travel.
@@ -85,7 +97,7 @@ catalog:
 From that catalog block plus the dataset and entity blocks below it, Registry Manifest
 derives a DCAT catalog document, a BRegDCAT-AP profile, a SHACL shapes document, a JSON
 Schema per entity, CPSV-AP service catalogue entries for declared public services, and
-ODRL policy documents per dataset. CCCEV evidence rendering is owned by Registry Witness,
+ODRL policy documents per dataset. CCCEV evidence rendering is owned by Registry Notary,
 not Registry Manifest.
 No renderer makes network calls or reads additional files.
 

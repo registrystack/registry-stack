@@ -1,12 +1,12 @@
 ---
 title: Your first call
-description: A reproducible tutorial using the Registry Lab demo fixtures to query a Relay and evaluate a Witness claim.
+description: A reproducible tutorial using the Registry Lab demo fixtures to query a Relay and evaluate a Notary claim.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-lab
   - registry-relay
-  - registry-witness
+  - registry-notary
 last_reviewed: "2026-05-25"
 doc_type: tutorial
 locale: en
@@ -15,7 +15,7 @@ standards_referenced:
 ---
 
 This tutorial walks you through four steps: bring up the Registry Lab demo, read one entity from
-a Relay instance, evaluate one claim from a Witness instance, and optionally issue a verifiable
+a Relay instance, evaluate one claim from a Notary instance, and optionally issue a verifiable
 credential.
 All commands use the fixtures that ship with Registry Lab, so the output is reproducible on any
 machine with Docker and `just` installed.
@@ -39,7 +39,7 @@ just up
 `just generate` writes `.env` with local demo credentials and generates fixture data.
 Do not hand-edit `.env`; `just generate` rewrites it on every run.
 
-`just up` starts the civil, social protection, and health Relay instances, four Witness
+`just up` starts the civil, social protection, and health Relay instances, four Notary
 instances, Postgres, Zitadel, the OpenFn sidecar, and the static metadata publisher.
 Wait until all services are ready (the civil Relay health check at
 `http://127.0.0.1:4311/health` returns `200`) before continuing.
@@ -108,9 +108,9 @@ Omitting it returns `400`.
 The `Authorization: Bearer` token must carry the `civil_registry:rows` scope.
 A token with only `civil_registry:evidence_verification` returns `403`.
 
-## Step 3: evaluate a claim from a Witness instance
+## Step 3: evaluate a claim from a Notary instance
 
-The civil Witness runs on host port `4321`.
+The civil Notary runs on host port `4321`.
 It evaluates the `person-is-alive` claim by fetching the `deceased` field from the civil Relay
 and applying the CEL rule `source.civil.deceased == false`.
 
@@ -128,7 +128,7 @@ curl -fsS \
     "subject": {"id": "NID-1001", "id_type": "national_id"},
     "claims": ["person-is-alive"],
     "disclosure": "predicate",
-    "format": "application/vnd.registry-witness.claim-result+json"
+    "format": "application/vnd.registry-notary.claim-result+json"
   }'
 ```
 
@@ -141,12 +141,12 @@ Expected response shape:
       "claim_id": "person-is-alive",
       "satisfied": true,
       "disclosure": "predicate",
-      "format": "application/vnd.registry-witness.claim-result+json",
+      "format": "application/vnd.registry-notary.claim-result+json",
       "evaluation_id": "01HX...",
       "issued_at": "2026-05-26T12:00:00Z",
       "provenance": {
         "source_count": 1,
-        "computed_by": "demo.registry-witness"
+        "computed_by": "demo.registry-notary"
       }
     }
   ]
@@ -159,7 +159,7 @@ not the underlying field value.
 Note the `evaluation_id`; step 4 references it.
 
 To confirm that a missing subject returns a stable status, replace `NID-1001` with `NID-9999`.
-The response will be `200`, `404`, or `422` depending on Witness configuration; all three are
+The response will be `200`, `404`, or `422` depending on Notary configuration; all three are
 considered stable outcomes for an unknown subject.
 
 ## Step 4: issue a verifiable credential (optional)
@@ -203,17 +203,17 @@ curl -fsS \
 
 The response body is a compact SD-JWT VC string.
 The credential is issued by `did:web:civil-evidence.demo.example` using the key from
-`REGISTRY_WITNESS_ISSUER_JWK` generated during `just generate`.
+`REGISTRY_NOTARY_ISSUER_JWK` generated during `just generate`.
 The issuer DID and key are demo values; do not use them outside the local lab.
 
 If you want a wallet to drive issuance instead, the lab also runs an OID4VCI flow against a
-host-side Witness on port `4325` via `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
+host-side Notary on port `4325` via `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
 `just citizen-oid4vci-token`, and `just citizen-oid4vci-report`. See
 [Evidence issuance, end to end](../../explanation/evidence-issuance/) for the three ways a caller
 can consume an evaluation.
 
 For a cross-authority claim that draws from all three Relay instances, use the shared eligibility
-Witness on port `4323` with claim `eligible-for-combined-support`.
+Notary on port `4323` with claim `eligible-for-combined-support`.
 That claim depends on `civil-record-present`, `social-program-active`, and
 `health-service-available`, each sourced from a different Relay.
 
@@ -229,7 +229,7 @@ curl -fsS \
     "subject": {"id": "NID-1001", "id_type": "national_id"},
     "claims": ["eligible-for-combined-support"],
     "disclosure": "predicate",
-    "format": "application/vnd.registry-witness.claim-result+json"
+    "format": "application/vnd.registry-notary.claim-result+json"
   }'
 ```
 
@@ -241,7 +241,7 @@ three source connections contributed to the evaluation.
 - [Capabilities](../../capabilities/): the product surfaces and supporting capabilities.
 - [Registry Relay](../../projects/registry-relay/): full route reference, auth scopes, and
   configuration guide.
-- [Registry Witness](../../projects/registry-witness/): claim configuration, disclosure modes, and
+- [Registry Notary](../../projects/registry-notary/): claim configuration, disclosure modes, and
   OID4VCI issuance.
 - [Registry Lab](../../projects/registry-lab/): the full demo topology, fixture data contract, and
   smoke test suite.

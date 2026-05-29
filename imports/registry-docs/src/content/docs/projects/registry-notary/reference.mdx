@@ -1,10 +1,10 @@
 ---
-title: Registry Witness reference
-description: Hand-maintained reference for the Registry Witness claim config schema, HTTP routes, federation config, disclosure modes, source connector types, and audit event shape.
+title: Registry Notary reference
+description: Hand-maintained reference for the Registry Notary claim config schema, HTTP routes, federation config, disclosure modes, source connector types, and audit event shape.
 status: draft
-owner: registry-witness
+owner: registry-notary
 source_repos:
-  - registry-witness
+  - registry-notary
   - registry-platform
 last_reviewed: "2026-05-25"
 doc_type: reference
@@ -19,8 +19,8 @@ standards_referenced:
   - oid4vci
 ---
 
-Use this page to look up the Registry Witness config schema, HTTP routes, federation config, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-witness-bin -- openapi`.
-([README](https://github.com/jeremi/registry-witness/blob/main/README.md))
+Use this page to look up the Registry Notary config schema, HTTP routes, federation config, disclosure modes, source connector options, and audit event fields. This reference is hand-maintained; the authoritative contract is the upstream repo. The OpenAPI contract is generated: `cargo run -p registry-notary-bin -- openapi`.
+([README](https://github.com/jeremi/registry-notary/blob/main/README.md))
 
 ## HTTP routes
 
@@ -31,7 +31,7 @@ Use this page to look up the Registry Witness config schema, HTTP routes, federa
 | `GET` | `/healthz` | Return the liveness probe. Public. |
 | `GET` | `/ready` | Return the readiness probe. Public. |
 | `POST` | `/admin/reload` | Admin-scoped no-op reload endpoint. Returns `reloaded: false` in the standalone router. |
-| `GET` | `/openapi.json` | Return the Registry Witness OpenAPI 3.1.0 document. |
+| `GET` | `/openapi.json` | Return the Registry Notary OpenAPI 3.1.0 document. |
 | `GET` | `/.well-known/evidence-service` | Return the service capabilities document. |
 | `GET` | `/.well-known/evidence/jwks.json` | Return the public issuer verification keys as a JWKS. |
 | `GET` | `/claims` | List claim definitions visible to the authenticated principal. |
@@ -72,12 +72,12 @@ Example response body for `POST /claims/evaluate` (`200`):
       "satisfied": true,
       "value": true,
       "disclosure": "predicate",
-      "format": "application/vnd.registry-witness.claim-result+json",
+      "format": "application/vnd.registry-notary.claim-result+json",
       "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
       "issued_at": "2026-05-24T12:00:00Z",
       "expires_at": "2026-05-25T12:00:00Z",
       "provenance": {
-        "computed_by": "demo.registry-witness",
+        "computed_by": "demo.registry-notary",
         "source_count": 1,
         "source_versions": {}
       }
@@ -184,7 +184,7 @@ SP DCI connector config fields under `source_connections.<id>.dci`:
 | Field | Default |
 | --- | --- |
 | `search_path` | `/registry/sync/search` |
-| `sender_id` | `registry-witness` |
+| `sender_id` | `registry-notary` |
 | `query_type` | `idtype-value` |
 | `records_path` | `/message/search_response/0/data/reg_records` |
 | `max_results` | `2` |
@@ -210,7 +210,7 @@ Downgrade strategies (`disclosure.downgrade`):
 
 ## Output media types
 
-Registry Witness supports three output media types: native claim result JSON (`application/vnd.registry-witness.claim-result+json`), CCCEV JSON-LD (`application/ld+json; profile="cccev"`), and SD-JWT VC (`application/dc+sd-jwt`, only via `/credentials/issue`).
+Registry Notary supports three output media types: native claim result JSON (`application/vnd.registry-notary.claim-result+json`), CCCEV JSON-LD (`application/ld+json; profile="cccev"`), and SD-JWT VC (`application/dc+sd-jwt`, only via `/credentials/issue`).
 
 ## Credential profile config
 
@@ -232,7 +232,7 @@ Fields of `CredentialProfileConfig`.
 
 ## OID4VCI routes
 
-Registry Witness emits OpenID for Verifiable Credential Issuance (OID4VCI) Draft 13 compatible routes when `oid4vci.enabled` is `true` in config. The wider [OID4VCI](../../../reference/standards/) spec alignment is `aligns_with`; the four routes below `emit` the wire shapes the spec defines.
+Registry Notary emits OpenID for Verifiable Credential Issuance (OID4VCI) Draft 13 compatible routes when `oid4vci.enabled` is `true` in config. The wider [OID4VCI](../../../reference/standards/) spec alignment is `aligns_with`; the four routes below `emit` the wire shapes the spec defines.
 
 ### `GET /.well-known/openid-credential-issuer`
 
@@ -282,11 +282,11 @@ Request requirements:
 
 - Request media type: `application/jwt`.
 - Compact JWS serialization only.
-- Header fields: `typ = registry-witness-request+jwt`, `alg = EdDSA`, and a `kid` found in the
+- Header fields: `typ = registry-notary-request+jwt`, `alg = EdDSA`, and a `kid` found in the
   configured peer JWKS.
 - Required payload claims: `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `protocol`, `action`,
   `profile`, `purpose`, and `request`.
-- `protocol` must be `registry-witness-federation/v0.1`.
+- `protocol` must be `registry-notary-federation/v0.1`.
 - `action` must be `evaluate`.
 - `purpose` must be an HTTPS URI allowed by the peer policy.
 - `jti` must be a ULID string and is retained in the replay store until `exp + clock_leeway`.
@@ -294,7 +294,7 @@ Request requirements:
 Response shape:
 
 - Success media type: `application/jwt`.
-- Header fields: `typ = registry-witness-response+jwt`, `alg = EdDSA`, and serving Witness `kid`.
+- Header fields: `typ = registry-notary-response+jwt`, `alg = EdDSA`, and serving Notary `kid`.
 - Payload fields include `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `request_jti`,
   `protocol`, `action`, `profile`, and either `result` or `error`.
 - `result.subject_ref.hash` is a pairwise `hmac-sha256:` handle. The raw subject identifier is not
@@ -303,7 +303,7 @@ Response shape:
 - Replay, policy, signature, body-limit, and audience failures return unsigned RFC 7807-style
   denial bodies.
 
-The serving Witness validates the request before source reads. Audit write failure prevents a
+The serving Notary validates the request before source reads. Audit write failure prevents a
 successful signed response.
 
 ## Audit event shape
@@ -333,11 +333,11 @@ Events are serialized as Registry Platform audit envelopes in JSON Lines (JSONL)
 
 ## Top-level config sections
 
-`StandaloneRegistryWitnessConfig` top-level keys.
+`StandaloneRegistryNotaryConfig` top-level keys.
 
 ### `server`
 
-Default bind: `127.0.0.1:8081`. The standalone demo config in `demo/config/registry-witness.yaml` overrides this to `127.0.0.1:4255`. The Lab topology overrides it to `0.0.0.0:8080` inside the container (mapped to host ports 4321-4324).
+Default bind: `127.0.0.1:8081`. The standalone demo config in `demo/config/registry-notary.yaml` overrides this to `127.0.0.1:4255`. The Lab topology overrides it to `0.0.0.0:8080` inside the container (mapped to host ports 4321-4324).
 
 ### `auth`
 
@@ -362,8 +362,8 @@ Fields under `auth.oidc`.
 | `allowed_typ` | `["JWT"]` | Accepted JOSE `typ` headers. |
 | `scope_claim` | `scope` | Claim used to extract scopes. |
 | `scope_separator` | space | Single-character scope separator. |
-| `scope_map` | `{}` | Optional mapping from incoming scopes to Witness scopes. |
-| `principal_claim` | `sub` | Claim used as the Witness principal ID. |
+| `scope_map` | `{}` | Optional mapping from incoming scopes to Notary scopes. |
+| `principal_claim` | `sub` | Claim used as the Notary principal ID. |
 | `leeway_seconds` | `60` | Clock skew tolerance. |
 | `allow_insecure_localhost` | `false` | Allows local insecure JWKS URLs for development. |
 
@@ -380,7 +380,7 @@ Fields under `auth.oidc`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `enabled` | `false` | Must be `true`. Config validation fails otherwise. |
-| `service_id` | `registry-witness` | Service identity string in responses. |
+| `service_id` | `registry-notary` | Service identity string in responses. |
 | `api_version` | `2026-05` | API version label. |
 | `api_base_url` | `/` | Base URL for self-links in the service document. |
 | `inline_batch_limit` | `100` | Global maximum subjects per batch request. |
@@ -395,11 +395,11 @@ Fields of `FederationConfig`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `enabled` | `false` | When true, mounts `/federation/v1/evaluations`. |
-| `node_id` | `""` | Serving Witness node id. MVP requires `did:web`. |
-| `issuer` | `""` | Serving Witness HTTPS issuer. Host must bind to `node_id`. |
-| `jwks_uri` | `""` | HTTPS JWKS URL for this Witness federation signing keys. |
+| `node_id` | `""` | Serving Notary node id. MVP requires `did:web`. |
+| `issuer` | `""` | Serving Notary HTTPS issuer. Host must bind to `node_id`. |
+| `jwks_uri` | `""` | HTTPS JWKS URL for this Notary federation signing keys. |
 | `federation_api` | `""` | Public federation API base URL. |
-| `supported_protocol_versions` | `[]` | Must include `registry-witness-federation/v0.1` when enabled. |
+| `supported_protocol_versions` | `[]` | Must include `registry-notary-federation/v0.1` when enabled. |
 | `inbound_body_limit_bytes` | `16384` | Maximum compact JWS request body size. |
 | `max_request_lifetime_seconds` | `300` | Maximum `exp - iat` for request JWTs. |
 | `clock_leeway_seconds` | `60` | Clock skew tolerance for time checks and replay retention. |
@@ -424,7 +424,7 @@ Fields of `FederationPeerConfig`.
 | `issuer` | Trusted peer HTTPS issuer. Host must bind to `node_id`. |
 | `jwks_uri` | Peer JWKS URL used by the request verifier. |
 | `allow_insecure_localhost` | Development-only opt-in for local JWKS URLs. |
-| `allowed_protocol_versions` | Must include `registry-witness-federation/v0.1`. |
+| `allowed_protocol_versions` | Must include `registry-notary-federation/v0.1`. |
 | `allowed_purposes` | HTTPS purpose URI allowlist. |
 | `allowed_profiles` | Evaluation profile IDs this peer may request. |
 | `source_scopes` | Internal source scopes granted to this peer after policy passes. |
@@ -448,7 +448,7 @@ Fields of `SourceConnectionConfig`.
 | `base_url` | None | Upstream source registry base URL. Required. |
 | `allow_insecure_localhost` | `false` | Development-only opt-in for HTTP localhost source registries. |
 | `allow_insecure_private_network` | `false` | Development/demo opt-in for HTTP private-network source registries, while cloud metadata endpoints remain blocked. |
-| `token_env` | None | Environment variable containing the outbound bearer token used when Witness calls the source registry. Required. |
+| `token_env` | None | Environment variable containing the outbound bearer token used when Notary calls the source registry. Required. |
 | `dci` | DCI defaults | Optional DCI connector settings such as `search_path`, `query_type`, `records_path`, and `field_paths`. |
 | `max_in_flight` | `8` | Per-connection cap on concurrent outbound source requests. |
 | `bulk_mode` | `none` | Connector-specific bulk-read mode. Values include `none`, `rda_in_filter`, and `dci_batched_search`. |

@@ -3,8 +3,8 @@ extends:
 apis:
   registry-relay:
     root: openapi/registry-relay.openapi.json
-  registry-witness:
-    root: openapi/registry-witness.openapi.json
+  registry-notary:
+    root: openapi/registry-notary.openapi.json
 rules:
   no-empty-servers: off
   no-unused-components: warn

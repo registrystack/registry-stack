@@ -1,13 +1,13 @@
-# Registry Legend
+# Registry Docs
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
-Registry Legend is the canonical documentation website for the registry project
+Registry Docs is the canonical documentation website for the registry project
 family.
 
 It explains the map: which project owns which responsibility, which standards
 claims are supported by evidence, which machine contracts are stable enough for
-integrators, how Registry Witness federation fits into the stack, and how to run
+integrators, how Registry Notary federation fits into the stack, and how to run
 the smallest end-to-end demo.
 
 ## Develop

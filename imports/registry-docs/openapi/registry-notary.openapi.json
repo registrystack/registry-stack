@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Registry Witness API",
+    "title": "Registry Notary API",
     "description": "Standalone claim evaluation, rendering, and credential issuance API.",
     "license": {
       "name": "Apache-2.0",
@@ -12,7 +12,7 @@
   "paths": {
     "/.well-known/evidence-service": {
       "get": {
-        "summary": "Discover Registry Witness capabilities",
+        "summary": "Discover Registry Notary capabilities",
         "operationId": "getEvidenceService",
         "responses": {
           "200": {
@@ -25,7 +25,7 @@
                     "api_key": {
                       "header": "x-api-key"
                     },
-                    "audience": "demo.registry-witness",
+                    "audience": "demo.registry-notary",
                     "bearer": {
                       "format": "Bearer <token>",
                       "header": "Authorization",
@@ -108,7 +108,7 @@
                       "status": "enabled"
                     },
                     {
-                      "id": "application/vnd.registry-witness.claim-result+json",
+                      "id": "application/vnd.registry-notary.claim-result+json",
                       "kind": "claim_result",
                       "status": "enabled"
                     }
@@ -120,7 +120,7 @@
                   },
                   "issuer": {
                     "id": "did:web:agriculture.demo.example.gov",
-                    "name": "demo.registry-witness"
+                    "name": "demo.registry-notary"
                   },
                   "operations": {
                     "batch_evaluate": true,
@@ -128,7 +128,7 @@
                     "evaluate": true,
                     "render": true
                   },
-                  "service_id": "demo.registry-witness"
+                  "service_id": "demo.registry-notary"
                 }
               }
             }
@@ -145,7 +145,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -167,7 +167,7 @@
                     {
                       "alg": "EdDSA",
                       "crv": "Ed25519",
-                      "kid": "did:web:agriculture.demo.example.gov#registry-witness-demo-key-1",
+                      "kid": "did:web:agriculture.demo.example.gov#registry-notary-demo-key-1",
                       "kty": "OKP",
                       "x": "11qYAYKxCrfVS_3XDbXJC2AgYI57qXzcS7P0W5Y9f4Y"
                     }
@@ -188,7 +188,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -199,7 +199,7 @@
     "/.well-known/openid-credential-issuer": {
       "get": {
         "summary": "Discover OpenID4VCI credential issuer metadata",
-        "description": "Returns the OpenID4VCI issuer metadata for Registry Witness' dc+sd-jwt issuance profile.",
+        "description": "Returns the OpenID4VCI issuer metadata for Registry Notary' dc+sd-jwt issuance profile.",
         "operationId": "getOpenidCredentialIssuer",
         "responses": {
           "200": {
@@ -295,13 +295,13 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
           },
           "403": {
-            "description": "Caller lacks registry_witness:admin scope",
+            "description": "Caller lacks registry_notary:admin scope",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -312,7 +312,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-witness.dev/problems/auth/scope_denied"
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
                 }
               }
             }
@@ -342,7 +342,7 @@
                         "downgrade": "deny"
                       },
                       "formats": [
-                        "application/vnd.registry-witness.claim-result+json",
+                        "application/vnd.registry-notary.claim-result+json",
                         "application/ld+json; profile=\"cccev\""
                       ],
                       "id": "date-of-birth",
@@ -372,7 +372,7 @@
                       "evidence_type": "smallholder_farmer_evidence",
                       "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
                       "formats": [
-                        "application/vnd.registry-witness.claim-result+json",
+                        "application/vnd.registry-notary.claim-result+json",
                         "application/ld+json; profile=\"cccev\"",
                         "application/dc+sd-jwt"
                       ],
@@ -403,7 +403,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -453,7 +453,7 @@
                           "claim_version": "2026-05",
                           "disclosure": "predicate",
                           "provenance": {
-                            "computed_by": "demo.registry-witness",
+                            "computed_by": "demo.registry-notary",
                             "source_count": 1,
                             "source_versions": {}
                           },
@@ -491,7 +491,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-witness.dev/problems/request/invalid"
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
                 }
               }
             }
@@ -508,7 +508,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -525,7 +525,7 @@
                   "detail": "the requested disclosure profile is not allowed",
                   "status": 403,
                   "title": "Disclosure not allowed",
-                  "type": "https://docs.registry-witness.dev/problems/claim/disclosure_not_allowed"
+                  "type": "https://docs.registry-notary.dev/problems/claim/disclosure_not_allowed"
                 }
               }
             }
@@ -542,7 +542,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-witness.dev/problems/format/unsupported"
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
                 }
               }
             }
@@ -559,7 +559,7 @@
                   "detail": "the request conflicts with existing state",
                   "status": 409,
                   "title": "Request conflict",
-                  "type": "https://docs.registry-witness.dev/problems/request/conflict"
+                  "type": "https://docs.registry-notary.dev/problems/request/conflict"
                 }
               }
             }
@@ -576,7 +576,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-witness.dev/problems/request/too_large"
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
                 }
               }
             }
@@ -593,7 +593,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-witness.dev/problems/self_attestation/rate_limited"
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
                 }
               }
             }
@@ -610,7 +610,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-witness.dev/problems/source/unavailable"
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
                 }
               }
             }
@@ -645,10 +645,10 @@
                       "disclosure": "predicate",
                       "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                       "expires_at": "2026-05-25T12:00:00Z",
-                      "format": "application/vnd.registry-witness.claim-result+json",
+                      "format": "application/vnd.registry-notary.claim-result+json",
                       "issued_at": "2026-05-24T12:00:00Z",
                       "provenance": {
-                        "computed_by": "demo.registry-witness",
+                        "computed_by": "demo.registry-notary",
                         "source_count": 1,
                         "source_versions": {}
                       },
@@ -674,7 +674,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-witness.dev/problems/request/invalid"
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
                 }
               }
             }
@@ -691,7 +691,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -708,7 +708,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-witness.dev/problems/auth/scope_denied"
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
                 }
               }
             }
@@ -725,7 +725,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-witness.dev/problems/format/unsupported"
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
                 }
               }
             }
@@ -742,7 +742,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-witness.dev/problems/request/too_large"
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
                 }
               }
             }
@@ -759,7 +759,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-witness.dev/problems/self_attestation/rate_limited"
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
                 }
               }
             }
@@ -776,7 +776,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-witness.dev/problems/source/unavailable"
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
                 }
               }
             }
@@ -820,7 +820,7 @@
                   "evidence_type": "smallholder_farmer_evidence",
                   "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
                   "formats": [
-                    "application/vnd.registry-witness.claim-result+json",
+                    "application/vnd.registry-notary.claim-result+json",
                     "application/ld+json; profile=\"cccev\"",
                     "application/dc+sd-jwt"
                   ],
@@ -849,7 +849,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -866,7 +866,7 @@
                   "detail": "the requested claim is not available",
                   "status": 404,
                   "title": "Claim not found",
-                  "type": "https://docs.registry-witness.dev/problems/claim/not_found"
+                  "type": "https://docs.registry-notary.dev/problems/claim/not_found"
                 }
               }
             }
@@ -895,7 +895,7 @@
               "application/json": {
                 "example": {
                   "credential": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdiNyZWdpc3RyeS13aXRuZXNzLWRlbW8ta2V5LTEifQ.eyJpc3MiOiJkaWQ6d2ViOmFncmljdWx0dXJlLmRlbW8uZXhhbXBsZS5nb3YiLCJzdWIiOiJkaWQ6andrOmV5SnJkSGtpT2lKUFMxQWlMQ0pqY25ZaU9pSkZaREkxTlRFNUlpd2llQ0k2SWpFeGNWbEJXVXQ0UTNKbVZsTmZNMWhFWWxoS1F6SkJaMWxKTlRkeFdIcGpVemRRTUZjMVdUbG1ORmtpZlEiLCJpYXQiOjE3Nzk2MjQwMDAsImV4cCI6MTc3OTcxMDQwMCwidmN0IjoiaHR0cHM6Ly9kZW1vLmV4YW1wbGUuZ292L2NyZWRlbnRpYWxzL3NtYWxsaG9sZGVyLWZhcm1lci92MSIsImp0aSI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJpZCI6InVybjpyZWdpc3RyeS13aXRuZXNzOmNyZWRlbnRpYWw6MDFIWDdZNUYyV0FKN1pQMFE0TTVLOUU4TkMiLCJfc2QiOlsia0ZxYXpKcDdleVhjS1ZIX0tiMzNnQ1lwMGM3dzFDLWd0WjVORkJxbDdYcyJdLCJjbmYiOnsia2lkIjoiZGlkOmp3azpleUpyZEhraU9pSlBTMUFpTENKamNuWWlPaUpGWkRJMU5URTVJaXdpZUNJNklqRXhjVmxCV1V0NFEzSm1WbE5mTTFoRVlsaEtRekpCWjFsSk5UZHhXSHBqVXpkUU1GYzFXVGxtTkZraWZRIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU18zWERiWEpDMkFnWUk1N3FYemNTN1AwVzVZOWY0WSJ9fX0.c2lnbmF0dXJl~ZGlzY2xvc3VyZQ~",
-                  "credential_id": "urn:registry-witness:credential:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                  "credential_id": "urn:registry-notary:credential:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                   "disclosures": [
                     "ZGlzY2xvc3VyZQ"
                   ],
@@ -919,7 +919,7 @@
                   "detail": "holder proof of possession is required",
                   "status": 400,
                   "title": "Holder proof required",
-                  "type": "https://docs.registry-witness.dev/problems/credential/holder_proof_required"
+                  "type": "https://docs.registry-notary.dev/problems/credential/holder_proof_required"
                 }
               }
             }
@@ -936,7 +936,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -953,7 +953,7 @@
                   "detail": "the evaluation id is unknown or expired",
                   "status": 404,
                   "title": "Evaluation not found",
-                  "type": "https://docs.registry-witness.dev/problems/evaluation/not_found"
+                  "type": "https://docs.registry-notary.dev/problems/evaluation/not_found"
                 }
               }
             }
@@ -970,7 +970,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-witness.dev/problems/format/unsupported"
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
                 }
               }
             }
@@ -987,7 +987,7 @@
                   "detail": "the request conflicts with existing state",
                   "status": 409,
                   "title": "Request conflict",
-                  "type": "https://docs.registry-witness.dev/problems/request/conflict"
+                  "type": "https://docs.registry-notary.dev/problems/request/conflict"
                 }
               }
             }
@@ -1004,7 +1004,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-witness.dev/problems/request/too_large"
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
                 }
               }
             }
@@ -1021,7 +1021,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-witness.dev/problems/self_attestation/rate_limited"
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
                 }
               }
             }
@@ -1038,7 +1038,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-witness.dev/problems/source/unavailable"
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
                 }
               }
             }
@@ -1073,10 +1073,10 @@
                       "disclosure": "predicate",
                       "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                       "expires_at": "2026-05-25T12:00:00Z",
-                      "format": "application/vnd.registry-witness.claim-result+json",
+                      "format": "application/vnd.registry-notary.claim-result+json",
                       "issued_at": "2026-05-24T12:00:00Z",
                       "provenance": {
-                        "computed_by": "demo.registry-witness",
+                        "computed_by": "demo.registry-notary",
                         "source_count": 1,
                         "source_versions": {}
                       },
@@ -1102,7 +1102,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-witness.dev/problems/request/invalid"
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
                 }
               }
             }
@@ -1119,7 +1119,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -1136,7 +1136,7 @@
                   "detail": "the evaluation id is unknown or expired",
                   "status": 404,
                   "title": "Evaluation not found",
-                  "type": "https://docs.registry-witness.dev/problems/evaluation/not_found"
+                  "type": "https://docs.registry-notary.dev/problems/evaluation/not_found"
                 }
               }
             }
@@ -1153,7 +1153,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-witness.dev/problems/format/unsupported"
+                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
                 }
               }
             }
@@ -1170,7 +1170,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-witness.dev/problems/request/too_large"
+                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
                 }
               }
             }
@@ -1187,7 +1187,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-witness.dev/problems/self_attestation/rate_limited"
+                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
                 }
               }
             }
@@ -1204,7 +1204,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-witness.dev/problems/source/unavailable"
+                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
                 }
               }
             }
@@ -1215,7 +1215,7 @@
     "/federation/v1/evaluations": {
       "post": {
         "summary": "Evaluate one configured federation profile for a trusted peer",
-        "description": "Accepts a compact JWS request with typ registry-witness-request+jwt. This route is mounted only when federation is enabled and uses body-JWT authentication instead of API key or bearer authentication.",
+        "description": "Accepts a compact JWS request with typ registry-notary-request+jwt. This route is mounted only when federation is enabled and uses body-JWT authentication instead of API key or bearer authentication.",
         "operationId": "federatedEvaluate",
         "requestBody": {
           "content": {
@@ -1235,7 +1235,7 @@
               "application/jwt": {
                 "schema": {
                   "type": "string",
-                  "description": "Compact JWS with typ registry-witness-response+jwt"
+                  "description": "Compact JWS with typ registry-notary-response+jwt"
                 }
               }
             }
@@ -1287,7 +1287,7 @@
                       "status": "enabled"
                     },
                     {
-                      "id": "application/vnd.registry-witness.claim-result+json",
+                      "id": "application/vnd.registry-notary.claim-result+json",
                       "kind": "claim_result",
                       "status": "enabled"
                     }
@@ -1308,7 +1308,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -1348,7 +1348,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-witness.dev/problems/request/invalid"
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
                 }
               }
             }
@@ -1630,7 +1630,7 @@
               "application/json": {
                 "example": {
                   "info": {
-                    "title": "Registry Witness API",
+                    "title": "Registry Notary API",
                     "version": "0.3.0"
                   },
                   "openapi": "3.1.0",
@@ -1653,7 +1653,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-witness.dev/problems/auth/missing_credential"
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
                 }
               }
             }
@@ -1693,7 +1693,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-witness.dev/problems/request/invalid"
+                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
                 }
               }
             }

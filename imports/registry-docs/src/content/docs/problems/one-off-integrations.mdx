@@ -2,11 +2,11 @@
 title: Integrations become one-off negotiations
 description: Why registry integrations repeat discovery, mapping, access review, and testing unless contracts and metadata are reusable.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-atlas
 last_reviewed: "2026-05-28"
 doc_type: explanation
@@ -72,7 +72,7 @@ actually exposes. The third partner reads the same description as the first.
 **Registry Relay** exposes protected, read-only API contracts for configured entities. The
 contract is the same artifact every caller integrates against.
 
-**Registry Witness** publishes configured evidence responses where a caller needs a status,
+**Registry Notary** publishes configured evidence responses where a caller needs a status,
 predicate, selected value, or credential-shaped artifact instead of a broad record.
 
 **Registry Atlas** lets a new partner inspect the published artifacts before any code is
@@ -85,12 +85,12 @@ have already been built, reviewed, and tested. For the broader model, see the
 ## What is built today
 
 The current site documents Registry Manifest render outputs, Registry Relay route shapes,
-Registry Witness claim definitions and response formats, and Registry Atlas inspection.
-OpenAPI references are published for Relay and Witness under the reference section.
+Registry Notary claim definitions and response formats, and Registry Atlas inspection.
+OpenAPI references are published for Relay and Notary under the reference section.
 
 See [contracts](../../reference/contracts/),
 [Registry Relay API reference](../../reference/apis/registry-relay/), and
-[Registry Witness API reference](../../reference/apis/registry-witness/).
+[Registry Notary API reference](../../reference/apis/registry-notary/).
 
 ## What is future-facing or out of scope
 

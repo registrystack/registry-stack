@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
-  <title id="title">Registry Legend favicon</title>
+  <title id="title">Registry Docs favicon</title>
   <desc id="desc">A compact registry legend mark with three horizontal lines.</desc>
   <rect x="8" y="8" width="48" height="48" fill="#000091"/>
   <path d="M20 25h18M20 32h26M20 39h14" stroke="#ffffff" stroke-width="5" stroke-linecap="square"/>

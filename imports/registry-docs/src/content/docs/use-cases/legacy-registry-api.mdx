@@ -2,7 +2,7 @@
 title: Expose a legacy registry as a protected API
 description: Wrap a legacy registry with a governed, caller-scoped API boundary without replacing the source system.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
   - registry-manifest
@@ -17,6 +17,9 @@ standards_referenced:
   - odrl
   - w3c-did
 ---
+
+Use this pattern when a registry has to stay where it is (a legacy database, a vendor system,
+a periodic export), but a partner needs an auditable read path the registrar can govern.
 
 ## Starting situation
 
@@ -57,18 +60,9 @@ route identifier.
 The full civil record, internal district notes, and correction history do not appear in the
 response.
 
-## What is in scope, what is not
+## Related patterns
 
-This pattern covers: placing a governed read-only HTTP boundary in front of a legacy source,
-publishing an OpenAPI contract, and attaching metadata that describes schemas, shapes, and
-policies.
-
-It does not cover: replacing the legacy system, synchronizing all source fields, or managing
-write-back corrections.
-Caller identity, legal basis, rate limits, and data sharing agreements are deployment concerns
-outside Registry Relay's scope.
-
-For evidence that is narrower than a field set (a single yes/no predicate), see
+For evidence narrower than a field set (a single yes/no predicate), see
 [Verify a business registry status without sharing the full record](../business-registry-status/)
 or
 [Verify an eligibility or entitlement fact without sharing the full record](../eligibility-or-entitlement-evidence/).

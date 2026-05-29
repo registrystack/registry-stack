@@ -6,15 +6,15 @@
     "source": "Hand-authored abstract contract in `registry-relay/openapi/registry-relay.openapi.json`, cross-checked against `registry-relay/docs/api.md` and the runtime route table.",
     "artifact": "openapi/registry-relay.openapi.json",
     "status": "hand-authored abstract contract (templated paths and capability tags, not a per-deployment dump). Use the auth-gated `GET /openapi.json` on a running gateway for the instance-specific shape of `{dataset_id}` and `{entity}`.",
-    "redoc_path": "/registry-legend/api/registry-relay.html"
+    "redoc_path": "/registry-docs/api/registry-relay.html"
   },
   {
-    "id": "registry-witness",
-    "name": "Registry Witness API",
-    "owner": "registry-witness",
-    "source": "`cargo run -p registry-witness-bin -- openapi`",
-    "artifact": "openapi/registry-witness.openapi.json",
-    "status": "pinned generated snapshot from the local Registry Witness workspace with federation, OID4VCI, and response examples",
-    "redoc_path": "/registry-legend/api/registry-witness.html"
+    "id": "registry-notary",
+    "name": "Registry Notary API",
+    "owner": "registry-notary",
+    "source": "`cargo run -p registry-notary-bin -- openapi`",
+    "artifact": "openapi/registry-notary.openapi.json",
+    "status": "pinned generated snapshot from the local Registry Notary workspace with federation, OID4VCI, and response examples",
+    "redoc_path": "/registry-docs/api/registry-notary.html"
   }
 ]

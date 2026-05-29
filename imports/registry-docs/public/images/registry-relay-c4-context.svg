@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Relay C4 system context</title>
-  <desc>C4-style system context diagram for Registry Relay. Program systems and metadata consumers call Registry Relay. Relay reads private registry sources, uses Registry Manifest metadata, writes audit records, and can point callers toward Registry Witness evidence offerings.</desc>
+  <desc>C4-style system context diagram for Registry Relay. Program systems and metadata consumers call Registry Relay. Relay reads private registry sources, uses Registry Manifest metadata, writes audit records, and can point callers toward Registry Notary evidence offerings.</desc>
 
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
     <text x="24" y="34">C4 LEVEL 1</text>
@@ -30,7 +30,7 @@
     <text x="58" y="292">Metadata consumer</text>
     <text x="576" y="110">Registry source</text>
     <text x="576" y="236">Registry Manifest</text>
-    <text x="576" y="362">Registry Witness</text>
+    <text x="576" y="362">Registry Notary</text>
   </g>
   <g fill="#6a6a6a" font-size="11.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">

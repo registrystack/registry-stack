@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" role="img" aria-labelledby="w-title w-desc" fill="none">
-  <title id="w-title">Registry Witness: two delivery modes for the same evidence</title>
-  <desc id="w-desc">Registry Witness reads a source registry and issues a signed SD-JWT VC. The same credential reaches consumers through two delivery paths. In the wallet-mediated path, the holder receives the credential in a wallet and presents it to a citizen-facing service. In the system-to-system path, a backend service requests the credential directly from Witness over its API. The credential payload is identical; only the delivery mode differs.</desc>
+  <title id="w-title">Registry Notary: two delivery modes for the same evidence</title>
+  <desc id="w-desc">Registry Notary reads a source registry and issues a signed SD-JWT VC. The same credential reaches consumers through two delivery paths. In the wallet-mediated path, the holder receives the credential in a wallet and presents it to a citizen-facing service. In the system-to-system path, a backend service requests the credential directly from Notary over its API. The credential payload is identical; only the delivery mode differs.</desc>
 
   <style>
     .h { font: 600 13px 'Public Sans', system-ui, sans-serif; fill: #161616; }
@@ -22,10 +22,10 @@
   <text x="36" y="194" class="c">Registry Data API</text>
   <text x="36" y="210" class="c">DCI · GovStack BB</text>
 
-  <!-- Witness box -->
+  <!-- Notary box -->
   <rect x="188" y="144" width="180" height="72" fill="#ffffff" stroke="#161616" stroke-width="1"/>
   <rect x="188" y="144" width="4" height="72" fill="#000091"/>
-  <text x="204" y="166" class="a">Registry Witness</text>
+  <text x="204" y="166" class="a">Registry Notary</text>
   <line x1="204" y1="176" x2="356" y2="176" stroke="#e5e5e5"/>
   <text x="204" y="194" class="b">evaluates claims</text>
   <text x="204" y="210" class="b">signs SD-JWT VC</text>
@@ -54,11 +54,11 @@
   <!-- Bottom lane caption -->
   <text x="440" y="222" class="m">DIRECT API · SYSTEM-TO-SYSTEM</text>
 
-  <!-- Arrow: Source → Witness -->
+  <!-- Arrow: Source → Notary -->
   <line x1="164" y1="180" x2="180" y2="180" stroke="#161616"/>
   <polygon points="188,180 180,176 180,184" fill="#161616"/>
 
-  <!-- Witness exits to a branch point at x=400, y=180 -->
+  <!-- Notary exits to a branch point at x=400, y=180 -->
   <line x1="368" y1="180" x2="400" y2="180" stroke="#161616"/>
 
   <!-- Upper branch: branch → up → wallet -->

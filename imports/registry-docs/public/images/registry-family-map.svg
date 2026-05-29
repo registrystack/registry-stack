@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry family map</title>
-  <desc>The six registry family projects, arranged left to right by structural role: Registry Platform provides shared primitives; Registry Manifest defines portable contracts; Registry Relay and Registry Witness are runtime services; Registry Atlas is the inspection client; Registry Lab is the compose-based runnable demo.</desc>
+  <desc>The six registry family projects, arranged left to right by structural role: Registry Platform provides shared primitives; Registry Manifest defines portable contracts; Registry Relay and Registry Notary are runtime services; Registry Atlas is the inspection client; Registry Lab is the compose-based runnable demo.</desc>
 
   <g stroke="#e5e5e5" stroke-width="1">
     <line x1="144" y1="16" x2="144" y2="216"/>
@@ -43,7 +43,7 @@
     <text x="16" y="100">Registry Platform</text>
     <text x="160" y="100">Registry Manifest</text>
     <text x="304" y="100">Registry Relay</text>
-    <text x="448" y="100">Registry Witness</text>
+    <text x="448" y="100">Registry Notary</text>
     <text x="592" y="100">Registry Atlas</text>
     <text x="736" y="100">Registry Lab</text>
   </g>
@@ -53,7 +53,7 @@
     <text x="16" y="118">registry-platform</text>
     <text x="160" y="118">registry-manifest</text>
     <text x="304" y="118">registry-relay</text>
-    <text x="448" y="118">registry-witness</text>
+    <text x="448" y="118">registry-notary</text>
     <text x="592" y="118">registry-atlas</text>
     <text x="736" y="118">registry-lab</text>
   </g>

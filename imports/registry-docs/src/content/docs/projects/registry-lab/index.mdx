@@ -1,6 +1,6 @@
 ---
 title: Registry Lab overview
-description: Registry Lab is the Docker Compose demo for the registry stack, wiring Relay, Witness, live-source, OpenFn, static metadata, and narrated demo services into a single topology you can run on a laptop.
+description: Registry Lab is the Docker Compose demo for the registry stack, wiring Relay, Notary, live-source, OpenFn, static metadata, and narrated demo services into a single topology you can run on a laptop.
 status: current
 owner: registry-lab
 source_repos:
@@ -16,7 +16,7 @@ standards_referenced:
 Use this when you want to see the registry stack actually run end-to-end on your laptop in one command.
 
 Registry Lab is a Docker Compose demo for the registry stack.
-It wires three Registry Relay instances, four Registry Witness instances,
+It wires three Registry Relay instances, four Registry Notary instances,
 live Postgres and Zitadel services, a private OpenFn sidecar path, a static
 metadata publisher, and narrated demo clients into a single topology you can
 run on a laptop, with no production credentials and no remote services.
@@ -45,7 +45,7 @@ with `--recurse-submodules`.
 
 ## Compose topology
 
-The topology runs three Relay instances, four Witness instances, live Postgres and Zitadel services,
+The topology runs three Relay instances, four Notary instances, live Postgres and Zitadel services,
 a private OpenFn sidecar, a static metadata publisher, and a narrated demo client.
 For service names, host ports, image sources, and network layout, see the
 [Registry Lab reference](./reference/).
@@ -99,18 +99,18 @@ another can require a single combined support record.
 [`scripts/smoke.sh`](https://github.com/jeremi/registry-lab/blob/main/scripts/smoke.sh)
 runs more than 30 checks against the live compose topology.
 The checks cover health and readiness on all three Relay instances,
-discovery endpoints on all three core Witness instances with bearer-token and `x-api-key` credentials,
+discovery endpoints on all three core Notary instances with bearer-token and `x-api-key` credentials,
 OpenAPI endpoints on every service,
 authorization scope denial responses (403 with `auth.scope_denied`),
 positive row-read and aggregate-read responses on the social protection Relay,
-claim evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility witnesses,
-a cross-authority result with `source_count >= 2` on the shared eligibility witness,
+claim evaluation (`POST /claims/evaluate`) on civil, social protection, and shared eligibility notaries,
+a cross-authority result with `source_count >= 2` on the shared eligibility notary,
 credential-bound evaluation returning `application/dc+sd-jwt`,
 and service-log assertions that generated raw secrets are not emitted.
 
 Additional focused checks exercise live and adaptor-backed paths:
 
-- `scripts/smoke-openfn.sh` verifies the OpenFn-backed Witness path through host port 4324.
+- `scripts/smoke-openfn.sh` verifies the OpenFn-backed Notary path through host port 4324.
 - `scripts/check-relay-postgres.sh` runs Relay's ignored live Postgres tests.
 - `scripts/check-relay-zitadel.sh` runs Relay's ignored Zitadel OIDC tests.
 - `scripts/smoke-oidc-relay.sh` starts a temporary OIDC-protected Relay against the local Zitadel IdP.
@@ -155,7 +155,7 @@ runs four additional narrated checks against the live-service topology:
 
 1. A live Postgres source cutover that shows new database rows becoming visible without a Relay restart.
 2. A Zitadel-issued JWT flow against a temporary OIDC-protected Relay.
-3. An OpenFn sidecar lookup behind Registry Witness, with the sidecar and mock registry kept off host ports.
+3. An OpenFn sidecar lookup behind Registry Notary, with the sidecar and mock registry kept off host ports.
 4. A service-first discovery story that asks Atlas to read the static CPSV-AP catalogue and select
    a satisfiable grouped evidence option without reading protected person-level data.
 
@@ -166,7 +166,7 @@ The script writes artifacts to `output/live-stories/`.
 Registry Lab is at v0.
 Fixture data covers only five districts and a maximum of approximately 100 rows per dataset;
 it is not representative of production scale.
-Core Witness services have no healthcheck in compose; Relay services use the CLI-help healthcheck,
+Core Notary services have no healthcheck in compose; Relay services use the CLI-help healthcheck,
 and the OpenFn sidecar uses an HTTP readiness healthcheck.
 Static metadata is not auto-regenerated on manifest changes; you must re-run
 `scripts/publish-static-metadata.sh` after modifying `config/static-metadata/metadata.yaml`.

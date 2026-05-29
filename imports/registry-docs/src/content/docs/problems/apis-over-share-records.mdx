@@ -2,10 +2,10 @@
 title: APIs over-share records
 description: Why registry callers often need a status, predicate, selected fields, or attested extract instead of a full source record.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-platform
   - registry-manifest
 last_reviewed: "2026-05-28"
@@ -66,7 +66,7 @@ returned.
 caller scopes. A route can be configured to return "licence valid" without ever exposing
 date of birth or suspension history.
 
-**Registry Witness** evaluates configured claims and returns a claim-result document,
+**Registry Notary** evaluates configured claims and returns a claim-result document,
 CCCEV-shaped JSON-LD, or an SD-JWT VC credential. The licence verification can be a signed
 yes/no that the calling service stores in place of the record.
 
@@ -80,13 +80,13 @@ where it belongs. For the broader model, see the [architecture overview](../../e
 
 Registry Relay documents declared field projection, caller scopes, and evidence-offering
 metadata routes.
-Registry Witness documents disclosure modes (`value`, `predicate`, and `redacted`), claim
+Registry Notary documents disclosure modes (`value`, `predicate`, and `redacted`), claim
 evaluation, CCCEV-shaped output, direct credential issuance, and OID4VCI issuance.
-Registry Platform provides shared primitives used by Relay and Witness for audit,
+Registry Platform provides shared primitives used by Relay and Notary for audit,
 authentication, HTTP safety, and SD-JWT handling.
 
 See [evidence issuance](../../explanation/evidence-issuance/) and
-[Registry Witness reference](../../projects/registry-witness/reference/).
+[Registry Notary reference](../../projects/registry-notary/reference/).
 
 ## What is future-facing or out of scope
 
@@ -99,7 +99,7 @@ are future-facing unless a source repo documents and tests the pattern.
 
 ## Next
 
-- [Registry Witness overview](../../projects/registry-witness/)
+- [Registry Notary overview](../../projects/registry-notary/)
 - [Consultation flow](../../explanation/consultation-flow/)
 - [Standards register](../../reference/standards/)
 - [Verify a business registry status](../../use-cases/business-registry-status/)

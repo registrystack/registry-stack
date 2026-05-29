@@ -1,6 +1,6 @@
 ---
 title: Registry Manifest overview
-description: Registry Manifest turns a single YAML metadata manifest into standards-facing artifacts and public Witness federation metadata a registry needs to publish, validate, and share.
+description: Registry Manifest turns a single YAML metadata manifest into standards-facing artifacts and public Notary federation metadata a registry needs to publish, validate, and share.
 status: current
 owner: registry-manifest
 source_repos:
@@ -22,7 +22,7 @@ standards_referenced:
 
 Registry Manifest is a portable Rust workspace that takes one `metadata.yaml` file and
 derives every standards-facing artifact other systems need to find, understand, and connect
-to a registry. It can also publish public Registry Witness federation metadata that helps
+to a registry. It can also publish public Registry Notary federation metadata that helps
 partners configure static-peer delegated evaluation.
 It does not serve HTTP, does not talk to databases, and does not handle credentials.
 You can run it on a laptop, in a CI pipeline, or in a static hosting workflow with no
@@ -118,7 +118,7 @@ forms: []
 A manifest must not contain runtime bindings such as source file paths, table names,
 database scopes, backend credentials, peer allowlists, federation signing keys, replay stores,
 or pairwise subject hash secrets.
-Those live in Registry Relay or Registry Witness configuration; the manifest is portable and
+Those live in Registry Relay or Registry Notary configuration; the manifest is portable and
 runtime-independent.
 
 A full working example is at
@@ -138,13 +138,13 @@ in that list are required together.
 Multiple lists on the same requirement are alternatives.
 
 Federated evaluation metadata is explicit too.
-The top-level `federation` block advertises the publishing Witness node id, issuer, JWKS URL,
+The top-level `federation` block advertises the publishing Notary node id, issuer, JWKS URL,
 federation API URL, and supported protocol versions.
-The top-level `evaluation_profiles` list binds public profile ids and ruleset ids to Witness
+The top-level `evaluation_profiles` list binds public profile ids and ruleset ids to Notary
 claim ids and subject id types.
-A `registry-witness` evidence offering must reference one of those ruleset ids through
+A `registry-notary` evidence offering must reference one of those ruleset ids through
 `access.ruleset`.
-Registry Manifest validates that link, but Registry Witness still decides which peers may call it.
+Registry Manifest validates that link, but Registry Notary still decides which peers may call it.
 
 ## Validation
 
@@ -161,7 +161,7 @@ before any rendering occurs:
 6. Validates per-dataset entities, fields, relationships, identifiers, codelists,
    cardinality strings, and ODRL policy terms.
 7. Validates evidence-offering references.
-8. Validates Registry Witness federation metadata when `registry-witness` access is declared:
+8. Validates Registry Notary federation metadata when `registry-notary` access is declared:
    HTTPS URLs, `did:web` issuer binding, protocol version, unique evaluation profile ids, unique
    rulesets, and `access.ruleset` references.
 

@@ -2,11 +2,11 @@
 title: Historical docs index
 description: Pointers to documentation that still lives in the source repos, categorized by status so readers know what to rely on and what to treat as historical record.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-atlas
   - registry-lab
 last_reviewed: "2026-05-23"
@@ -27,7 +27,7 @@ Status values:
 - `historical`: superseded or scope-replaced; keep as record, not as instructions.
 - `archive`: vendored copy, pre-rename worktree content, or nested demo staging area.
 
-{/* The plan for how these docs move is in the registry-legend plan (2026-05-23), "Existing docs to triage" section. Link removed: GitHub blob links to main are not durable for readers. */}
+{/* The plan for how these docs move is in the registry-docs plan (2026-05-23), "Existing docs to triage" section. Link removed: GitHub blob links to main are not durable for readers. */}
 
 ## Registry Relay docs
 
@@ -82,13 +82,13 @@ The directory is now `registry-manifest/`; the table uses the current name.
 | `README.md` | Library and CLI entry point, manifest model, renderers | `current` |
 | `docs/repository-split.md` | Background on the metadata/evidence split from [Registry Relay](../../projects/registry-relay/) | `historical` |
 
-## Registry Witness docs
+## Registry Notary docs
 
-Paths in this table are relative to `apps/registry-witness/`.
-All paths verified against commit `b4128a3` (registry-witness evidence packet).
+Paths in this table are relative to `apps/registry-notary/`.
+All paths verified against commit `b4128a3` (registry-notary evidence packet).
 
 The plan listed these paths under `evidence-server/`, the pre-rename directory name.
-The directory is now `registry-witness/`; the table uses the current name.
+The directory is now `registry-notary/`; the table uses the current name.
 
 | Path | Topic | Status |
 | --- | --- | --- |
@@ -127,7 +127,7 @@ The directory is now `registry-lab/`; the table uses the current name.
 | --- | --- | --- |
 | `README.md` | Demo topology, scripts, setup, scenarios | `current` |
 | `vendor/registry-relay/` | Git submodule: Registry Relay source | `archive` |
-| `vendor/registry-witness/` | Git submodule: [Registry Witness](../../projects/registry-witness/) source | `archive` |
+| `vendor/registry-notary/` | Git submodule: [Registry Notary](../../projects/registry-notary/) source | `archive` |
 
 ## Top-level `apps/docs/` docs
 
@@ -139,7 +139,7 @@ Path existence verified by direct filesystem check (2026-05-23).
 | `docs/registry-discovery-evidence-standard.md` | Discovery and evidence standard background | `historical` |
 | `docs/registry-relay-dpi-safeguards.md` | DPI safeguards background; candidate for a future explanation page | `historical` |
 
-{/* TODO[evidence]: registry-legend-plan-2026-05-23.md lists docs/registry-relay-dpi-safeguards.md
+{/* TODO[evidence]: registry-docs-plan-2026-05-23.md lists docs/registry-relay-dpi-safeguards.md
      as a candidate for a future explanation page. Verify whether the content is still current
      or has been superseded by relay's STANDARDS_ASSUMPTIONS.md and docs/ops.md before promoting. */}
 
@@ -152,7 +152,7 @@ at the expected locations as of 2026-05-23:
   The `registry-metadata` directory does not exist locally; it was renamed to `registry-manifest`.
   Current paths are listed in the "[Registry Manifest](../../projects/registry-manifest/) docs" section.
 - `evidence-server/README.md`: The `evidence-server` directory does not exist locally;
-  it was renamed to `registry-witness`. The current path is listed in the "Registry Witness docs" section.
+  it was renamed to `registry-notary`. The current path is listed in the "Registry Notary docs" section.
 - `dataspace-atlas/README.md` and `dataspace-atlas/SPEC.md`: The `dataspace-atlas` directory
   does not exist locally; it was renamed to `registry-atlas`.
   Current paths are listed in the "[Registry Atlas](../../projects/registry-atlas/) docs" section.

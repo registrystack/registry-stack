@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" role="img" aria-labelledby="w-title w-desc" fill="none">
-  <title id="w-title">Registry Witness: issuer of evidence in the three-party model</title>
-  <desc id="w-desc">Registry Witness is the issuer in a three-party credential model. It evaluates configured claims against registry data and issues an SD-JWT VC. A wallet, the holder, stores the credential and presents it selectively. A verifier, the relying party, checks the signature and the presented fields. The credential is evidence; the verifier's program decides eligibility, not Witness.</desc>
+  <title id="w-title">Registry Notary: issuer of evidence in the three-party model</title>
+  <desc id="w-desc">Registry Notary is the issuer in a three-party credential model. It evaluates configured claims against registry data and issues an SD-JWT VC. A wallet, the holder, stores the credential and presents it selectively. A verifier, the relying party, checks the signature and the presented fields. The credential is evidence; the verifier's program decides eligibility, not Notary.</desc>
 
   <style>
     .h { font: 600 13px 'Public Sans', system-ui, sans-serif; fill: #161616; }
@@ -17,10 +17,10 @@
   <text x="260" y="40" class="m">WALLET · HOLDER</text>
   <text x="496" y="40" class="m">VERIFIER · RELYING PARTY</text>
 
-  <!-- Witness box -->
+  <!-- Notary box -->
   <rect x="24" y="60" width="200" height="140" fill="#ffffff" stroke="#161616" stroke-width="1"/>
   <rect x="24" y="60" width="4" height="140" fill="#000091"/>
-  <text x="40" y="82" class="a">Registry Witness</text>
+  <text x="40" y="82" class="a">Registry Notary</text>
   <line x1="40" y1="96" x2="208" y2="96" stroke="#e5e5e5"/>
   <text x="40" y="118" class="b">reads source data</text>
   <text x="40" y="138" class="b">evaluates claims</text>

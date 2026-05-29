@@ -2,10 +2,10 @@
 title: Safeguards need technical enforcement
 description: Why purpose, scope, disclosure limits, audit behavior, and contract visibility need runtime and metadata surfaces.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-platform
   - registry-manifest
 last_reviewed: "2026-05-28"
@@ -69,7 +69,7 @@ operating under. Reviewers, callers, and operators can read the same contract.
 **Registry Relay** enforces configured caller scopes and writes a tamper-evident audit
 record for each request: who asked, when, for what, against which dataset.
 
-**Registry Witness** enforces configured claim rules, disclosure modes, and credential
+**Registry Notary** enforces configured claim rules, disclosure modes, and credential
 issuance paths. The evaluation event is itself recorded.
 
 **Registry Platform** provides the shared primitives (authentication, audit envelopes,
@@ -84,7 +84,7 @@ enforceable and the enforcement reviewable. For the broader model, see the
 
 The current docs describe Relay API-key and OIDC modes, dataset-scoped scopes, projected
 fields, declared filters, and tamper-evident audit records.
-They describe Witness disclosure modes, configured claim evaluation, delegated evaluation,
+They describe Notary disclosure modes, configured claim evaluation, delegated evaluation,
 credential issuance, OID4VCI routes, and audit-stamped results.
 They also describe Manifest policy and evidence-offering render outputs.
 
@@ -106,5 +106,5 @@ surface.
 
 - [Registry Platform overview](../../projects/registry-platform/)
 - [Registry Relay reference](../../projects/registry-relay/reference/)
-- [Registry Witness reference](../../projects/registry-witness/reference/)
+- [Registry Notary reference](../../projects/registry-notary/reference/)
 - Planned explanation: executable safeguards

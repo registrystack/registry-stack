@@ -2,11 +2,11 @@
 title: Semantics do not line up
 description: Why similar field names and codes can carry different assumptions, coverage, freshness, and legal meaning across registries.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-atlas
 last_reviewed: "2026-05-28"
 doc_type: explanation
@@ -77,7 +77,7 @@ registry, before it writes the eligibility logic.
 **Registry Relay** binds the declared entities and fields to the runtime sources, so the
 published meaning is the meaning the API serves.
 
-**Registry Witness** evaluates configured claims against named source bindings. A signed
+**Registry Notary** evaluates configured claims against named source bindings. A signed
 answer carries the source meaning that supported it.
 
 **Registry Atlas** lets a reviewer inspect the published graph before integration code is
@@ -93,7 +93,7 @@ Registry Manifest documents renderers for JSON Schema, SHACL, DCAT, BRegDCAT-AP,
 CPSV-AP, ODRL policy JSON-LD, and CCCEV-shaped evidence metadata.
 Registry Relay documents entity fields, allowed filters, metadata routes, and scope
 behavior.
-Registry Witness documents claim definitions and response formats.
+Registry Notary documents claim definitions and response formats.
 Registry Atlas documents strict inspection of published assets.
 
 See the [standards register](../../reference/standards/) for which standards each project emits, maps to, or aligns with.

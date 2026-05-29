@@ -1,11 +1,11 @@
 ---
 title: Audit and operate
-description: How Registry Relay, Registry Witness, and Registry Platform support auditability and operational consistency, with the Trust Control Plane labeled as future-facing.
+description: How Registry Relay, Registry Notary, and Registry Platform support auditability and operational consistency, with the Trust Control Plane labeled as future-facing.
 status: current
-owner: registry-legend
+owner: registry-docs
 source_repos:
   - registry-relay
-  - registry-witness
+  - registry-notary
   - registry-platform
 last_reviewed: "2026-05-28"
 doc_type: explanation
@@ -19,20 +19,20 @@ standards_referenced:
 
 Audit and operate covers the shared operational behavior (audit records, security primitives,
 signing) that makes [Registry Relay](../../projects/registry-relay/) and
-[Registry Witness](../../projects/registry-witness/) reviewable.
+[Registry Notary](../../projects/registry-notary/) reviewable.
 
 ## What it does
 
 Registry Relay writes audit records for authenticated metadata, row, aggregate,
 evidence-verification, and admin requests.
-Registry Witness writes audit records for claim evaluation, credential issuance, and related
+Registry Notary writes audit records for claim evaluation, credential issuance, and related
 request handling.
 
 [Registry Platform](../../projects/registry-platform/) supplies shared primitives that both services
 consume: auth helpers, OIDC verification, audit envelopes, HTTP security middleware, outbound HTTP
 policy, crypto helpers, SD-JWT support, and test fixtures.
 Product-specific route behavior, scopes, config files, and policy decisions stay in Registry Relay
-or Registry Witness.
+or Registry Notary.
 
 Trust Control Plane is future-facing.
 It is the label for a later governance and operational control surface around trust policy,
@@ -42,27 +42,27 @@ It is not yet supported as a product page or running service in the current docs
 ## Primary projects
 
 - [Registry Relay](../../projects/registry-relay/): audit records for consultation requests.
-- [Registry Witness](../../projects/registry-witness/): audit records for claim evaluation and
+- [Registry Notary](../../projects/registry-notary/): audit records for claim evaluation and
   credential issuance.
 - [Registry Platform](../../projects/registry-platform/): shared primitives consumed by both services.
 
 ## How to use it
 
-Audit envelopes are written automatically by Relay and Witness on every covered request.
+Audit envelopes are written automatically by Relay and Notary on every covered request.
 See the [consultation flow](../../explanation/consultation-flow/) for the Relay audit sequence.
-See [evidence issuance](../../explanation/evidence-issuance/) for the Witness audit model.
+See [evidence issuance](../../explanation/evidence-issuance/) for the Notary audit model.
 For Platform primitives and consumer responsibilities, see the
 [Registry Platform reference](../../projects/registry-platform/reference/).
 
 Example: an audit reviewer at an immigration authority pulls the day's audit envelopes from
-Registry Relay and Registry Witness to inspect who asked for what, for which declared purpose,
+Registry Relay and Registry Notary to inspect who asked for what, for which declared purpose,
 and what was disclosed.
 
 ## Related docs
 
 - [Consultation flow](../../explanation/consultation-flow/): Relay request authorization and audit
   sequence.
-- [Evidence issuance](../../explanation/evidence-issuance/): Witness evaluation, disclosure, and
+- [Evidence issuance](../../explanation/evidence-issuance/): Notary evaluation, disclosure, and
   audit model.
 - [Registry Platform overview](../../projects/registry-platform/): shared primitives and boundaries.
 - [Registry Platform reference](../../projects/registry-platform/reference/): crate APIs and consumer
