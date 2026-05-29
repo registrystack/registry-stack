@@ -16,10 +16,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_notary_core::{
-    AccessMode, BatchEvaluateRequest, ClaimDefinition, ClaimOperationsConfig, ClaimValueConfig,
-    ConcurrencyConfig, DisclosureConfig, EvidenceConfig, EvidenceError, EvidencePrincipal,
-    RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
-    SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
+    AccessMode, BatchEvaluateRequest, BatchSubjectRequest, ClaimDefinition, ClaimOperationsConfig,
+    ClaimRef, ClaimValueConfig, ConcurrencyConfig, DisclosureConfig, EvidenceConfig, EvidenceError,
+    EvidencePrincipal, RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig,
+    SourceLookupConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
@@ -162,16 +162,18 @@ async fn owner_panic_does_not_deadlock_waiters() {
     let runtime = RegistryNotaryRuntime::new();
     let request = BatchEvaluateRequest {
         subjects: vec![
-            SubjectRequest {
+            BatchSubjectRequest {
                 id: "shared-id".to_string(),
                 id_type: None,
+                purpose: None,
             },
-            SubjectRequest {
+            BatchSubjectRequest {
                 id: "shared-id".to_string(),
                 id_type: None,
+                purpose: None,
             },
         ],
-        claims: vec!["claim".to_string()],
+        claims: vec![ClaimRef::from("claim")],
         disclosure: Some("value".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: Some("test".to_string()),

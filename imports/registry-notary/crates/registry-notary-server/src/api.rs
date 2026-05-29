@@ -14,13 +14,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_notary_core::sd_jwt;
 use registry_notary_core::{
-    AccessMode, BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimSet,
-    ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest,
-    EvidenceConfig, EvidenceError, EvidencePrincipal, FederationConfig, Hashed, HolderRequest,
-    Oid4vciConfig, Oid4vciCredentialConfigurationConfig, PolicyIdentifier, RateLimitBucket,
-    RenderRequest, SelfAttestationConfig, SelfAttestationDenialCode, SelfAttestationScopePolicy,
-    SourceCapability, StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue,
-    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    AccessMode, BatchEvaluateRequest, BatchSubjectRequest, BoundedClaimId, BoundedCorrelationId,
+    ClaimRef, ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig,
+    EvaluateRequest, EvidenceConfig, EvidenceError, EvidencePrincipal, FederationConfig, Hashed,
+    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, PolicyIdentifier,
+    RateLimitBucket, RenderRequest, SelfAttestationConfig, SelfAttestationDenialCode,
+    SelfAttestationScopePolicy, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::PublicJwk;
@@ -45,6 +45,7 @@ use crate::{
     metrics::AppMetrics,
     openapi_document,
     replay::{require_replay_insert, ReplayStores},
+    runtime::claim_ids,
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SelfAttestationRateLimitBucket,
     SelfAttestationRateLimitError, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
     SourceReader,
@@ -552,6 +553,7 @@ pub struct EvidenceAuditContext {
     pub verification_id: Option<String>,
     pub verification_decision: Option<String>,
     pub claim_hash: Option<String>,
+    pub purposes: Option<Vec<String>>,
     pub row_count: Option<u64>,
     pub access_mode: Option<AccessMode>,
     pub denial_code: Option<SelfAttestationDenialCode>,
@@ -855,7 +857,7 @@ async fn oid4vci_credential(
                 return response;
             }
         },
-        claims: vec![configuration.claim_id.clone()],
+        claims: vec![ClaimRef::from(configuration.claim_id.clone())],
         disclosure: None,
         format: Some(FORMAT_SD_JWT_VC.to_string()),
         purpose: None,
@@ -872,7 +874,7 @@ async fn oid4vci_credential(
             attach_oid4vci_self_attestation_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
-                &request.claims,
+                std::slice::from_ref(&configuration.claim_id),
                 configuration_id,
                 denial_code,
                 Some(state.self_attestation.subject_binding.token_claim.as_str()),
@@ -1157,6 +1159,7 @@ async fn evaluate(
         Ok(format) => request.format = Some(format),
         Err(error) => return evidence_error_response(error),
     }
+    let request_claim_ids = claim_ids(&request.claims);
     let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
         Ok(principal) => principal,
         Err(error) => {
@@ -1165,7 +1168,7 @@ async fn evaluate(
                 attach_self_attestation_rate_limit_audit(
                     &mut response,
                     "evaluate_rate_limited",
-                    &request.claims,
+                    &request_claim_ids,
                     rate_error.bucket(),
                 );
                 return response;
@@ -1175,7 +1178,7 @@ async fn evaluate(
             attach_self_attestation_audit(
                 &mut response,
                 "evaluate_denied",
-                &request.claims,
+                &request_claim_ids,
                 denial_code,
                 Some(state.self_attestation.subject_binding.token_claim.as_str()),
             );
@@ -1199,7 +1202,7 @@ async fn evaluate(
             attach_self_attestation_rate_limit_audit(
                 &mut response,
                 "evaluate_rate_limited",
-                &request.claims,
+                &request_claim_ids,
                 error.bucket(),
             );
             return response;
@@ -1220,7 +1223,7 @@ async fn evaluate(
                         attach_self_attestation_rate_limit_audit(
                             &mut response,
                             "evaluate_rate_limited",
-                            &request.claims,
+                            &request_claim_ids,
                             rate_error.bucket(),
                         );
                         return response;
@@ -1231,7 +1234,7 @@ async fn evaluate(
                 attach_self_attestation_audit(
                     &mut response,
                     "evaluate_denied",
-                    &request.claims,
+                    &request_claim_ids,
                     denial_code,
                     Some(state.self_attestation.subject_binding.token_claim.as_str()),
                 );
@@ -1242,7 +1245,7 @@ async fn evaluate(
     let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
         &state.self_attestation_rate_keys,
     ));
-    let requested_claims = request.claims.clone();
+    let requested_claims = request_claim_ids;
     let self_attestation_policy_hash = self_attestation_context
         .as_ref()
         .and_then(|context| context.metadata.policy_hash.clone());
@@ -1332,6 +1335,7 @@ async fn batch_evaluate(
         Ok(format) => request.format = Some(format),
         Err(error) => return evidence_error_response(error),
     }
+    let request_claim_ids = claim_ids(&request.claims);
     let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
         Ok(principal) => principal,
         Err(error) => {
@@ -1340,7 +1344,7 @@ async fn batch_evaluate(
             attach_self_attestation_audit(
                 &mut response,
                 "batch_evaluate_denied",
-                &request.claims,
+                &request_claim_ids,
                 denial_code,
                 Some(state.self_attestation.subject_binding.token_claim.as_str()),
             );
@@ -1355,7 +1359,7 @@ async fn batch_evaluate(
         attach_self_attestation_audit(
             &mut response,
             "batch_evaluate_denied",
-            &request.claims,
+            &request_claim_ids,
             Some(SelfAttestationDenialCode::BatchDenied),
             Some(state.self_attestation.subject_binding.token_claim.as_str()),
         );
@@ -1364,8 +1368,13 @@ async fn batch_evaluate(
     let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
         &state.self_attestation_rate_keys,
     ));
-    let requested_claims = request.claims.clone();
+    let requested_claims = request_claim_ids;
     let requested_subject_count = request.subjects.len();
+    let audit_purposes = resolved_batch_audit_purposes(
+        purpose_header(&headers),
+        request.purpose.as_deref(),
+        &request.subjects,
+    );
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
         Arc::clone(&state.source),
@@ -1386,12 +1395,13 @@ async fn batch_evaluate(
     match result {
         Ok(result) => {
             let mut response = Json(result).into_response();
-            attach_evidence_audit(
+            attach_evidence_audit_with_purposes(
                 &mut response,
                 "batch_evaluate",
                 None,
                 &requested_claims,
                 Some(requested_subject_count as u64),
+                audit_purposes,
             );
             response
         }
@@ -2368,12 +2378,13 @@ fn require_self_attestation_evaluate(
             SelfAttestationDenialCode::OperationDenied,
         ));
     }
+    let request_claim_ids = claim_ids(&request.claims);
     if request.claims.len() != 1
         || !request.claims.iter().all(|claim_id| {
             config
                 .allowed_claims
                 .iter()
-                .any(|allowed| allowed == claim_id)
+                .any(|allowed| allowed == &claim_id.id)
         })
     {
         return Err(self_attestation_denied(
@@ -2395,8 +2406,9 @@ fn require_self_attestation_evaluate(
         ));
     }
 
-    let disclosure = selected_disclosure(evidence, &request.claims, request.disclosure.as_deref())
-        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DisclosureDenied))?;
+    let disclosure =
+        selected_disclosure(evidence, &request_claim_ids, request.disclosure.as_deref())
+            .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DisclosureDenied))?;
     if !config
         .allowed_disclosures
         .iter()
@@ -2412,7 +2424,7 @@ fn require_self_attestation_evaluate(
     }
 
     for claim_id in &request.claims {
-        let claim = crate::find_claim(evidence, claim_id)
+        let claim = find_requested_claim(evidence, claim_id)
             .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
         if !claim.operations.evaluate.enabled {
             return Err(self_attestation_denied(
@@ -2457,6 +2469,16 @@ fn require_self_attestation_evaluate(
     Ok(())
 }
 
+fn find_requested_claim<'a>(
+    evidence: &'a EvidenceConfig,
+    claim: &ClaimRef,
+) -> Result<&'a registry_notary_core::ClaimDefinition, EvidenceError> {
+    match claim.version.as_deref() {
+        Some(version) => crate::runtime::find_claim_version(evidence, &claim.id, version),
+        None => crate::find_claim(evidence, &claim.id),
+    }
+}
+
 fn prepare_self_attestation_evaluate(
     state: &RegistryNotaryApiState,
     evidence: &EvidenceConfig,
@@ -2472,7 +2494,7 @@ fn prepare_self_attestation_evaluate(
         .ok_or(EvidenceError::SelfAttestationDenied {
             reason: SelfAttestationDenialCode::ClaimDenied,
         })?;
-    let claim = crate::find_claim(evidence, claim_id).map_err(|_| {
+    let claim = find_requested_claim(evidence, claim_id).map_err(|_| {
         EvidenceError::SelfAttestationDenied {
             reason: SelfAttestationDenialCode::ClaimDenied,
         }
@@ -2488,10 +2510,13 @@ fn prepare_self_attestation_evaluate(
         .as_deref()
         .unwrap_or(FORMAT_CLAIM_RESULT_JSON)
         .to_string();
-    let disclosure = selected_disclosure(evidence, &request.claims, request.disclosure.as_deref())
-        .map_err(|_| EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DisclosureDenied,
-        })?;
+    let request_claim_ids = claim_ids(&request.claims);
+    let disclosure =
+        selected_disclosure(evidence, &request_claim_ids, request.disclosure.as_deref()).map_err(
+            |_| EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DisclosureDenied,
+            },
+        )?;
     let claims = principal
         .verified_claims
         .as_ref()
@@ -2509,11 +2534,12 @@ fn prepare_self_attestation_evaluate(
         .self_attestation_rate_keys
         .subject_binding(subject_binding_value)
         .map_err(|error| error.evidence_error())?;
-    let requested_claims_hash = Hashed::<ClaimSet>::from_hash(evidence_claim_hash(&request.claims));
+    let requested_claims_hash =
+        Hashed::<ClaimSet>::from_hash(evidence_claim_hash(&request_claim_ids));
     let policy_hash = self_attestation_policy_hash(
         evidence,
         &state.self_attestation,
-        &request.claims,
+        &request_claim_ids,
         &disclosure,
         &format,
     )?;
@@ -2551,7 +2577,7 @@ fn prepare_self_attestation_evaluate(
         evaluation_expires_at: Some(format_time(evaluation_expires_at)),
     };
     let source_capability = SourceCapability::SelfAttestation {
-        claim_id: BoundedClaimId::new(claim_id.clone())
+        claim_id: BoundedClaimId::new(claim_id.id.clone())
             .map_err(|_| EvidenceError::InvalidRequest)?,
         subject_binding_hash,
     };
@@ -2815,10 +2841,29 @@ fn attach_evidence_audit(
     claim_ids: &[String],
     row_count: Option<u64>,
 ) {
+    attach_evidence_audit_with_purposes(
+        response,
+        decision,
+        verification_id,
+        claim_ids,
+        row_count,
+        None,
+    );
+}
+
+fn attach_evidence_audit_with_purposes(
+    response: &mut Response,
+    decision: &str,
+    verification_id: Option<String>,
+    claim_ids: &[String],
+    row_count: Option<u64>,
+    purposes: Option<Vec<String>>,
+) {
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        purposes,
         row_count,
         access_mode: None,
         denial_code: None,
@@ -2851,6 +2896,7 @@ fn attach_self_attestation_credential_audit(
         verification_id: Some(evaluation_id.to_string()),
         verification_decision: Some("credential_issued".to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        purposes: None,
         row_count: Some(row_count),
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,
@@ -2880,6 +2926,7 @@ fn attach_self_attestation_success_audit(
         verification_id,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        purposes: None,
         row_count,
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,
@@ -2904,6 +2951,7 @@ fn attach_self_attestation_audit(
         verification_id: None,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        purposes: None,
         row_count: None,
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code,
@@ -2929,6 +2977,7 @@ fn attach_oid4vci_self_attestation_denial_audit(
         verification_id: None,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        purposes: None,
         row_count: None,
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code,
@@ -2952,6 +3001,7 @@ fn attach_self_attestation_rate_limit_audit(
         verification_id: None,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
+        purposes: None,
         row_count: None,
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: Some(SelfAttestationDenialCode::RateLimited),
@@ -2994,6 +3044,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::CredentialIssuerNotConfigured => StatusCode::NOT_IMPLEMENTED,
         EvidenceError::FormatUnsupported => StatusCode::NOT_ACCEPTABLE,
         EvidenceError::ClaimNotFound
+        | EvidenceError::ClaimVersionNotFound
         | EvidenceError::SourceNotFound
         | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
         EvidenceError::MissingCredential => StatusCode::UNAUTHORIZED,
@@ -3023,6 +3074,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
     match error {
         EvidenceError::ServerDisabled => "Evidence server disabled",
         EvidenceError::ClaimNotFound => "Claim not found",
+        EvidenceError::ClaimVersionNotFound => "Claim version not found",
         EvidenceError::OperationUnsupported => "Claim operation unsupported",
         EvidenceError::InvalidRequest => "Invalid evidence request",
         EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
@@ -3054,6 +3106,7 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
     match error {
         EvidenceError::ServerDisabled => "the evidence server is not enabled",
         EvidenceError::ClaimNotFound => "the requested claim is not available",
+        EvidenceError::ClaimVersionNotFound => "the requested claim version is not available",
         EvidenceError::OperationUnsupported => "the requested operation is not enabled",
         EvidenceError::InvalidRequest => "the evidence request is invalid",
         EvidenceError::DisclosureNotAllowed => "the requested disclosure profile is not allowed",
@@ -3291,6 +3344,28 @@ fn purpose_header(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(DATA_PURPOSE_HEADER)
         .and_then(|value| value.to_str().ok())
+}
+
+fn resolved_batch_audit_purposes(
+    header_purpose: Option<&str>,
+    body_purpose: Option<&str>,
+    subjects: &[BatchSubjectRequest],
+) -> Option<Vec<String>> {
+    let default = match (header_purpose, body_purpose) {
+        (Some(header), Some(body)) if header != body => return None,
+        (Some(header), _) if !header.trim().is_empty() => Some(header),
+        (_, Some(body)) if !body.trim().is_empty() => Some(body),
+        (Some(_), _) | (_, Some(_)) => return None,
+        _ => None,
+    };
+    subjects
+        .iter()
+        .map(|subject| match subject.purpose.as_deref() {
+            Some(purpose) if !purpose.trim().is_empty() => Some(purpose.to_string()),
+            Some(_) => None,
+            None => default.map(str::to_string),
+        })
+        .collect()
 }
 
 fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
@@ -3808,7 +3883,7 @@ mod tests {
                 id: subject_id.to_string(),
                 id_type: Some("national_id".to_string()),
             },
-            claims: vec!["person-is-alive".to_string()],
+            claims: vec![ClaimRef::from("person-is-alive")],
             disclosure: Some("predicate".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: None,
@@ -4350,11 +4425,12 @@ mod tests {
             Arc::new(NoopIssuerResolver),
         ));
         let request = BatchEvaluateRequest {
-            subjects: vec![SubjectRequest {
+            subjects: vec![registry_notary_core::BatchSubjectRequest {
                 id: "NAT-123".to_string(),
                 id_type: Some("national_id".to_string()),
+                purpose: None,
             }],
-            claims: vec!["person-is-alive".to_string()],
+            claims: vec![ClaimRef::from("person-is-alive")],
             disclosure: Some("predicate".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: None,
@@ -4383,6 +4459,29 @@ mod tests {
             audit.denial_code,
             Some(SelfAttestationDenialCode::BatchDenied)
         );
+    }
+
+    #[test]
+    fn batch_audit_purposes_resolve_per_subject_overrides() {
+        let purposes = resolved_batch_audit_purposes(
+            None,
+            Some("program-b"),
+            &[
+                registry_notary_core::BatchSubjectRequest {
+                    id: "NAT-123".to_string(),
+                    id_type: Some("national_id".to_string()),
+                    purpose: Some("program-a".to_string()),
+                },
+                registry_notary_core::BatchSubjectRequest {
+                    id: "NAT-456".to_string(),
+                    id_type: Some("national_id".to_string()),
+                    purpose: None,
+                },
+            ],
+        )
+        .expect("audit purposes resolve");
+
+        assert_eq!(purposes, vec!["program-a", "program-b"]);
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {

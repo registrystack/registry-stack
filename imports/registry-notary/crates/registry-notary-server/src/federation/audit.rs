@@ -66,6 +66,7 @@ pub(super) fn federation_audit_event(
         status: response.status().as_u16(),
         verification_id: audit.verification_id,
         claim_hash: (!audit.claim_ids.is_empty()).then(|| evidence_claim_hash(&audit.claim_ids)),
+        purposes: None,
         row_count: response.status().is_success().then_some(1),
         error_code: audit.error_code,
         access_mode: Some(AccessMode::MachineClient),

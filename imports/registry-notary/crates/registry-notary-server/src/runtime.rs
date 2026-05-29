@@ -109,6 +109,48 @@ type FetchMemo = Arc<MemoState>;
 /// caller can pin `iat` to the upstream read time.
 type BindingFetchResult = Result<(Value, Option<OffsetDateTime>), EvidenceError>;
 
+type ClaimVersionSelections = BTreeMap<String, Option<String>>;
+
+pub(crate) fn claim_ids(claims: &[ClaimRef]) -> Vec<String> {
+    claims.iter().map(|claim| claim.id.clone()).collect()
+}
+
+fn requested_claim_versions(claims: &[ClaimRef]) -> Result<ClaimVersionSelections, EvidenceError> {
+    let mut versions = BTreeMap::new();
+    for claim in claims {
+        if claim.id.trim().is_empty()
+            || claim
+                .version
+                .as_deref()
+                .is_some_and(|version| version.trim().is_empty())
+        {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        match versions.get(&claim.id) {
+            Some(existing) => {
+                if existing != &claim.version {
+                    return Err(EvidenceError::InvalidRequest);
+                }
+            }
+            None => {
+                versions.insert(claim.id.clone(), claim.version.clone());
+            }
+        }
+    }
+    Ok(versions)
+}
+
+fn find_claim_for_selection<'a>(
+    config: &'a EvidenceConfig,
+    claim_id: &str,
+    versions: &ClaimVersionSelections,
+) -> Result<&'a ClaimDefinition, EvidenceError> {
+    match versions.get(claim_id).and_then(Option::as_deref) {
+        Some(version) => find_claim_version(config, claim_id, version),
+        None => find_claim(config, claim_id),
+    }
+}
+
 /// Build the canonical cache key for one (binding, purpose) pair.
 ///
 /// We include every field that determines the upstream wire request:
@@ -178,11 +220,11 @@ use crosswalk_core::{
 };
 use registry_notary_core::{
     AccessMode, BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
-    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
-    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimProvenance,
-    ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
-    EvaluateRequest, EvidenceConfig, EvidenceError, EvidenceFormat, EvidencePrincipal,
-    RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
+    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSubjectRequest, BatchSummary,
+    BoundedClaimId, BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition,
+    ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig, DisclosureDowngrade,
+    DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceError, EvidenceFormat,
+    EvidencePrincipal, RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
     SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectRefView,
     SubjectRequest, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
     SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
@@ -295,12 +337,14 @@ pub trait SourceReader: Send + Sync {
 /// Errors from `read_many` are NOT inserted into the memo (matching Stage 2
 /// error-not-cached semantics). A subject whose bulk read failed will fall
 /// through to a fresh per-subject `read_one` call.
+#[allow(clippy::too_many_arguments)]
 async fn prefetch_bulk_bindings(
     evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
     source_capability: SourceCapability,
     subjects: &[SubjectRequest],
-    requested_claims: &[String],
+    requested_claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
     purpose: &str,
     fetch_memo: FetchMemo,
 ) {
@@ -309,7 +353,7 @@ async fn prefetch_bulk_bindings(
     }
     // Closure of claims (requested + transitive deps) so we cover bindings
     // that only show up under depends_on edges.
-    let levels = match build_claim_levels(&evidence, requested_claims) {
+    let levels = match build_claim_levels(&evidence, requested_claims, claim_versions) {
         Ok(levels) => levels,
         Err(_) => return,
     };
@@ -323,7 +367,7 @@ async fn prefetch_bulk_bindings(
     let mut groups: BTreeMap<GroupKey, Vec<(SourceBindingConfig, SubjectRequest, String)>> =
         BTreeMap::new();
     for claim_id in &claim_closure {
-        let Ok(claim) = find_claim(&evidence, claim_id) else {
+        let Ok(claim) = find_claim_for_selection(&evidence, claim_id, claim_versions) else {
             continue;
         };
         for binding in claim.source_bindings.values() {
@@ -534,6 +578,7 @@ struct ClaimEvaluationContext {
     // `None` for single-subject `evaluate` calls where there are no sibling
     // subjects to share results with.
     fetch_memo: Option<FetchMemo>,
+    claim_versions: ClaimVersionSelections,
 }
 
 #[cfg_attr(not(feature = "registry-notary-cel"), allow(dead_code))]
@@ -828,10 +873,11 @@ impl RegistryNotaryRuntime {
         request: EvaluateRequest,
         header_purpose: Option<&str>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
+        let request_claim_ids = claim_ids(&request.claims);
         let source_capability = source_capability_for_principal(
             &self.self_attestation_rate_keys,
             principal,
-            &request.claims,
+            &request_claim_ids,
         )?;
         self.evaluate_with_source_capability(
             evidence,
@@ -864,6 +910,8 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
+        let claim_versions = requested_claim_versions(&request.claims)?;
+        let request_claim_ids = claim_ids(&request.claims);
         for claim_id in &request.claims {
             require_source_read_capability(&source_capability, claim_id)?;
         }
@@ -878,7 +926,12 @@ impl RegistryNotaryRuntime {
         for claim_id in &request.claims {
             require_claim_format(&evidence, claim_id, &format)?;
         }
-        let disclosure = requested_disclosure(&evidence, &request.claims, &request.disclosure)?;
+        let disclosure = requested_disclosure(
+            &evidence,
+            &request.claims,
+            &claim_versions,
+            &request.disclosure,
+        )?;
         let request_hash = hash_json(&request)?;
         let evaluation_id = Ulid::new().to_string();
         let now = OffsetDateTime::now_utc();
@@ -892,6 +945,7 @@ impl RegistryNotaryRuntime {
                 evaluation_id.clone(),
                 now,
                 request.claims.clone(),
+                claim_versions.clone(),
                 binding_concurrency,
                 source_capability,
                 None, // single-subject evaluate: no cross-subject memo needed
@@ -902,9 +956,9 @@ impl RegistryNotaryRuntime {
             .claims
             .iter()
             .map(|claim_id| {
-                let claim = find_claim(&evidence, claim_id)?;
+                let claim = find_claim_for_selection(&evidence, claim_id, &claim_versions)?;
                 let result = internal
-                    .get(claim_id)
+                    .get(claim_id.id.as_str())
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
                 view_claim(
                     &self.self_attestation_rate_keys,
@@ -924,7 +978,7 @@ impl RegistryNotaryRuntime {
         store.insert(registry_notary_core::StoredEvaluation {
             client_id,
             purpose,
-            claim_ids: request.claims,
+            claim_ids: request_claim_ids,
             disclosure: stored_disclosure(&views),
             format,
             results: views.clone(),
@@ -953,12 +1007,14 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() || request.subjects.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
+        let claim_versions = requested_claim_versions(&request.claims)?;
+        let request_claim_ids = claim_ids(&request.claims);
         let source_capability = source_capability_for_principal(
             &self.self_attestation_rate_keys,
             principal,
-            &request.claims,
+            &request_claim_ids,
         )?;
-        let max_subjects = max_batch_subjects(&evidence, &request.claims)?;
+        let max_subjects = max_batch_subjects(&evidence, &request.claims, &claim_versions)?;
         if request.subjects.len() > max_subjects {
             return Err(EvidenceError::BatchTooLarge);
         }
@@ -975,9 +1031,12 @@ impl RegistryNotaryRuntime {
                 return Ok(response);
             }
         }
-        let purpose = resolve_purpose(options.header_purpose, request.purpose.as_deref())?;
+        let batch_purpose =
+            resolve_batch_default_purpose(options.header_purpose, request.purpose.as_deref())?;
+        let subject_purposes =
+            resolve_batch_subject_purposes(&request.subjects, batch_purpose.as_deref())?;
         let batch_id = Ulid::new().to_string();
-        let claims = request.claims.clone();
+        let claims = request_claim_ids.clone();
         let subject_count = request.subjects.len();
         let mut items: Vec<Option<BatchItemResponse>> = (0..subject_count).map(|_| None).collect();
         let mut succeeded = 0usize;
@@ -998,16 +1057,27 @@ impl RegistryNotaryRuntime {
         // call. We do this before the JoinSet so the bulk request runs
         // exactly once per group instead of being raced by N sibling subject
         // tasks.
-        prefetch_bulk_bindings(
-            Arc::clone(&evidence),
-            Arc::clone(&source),
-            source_capability.clone(),
-            &request.subjects,
-            &request.claims,
-            purpose.as_str(),
-            Arc::clone(&fetch_memo),
-        )
-        .await;
+        let mut prefetch_subjects_by_purpose: BTreeMap<String, Vec<SubjectRequest>> =
+            BTreeMap::new();
+        for (subject, purpose) in request.subjects.iter().zip(&subject_purposes) {
+            prefetch_subjects_by_purpose
+                .entry(purpose.clone())
+                .or_default()
+                .push(subject_request(subject));
+        }
+        for (purpose, subjects) in prefetch_subjects_by_purpose {
+            prefetch_bulk_bindings(
+                Arc::clone(&evidence),
+                Arc::clone(&source),
+                source_capability.clone(),
+                &subjects,
+                &request.claims,
+                &claim_versions,
+                purpose.as_str(),
+                Arc::clone(&fetch_memo),
+            )
+            .await;
+        }
         let mut join_set: JoinSet<(usize, Result<Vec<ClaimResultView>, EvidenceError>)> =
             JoinSet::new();
         for (input_index, subject) in request.subjects.clone().into_iter().enumerate() {
@@ -1018,7 +1088,7 @@ impl RegistryNotaryRuntime {
             let claims_list = request.claims.clone();
             let disclosure = request.disclosure.clone();
             let format = request.format.clone();
-            let purpose_for_task = purpose.clone();
+            let purpose_for_task = subject_purposes[input_index].clone();
             let principal_id = principal.principal_id.clone();
             let principal_scopes = principal.scopes.clone();
             let memo_for_task = Arc::clone(&fetch_memo);
@@ -1029,7 +1099,7 @@ impl RegistryNotaryRuntime {
                     Err(_) => return (input_index, Err(EvidenceError::RuleEvaluationFailed)),
                 };
                 let eval = EvaluateRequest {
-                    subject,
+                    subject: subject.into(),
                     claims: claims_list,
                     disclosure,
                     format,
@@ -1087,8 +1157,8 @@ impl RegistryNotaryRuntime {
                         let expires_at = now_parsed + time::Duration::minutes(15);
                         store.insert(registry_notary_core::StoredEvaluation {
                             client_id: principal.principal_id.clone(),
-                            purpose: purpose.clone(),
-                            claim_ids: request.claims.clone(),
+                            purpose: subject_purposes[input_index].clone(),
+                            claim_ids: request_claim_ids.clone(),
                             disclosure: stored_disclosure(&results),
                             format: results
                                 .first()
@@ -1177,6 +1247,7 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
+        let claim_versions = requested_claim_versions(&request.claims)?;
         for claim_id in &request.claims {
             require_source_read_capability(&source_capability, claim_id)?;
         }
@@ -1190,7 +1261,12 @@ impl RegistryNotaryRuntime {
         for claim_id in &request.claims {
             require_claim_format(&evidence, claim_id, &format)?;
         }
-        let disclosure = requested_disclosure(&evidence, &request.claims, &request.disclosure)?;
+        let disclosure = requested_disclosure(
+            &evidence,
+            &request.claims,
+            &claim_versions,
+            &request.disclosure,
+        )?;
         let evaluation_id = Ulid::new().to_string();
         let now = OffsetDateTime::now_utc();
         let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
@@ -1203,6 +1279,7 @@ impl RegistryNotaryRuntime {
                 evaluation_id.clone(),
                 now,
                 request.claims.clone(),
+                claim_versions.clone(),
                 binding_concurrency,
                 source_capability,
                 Some(fetch_memo),
@@ -1213,9 +1290,9 @@ impl RegistryNotaryRuntime {
             .claims
             .iter()
             .map(|claim_id| {
-                let claim = find_claim(&evidence, claim_id)?;
+                let claim = find_claim_for_selection(&evidence, claim_id, &claim_versions)?;
                 let result = internal
-                    .get(claim_id)
+                    .get(claim_id.id.as_str())
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
                 view_claim(
                     &self.self_attestation_rate_keys,
@@ -1240,13 +1317,14 @@ impl RegistryNotaryRuntime {
         purpose: String,
         evaluation_id: String,
         now: OffsetDateTime,
-        requested: Vec<String>,
+        requested: Vec<ClaimRef>,
+        claim_versions: ClaimVersionSelections,
         binding_concurrency: Arc<Semaphore>,
         source_capability: SourceCapability,
         fetch_memo: Option<FetchMemo>,
         correlation_id: Option<BoundedCorrelationId>,
     ) -> Result<BTreeMap<String, ClaimResultInternal>, EvidenceError> {
-        let levels = build_claim_levels(&evidence, &requested)?;
+        let levels = build_claim_levels(&evidence, &requested, &claim_versions)?;
         let prior: Arc<Mutex<BTreeMap<String, ClaimResultInternal>>> =
             Arc::new(Mutex::new(BTreeMap::new()));
         for level in levels {
@@ -1273,6 +1351,7 @@ impl RegistryNotaryRuntime {
                     now,
                     binding_concurrency: Arc::clone(&binding_concurrency),
                     fetch_memo: fetch_memo.as_ref().map(Arc::clone),
+                    claim_versions: claim_versions.clone(),
                 };
                 let prior_for_task = Arc::clone(&prior);
                 // We do not acquire a permit here. The `bindings` cap applies to
@@ -1379,7 +1458,7 @@ async fn evaluate_claim_task(
     {
         return Ok(existing);
     }
-    let claim = find_claim(&ctx.evidence, claim_id)?.clone();
+    let claim = find_claim_for_selection(&ctx.evidence, claim_id, &ctx.claim_versions)?.clone();
     if !claim.operations.evaluate.enabled {
         return Err(EvidenceError::OperationUnsupported);
     }
@@ -1470,16 +1549,17 @@ fn claim_arc(claim: &ClaimDefinition) -> Arc<ClaimDefinition> {
 /// guard with bounded iterations so a malformed config cannot infinite-loop.
 fn build_claim_levels(
     evidence: &EvidenceConfig,
-    requested: &[String],
+    requested: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
 ) -> Result<Vec<Vec<String>>, EvidenceError> {
     // Closure: starting from `requested`, accumulate every transitive dep.
     let mut closure: BTreeSet<String> = BTreeSet::new();
-    let mut frontier: Vec<String> = requested.to_vec();
+    let mut frontier: Vec<String> = claim_ids(requested);
     while let Some(claim_id) = frontier.pop() {
         if !closure.insert(claim_id.clone()) {
             continue;
         }
-        let claim = find_claim(evidence, &claim_id)?;
+        let claim = find_claim_for_selection(evidence, &claim_id, claim_versions)?;
         for dep in &claim.depends_on {
             if !closure.contains(dep) {
                 frontier.push(dep.clone());
@@ -1497,7 +1577,7 @@ fn build_claim_levels(
             if placed.contains(claim_id) {
                 continue;
             }
-            let claim = find_claim(evidence, claim_id)?;
+            let claim = find_claim_for_selection(evidence, claim_id, claim_versions)?;
             if claim.depends_on.iter().all(|dep| placed.contains(dep)) {
                 next_level.push(claim_id.clone());
             }
@@ -1523,6 +1603,27 @@ pub fn find_claim<'a>(
         .iter()
         .find(|claim| claim.id == claim_id)
         .ok_or(EvidenceError::ClaimNotFound)
+}
+
+pub fn find_claim_version<'a>(
+    config: &'a EvidenceConfig,
+    claim_id: &str,
+    version: &str,
+) -> Result<&'a ClaimDefinition, EvidenceError> {
+    let mut has_claim_id = false;
+    for claim in &config.claims {
+        if claim.id == claim_id {
+            has_claim_id = true;
+            if claim.version == version {
+                return Ok(claim);
+            }
+        }
+    }
+    if has_claim_id {
+        Err(EvidenceError::ClaimVersionNotFound)
+    } else {
+        Err(EvidenceError::ClaimNotFound)
+    }
 }
 
 fn principal_can_see_claim<R: SourceReader + ?Sized>(
@@ -1713,6 +1814,42 @@ fn resolve_purpose(header: Option<&str>, body: Option<&str>) -> Result<String, E
     }
 }
 
+fn resolve_batch_default_purpose(
+    header: Option<&str>,
+    body: Option<&str>,
+) -> Result<Option<String>, EvidenceError> {
+    match (header, body) {
+        (Some(header), Some(body)) if header != body => Err(EvidenceError::InvalidRequest),
+        (Some(header), _) if !header.trim().is_empty() => Ok(Some(header.to_string())),
+        (_, Some(body)) if !body.trim().is_empty() => Ok(Some(body.to_string())),
+        (Some(_), _) | (_, Some(_)) => Err(EvidenceError::InvalidRequest),
+        _ => Ok(None),
+    }
+}
+
+fn resolve_batch_subject_purposes(
+    subjects: &[BatchSubjectRequest],
+    batch_default: Option<&str>,
+) -> Result<Vec<String>, EvidenceError> {
+    subjects
+        .iter()
+        .map(|subject| match subject.purpose.as_deref() {
+            Some(purpose) if !purpose.trim().is_empty() => Ok(purpose.to_string()),
+            Some(_) => Err(EvidenceError::InvalidRequest),
+            None => batch_default
+                .map(str::to_string)
+                .ok_or(EvidenceError::PurposeRequired),
+        })
+        .collect()
+}
+
+fn subject_request(subject: &BatchSubjectRequest) -> SubjectRequest {
+    SubjectRequest {
+        id: subject.id.clone(),
+        id_type: subject.id_type.clone(),
+    }
+}
+
 fn require_claim_format(
     evidence: &EvidenceConfig,
     claim_id: &str,
@@ -1728,25 +1865,30 @@ fn require_claim_format(
 
 fn requested_disclosure(
     config: &EvidenceConfig,
-    claim_ids: &[String],
+    claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
     requested: &Option<String>,
 ) -> Result<DisclosureProfile, EvidenceError> {
     let raw = requested
         .as_deref()
         .or_else(|| {
-            claim_ids
+            claims
                 .first()
-                .and_then(|claim_id| find_claim(config, claim_id).ok())
+                .and_then(|claim| find_claim_for_selection(config, claim, claim_versions).ok())
                 .map(|claim| claim.disclosure.default.as_str())
         })
         .unwrap_or("redacted");
     DisclosureProfile::parse(raw).ok_or(EvidenceError::InvalidRequest)
 }
 
-fn max_batch_subjects(config: &EvidenceConfig, claims: &[String]) -> Result<usize, EvidenceError> {
+fn max_batch_subjects(
+    config: &EvidenceConfig,
+    claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
+) -> Result<usize, EvidenceError> {
     let mut max = config.inline_batch_limit;
     for claim_id in claims {
-        let claim = find_claim(config, claim_id)?;
+        let claim = find_claim_for_selection(config, claim_id, claim_versions)?;
         if !claim.operations.batch_evaluate.enabled {
             return Err(EvidenceError::OperationUnsupported);
         }
@@ -2567,6 +2709,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct CountingSource {
         read_count: AtomicU64,
+        purposes: Mutex<Vec<String>>,
     }
 
     impl SourceReader for CountingSource {
@@ -2574,10 +2717,14 @@ mod tests {
             &'a self,
             _binding: &'a SourceBindingConfig,
             subject: &'a SubjectRequest,
-            _purpose: &'a str,
+            purpose: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
             Box::pin(async move {
                 self.read_count.fetch_add(1, Ordering::SeqCst);
+                self.purposes
+                    .lock()
+                    .expect("purposes mutex is not poisoned")
+                    .push(purpose.to_string());
                 Ok(json!({
                     "id": subject.id.clone(),
                     "value": true,
@@ -2677,7 +2824,7 @@ mod tests {
                 id: "person-1".to_string(),
                 id_type: None,
             },
-            claims: vec![claim.to_string()],
+            claims: vec![ClaimRef::from(claim)],
             disclosure: Some("value".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: Some("test".to_string()),
@@ -3082,11 +3229,12 @@ mod tests {
         let evidence = Arc::new(evidence_config);
         let store = EvidenceStore::default();
         let request = BatchEvaluateRequest {
-            subjects: vec![SubjectRequest {
+            subjects: vec![BatchSubjectRequest {
                 id: "person-1".to_string(),
                 id_type: Some("national_id".to_string()),
+                purpose: None,
             }],
-            claims: vec!["selected".to_string()],
+            claims: vec![ClaimRef::from("selected")],
             disclosure: Some("value".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: Some("test".to_string()),
@@ -3109,6 +3257,144 @@ mod tests {
         assert_eq!(subject_ref["id_type"], json!("national_id"));
         assert!(subject_ref["hash"].as_str().is_some());
         assert!(!subject_ref.to_string().contains("person-1"));
+    }
+
+    #[tokio::test]
+    async fn evaluate_uses_requested_claim_version() {
+        let source = Arc::new(CountingSource::default());
+        let older_claim = test_claim("selected", Vec::new(), false);
+        let mut newer_claim = test_claim("selected", Vec::new(), true);
+        newer_claim.version = "2.0".to_string();
+        let evidence = test_evidence(vec![older_claim, newer_claim]);
+        let store = EvidenceStore::default();
+        let mut request = test_request("selected");
+        request.claims = vec![ClaimRef::with_version("selected", "2.0")];
+
+        let results = RegistryNotaryRuntime::new()
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                None,
+            )
+            .await
+            .expect("versioned evaluate succeeds");
+
+        assert_eq!(results[0].claim_version, "2.0");
+        assert_eq!(results[0].value, Some(json!(true)));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn evaluate_rejects_missing_claim_version() {
+        let source = Arc::new(CountingSource::default());
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let store = EvidenceStore::default();
+        let mut request = test_request("selected");
+        request.claims = vec![ClaimRef::with_version("selected", "2.0")];
+
+        let err = RegistryNotaryRuntime::new()
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                None,
+            )
+            .await
+            .expect_err("unknown version is rejected");
+
+        assert!(matches!(err, EvidenceError::ClaimVersionNotFound));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn requested_claim_versions_accepts_duplicate_same_version() {
+        let versions = requested_claim_versions(&[
+            ClaimRef::with_version("selected", "2.0"),
+            ClaimRef::with_version("selected", "2.0"),
+        ])
+        .expect("duplicate matching version is accepted");
+
+        assert_eq!(
+            versions.get("selected").and_then(Option::as_deref),
+            Some("2.0")
+        );
+    }
+
+    #[test]
+    fn requested_claim_versions_rejects_duplicate_conflicting_version() {
+        let err = requested_claim_versions(&[
+            ClaimRef::with_version("selected", "1.0"),
+            ClaimRef::with_version("selected", "2.0"),
+        ])
+        .expect_err("conflicting versions are rejected");
+
+        assert!(matches!(err, EvidenceError::InvalidRequest));
+    }
+
+    #[tokio::test]
+    async fn batch_subject_purpose_overrides_batch_default() {
+        let source = Arc::new(CountingSource::default());
+        let mut claim = test_claim("selected", Vec::new(), true);
+        claim.operations.batch_evaluate.enabled = true;
+        claim.operations.batch_evaluate.max_subjects = 2;
+        let mut evidence_config = (*test_evidence(vec![claim])).clone();
+        evidence_config.inline_batch_limit = 2;
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let request = BatchEvaluateRequest {
+            subjects: vec![
+                BatchSubjectRequest {
+                    id: "person-1".to_string(),
+                    id_type: None,
+                    purpose: Some("program-a".to_string()),
+                },
+                BatchSubjectRequest {
+                    id: "person-2".to_string(),
+                    id_type: None,
+                    purpose: None,
+                },
+            ],
+            claims: vec![ClaimRef::from("selected")],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-b".to_string()),
+        };
+
+        let response = RegistryNotaryRuntime::new()
+            .batch_evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                BatchEvaluateOptions::default(),
+            )
+            .await
+            .expect("batch evaluate succeeds");
+
+        let purposes = source
+            .purposes
+            .lock()
+            .expect("purposes mutex is not poisoned")
+            .clone();
+        let mut sorted_purposes = purposes.clone();
+        sorted_purposes.sort();
+        assert_eq!(sorted_purposes, vec!["program-a", "program-b"]);
+        for item in &response.items {
+            let evaluation_id = item.evaluation_id.as_deref().expect("evaluation id");
+            let stored = store.get(evaluation_id).expect("stored evaluation");
+            let expected = if item.input_index == 0 {
+                "program-a"
+            } else {
+                "program-b"
+            };
+            assert_eq!(stored.purpose, expected);
+        }
     }
 
     #[tokio::test]
@@ -3213,11 +3499,12 @@ mod tests {
         let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
         let store = EvidenceStore::default();
         let request = BatchEvaluateRequest {
-            subjects: vec![SubjectRequest {
+            subjects: vec![BatchSubjectRequest {
                 id: "person-1".to_string(),
                 id_type: None,
+                purpose: None,
             }],
-            claims: vec!["selected".to_string()],
+            claims: vec![ClaimRef::from("selected")],
             disclosure: Some("value".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
             purpose: Some("test".to_string()),

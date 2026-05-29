@@ -18,8 +18,8 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_notary_core::{
-    AccessMode, EvaluateRequest, EvidencePrincipal, SourceCapability, FEDERATION_REQUEST_JWT_TYP,
-    FORMAT_CLAIM_RESULT_JSON,
+    AccessMode, ClaimRef, EvaluateRequest, EvidencePrincipal, SourceCapability,
+    FEDERATION_REQUEST_JWT_TYP, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_crypto::pairwise_subject_ref_hash;
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
@@ -248,7 +248,7 @@ async fn handle_federated_evaluate(
     };
     let request = EvaluateRequest {
         subject: subject.clone(),
-        claims: vec![profile.claim_id.clone()],
+        claims: vec![ClaimRef::from(profile.claim_id.clone())],
         disclosure: Some(
             profile
                 .disclosure

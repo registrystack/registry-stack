@@ -41,6 +41,7 @@ fn build_audit_event() -> EvidenceAuditEvent {
         claim_hash: Some(
             "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
         ),
+        purposes: None,
         row_count: None,
         error_code: None,
         access_mode: None,

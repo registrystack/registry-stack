@@ -19,11 +19,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_notary_core::sd_jwt::{issue as sd_jwt_issue, EvidenceIssuer, IssueOptions};
 use registry_notary_core::{
-    AccessMode, BatchEvaluateRequest, ClaimDefinition, ClaimOperationsConfig, ClaimResultView,
-    ClaimValueConfig, ConcurrencyConfig, CredentialProfileConfig, DisclosureConfig, EvidenceConfig,
-    EvidenceError, EvidencePrincipal, RuleConfig, SourceBindingConfig, SourceConnectorKind,
-    SourceFieldConfig, SourceLookupConfig, StandaloneRegistryNotaryConfig, SubjectRequest,
-    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    AccessMode, BatchEvaluateRequest, BatchSubjectRequest, ClaimDefinition, ClaimOperationsConfig,
+    ClaimRef, ClaimResultView, ClaimValueConfig, ConcurrencyConfig, CredentialProfileConfig,
+    DisclosureConfig, EvidenceConfig, EvidenceError, EvidencePrincipal, RuleConfig,
+    SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
+    StandaloneRegistryNotaryConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_notary_server::{
     standalone_router, BatchEvaluateOptions, EvidenceStore, MemoState, RegistryNotaryRuntime,
@@ -1401,8 +1401,11 @@ async fn memo_counters_record_hits_and_misses_on_shared_binding_batch() {
         })
         .collect();
     let request = BatchEvaluateRequest {
-        subjects,
-        claims: vec!["claim-a".to_string(), "claim-b".to_string()],
+        subjects: subjects
+            .into_iter()
+            .map(BatchSubjectRequest::from)
+            .collect(),
+        claims: vec![ClaimRef::from("claim-a"), ClaimRef::from("claim-b")],
         disclosure: Some("value".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: Some("test".to_string()),

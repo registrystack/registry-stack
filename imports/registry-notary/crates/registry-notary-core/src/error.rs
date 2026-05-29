@@ -12,6 +12,8 @@ pub enum EvidenceError {
     ServerDisabled,
     #[error("claim was not found")]
     ClaimNotFound,
+    #[error("claim version was not found")]
+    ClaimVersionNotFound,
     #[error("claim operation is unsupported")]
     OperationUnsupported,
     #[error("evidence request is invalid")]
@@ -66,6 +68,7 @@ impl EvidenceError {
         match self {
             Self::ServerDisabled => "evidence.server_disabled",
             Self::ClaimNotFound => "claim.not_found",
+            Self::ClaimVersionNotFound => "claim.version_not_found",
             Self::OperationUnsupported => "claim.operation_unsupported",
             Self::InvalidRequest => "request.invalid",
             Self::DisclosureNotAllowed => "claim.disclosure_not_allowed",

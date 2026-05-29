@@ -984,6 +984,7 @@ async fn auth_audit_middleware(
             verification_id: None,
             verification_decision: Some("auth_rate_limited".to_string()),
             claim_hash: None,
+            purposes: None,
             row_count: None,
             access_mode: Some(AccessMode::Unknown),
             denial_code: Some(SelfAttestationDenialCode::RateLimited),
@@ -1020,6 +1021,7 @@ async fn auth_audit_middleware(
                     verification_id: None,
                     verification_decision: Some("auth_rate_limited".to_string()),
                     claim_hash: None,
+                    purposes: None,
                     row_count: None,
                     access_mode: Some(AccessMode::Unknown),
                     denial_code: Some(SelfAttestationDenialCode::RateLimited),
@@ -1163,6 +1165,7 @@ fn build_audit_event(
     let error = response.extensions().get::<EvidenceErrorCodeContext>();
     let verification_id = audit.and_then(|context| context.verification_id.clone());
     let claim_hash = audit.and_then(|context| context.claim_hash.clone());
+    let purposes = audit.and_then(|context| context.purposes.clone());
     let row_count = audit.and_then(|context| context.row_count);
     let access_mode = audit
         .and_then(|context| context.access_mode)
@@ -1201,6 +1204,7 @@ fn build_audit_event(
         status: response.status().as_u16(),
         verification_id,
         claim_hash,
+        purposes,
         row_count,
         error_code,
         access_mode,
@@ -2536,6 +2540,7 @@ mod tests {
             status: 200,
             verification_id: None,
             claim_hash: None,
+            purposes: None,
             row_count: None,
             error_code: None,
             access_mode: Some(AccessMode::MachineClient),
@@ -2600,6 +2605,7 @@ mod tests {
             verification_id: None,
             verification_decision: Some("evaluate_denied".to_string()),
             claim_hash: Some("sha256:claim-hash".to_string()),
+            purposes: None,
             row_count: None,
             access_mode: Some(AccessMode::SelfAttestation),
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
@@ -3009,7 +3015,7 @@ sources:
                         id: "person-123".to_string(),
                         id_type: None,
                     },
-                    claims: vec!["date-of-birth".to_string()],
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
                     disclosure: Some("value".to_string()),
                     format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
                     purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
@@ -3066,7 +3072,7 @@ sources:
                         id: "retry-sentinel".to_string(),
                         id_type: None,
                     },
-                    claims: vec!["date-of-birth".to_string()],
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
                     disclosure: Some("value".to_string()),
                     format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
                     purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),

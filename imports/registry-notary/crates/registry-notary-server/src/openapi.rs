@@ -2,9 +2,10 @@
 //! Registry Notary OpenAPI document generation.
 
 use registry_notary_core::model::{
-    BatchEvaluateRequest, CredentialIssueRequest, EvaluateRequest, HolderRequest, RenderRequest,
-    SubjectRequest, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE,
-    SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+    BatchEvaluateRequest, BatchSubjectRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest,
+    HolderRequest, RenderRequest, SubjectRequest, FORMAT_SD_JWT_VC,
+    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
+    SD_JWT_VC_SIGNING_ALG,
 };
 use serde_json::{json, Value};
 use std::sync::OnceLock;
@@ -561,6 +562,13 @@ fn build_openapi_document() -> OpenApi {
     components
         .schemas
         .insert("SubjectRequest".to_string(), SubjectRequest::schema());
+    components.schemas.insert(
+        "BatchSubjectRequest".to_string(),
+        BatchSubjectRequest::schema(),
+    );
+    components
+        .schemas
+        .insert("ClaimRef".to_string(), ClaimRef::schema());
     components
         .schemas
         .insert("EvaluateRequest".to_string(), EvaluateRequest::schema());
@@ -579,7 +587,11 @@ fn build_openapi_document() -> OpenApi {
         .schemas
         .insert("HolderRequest".to_string(), HolderRequest::schema());
 
-    document
+    let mut document_value =
+        serde_json::to_value(&document).expect("Registry Notary OpenAPI document serializes");
+    document_value["components"]["schemas"]["ClaimRef"] = claim_ref_schema();
+    serde_json::from_value(document_value)
+        .expect("Registry Notary OpenAPI ClaimRef schema is valid")
 }
 
 fn add_response_examples(document: &mut Value) {
@@ -1169,6 +1181,23 @@ fn add_response_examples(document: &mut Value) {
         "Credential status store is unavailable",
         credential_status_problem_example(503, "credential_status.unavailable"),
     );
+}
+
+fn claim_ref_schema() -> Value {
+    json!({
+        "oneOf": [
+            { "type": "string" },
+            {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": { "type": "string" },
+                    "version": { "type": "string" }
+                },
+                "additionalProperties": false
+            }
+        ]
+    })
 }
 
 fn set_json_response(

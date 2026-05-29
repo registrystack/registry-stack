@@ -493,11 +493,87 @@ impl DisclosureDowngrade {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimRef {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl ClaimRef {
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_version(id: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            version: Some(version.into()),
+        }
+    }
+}
+
+impl From<String> for ClaimRef {
+    fn from(id: String) -> Self {
+        Self::new(id)
+    }
+}
+
+impl From<&str> for ClaimRef {
+    fn from(id: &str) -> Self {
+        Self::new(id)
+    }
+}
+
+impl std::ops::Deref for ClaimRef {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.id.as_str()
+    }
+}
+
+impl<'de> Deserialize<'de> for ClaimRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ClaimRefObject {
+            id: String,
+            #[serde(default)]
+            version: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum WireClaimRef {
+            Id(String),
+            Object(ClaimRefObject),
+        }
+
+        match WireClaimRef::deserialize(deserializer)? {
+            WireClaimRef::Id(id) => Ok(Self::new(id)),
+            WireClaimRef::Object(object) => Ok(Self {
+                id: object.id,
+                version: object.version,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
     pub subject: SubjectRequest,
-    pub claims: Vec<String>,
+    pub claims: Vec<ClaimRef>,
     #[serde(default)]
     pub disclosure: Option<String>,
     #[serde(default)]
@@ -516,9 +592,38 @@ pub struct SubjectRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BatchSubjectRequest {
+    pub id: String,
+    #[serde(default)]
+    pub id_type: Option<String>,
+    #[serde(default)]
+    pub purpose: Option<String>,
+}
+
+impl From<BatchSubjectRequest> for SubjectRequest {
+    fn from(subject: BatchSubjectRequest) -> Self {
+        Self {
+            id: subject.id,
+            id_type: subject.id_type,
+        }
+    }
+}
+
+impl From<SubjectRequest> for BatchSubjectRequest {
+    fn from(subject: SubjectRequest) -> Self {
+        Self {
+            id: subject.id,
+            id_type: subject.id_type,
+            purpose: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BatchEvaluateRequest {
-    pub subjects: Vec<SubjectRequest>,
-    pub claims: Vec<String>,
+    pub subjects: Vec<BatchSubjectRequest>,
+    pub claims: Vec<ClaimRef>,
     #[serde(default)]
     pub disclosure: Option<String>,
     #[serde(default)]
@@ -774,6 +879,8 @@ pub struct EvidenceAuditEvent {
     pub status: u16,
     pub verification_id: Option<String>,
     pub claim_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purposes: Option<Vec<String>>,
     pub row_count: Option<u64>,
     pub error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -831,6 +938,20 @@ mod tests {
             AccessMode::parse("machine_client"),
             Some(AccessMode::MachineClient)
         );
+    }
+
+    #[test]
+    fn claim_ref_deserializes_string_and_versioned_object() {
+        let legacy: ClaimRef =
+            serde_json::from_value(json!("person-is-alive")).expect("legacy claim id deserializes");
+        assert_eq!(legacy.id, "person-is-alive");
+        assert_eq!(legacy.version, None);
+
+        let versioned: ClaimRef =
+            serde_json::from_value(json!({ "id": "person-is-alive", "version": "2026-05" }))
+                .expect("versioned claim ref deserializes");
+        assert_eq!(versioned.id, "person-is-alive");
+        assert_eq!(versioned.version.as_deref(), Some("2026-05"));
     }
 
     #[test]
@@ -897,6 +1018,7 @@ mod tests {
             status: 403,
             verification_id: None,
             claim_hash: Some("sha256:claims".to_string()),
+            purposes: None,
             row_count: None,
             error_code: Some("self_attestation.denied".to_string()),
             access_mode: Some(AccessMode::SelfAttestation),
