@@ -2,8 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::CStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::mem::MaybeUninit;
+use std::path::{Component, Path, PathBuf};
 
 use registry_manifest_core::{
     compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_cpsv_ap,
@@ -12,8 +14,15 @@ use registry_manifest_core::{
     render_ogc_records_items, render_policy_collection, render_shacl, MetadataError,
     MetadataManifest,
 };
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_yaml_ng::Value;
+use unsafe_libyaml::{
+    yaml_event_delete, yaml_event_t, yaml_parser_delete, yaml_parser_initialize, yaml_parser_parse,
+    yaml_parser_set_input_string, yaml_parser_t, YAML_ALIAS_EVENT, YAML_MAPPING_START_EVENT,
+    YAML_SCALAR_EVENT, YAML_SEQUENCE_START_EVENT, YAML_STREAM_END_EVENT,
+};
+
+const YAML_MAX_BYTES: u64 = 64 * 1024;
 
 fn main() {
     if let Err(error) = run() {
@@ -108,43 +117,48 @@ fn render_command(args: &[String]) -> Result<(), String> {
 fn publish_command(args: &[String]) -> Result<(), String> {
     let manifest_path = args.first().ok_or_else(usage)?;
     let out = option_value(args, "--out").unwrap_or_else(|| "public/metadata".to_string());
-    let site_root = option_value(args, "--site-root").map(PathBuf::from);
     let manifest = load_manifest(manifest_path)?;
     let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
     let out = PathBuf::from(out);
-    if let Some(ref site_root) = site_root {
-        if site_root.exists() && !site_root.is_dir() {
-            return Err(format!(
-                "metadata.publish.site_root_not_directory: {}",
-                site_root.display()
-            ));
-        }
-        fs::create_dir_all(site_root).map_err(|error| error.to_string())?;
-    }
-    fs::create_dir_all(out.join("schema")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(out.join("forms")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(out.join("profiles")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(out.join("evidence-offerings")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(out.join("policies")).map_err(|error| error.to_string())?;
+    let out_root = prepare_publish_root(&out, "metadata.publish.out_not_directory")?;
+    let site_root = option_value(args, "--site-root")
+        .map(PathBuf::from)
+        .map(|site_root| {
+            if site_root.exists() && !site_root.is_dir() {
+                return Err(format!(
+                    "metadata.publish.site_root_not_directory: {}",
+                    site_root.display()
+                ));
+            }
+            prepare_publish_root(&site_root, "metadata.publish.site_root_not_directory")
+        })
+        .transpose()?;
+    create_contained_dir_all(&out_root, "schema")?;
+    create_contained_dir_all(&out_root, "forms")?;
+    create_contained_dir_all(&out_root, "profiles")?;
+    create_contained_dir_all(&out_root, "evidence-offerings")?;
+    create_contained_dir_all(&out_root, "policies")?;
 
-    fs::copy(manifest_path, out.join("metadata.yaml")).map_err(|error| error.to_string())?;
-    write_json(out.join("catalog.json"), &render_catalog(&compiled))?;
+    copy_contained(&out_root, "metadata.yaml", manifest_path)?;
+    write_json(&out_root, "catalog.json", &render_catalog(&compiled))?;
     write_json(
-        out.join("evidence-offerings.json"),
+        &out_root,
+        "evidence-offerings.json",
         &render_evidence_offerings(&compiled),
     )?;
     write_json(
-        out.join("policies.jsonld"),
+        &out_root,
+        "policies.jsonld",
         &render_policy_collection(&compiled),
     )?;
-    write_json(out.join("dcat.jsonld"), &render_base_dcat(&compiled))?;
+    write_json(&out_root, "dcat.jsonld", &render_base_dcat(&compiled))?;
     let mut dcat_profiles = Vec::new();
     let mut service_catalogues = Vec::new();
     for profile in &compiled.catalog().application_profiles {
         if profile.id == "cpsv-ap" {
             let service_catalogue = render_cpsv_ap(&compiled);
-            write_json(out.join("cpsv-ap"), &service_catalogue)?;
-            write_json(out.join("cpsv-ap.jsonld"), &service_catalogue)?;
+            write_json(&out_root, "cpsv-ap", &service_catalogue)?;
+            write_json(&out_root, "cpsv-ap.jsonld", &service_catalogue)?;
             service_catalogues.push(serde_json::json!({
                 "id": profile.id,
                 "version": profile.version,
@@ -156,7 +170,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         }
         if let Some(document) = render_dcat_profile(&compiled, &profile.id) {
             let filename = format!("dcat.{}.jsonld", profile.id);
-            write_json(out.join(&filename), &document)?;
+            write_json(&out_root, PathBuf::from(&filename), &document)?;
             dcat_profiles.push(serde_json::json!({
                 "id": profile.id,
                 "version": profile.version,
@@ -164,7 +178,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
             }));
         }
     }
-    write_json(out.join("shacl.jsonld"), &render_shacl(&compiled))?;
+    write_json(&out_root, "shacl.jsonld", &render_shacl(&compiled))?;
 
     let mut schemas = Vec::new();
     let mut policy_documents = Vec::new();
@@ -177,17 +191,21 @@ fn publish_command(args: &[String]) -> Result<(), String> {
                     dataset.dataset_id
                 )
             })?;
-        write_json(out.join("policies").join(&policy_filename), &policy)?;
+        write_json(
+            &out_root,
+            PathBuf::from("policies").join(&policy_filename),
+            &policy,
+        )?;
         policy_documents.push(serde_json::json!({
             "dataset": dataset.dataset_id,
             "url": format!("/metadata/policies/{policy_filename}"),
         }));
 
-        let schema_dir = out.join("schema").join(&dataset.dataset_id);
-        fs::create_dir_all(&schema_dir).map_err(|error| error.to_string())?;
+        let schema_dir = PathBuf::from("schema").join(&dataset.dataset_id);
+        create_contained_dir_all(&out_root, &schema_dir)?;
         for entity in dataset.entities.values() {
             let entity_dir = schema_dir.join(&entity.name);
-            fs::create_dir_all(&entity_dir).map_err(|error| error.to_string())?;
+            create_contained_dir_all(&out_root, &entity_dir)?;
             let relative = format!(
                 "/metadata/schema/{}/{}/schema.json",
                 dataset.dataset_id, entity.name
@@ -200,7 +218,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
                             dataset.dataset_id, entity.name
                         )
                     })?;
-            write_json(entity_dir.join("schema.json"), &schema)?;
+            write_json(&out_root, entity_dir.join("schema.json"), &schema)?;
             schemas.push(serde_json::json!({
                 "dataset": dataset.dataset_id,
                 "entity": entity.name,
@@ -211,8 +229,8 @@ fn publish_command(args: &[String]) -> Result<(), String> {
 
     let mut form_schemas = Vec::new();
     for form in compiled.forms() {
-        let form_dir = out.join("forms").join(&form.id);
-        fs::create_dir_all(&form_dir).map_err(|error| error.to_string())?;
+        let form_dir = PathBuf::from("forms").join(&form.id);
+        create_contained_dir_all(&out_root, &form_dir)?;
         let relative = format!("/metadata/forms/{}/schema.json", form.id);
         let schema = render_form_schema_draft_2020_12(&compiled, &form.id).ok_or_else(|| {
             format!(
@@ -220,7 +238,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
                 form.id
             )
         })?;
-        write_json(form_dir.join("schema.json"), &schema)?;
+        write_json(&out_root, form_dir.join("schema.json"), &schema)?;
         form_schemas.push(serde_json::json!({
             "form": form.id,
             "url": relative,
@@ -236,7 +254,11 @@ fn publish_command(args: &[String]) -> Result<(), String> {
                 offering.id
             )
         })?;
-        write_json(out.join("evidence-offerings").join(&filename), &document)?;
+        write_json(
+            &out_root,
+            PathBuf::from("evidence-offerings").join(&filename),
+            &document,
+        )?;
         evidence_offerings.push(serde_json::json!({
             "id": offering.id,
             "dataset": offering.dataset_id,
@@ -248,7 +270,8 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     for profile in compiled.profiles() {
         let filename = format!("{}.json", profile.id);
         write_json(
-            out.join("profiles").join(&filename),
+            &out_root,
+            PathBuf::from("profiles").join(&filename),
             &serde_json::json!(profile),
         )?;
         profiles.push(serde_json::json!({
@@ -285,21 +308,26 @@ fn publish_command(args: &[String]) -> Result<(), String> {
         "profiles": profiles,
         "application_profiles": application_profiles,
     });
-    write_json(out.join("index.json"), &index)?;
-    let public_root = site_root.as_deref().unwrap_or(out.as_path());
+    write_json(&out_root, "index.json", &index)?;
+    let public_root = site_root.as_ref().unwrap_or(&out_root);
     write_well_known_discovery(public_root, &index)?;
-    println!("published metadata artifacts to {}", out.display());
+    println!(
+        "published metadata artifacts to {}",
+        out_root.root.display()
+    );
     Ok(())
 }
 
-fn write_well_known_discovery(public_root: &Path, index: &serde_json::Value) -> Result<(), String> {
-    let well_known_dir = public_root.join(".well-known");
-    fs::create_dir_all(&well_known_dir).map_err(|error| error.to_string())?;
-    write_api_catalog(&well_known_dir, index)?;
-    write_legacy_registry_manifest_discovery(&well_known_dir, index)
+fn write_well_known_discovery(
+    public_root: &PublishRoot,
+    index: &serde_json::Value,
+) -> Result<(), String> {
+    create_contained_dir_all(public_root, ".well-known")?;
+    write_api_catalog(public_root, index)?;
+    write_legacy_registry_manifest_discovery(public_root, index)
 }
 
-fn write_api_catalog(well_known_dir: &Path, index: &serde_json::Value) -> Result<(), String> {
+fn write_api_catalog(public_root: &PublishRoot, index: &serde_json::Value) -> Result<(), String> {
     let mut items = Vec::new();
     push_api_catalog_item(
         &mut items,
@@ -385,7 +413,7 @@ fn write_api_catalog(well_known_dir: &Path, index: &serde_json::Value) -> Result
             }
         ]
     });
-    write_json(well_known_dir.join("api-catalog"), &api_catalog)
+    write_json(public_root, ".well-known/api-catalog", &api_catalog)
 }
 
 fn push_api_catalog_item(
@@ -417,7 +445,7 @@ fn value_array<'a>(value: &'a serde_json::Value, key: &str) -> &'a [serde_json::
 }
 
 fn write_legacy_registry_manifest_discovery(
-    well_known_dir: &Path,
+    public_root: &PublishRoot,
     index: &serde_json::Value,
 ) -> Result<(), String> {
     let discovery = serde_json::json!({
@@ -431,7 +459,11 @@ fn write_legacy_registry_manifest_discovery(
         "evidence_offerings": index.get("evidence_offerings").cloned().unwrap_or(serde_json::Value::Null),
         "application_profiles": index.get("application_profiles").cloned().unwrap_or_else(|| serde_json::json!([])),
     });
-    write_json(well_known_dir.join("registry-manifest.json"), &discovery)
+    write_json(
+        public_root,
+        ".well-known/registry-manifest.json",
+        &discovery,
+    )
 }
 
 fn validate_profiles_command(args: &[String]) -> Result<(), String> {
@@ -489,14 +521,8 @@ fn profile_descriptor_paths(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn load_profile_descriptor(path: &Path) -> Result<ProfileDescriptor, String> {
-    let raw = fs::read_to_string(path).map_err(|error| {
-        format!(
-            "metadata.profile.file_not_found: {}: {error}",
-            path.display()
-        )
-    })?;
-    serde_yaml_ng::from_str(&raw)
-        .map_err(|error| format!("metadata.profile.parse_failed: {}: {error}", path.display()))
+    let raw = load_yaml_source(path, YamlInput::ProfileDescriptor)?;
+    deserialize_yaml(&raw, path, YamlInput::ProfileDescriptor)
 }
 
 fn validate_profile_descriptor(
@@ -562,24 +588,21 @@ fn validate_profile_fixture(
         .parent()
         .expect("profile path has parent")
         .join(&fixture.path);
-    let raw = match fs::read_to_string(&fixture_path) {
+    let yaml_kind = YamlInput::ProfileFixture {
+        profile_path,
+        fixture: &fixture.path,
+    };
+    let raw = match load_yaml_source(&fixture_path, yaml_kind) {
         Ok(raw) => raw,
         Err(error) => {
-            errors.push(format!(
-                "{}: metadata.profile.fixture_missing: {}: {error}",
-                profile_path.display(),
-                fixture.path
-            ));
+            errors.push(error);
             return;
         }
     };
-    let manifest: MetadataManifest = match serde_yaml_ng::from_str(&raw) {
+    let manifest: MetadataManifest = match deserialize_yaml(&raw, &fixture_path, yaml_kind) {
         Ok(manifest) => manifest,
         Err(error) => {
-            errors.push(format!(
-                "{}: metadata.manifest.parse_failed: {error}",
-                fixture_path.display()
-            ));
+            errors.push(error);
             return;
         }
     };
@@ -692,10 +715,256 @@ fn validate_profile_fixture(
 
 fn load_manifest(path: impl AsRef<Path>) -> Result<MetadataManifest, String> {
     let path = path.as_ref();
-    let raw = fs::read_to_string(path)
-        .map_err(|error| format!("metadata.manifest.file_not_found: {error}"))?;
-    serde_yaml_ng::from_str(&raw)
-        .map_err(|error| format!("metadata.manifest.parse_failed: {error}"))
+    let raw = load_yaml_source(path, YamlInput::Manifest)?;
+    deserialize_yaml(&raw, path, YamlInput::Manifest)
+}
+
+#[derive(Clone, Copy)]
+enum YamlInput<'a> {
+    Manifest,
+    ProfileDescriptor,
+    ProfileFixture {
+        profile_path: &'a Path,
+        fixture: &'a str,
+    },
+}
+
+impl YamlInput<'_> {
+    fn read_error(self, path: &Path, error: std::io::Error) -> String {
+        match self {
+            YamlInput::Manifest => format!("metadata.manifest.file_not_found: {error}"),
+            YamlInput::ProfileDescriptor => {
+                format!(
+                    "metadata.profile.file_not_found: {}: {error}",
+                    path.display()
+                )
+            }
+            YamlInput::ProfileFixture {
+                profile_path,
+                fixture,
+            } => {
+                format!(
+                    "{}: metadata.profile.fixture_missing: {fixture}: {error}",
+                    profile_path.display()
+                )
+            }
+        }
+    }
+
+    fn too_large_error(self, path: &Path) -> String {
+        match self {
+            YamlInput::Manifest | YamlInput::ProfileFixture { .. } => format!(
+                "metadata.manifest.too_large: {} exceeds {YAML_MAX_BYTES} bytes",
+                path.display()
+            ),
+            YamlInput::ProfileDescriptor => format!(
+                "metadata.profile.too_large: {} exceeds {YAML_MAX_BYTES} bytes",
+                path.display()
+            ),
+        }
+    }
+
+    fn aliases_error(self, path: &Path) -> String {
+        match self {
+            YamlInput::Manifest | YamlInput::ProfileFixture { .. } => {
+                format!("metadata.manifest.aliases_unsupported: {}", path.display())
+            }
+            YamlInput::ProfileDescriptor => {
+                format!("metadata.profile.aliases_unsupported: {}", path.display())
+            }
+        }
+    }
+
+    fn parse_error(self, path: &Path, error: impl std::fmt::Display) -> String {
+        match self {
+            YamlInput::Manifest => format!("metadata.manifest.parse_failed: {error}"),
+            YamlInput::ProfileDescriptor => {
+                format!("metadata.profile.parse_failed: {}: {error}", path.display())
+            }
+            YamlInput::ProfileFixture { .. } => {
+                format!(
+                    "{}: metadata.manifest.parse_failed: {error}",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+enum YamlPrepassError {
+    AliasesUnsupported,
+    Parse(String),
+}
+
+fn load_yaml_source(path: &Path, kind: YamlInput<'_>) -> Result<String, String> {
+    let metadata = fs::metadata(path).map_err(|error| kind.read_error(path, error))?;
+    if metadata.len() > YAML_MAX_BYTES {
+        return Err(kind.too_large_error(path));
+    }
+    let raw = fs::read_to_string(path).map_err(|error| kind.read_error(path, error))?;
+    if raw.len() as u64 > YAML_MAX_BYTES {
+        return Err(kind.too_large_error(path));
+    }
+    reject_yaml_anchors_and_aliases(&raw).map_err(|error| match error {
+        YamlPrepassError::AliasesUnsupported => kind.aliases_error(path),
+        YamlPrepassError::Parse(error) => kind.parse_error(path, error),
+    })?;
+    Ok(raw)
+}
+
+fn deserialize_yaml<T: DeserializeOwned>(
+    raw: &str,
+    path: &Path,
+    kind: YamlInput<'_>,
+) -> Result<T, String> {
+    serde_yaml_ng::from_str(raw).map_err(|error| kind.parse_error(path, error))
+}
+
+fn reject_yaml_anchors_and_aliases(raw: &str) -> Result<(), YamlPrepassError> {
+    if contains_obvious_yaml_anchor_or_alias(raw) {
+        return Err(YamlPrepassError::AliasesUnsupported);
+    }
+
+    // SAFETY: The libyaml parser receives a pointer into `raw`, which remains
+    // alive until `yaml_parser_delete` runs through `ParserGuard`.
+    unsafe {
+        let mut parser = MaybeUninit::<yaml_parser_t>::uninit();
+        let parser = parser.as_mut_ptr();
+        if yaml_parser_initialize(parser).fail {
+            return Err(YamlPrepassError::Parse(
+                "could not initialize YAML parser".to_string(),
+            ));
+        }
+        let _guard = ParserGuard(parser);
+        yaml_parser_set_input_string(parser, raw.as_ptr(), raw.len() as u64);
+
+        let mut event = MaybeUninit::<yaml_event_t>::uninit();
+        let event = event.as_mut_ptr();
+        loop {
+            if yaml_parser_parse(parser, event).fail {
+                return Err(YamlPrepassError::Parse(parser_problem(parser)));
+            }
+            let event_type = (*event).type_;
+            let unsupported = match event_type {
+                YAML_ALIAS_EVENT => true,
+                YAML_SCALAR_EVENT => !(*event).data.scalar.anchor.is_null(),
+                YAML_SEQUENCE_START_EVENT => !(*event).data.sequence_start.anchor.is_null(),
+                YAML_MAPPING_START_EVENT => !(*event).data.mapping_start.anchor.is_null(),
+                _ => false,
+            };
+            yaml_event_delete(event);
+
+            if unsupported {
+                return Err(YamlPrepassError::AliasesUnsupported);
+            }
+            if event_type == YAML_STREAM_END_EVENT {
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn contains_obvious_yaml_anchor_or_alias(raw: &str) -> bool {
+    raw.lines()
+        .map(str::trim_start)
+        .filter(|line| !line.starts_with('#'))
+        .any(line_contains_obvious_yaml_anchor_or_alias)
+}
+
+fn line_contains_obvious_yaml_anchor_or_alias(line: &str) -> bool {
+    starts_anchor_or_alias(line)
+        || line
+            .strip_prefix("- ")
+            .is_some_and(|rest| starts_anchor_or_alias(rest.trim_start()))
+}
+
+fn starts_anchor_or_alias(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    matches!(bytes.first(), Some(b'&' | b'*'))
+        && bytes
+            .get(1)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-')
+}
+
+struct ParserGuard(*mut yaml_parser_t);
+
+impl Drop for ParserGuard {
+    fn drop(&mut self) {
+        // SAFETY: `ParserGuard` is constructed only after successful
+        // `yaml_parser_initialize` and owns parser teardown.
+        unsafe {
+            yaml_parser_delete(self.0);
+        }
+    }
+}
+
+unsafe fn parser_problem(parser: *mut yaml_parser_t) -> String {
+    let problem = (&*parser).problem;
+    if problem.is_null() {
+        "unknown YAML parse error".to_string()
+    } else {
+        CStr::from_ptr(problem).to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reject_yaml_anchors_and_aliases, YamlPrepassError};
+
+    #[test]
+    fn yaml_prepass_rejects_scaled_alias_amplification_shape() {
+        let raw = r#"
+amplified_seed: &seed lol
+amplified_1: [*seed, *seed, *seed, *seed, *seed, *seed, *seed, *seed]
+amplified_2: [*seed, *seed, *seed, *seed, *seed, *seed, *seed, *seed]
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+datasets:
+  - id: demo
+    title: Demo
+    entities: []
+codelists: []
+"#;
+
+        assert!(matches!(
+            reject_yaml_anchors_and_aliases(raw),
+            Err(YamlPrepassError::AliasesUnsupported)
+        ));
+    }
+
+    #[test]
+    fn yaml_prepass_rejects_nested_anchored_mapping_without_hanging() {
+        let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+datasets:
+  - id: demo
+    title: Demo
+    entities:
+      - name: amplified
+        fields:
+          - &field
+            name: a
+            type: string
+          - *field
+codelists: []
+"#;
+
+        assert!(matches!(
+            reject_yaml_anchors_and_aliases(raw),
+            Err(YamlPrepassError::AliasesUnsupported)
+        ));
+    }
 }
 
 fn manifest_entities(manifest: &MetadataManifest) -> Vec<&registry_manifest_core::EntityManifest> {
@@ -873,9 +1142,127 @@ fn ensure_dcat_profile_available(
     }
 }
 
-fn write_json(path: impl AsRef<Path>, value: &serde_json::Value) -> Result<(), String> {
+struct PublishRoot {
+    root: PathBuf,
+    canonical: PathBuf,
+}
+
+fn prepare_publish_root(path: &Path, not_directory_code: &str) -> Result<PublishRoot, String> {
+    if path.exists() && !path.is_dir() {
+        return Err(format!("{not_directory_code}: {}", path.display()));
+    }
+    fs::create_dir_all(path).map_err(|error| error.to_string())?;
+    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+    Ok(PublishRoot {
+        root: path.to_path_buf(),
+        canonical,
+    })
+}
+
+fn contained_path(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<PathBuf, String> {
+    let relative = relative.as_ref();
+    if relative.is_absolute() {
+        return Err(format!(
+            "metadata.publish.path_escape: absolute generated path {}",
+            relative.display()
+        ));
+    }
+
+    let mut target = root.canonical.clone();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => target.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!(
+                    "metadata.publish.path_escape: parent traversal in generated path {}",
+                    relative.display()
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "metadata.publish.path_escape: absolute generated path {}",
+                    relative.display()
+                ));
+            }
+        }
+    }
+
+    if target.starts_with(&root.canonical) {
+        Ok(target)
+    } else {
+        Err(format!(
+            "metadata.publish.path_escape: generated path escaped root {}",
+            relative.display()
+        ))
+    }
+}
+
+fn create_contained_dir_all(root: &PublishRoot, relative: impl AsRef<Path>) -> Result<(), String> {
+    let relative = relative.as_ref();
+    let target = contained_path(root, relative)?;
+    reject_existing_symlink_components(root, relative)?;
+    fs::create_dir_all(target).map_err(|error| error.to_string())
+}
+
+fn write_contained_bytes(
+    root: &PublishRoot,
+    relative: impl AsRef<Path>,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let relative = relative.as_ref();
+    let target = contained_path(root, relative)?;
+    reject_existing_symlink_components(root, relative)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(target, bytes).map_err(|error| error.to_string())
+}
+
+fn reject_existing_symlink_components(root: &PublishRoot, relative: &Path) -> Result<(), String> {
+    let mut current = root.canonical.clone();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => current.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "metadata.publish.path_escape: invalid generated path {}",
+                    relative.display()
+                ));
+            }
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "metadata.publish.path_escape: symlink in generated path {}",
+                    relative.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn copy_contained(
+    root: &PublishRoot,
+    relative: impl AsRef<Path>,
+    source: impl AsRef<Path>,
+) -> Result<(), String> {
+    let bytes = fs::read(source).map_err(|error| error.to_string())?;
+    write_contained_bytes(root, relative, &bytes)
+}
+
+fn write_json(
+    root: &PublishRoot,
+    relative: impl AsRef<Path>,
+    value: &serde_json::Value,
+) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    fs::write(path, bytes).map_err(|error| error.to_string())
+    write_contained_bytes(root, relative, &bytes)
 }
 
 fn print_json(value: &serde_json::Value) -> Result<(), String> {

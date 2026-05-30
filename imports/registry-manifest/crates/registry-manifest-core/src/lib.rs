@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use oxiri::Iri;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -15,6 +16,33 @@ const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/autho
 const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
 const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
 const REGISTRY_NOTARY_FEDERATION_PROTOCOL: &str = "registry-notary-federation/v0.1";
+const MAX_PROFILES: usize = 64;
+const MAX_CATALOG_CONFORMS_TO: usize = 64;
+const MAX_CATALOG_APPLICATION_PROFILES: usize = 32;
+const MAX_TOP_LEVEL_COLLECTION_ITEMS: usize = 256;
+const MAX_DATASET_ENTITIES: usize = 256;
+const MAX_ENTITY_FIELDS: usize = 512;
+const MAX_ENTITY_RELATIONSHIPS: usize = 512;
+const MAX_CODELIST_CONCEPTS: usize = 1024;
+const MAX_URI_LIST_ITEMS: usize = 128;
+const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
+    ("adms", "http://www.w3.org/ns/adms#"),
+    ("cccev", "http://data.europa.eu/m8g/"),
+    ("cpsv", "http://purl.org/vocab/cpsv#"),
+    ("cv", "http://data.europa.eu/m8g/"),
+    ("dcat", "http://www.w3.org/ns/dcat#"),
+    ("dcatap", "http://data.europa.eu/r5r/"),
+    ("dcterms", "http://purl.org/dc/terms/"),
+    ("eli", "http://data.europa.eu/eli/ontology#"),
+    ("foaf", "http://xmlns.com/foaf/0.1/"),
+    ("odrl", "http://www.w3.org/ns/odrl/2/"),
+    ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
+    ("registry_manifest", "https://registry-manifest.dev/ns/v1#"),
+    ("registry_relay", "https://registry-relay.dev/"),
+    ("sh", "http://www.w3.org/ns/shacl#"),
+    ("skos", "http://www.w3.org/2004/02/skos/core#"),
+    ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+];
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1328,11 +1356,194 @@ fn validate_evaluation_profiles<'a>(
     rulesets
 }
 
+fn validate_collection_limits(manifest: &MetadataManifest, errors: &mut Vec<ValidationError>) {
+    validate_count_limit(manifest.profiles.len(), "profiles", MAX_PROFILES, errors);
+    validate_count_limit(
+        manifest.catalog.conforms_to.len(),
+        "catalog.conforms_to",
+        MAX_CATALOG_CONFORMS_TO,
+        errors,
+    );
+    validate_count_limit(
+        manifest.catalog.application_profiles.len(),
+        "catalog.application_profiles",
+        MAX_CATALOG_APPLICATION_PROFILES,
+        errors,
+    );
+    validate_count_limit(
+        manifest.evaluation_profiles.len(),
+        "evaluation_profiles",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.requirements.len(),
+        "requirements",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.evidence_types.len(),
+        "evidence_types",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.authorities.len(),
+        "authorities",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.public_services.len(),
+        "public_services",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.data_services.len(),
+        "data_services",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.forms.len(),
+        "forms",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.datasets.len(),
+        "datasets",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
+        manifest.codelists.len(),
+        "codelists",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+
+    for (index, requirement) in manifest.requirements.iter().enumerate() {
+        validate_count_limit(
+            requirement.procedure_contexts.len(),
+            format!("requirements[{index}].procedure_contexts"),
+            MAX_URI_LIST_ITEMS,
+            errors,
+        );
+    }
+    for (index, evidence_type) in manifest.evidence_types.iter().enumerate() {
+        validate_count_limit(
+            evidence_type.information_concepts.len(),
+            format!("evidence_types[{index}].information_concepts"),
+            MAX_URI_LIST_ITEMS,
+            errors,
+        );
+    }
+    for (dataset_index, dataset) in manifest.datasets.iter().enumerate() {
+        let dataset_path = format!("datasets[{dataset_index}]");
+        validate_count_limit(
+            dataset.conforms_to.len(),
+            format!("{dataset_path}.conforms_to"),
+            MAX_URI_LIST_ITEMS,
+            errors,
+        );
+        validate_count_limit(
+            dataset.applicable_legislation.len(),
+            format!("{dataset_path}.applicable_legislation"),
+            MAX_URI_LIST_ITEMS,
+            errors,
+        );
+        validate_count_limit(
+            dataset.entities.len(),
+            format!("{dataset_path}.entities"),
+            MAX_DATASET_ENTITIES,
+            errors,
+        );
+        if let Some(policy) = dataset.policy.as_ref() {
+            validate_count_limit(
+                policy.profile.len(),
+                format!("{dataset_path}.policy.profile"),
+                MAX_URI_LIST_ITEMS,
+                errors,
+            );
+        }
+        for (offering_index, offering) in dataset.evidence_offerings.iter().enumerate() {
+            let offering_path = format!("{dataset_path}.evidence_offerings[{offering_index}]");
+            validate_count_limit(
+                offering.procedure_contexts.len(),
+                format!("{offering_path}.procedure_contexts"),
+                MAX_URI_LIST_ITEMS,
+                errors,
+            );
+            if let Some(policy) = offering.policy.as_ref() {
+                validate_count_limit(
+                    policy.purpose.len(),
+                    format!("{offering_path}.policy.purpose"),
+                    MAX_URI_LIST_ITEMS,
+                    errors,
+                );
+            }
+        }
+        for (entity_index, entity) in dataset.entities.iter().enumerate() {
+            let entity_path = format!("{dataset_path}.entities[{entity_index}]");
+            validate_count_limit(
+                entity.fields.len(),
+                format!("{entity_path}.fields"),
+                MAX_ENTITY_FIELDS,
+                errors,
+            );
+            validate_count_limit(
+                entity.relationships.len(),
+                format!("{entity_path}.relationships"),
+                MAX_ENTITY_RELATIONSHIPS,
+                errors,
+            );
+            for (field_index, field) in entity.fields.iter().enumerate() {
+                validate_count_limit(
+                    field.concepts.len(),
+                    format!("{entity_path}.fields[{field_index}].concepts"),
+                    MAX_URI_LIST_ITEMS,
+                    errors,
+                );
+            }
+        }
+    }
+    for (index, codelist) in manifest.codelists.iter().enumerate() {
+        validate_count_limit(
+            codelist.concepts.len(),
+            format!("codelists[{index}].concepts"),
+            MAX_CODELIST_CONCEPTS,
+            errors,
+        );
+    }
+}
+
+fn validate_count_limit(
+    count: usize,
+    path: impl Into<String>,
+    max: usize,
+    errors: &mut Vec<ValidationError>,
+) {
+    if count > max {
+        errors.push(ValidationError::new(
+            path,
+            format!("collection must contain at most {max} items"),
+        ));
+    }
+}
+
 pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataError> {
     let mut errors = Vec::new();
     if manifest.schema_version != "registry-manifest/v1" {
         return Err(MetadataError::VersionUnsupported);
     }
+    validate_collection_limits(manifest, &mut errors);
+    if !errors.is_empty() {
+        return Err(MetadataError::Validation { errors });
+    }
+    validate_vocabularies(&manifest.vocabularies, &mut errors);
     validate_id(&manifest.catalog.id, "catalog.id", &mut errors);
     validate_http_url(&manifest.catalog.base_url, "catalog.base_url", &mut errors);
     validate_non_empty(&manifest.catalog.title.text(), "catalog.title", &mut errors);
@@ -1378,6 +1589,19 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         }
     }
 
+    let mut profile_ids = BTreeSet::new();
+    for (index, profile) in manifest.profiles.iter().enumerate() {
+        let path = format!("profiles[{index}]");
+        validate_id(&profile.id, format!("{path}.id"), &mut errors);
+        validate_non_empty(&profile.version, format!("{path}.version"), &mut errors);
+        if !profile_ids.insert(profile.id.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{path}.id"),
+                "profile id must be unique",
+            ));
+        }
+    }
+
     validate_federation(manifest.federation.as_ref(), &mut errors);
     let evaluation_profile_rulesets = validate_evaluation_profiles(manifest, &mut errors);
     let requirement_ids = validate_requirements(manifest, &mut errors);
@@ -1407,6 +1631,17 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &manifest.vocabularies,
             &mut errors,
         );
+        let mut concept_codes = BTreeSet::new();
+        for (concept_index, concept) in codelist.concepts.iter().enumerate() {
+            let concept_path = format!("{path}.concepts[{concept_index}]");
+            validate_codelist_concept(concept, &concept_path, &mut concept_codes, &mut errors);
+            validate_optional_uri(
+                concept.iri.as_deref(),
+                format!("{concept_path}.iri"),
+                &manifest.vocabularies,
+                &mut errors,
+            );
+        }
     }
 
     if manifest.federation.is_none()
@@ -1453,6 +1688,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
             &manifest.vocabularies,
             &mut errors,
         );
+        let mut dataset_public_service_ids = BTreeSet::new();
         for (service_index, service) in dataset.public_services.iter().enumerate() {
             let service_path = format!("{path}.public_services[{service_index}]");
             validate_non_empty(
@@ -1460,11 +1696,18 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
                 format!("{service_path}.title"),
                 &mut errors,
             );
-            if service.id.as_deref().is_some_and(str::is_empty) {
-                errors.push(ValidationError::new(
+            if let Some(service_id) = service.id.as_deref() {
+                validate_dataset_public_service_id(
+                    service_id,
                     format!("{service_path}.id"),
-                    "service id must not be empty",
-                ));
+                    &mut errors,
+                );
+                if !dataset_public_service_ids.insert(service_id) {
+                    errors.push(ValidationError::new(
+                        format!("{service_path}.id"),
+                        "dataset public service id must be unique within a dataset",
+                    ));
+                }
             }
         }
         validate_dataset_policy(
@@ -5132,7 +5375,11 @@ fn codelist_shape(codelist: &CompiledCodelist) -> Value {
                 "@id": concept
                     .iri
                     .clone()
-                    .unwrap_or_else(|| format!("{}/{}", codelist.scheme_iri.trim_end_matches('/'), concept.code)),
+                    .unwrap_or_else(|| format!(
+                        "{}/{}",
+                        codelist.scheme_iri.trim_end_matches('/'),
+                        percent_encode_iri_path_segment(&concept.code)
+                    )),
                 "@type": "skos:Concept",
                 "skos:notation": concept.code,
                 "skos:prefLabel": concept.label.as_ref().map(LocalizedText::text),
@@ -5144,6 +5391,19 @@ fn codelist_shape(codelist: &CompiledCodelist) -> Value {
         scheme["rdfs:seeAlso"] = json!(external_ref);
     }
     scheme
+}
+
+fn percent_encode_iri_path_segment(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 fn humanize_identifier(value: &str) -> String {
@@ -5371,18 +5631,67 @@ fn validate_non_empty(value: &str, path: impl Into<String>, errors: &mut Vec<Val
     }
 }
 
+fn is_valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' => true,
+            b'0'..=b'9' | b'_' | b'-' => index > 0,
+            _ => false,
+        })
+}
+
 fn validate_id(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
-    let valid = value.bytes().enumerate().all(|(index, byte)| match byte {
-        b'a'..=b'z' => true,
-        b'0'..=b'9' | b'_' | b'-' => index > 0,
-        _ => false,
-    });
-    if value.is_empty() || !valid {
+    if !is_valid_id(value) {
         errors.push(ValidationError::new(
             path,
             "id must use lower-case letters, digits, hyphen, or underscore and start with a letter",
         ));
     }
+}
+
+fn validate_vocabularies(
+    vocabularies: &BTreeMap<String, String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    for (prefix, namespace) in vocabularies {
+        let path = format!("vocabularies.{prefix}");
+        if let Some(builtin) = builtin_namespace(prefix) {
+            if namespace != builtin {
+                errors.push(ValidationError::new(
+                    path,
+                    "built-in vocabulary prefix must not be redefined",
+                ));
+            }
+            continue;
+        }
+        if !is_valid_custom_vocabulary_prefix(prefix) {
+            errors.push(ValidationError::new(
+                path.clone(),
+                "vocabulary prefix must use lower-case ASCII letters, digits, hyphen, or underscore and start with a letter",
+            ));
+        }
+        if !is_well_formed_http_https_iri(namespace) {
+            errors.push(ValidationError::new(
+                path,
+                "vocabulary namespace must be an absolute http:// or https:// IRI",
+            ));
+        }
+    }
+}
+
+fn is_valid_custom_vocabulary_prefix(prefix: &str) -> bool {
+    !prefix.is_empty()
+        && prefix.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' => true,
+            b'0'..=b'9' | b'_' | b'-' => index > 0,
+            _ => false,
+        })
+}
+
+fn builtin_namespace(prefix: &str) -> Option<&'static str> {
+    BUILTIN_VOCABULARIES
+        .iter()
+        .find_map(|(builtin_prefix, namespace)| (*builtin_prefix == prefix).then_some(*namespace))
 }
 
 fn validate_cardinality(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
@@ -5458,6 +5767,46 @@ fn did_web_host(node_id: &str) -> Option<String> {
         })
 }
 
+fn validate_dataset_public_service_id(
+    value: &str,
+    path: impl Into<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if is_valid_id(value) || is_well_formed_http_https_iri(value) {
+        return;
+    }
+    errors.push(ValidationError::new(
+        path,
+        "dataset public service id must be a local id or absolute http:// or https:// IRI",
+    ));
+}
+
+fn validate_codelist_concept(
+    concept: &CodelistConcept,
+    path: &str,
+    concept_codes: &mut BTreeSet<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if concept.code.trim().is_empty() {
+        errors.push(ValidationError::new(
+            format!("{path}.code"),
+            "codelist concept code must not be empty",
+        ));
+    }
+    if concept.code.chars().any(is_c0_control) {
+        errors.push(ValidationError::new(
+            format!("{path}.code"),
+            "codelist concept code must not contain C0 controls",
+        ));
+    }
+    if !concept_codes.insert(concept.code.clone()) {
+        errors.push(ValidationError::new(
+            format!("{path}.code"),
+            "codelist concept code must be unique within a codelist",
+        ));
+    }
+}
+
 fn validate_uri(
     value: &str,
     path: impl Into<String>,
@@ -5487,7 +5836,9 @@ fn validate_uri_or_code_list(
 ) {
     let path = path.into();
     for (index, value) in values.iter().enumerate() {
-        if expand_uri(value, vocabularies).is_none() && value.trim().is_empty() {
+        if expand_uri(value, vocabularies).is_none()
+            && (value.trim().is_empty() || value.contains(':'))
+        {
             errors.push(ValidationError::new(
                 format!("{path}[{index}]"),
                 "value must be an IRI, compact IRI, or non-empty procedure code",
@@ -5514,32 +5865,16 @@ fn validate_optional_uri(
 }
 
 fn expand_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<String> {
-    if uri.starts_with("http://")
-        || uri.starts_with("https://")
-        || uri.starts_with("urn:")
-        || uri.starts_with("did:")
+    if is_well_formed_http_https_iri(uri)
+        || ((uri.starts_with("urn:") || uri.starts_with("did:")) && is_sane_expanded_iri(uri))
     {
         return Some(uri.to_string());
     }
     let (prefix, suffix) = uri.split_once(':')?;
-    let base = vocabularies
-        .get(prefix)
-        .map(String::as_str)
-        .or(match prefix {
-            "cccev" => Some("http://data.europa.eu/m8g/"),
-            "cpsv" => Some("http://purl.org/vocab/cpsv#"),
-            "dcat" => Some("http://www.w3.org/ns/dcat#"),
-            "dcterms" => Some("http://purl.org/dc/terms/"),
-            "cv" => Some("http://data.europa.eu/m8g/"),
-            "dcatap" => Some("http://data.europa.eu/r5r/"),
-            "eli" => Some("http://data.europa.eu/eli/ontology#"),
-            "odrl" => Some("http://www.w3.org/ns/odrl/2/"),
-            "registry_manifest" => Some("https://registry-manifest.dev/ns/v1#"),
-            "registry_relay" => Some("https://registry-relay.dev/ns#"),
-            "xsd" => Some("http://www.w3.org/2001/XMLSchema#"),
-            _ => None,
-        })?;
-    Some(format!("{base}{suffix}"))
+    let base =
+        builtin_namespace(prefix).or_else(|| vocabularies.get(prefix).map(String::as_str))?;
+    let expanded = format!("{base}{suffix}");
+    is_well_formed_http_https_iri(&expanded).then_some(expanded)
 }
 
 fn expand_policy_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Option<String> {
@@ -5553,7 +5888,32 @@ fn expand_policy_uri(uri: &str, vocabularies: &BTreeMap<String, String>) -> Opti
         "xsd" => "http://www.w3.org/2001/XMLSchema#",
         _ => return None,
     };
-    Some(format!("{base}{suffix}"))
+    let expanded = format!("{base}{suffix}");
+    is_sane_expanded_iri(&expanded).then_some(expanded)
+}
+
+fn is_well_formed_http_https_iri(value: &str) -> bool {
+    let Ok(iri) = Iri::parse(value) else {
+        return false;
+    };
+    (iri.scheme().eq_ignore_ascii_case("http") || iri.scheme().eq_ignore_ascii_case("https"))
+        && iri
+            .authority()
+            .is_some_and(|authority| !authority.trim().is_empty())
+        && is_sane_expanded_iri(value)
+}
+
+fn is_sane_expanded_iri(value: &str) -> bool {
+    !value.is_empty()
+        && !value.chars().any(|ch| {
+            ch.is_ascii_whitespace()
+                || is_c0_control(ch)
+                || matches!(ch, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`')
+        })
+}
+
+fn is_c0_control(ch: char) -> bool {
+    matches!(ch, '\u{0}'..='\u{1f}')
 }
 
 fn normalized_base_url(base_url: &str) -> String {
