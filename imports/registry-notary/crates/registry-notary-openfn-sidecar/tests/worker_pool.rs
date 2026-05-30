@@ -1,6 +1,7 @@
 use registry_notary_openfn_sidecar::{WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig};
 use serde_json::json;
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     path::PathBuf,
     sync::Arc,
@@ -16,6 +17,7 @@ fn fixture_command() -> WorkerCommand {
 fn pool_config(max_workers: usize) -> WorkerPoolConfig {
     WorkerPoolConfig {
         command: fixture_command(),
+        forbidden_env_names: BTreeSet::new(),
         max_workers,
         request_timeout: Duration::from_millis(30_000),
         max_request_bytes: 4096,
@@ -23,6 +25,76 @@ fn pool_config(max_workers: usize) -> WorkerPoolConfig {
         max_stderr_bytes: 128,
         max_memory_bytes: None,
     }
+}
+
+#[tokio::test]
+async fn worker_env_is_cleared_except_explicit_envs() {
+    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    std::env::set_var(
+        "REGISTRY_NOTARY_TEST_SOURCE_CREDENTIAL_JSON",
+        "source-secret",
+    );
+    std::env::set_var("REGISTRY_NOTARY_TEST_BEARER_HASH", "bearer-secret");
+    let command = fixture_command().env("REGISTRY_NOTARY_TEST_ALLOWED", "benign");
+    let mut config = pool_config(1);
+    config.command = command;
+    let pool = WorkerPool::new(config).await.unwrap();
+
+    let response = pool
+        .execute_json(json!({
+            "mode": "env",
+            "env_keys": [
+                "REGISTRY_NOTARY_TEST_SOURCE_CREDENTIAL_JSON",
+                "REGISTRY_NOTARY_TEST_BEARER_HASH",
+                "REGISTRY_NOTARY_TEST_ALLOWED"
+            ]
+        }))
+        .await
+        .unwrap();
+
+    assert!(response["env"]["REGISTRY_NOTARY_TEST_SOURCE_CREDENTIAL_JSON"].is_null());
+    assert!(response["env"]["REGISTRY_NOTARY_TEST_BEARER_HASH"].is_null());
+    assert_eq!(response["env"]["REGISTRY_NOTARY_TEST_ALLOWED"], "benign");
+    std::env::remove_var("REGISTRY_NOTARY_TEST_SOURCE_CREDENTIAL_JSON");
+    std::env::remove_var("REGISTRY_NOTARY_TEST_BEARER_HASH");
+}
+
+#[tokio::test]
+async fn worker_config_rejects_forbidden_explicit_envs() {
+    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let mut config = pool_config(1);
+    config.forbidden_env_names.insert(OsString::from(
+        "REGISTRY_NOTARY_TEST_SOURCE_CREDENTIAL_JSON",
+    ));
+    config.command = fixture_command().env(
+        "REGISTRY_NOTARY_TEST_SOURCE_CREDENTIAL_JSON",
+        "source-secret",
+    );
+
+    let error = match WorkerPool::new(config).await {
+        Ok(_) => panic!("forbidden explicit worker env must fail validation"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, WorkerError::InvalidConfig { .. }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn worker_reports_resource_limits() {
+    let _guard = WORKER_POOL_TEST_LOCK.lock().await;
+    let pool = WorkerPool::new(pool_config(1)).await.unwrap();
+
+    let response = pool
+        .execute_json(json!({ "mode": "rlimits" }))
+        .await
+        .unwrap();
+
+    assert_eq!(response["rlimits"]["cpu"]["soft"], json!(60 * 60));
+    assert_eq!(response["rlimits"]["fsize"]["soft"], json!(1024 * 1024));
+    assert_eq!(response["rlimits"]["nofile"]["soft"], json!(64));
+    assert_eq!(response["rlimits"]["core"]["soft"], json!(0));
+    #[cfg(target_os = "linux")]
+    assert_eq!(response["rlimits"]["nproc"]["soft"], json!(1024));
 }
 
 #[tokio::test]

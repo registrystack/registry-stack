@@ -50,6 +50,9 @@ struct Args {
     /// Override already-set process env vars with values from --env-file.
     #[arg(long, global = true)]
     env_file_override: bool,
+    /// Override server.bind after config load.
+    #[arg(long, env = "REGISTRY_NOTARY_BIND", global = true)]
+    bind: Option<SocketAddr>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -171,6 +174,7 @@ impl std::error::Error for EnvFileError {}
 #[derive(Debug)]
 struct Diagnostic {
     ok: bool,
+    warning: bool,
     label: String,
     action: Option<String>,
 }
@@ -179,14 +183,25 @@ impl Diagnostic {
     fn ok(label: impl Into<String>) -> Self {
         Self {
             ok: true,
+            warning: false,
             label: label.into(),
             action: None,
+        }
+    }
+
+    fn warn(label: impl Into<String>, action: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            warning: true,
+            label: label.into(),
+            action: Some(action.into()),
         }
     }
 
     fn fail(label: impl Into<String>, action: impl Into<String>) -> Self {
         Self {
             ok: false,
+            warning: false,
             label: label.into(),
             action: Some(action.into()),
         }
@@ -209,7 +224,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     match args.command {
         None => {
             let config_path = required_config_path(args.config.as_deref())?;
-            run_server(config_path).await?;
+            run_server(config_path, args.bind).await?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Openapi) => {
@@ -227,6 +242,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             let ok = doctor(
                 config_path,
                 &env_report,
+                args.bind,
                 DoctorOptions {
                     live,
                     subject_id,
@@ -244,7 +260,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Some(Command::ExplainConfig) => {
             let config_path = required_config_path(args.config.as_deref())?;
-            explain_config(config_path, &env_report)?;
+            explain_config(config_path, &env_report, args.bind)?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Init { template }) => {
@@ -297,14 +313,18 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
 }
 
-async fn run_server(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_server(
+    config_path: &Path,
+    bind_override: Option<SocketAddr>,
+) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new("info,registry_notary_server=debug,registry_notary_bin=debug")
         }))
         .init();
 
-    let config = load_expanded_config(config_path)?;
+    let mut config = load_expanded_config(config_path)?;
+    apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;
     let app = standalone_router(config)?.layer(TraceLayer::new_for_http().make_span_with(
         |request: &Request<Body>| {
@@ -460,6 +480,7 @@ struct DoctorOptions {
 async fn doctor(
     config_path: &Path,
     env_report: &EnvFileReport,
+    bind_override: Option<SocketAddr>,
     options: DoctorOptions,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut diagnostics = Vec::new();
@@ -480,6 +501,8 @@ async fn doctor(
     let parsed = match serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw) {
         Ok(config) => {
             diagnostics.push(Diagnostic::ok("config YAML parsed"));
+            let mut config = config;
+            apply_bind_override(&mut config, bind_override);
             Some(config)
         }
         Err(err) => {
@@ -530,7 +553,14 @@ async fn doctor(
 
 fn print_diagnostics(diagnostics: &[Diagnostic]) {
     for diag in diagnostics {
-        println!("{}  {}", if diag.ok { "OK  " } else { "FAIL" }, diag.label);
+        let status = if diag.warning {
+            "WARN"
+        } else if diag.ok {
+            "OK  "
+        } else {
+            "FAIL"
+        };
+        println!("{status}  {}", diag.label);
         if let Some(action) = &diag.action {
             println!("     Next action: {action}");
         }
@@ -555,6 +585,12 @@ fn local_env_diagnostics(
             secret_env,
             env_report,
             "audit hash secret",
+        ));
+    }
+    if matches!(config.audit.sink.as_str(), "file" | "jsonl") {
+        diagnostics.push(Diagnostic::warn(
+            "audit file/jsonl sink is local-chain-only",
+            "for beta tamper-evidence, ship audit envelopes off-host via stdout/syslog or publish external head/tail anchors",
         ));
     }
     if config.replay.storage == "redis" {
@@ -1201,8 +1237,10 @@ fn dci_probe_body(
 fn explain_config(
     config_path: &Path,
     env_report: &EnvFileReport,
+    bind_override: Option<SocketAddr>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let config = load_expanded_config(config_path)?;
+    let mut config = load_expanded_config(config_path)?;
+    apply_bind_override(&mut config, bind_override);
     println!(
         "{}",
         serde_json::to_string_pretty(&redacted_config(&config))?
@@ -1233,6 +1271,12 @@ fn explain_config(
         }
     }
     Ok(())
+}
+
+fn apply_bind_override(config: &mut StandaloneRegistryNotaryConfig, bind: Option<SocketAddr>) {
+    if let Some(bind) = bind {
+        config.server.bind = bind;
+    }
 }
 
 fn required_env_vars(config: &StandaloneRegistryNotaryConfig) -> BTreeSet<String> {
@@ -1293,7 +1337,15 @@ fn redact_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, value) in map {
-                if key.contains("secret") || key.contains("token") || key.contains("jwk") {
+                let lower = key.to_ascii_lowercase();
+                if ["secret", "token", "jwk", "pin"]
+                    .iter()
+                    .any(|term| lower.contains(term))
+                    || (lower.contains("key") && lower != "signing_keys" && lower != "api_keys")
+                    || lower == "credential"
+                    || lower.ends_with("_credential")
+                    || lower == "credential_env"
+                {
                     *value = Value::String("[redacted]".to_string());
                 } else {
                     redact_value(value);
@@ -1873,6 +1925,116 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         let jwk = demo_issuer_jwk("did:web:localhost#demo").expect("jwk generated");
         PrivateJwk::parse(&jwk).expect("generated JWK parses");
         assert!(!format!("{jwk:?}").contains("[redacted]"));
+    }
+
+    #[test]
+    fn bind_override_replaces_config_bind() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.server.bind = "127.0.0.1:8081".parse().expect("socket addr parses");
+
+        apply_bind_override(
+            &mut config,
+            Some("0.0.0.0:8080".parse().expect("socket addr parses")),
+        );
+
+        assert_eq!(
+            config.server.bind,
+            "0.0.0.0:8080"
+                .parse::<SocketAddr>()
+                .expect("socket addr parses")
+        );
+    }
+
+    #[test]
+    fn bind_cli_override_wins_over_env() {
+        std::env::set_var("REGISTRY_NOTARY_BIND", "0.0.0.0:8080");
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "--bind",
+            "127.0.0.1:9000",
+            "explain-config",
+        ])
+        .expect("args parse");
+        std::env::remove_var("REGISTRY_NOTARY_BIND");
+
+        assert_eq!(
+            args.bind,
+            Some("127.0.0.1:9000".parse().expect("socket addr parses"))
+        );
+    }
+
+    #[test]
+    fn env_bind_override_is_loaded_by_cli() {
+        std::env::set_var("REGISTRY_NOTARY_BIND", "0.0.0.0:8080");
+        let args = Args::try_parse_from(["registry-notary", "explain-config"]).expect("args parse");
+        std::env::remove_var("REGISTRY_NOTARY_BIND");
+
+        assert_eq!(
+            args.bind,
+            Some("0.0.0.0:8080".parse().expect("socket addr parses"))
+        );
+    }
+
+    #[test]
+    fn redaction_covers_pin_key_and_credential_names() {
+        let mut value = json!({
+            "pin": "1234",
+            "key": "plain-key",
+            "credential": "raw-credential",
+            "credential_env": "SOURCE_CREDENTIAL",
+            "api_keys": [{
+                "id": "api-key-id",
+                "scopes": ["claims:read"]
+            }],
+            "signing_keys": {
+                "active": {
+                    "status": "active",
+                    "public_key_id": "public-key-id"
+                }
+            },
+            "nested": {
+                "public_key": "public-material",
+                "source_credential": "source-secret",
+                "safe": "visible"
+            }
+        });
+
+        redact_value(&mut value);
+
+        assert_eq!(value["pin"], json!("[redacted]"));
+        assert_eq!(value["key"], json!("[redacted]"));
+        assert_eq!(value["credential"], json!("[redacted]"));
+        assert_eq!(value["credential_env"], json!("[redacted]"));
+        assert_eq!(value["nested"]["public_key"], json!("[redacted]"));
+        assert_eq!(value["nested"]["source_credential"], json!("[redacted]"));
+        assert_eq!(value["nested"]["safe"], json!("visible"));
+        assert_eq!(value["api_keys"][0]["id"], json!("api-key-id"));
+        assert_eq!(value["api_keys"][0]["scopes"][0], json!("claims:read"));
+        assert_eq!(value["signing_keys"]["active"]["status"], json!("active"));
+        assert_eq!(
+            value["signing_keys"]["active"]["public_key_id"],
+            json!("[redacted]")
+        );
+    }
+
+    #[test]
+    fn local_file_audit_sink_emits_beta_tamper_evidence_warning() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "jsonl".to_string();
+
+        let diagnostics = local_env_diagnostics(&config, &EnvFileReport::default());
+
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.label.contains("local-chain-only"))
+            .expect("audit file warning exists");
+        assert!(warning.ok);
+        assert!(warning.warning);
+        assert!(warning
+            .action
+            .as_deref()
+            .expect("warning has next action")
+            .contains("off-host"));
     }
 
     fn test_dci_options(demo_issuer: bool) -> InitDciOptions {

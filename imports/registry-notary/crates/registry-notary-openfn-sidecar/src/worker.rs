@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::{
+    collections::BTreeSet,
     collections::VecDeque,
     ffi::OsString,
     fmt,
@@ -70,6 +71,7 @@ impl WorkerCommand {
 #[derive(Clone, Debug)]
 pub struct WorkerPoolConfig {
     pub command: WorkerCommand,
+    pub forbidden_env_names: BTreeSet<OsString>,
     pub max_workers: usize,
     pub request_timeout: Duration,
     pub max_request_bytes: usize,
@@ -98,6 +100,16 @@ impl WorkerPoolConfig {
         if self.max_stdout_bytes == 0 {
             return Err(WorkerError::InvalidConfig {
                 reason: "max_stdout_bytes must be greater than zero",
+            });
+        }
+        if self
+            .command
+            .envs
+            .iter()
+            .any(|(key, _)| self.forbidden_env_names.contains(key))
+        {
+            return Err(WorkerError::InvalidConfig {
+                reason: "worker command env must not include credential or token env names",
             });
         }
         Ok(())
@@ -567,6 +579,8 @@ impl Worker {
         let mut command = Command::new(&config.command.program);
         command
             .args(&config.command.args)
+            .env_clear()
+            .envs(minimal_worker_env())
             .envs(config.command.envs.iter().cloned())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -581,6 +595,7 @@ impl Worker {
                     if let Some(bytes) = max_memory_bytes {
                         apply_memory_limit(bytes)?;
                     }
+                    apply_worker_resource_limits()?;
                     Ok(())
                 });
             }
@@ -734,6 +749,19 @@ impl Worker {
 }
 
 #[cfg(unix)]
+#[cfg(target_os = "linux")]
+fn apply_memory_limit(bytes: u64) -> io::Result<()> {
+    apply_resource_limit(libc::RLIMIT_AS, bytes).or_else(|error| {
+        if error.raw_os_error() == Some(libc::EINVAL) {
+            apply_resource_limit(libc::RLIMIT_DATA, bytes)
+        } else {
+            Err(error)
+        }
+    })
+}
+
+#[cfg(unix)]
+#[cfg(not(target_os = "linux"))]
 fn apply_memory_limit(bytes: u64) -> io::Result<()> {
     apply_resource_limit(libc::RLIMIT_AS, bytes).or_else(|error| {
         if error.raw_os_error() == Some(libc::EINVAL) {
@@ -748,6 +776,19 @@ fn apply_memory_limit(bytes: u64) -> io::Result<()> {
             Err(error)
         }
     })
+}
+
+#[cfg(unix)]
+fn apply_worker_resource_limits() -> io::Result<()> {
+    apply_resource_limit(libc::RLIMIT_CPU, 60 * 60)?;
+    apply_resource_limit(libc::RLIMIT_FSIZE, 1024 * 1024)?;
+    apply_resource_limit(libc::RLIMIT_NOFILE, 64)?;
+    apply_resource_limit(libc::RLIMIT_CORE, 0)?;
+    #[cfg(target_os = "linux")]
+    {
+        apply_resource_limit(libc::RLIMIT_NPROC, 1024)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -770,6 +811,14 @@ fn apply_resource_limit(resource: RlimitResource, bytes: u64) -> io::Result<()> 
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+fn minimal_worker_env() -> Vec<(OsString, OsString)> {
+    const ALLOWED: &[&str] = &["PATH", "HOME", "TMPDIR", "TEMP", "TMP"];
+    ALLOWED
+        .iter()
+        .filter_map(|key| std::env::var_os(key).map(|value| (OsString::from(key), value)))
+        .collect()
 }
 
 async fn kill_worker_process(child: &mut Child) {

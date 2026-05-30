@@ -29,16 +29,16 @@ fn app(config: StandaloneRegistryNotaryConfig) -> Result<axum::Router, Standalon
 
 ## Features
 
-- Default: `registry-notary-cel`.
+- Default: no CEL runtime.
 - `registry-notary-cel`: enables CEL-backed claim expression evaluation through
-  `crosswalk-core`.
+  `crosswalk-core`. CEL-enabled builds are experimental for beta because the
+  current timeout is not a hard CPU or step limit.
 - `pkcs11`: enables HSM-backed SD-JWT VC issuer signing through PKCS#11. The
   provider supports Ed25519 EdDSA keys and is configured through
   `evidence.signing_keys`. See
   [`../../docs/signing-key-provider.md`](../../docs/signing-key-provider.md).
 
-Run server tests without default features when checking the non-CEL binary
-shape:
+Run server tests without default features when checking the beta binary shape:
 
 ```sh
 cargo test -p registry-notary-server --no-default-features

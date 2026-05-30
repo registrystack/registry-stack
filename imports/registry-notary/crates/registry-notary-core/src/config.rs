@@ -72,6 +72,15 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.evidence.concurrency.validate()?;
+        if self.evidence.max_credential_validity_seconds == 0
+            || self.evidence.max_credential_validity_seconds > 600
+        {
+            return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
+                profile: "*".to_string(),
+                validity_seconds: self.evidence.max_credential_validity_seconds as i64,
+                max_validity_seconds: 600,
+            });
+        }
         self.credential_status.validate()?;
         for (connection_id, connection) in &self.evidence.source_connections {
             if connection.max_in_flight < 1 {
@@ -148,6 +157,11 @@ impl StandaloneRegistryNotaryConfig {
         // cannot advertise support that issuance cannot satisfy.
         self.evidence.validate_signing_keys()?;
         for (profile_id, profile) in &self.evidence.credential_profiles {
+            validate_credential_profile_validity(
+                profile_id,
+                profile,
+                self.evidence.max_credential_validity_seconds,
+            )?;
             if profile.format != FORMAT_SD_JWT_VC {
                 return Err(EvidenceConfigError::UnsupportedCredentialProfileFormat {
                     profile: profile_id.clone(),
@@ -364,6 +378,35 @@ fn invalid_replay<T>(reason: impl Into<String>) -> Result<T, EvidenceConfigError
     Err(EvidenceConfigError::InvalidReplayConfig {
         reason: reason.into(),
     })
+}
+
+fn validate_credential_profile_validity(
+    profile_id: &str,
+    profile: &CredentialProfileConfig,
+    max_validity_seconds: u64,
+) -> Result<(), EvidenceConfigError> {
+    if profile.validity_seconds <= 0 {
+        return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
+            profile: profile_id.to_string(),
+            validity_seconds: profile.validity_seconds,
+            max_validity_seconds,
+        });
+    }
+    let validity_seconds = u64::try_from(profile.validity_seconds).map_err(|_| {
+        EvidenceConfigError::InvalidCredentialProfileValidity {
+            profile: profile_id.to_string(),
+            validity_seconds: profile.validity_seconds,
+            max_validity_seconds,
+        }
+    })?;
+    if validity_seconds > max_validity_seconds {
+        return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
+            profile: profile_id.to_string(),
+            validity_seconds: profile.validity_seconds,
+            max_validity_seconds,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -2505,6 +2548,14 @@ pub enum EvidenceConfigError {
     UnknownCredentialProfileSigningKey { profile: String, key: String },
     #[error("credential profile '{profile}' references non-active signing key '{key}'")]
     CredentialProfileSigningKeyNotActive { profile: String, key: String },
+    #[error(
+        "credential profile '{profile}' validity_seconds {validity_seconds} must be between 1 and {max_validity_seconds}"
+    )]
+    InvalidCredentialProfileValidity {
+        profile: String,
+        validity_seconds: i64,
+        max_validity_seconds: u64,
+    },
     #[error("credential profile '{profile}' issuer does not match signing key '{key}': {reason}")]
     CredentialProfileSigningKeyIssuerMismatch {
         profile: String,
@@ -2567,6 +2618,8 @@ pub struct EvidenceConfig {
     pub formats_url: String,
     #[serde(default = "default_inline_batch_limit")]
     pub inline_batch_limit: usize,
+    #[serde(default = "default_max_credential_validity_seconds")]
+    pub max_credential_validity_seconds: u64,
     #[serde(default)]
     pub claims: Vec<ClaimDefinition>,
     #[serde(default)]
@@ -2579,6 +2632,10 @@ pub struct EvidenceConfig {
     /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
+}
+
+const fn default_max_credential_validity_seconds() -> u64 {
+    600
 }
 
 impl EvidenceConfig {
@@ -4061,6 +4118,70 @@ allowed_claims:
         .expect("profile YAML is valid");
 
         assert_eq!(profile.validity_seconds, 300);
+    }
+
+    #[test]
+    fn credential_profile_validity_above_general_ceiling_is_rejected() {
+        let mut config = minimal_config();
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: did:web:issuer.example
+signing_key: issuer-key
+vct: https://vct.example/test
+validity_seconds: 601
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+        config
+            .evidence
+            .credential_profiles
+            .insert("long-lived".to_string(), profile);
+
+        let err = config
+            .validate()
+            .expect_err("over-ceiling credential validity must fail");
+        assert!(matches!(
+            err,
+            EvidenceConfigError::InvalidCredentialProfileValidity {
+                profile,
+                validity_seconds: 601,
+                max_validity_seconds: 600
+            } if profile == "long-lived"
+        ));
+    }
+
+    #[test]
+    fn credential_profile_non_positive_validity_is_rejected() {
+        for invalid in [0, -1] {
+            let mut config = minimal_config();
+            let mut profile: CredentialProfileConfig = serde_norway::from_str(
+                r#"
+format: application/dc+sd-jwt
+issuer: did:web:issuer.example
+signing_key: issuer-key
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+            )
+            .expect("profile YAML is valid");
+            profile.validity_seconds = invalid;
+            config
+                .evidence
+                .credential_profiles
+                .insert("invalid-validity".to_string(), profile);
+
+            let err = config
+                .validate()
+                .expect_err("non-positive credential validity must fail");
+            assert!(matches!(
+                err,
+                EvidenceConfigError::InvalidCredentialProfileValidity { .. }
+            ));
+        }
     }
 
     #[test]
@@ -5673,8 +5794,17 @@ self_attestation:
             .unwrap()
             .validity_seconds = 601;
 
-        let reason = expect_self_attestation_error(&config);
-        assert!(reason.contains("validity_seconds"), "unexpected: {reason}");
+        let error = config
+            .validate()
+            .expect_err("validity above general ceiling is rejected");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidCredentialProfileValidity {
+                profile,
+                validity_seconds: 601,
+                max_validity_seconds: 600,
+            } if profile == "civil_status_sd_jwt"
+        ));
     }
 
     #[test]

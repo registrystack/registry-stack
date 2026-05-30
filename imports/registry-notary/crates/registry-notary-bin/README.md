@@ -28,7 +28,7 @@ cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.jso
 
 ## Features
 
-- Default: `registry-notary-cel`.
+- Default: no CEL runtime.
 - `registry-notary-cel`: enables the server crate's CEL runtime feature.
 
 ## Testing

@@ -315,6 +315,9 @@ pub enum ClaimSet {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyIdentifier {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestIdentifier {}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundedVerifiedClaims {
@@ -898,7 +901,7 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub federation_purpose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub federation_request_jti: Option<String>,
+    pub federation_request_jti_hash: Option<Hashed<RequestIdentifier>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub federation_subject_ref_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -906,7 +909,7 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_claim_name: Option<ConfigMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub correlation_id: Option<BoundedCorrelationId>,
+    pub correlation_id_hash: Option<Hashed<RequestIdentifier>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_profile: Option<ConfigMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1030,11 +1033,11 @@ mod tests {
             federation_issuer: None,
             federation_profile: None,
             federation_purpose: None,
-            federation_request_jti: None,
+            federation_request_jti_hash: None,
             federation_subject_ref_hash: None,
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
             token_claim_name: Some(bounded("national_id")),
-            correlation_id: Some(bounded("req-123")),
+            correlation_id_hash: Some(Hashed::from_hash("hmac-sha256:req-123")),
             credential_profile: None,
             protocol: Some(bounded("openid4vci")),
             credential_configuration_id: Some(bounded("person_is_alive_sd_jwt")),
@@ -1051,7 +1054,8 @@ mod tests {
             json!("self_attestation.subject_mismatch")
         );
         assert_eq!(value["token_claim_name"], json!("national_id"));
-        assert_eq!(value["correlation_id"], json!("req-123"));
+        assert_eq!(value["correlation_id_hash"], json!("hmac-sha256:req-123"));
+        assert!(value.get("correlation_id").is_none());
         assert_eq!(value["protocol"], json!("openid4vci"));
         assert_eq!(
             value["credential_configuration_id"],
@@ -1074,8 +1078,8 @@ mod tests {
             Some("national_id")
         );
         assert_eq!(
-            decoded.correlation_id.as_ref().map(Bounded::as_str),
-            Some("req-123")
+            decoded.correlation_id_hash.as_ref().map(Hashed::as_str),
+            Some("hmac-sha256:req-123")
         );
         assert_eq!(
             decoded.policy_hash.as_ref().map(Hashed::as_str),

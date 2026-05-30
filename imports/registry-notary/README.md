@@ -227,10 +227,13 @@ it only with an audit-retention plan.
 
 Each envelope links to the previous envelope through `prev_hash` and exposes its
 own `record_hash`. For file/jsonl sinks, startup resumes from the retained tail
-hash. For stdout, syslog, or rotated-file retention windows, publish external
-anchors for the retained head and tail hashes in storage the audit writer cannot
-rewrite. Verification should check both the trusted starting `prev_hash` for a
-retained suffix and the trusted final `record_hash` for the period under review.
+hash, which proves local chain consistency but does not by itself prevent a
+writer with local file access from rewriting history. Beta deployments that rely
+on audit tamper-evidence must ship stdout/syslog envelopes off-host or publish
+external anchors for retained head and tail hashes in storage the audit writer
+cannot rewrite. Verification should check both the trusted starting `prev_hash`
+for a retained suffix and the trusted final `record_hash` for the period under
+review.
 
 ## Verification
 
@@ -239,18 +242,26 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p registry-notary-server --no-default-features
 cargo test --workspace --all-features
+# cargo-deny is pinned through this wrapper.
+./scripts/cargo-deny-check.sh
 cargo build --workspace --all-features
 cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
 ```
+
+Use the wrapper for dependency policy checks. It installs and runs the pinned
+`cargo-deny` version expected by `deny.toml`, so older global installs do not
+break local or CI verification.
 
 Registry Notary depends on sibling `../registry-platform` path crates. CI checks
 out `registry-platform` at `REGISTRY_PLATFORM_REF` beside this repository before
 running Cargo jobs. Private platform checkouts require a repository secret named
 `REGISTRY_PLATFORM_TOKEN`.
 
-CEL is enabled by default through the `registry-notary-cel` feature and is
-implemented through the local `crosswalk-core` crate at
-`../cel-mapping/crates/crosswalk-core`.
+CEL is disabled in default beta builds. It remains available through the
+explicit `registry-notary-cel` feature and is implemented through the local
+`crosswalk-core` crate at `../cel-mapping/crates/crosswalk-core`. The current
+CEL timeout bounds request latency but is not a hard CPU or step limit, so
+CEL-enabled builds are experimental until hardened subprocess isolation lands.
 
 ## Docker
 
@@ -260,6 +271,10 @@ BuildKit and pass `../registry-platform` as a named context:
 ```bash
 docker build --build-context registry-platform=../registry-platform -t registry-notary .
 ```
+
+Native runs default to `127.0.0.1:8081`. The Docker image sets
+`REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with
+`--bind` or `REGISTRY_NOTARY_BIND` when deploying behind a different listener.
 
 ## OpenAPI
 

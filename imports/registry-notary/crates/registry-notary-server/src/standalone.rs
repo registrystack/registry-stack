@@ -6,7 +6,7 @@ use std::env;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex, OnceCell, Semaphore};
@@ -24,10 +24,10 @@ use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
     EvidenceAuditEvent, EvidenceConfig, EvidenceCredentialConfig, EvidenceError, EvidencePrincipal,
     Hashed, Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
-    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
-    SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig,
-    SourceConnectionConfig, SourceConnectorKind, StandaloneRegistryNotaryConfig, SubjectRequest,
-    VerifiedClaimName, VerifiedClaimValue,
+    RequestIdentifier, SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource,
+    SelfAttestationDenialCode, SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig,
+    SourceBindingConfig, SourceConnectionConfig, SourceConnectorKind,
+    StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState, JsonlFileSink,
@@ -40,7 +40,7 @@ use registry_platform_crypto::{
     sign, verify, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
 };
 use registry_platform_httputil::{
-    read_bounded, url as httputil_url, FetchUrlPolicy, OutboundClientBuilder,
+    read_bounded, url as httputil_url, FetchUrlError, FetchUrlPolicy, ValidatedFetchUrl,
 };
 use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
@@ -417,25 +417,31 @@ impl std::fmt::Debug for Oauth2ClientCredentialsRuntime {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct CachedSourceToken {
     access_token: String,
     refresh_after: Instant,
 }
 
+impl std::fmt::Debug for CachedSourceToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedSourceToken")
+            .field("access_token", &"<redacted>")
+            .field("refresh_after", &self.refresh_after)
+            .finish()
+    }
+}
+
 impl SourceAuthRuntime {
     async fn bearer_token(
         &self,
-        client: &reqwest::Client,
         fetch_url_policy: &FetchUrlPolicy,
         force_refresh: bool,
     ) -> Result<String, EvidenceError> {
         match self {
             SourceAuthRuntime::StaticBearer(token) => Ok(token.to_string()),
             SourceAuthRuntime::Oauth2ClientCredentials(runtime) => {
-                runtime
-                    .bearer_token(client, fetch_url_policy, force_refresh)
-                    .await
+                runtime.bearer_token(fetch_url_policy, force_refresh).await
             }
         }
     }
@@ -448,7 +454,6 @@ impl SourceAuthRuntime {
 impl Oauth2ClientCredentialsRuntime {
     async fn bearer_token(
         &self,
-        client: &reqwest::Client,
         fetch_url_policy: &FetchUrlPolicy,
         force_refresh: bool,
     ) -> Result<String, EvidenceError> {
@@ -461,7 +466,7 @@ impl Oauth2ClientCredentialsRuntime {
                 }
             }
         }
-        let token = self.fetch_token(client, fetch_url_policy).await?;
+        let token = self.fetch_token(fetch_url_policy).await?;
         let access_token = token.access_token.clone();
         *cache = Some(token);
         Ok(access_token)
@@ -469,23 +474,59 @@ impl Oauth2ClientCredentialsRuntime {
 
     async fn fetch_token(
         &self,
-        client: &reqwest::Client,
         fetch_url_policy: &FetchUrlPolicy,
     ) -> Result<CachedSourceToken, EvidenceError> {
-        if let Err(error) = fetch_url_policy.validate(&self.token_url) {
+        let validated_url = match fetch_url_policy
+            .validate_for_immediate_fetch_with_timeout(&self.token_url, SOURCE_REQUEST_TIMEOUT)
+            .await
+        {
+            Ok(validated_url) => validated_url,
+            Err(error) => {
+                tracing::warn!(
+                    target: "registry_notary_server::outbound",
+                    scheme = self.token_url.scheme(),
+                    host = self.token_url.host_str().unwrap_or("<missing>"),
+                    error = %error,
+                    "source OAuth token URL rejected by fetch policy",
+                );
+                return Err(EvidenceError::SourceUnavailable);
+            }
+        };
+        let mut request = match pinned_request_builder(
+            &validated_url,
+            reqwest::Method::POST,
+            SOURCE_REQUEST_TIMEOUT,
+        ) {
+            Ok(request) => request
+                .timeout(SOURCE_REQUEST_TIMEOUT)
+                .header("accept", "application/json"),
+            Err(error) => {
+                tracing::error!(
+                    target: "registry_notary_server::outbound",
+                    scheme = self.token_url.scheme(),
+                    host = self.token_url.host_str().unwrap_or("<missing>"),
+                    error = %error,
+                    "source OAuth token request could not use pinned fetch target",
+                );
+                return Err(EvidenceError::SourceUnavailable);
+            }
+        };
+        tracing::debug!(
+            target: "registry_notary_server::outbound",
+            scheme = self.token_url.scheme(),
+            host = self.token_url.host_str().unwrap_or("<missing>"),
+            resolved_ips = ?validated_url.resolved_ips(),
+            "source OAuth token URL validated for pinned immediate fetch",
+        );
+        if validated_url.url() != &self.token_url {
             tracing::warn!(
                 target: "registry_notary_server::outbound",
                 scheme = self.token_url.scheme(),
                 host = self.token_url.host_str().unwrap_or("<missing>"),
-                error = %error,
-                "source OAuth token URL rejected by fetch policy",
+                "source OAuth token URL changed during validation",
             );
             return Err(EvidenceError::SourceUnavailable);
         }
-        let mut request = client
-            .post(self.token_url.clone())
-            .timeout(SOURCE_REQUEST_TIMEOUT)
-            .header("accept", "application/json");
         let mut params = BTreeMap::new();
         params.insert("grant_type", "client_credentials");
         params.insert("client_id", self.client_id.as_str());
@@ -583,7 +624,6 @@ impl std::fmt::Debug for ResolvedEvidenceSourceConnection {
 
 #[derive(Debug, Clone)]
 pub struct HttpEvidenceSources {
-    client: reqwest::Client,
     request_timeout: Duration,
     source_connections: BTreeMap<String, ResolvedEvidenceSourceConnection>,
     metrics: Arc<AppMetrics>,
@@ -613,12 +653,7 @@ impl HttpEvidenceSources {
                 },
             );
         }
-        let client = OutboundClientBuilder::new()
-            .timeout(SOURCE_REQUEST_TIMEOUT)
-            .user_agent("registry-notary/0.2")
-            .build();
         Ok(Self {
-            client,
             request_timeout: SOURCE_REQUEST_TIMEOUT,
             source_connections,
             metrics,
@@ -1715,6 +1750,10 @@ impl AuditPipeline {
         Hashed::from_hash(self.hasher.hash(value))
     }
 
+    pub(crate) fn hash_request_identifier(&self, value: &str) -> Hashed<RequestIdentifier> {
+        Hashed::from_hash(self.hasher.hash(value))
+    }
+
     pub(crate) async fn emit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
         let chain = self
             .chain
@@ -2004,11 +2043,13 @@ fn build_audit_event(
         federation_issuer: None,
         federation_profile: None,
         federation_purpose: None,
-        federation_request_jti: None,
+        federation_request_jti_hash: None,
         federation_subject_ref_hash: None,
         denial_code,
         token_claim_name,
-        correlation_id: Some(correlation_id),
+        correlation_id_hash: Some(Hashed::<RequestIdentifier>::from_hash(
+            hasher.hash(correlation_id.as_str()),
+        )),
         credential_profile,
         protocol,
         credential_configuration_id,
@@ -2352,7 +2393,6 @@ fn oidc_auth_error(error: OidcError) -> EvidenceError {
     tracing::debug!(
         target: "registry_notary_server::auth",
         error_code = oidc_internal_error_code(&error),
-        error = ?error,
         "OIDC token verification failed"
     );
     EvidenceError::MissingCredential
@@ -2468,6 +2508,61 @@ fn add_correlation_header(builder: reqwest::RequestBuilder) -> reqwest::RequestB
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PinnedClientCacheKey {
+    host: String,
+    resolved_addrs: Vec<SocketAddr>,
+    timeout: Duration,
+}
+
+static PINNED_CLIENTS: OnceLock<StdMutex<HashMap<PinnedClientCacheKey, reqwest::Client>>> =
+    OnceLock::new();
+
+fn pinned_request_builder(
+    validated_url: &ValidatedFetchUrl,
+    method: reqwest::Method,
+    timeout: Duration,
+) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+    let host = validated_url
+        .url()
+        .host_str()
+        .ok_or(FetchUrlError::MissingHost)?
+        .to_string();
+    let key = PinnedClientCacheKey {
+        host: host.clone(),
+        resolved_addrs: validated_url.resolved_addrs().to_vec(),
+        timeout,
+    };
+    let clients = PINNED_CLIENTS.get_or_init(|| StdMutex::new(HashMap::new()));
+    if let Some(client) = clients
+        .lock()
+        .expect("pinned client cache lock is not poisoned")
+        .get(&key)
+        .cloned()
+    {
+        return Ok(client
+            .request(method, validated_url.url().clone())
+            .timeout(timeout));
+    }
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent("registry-notary/0.2")
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .resolve_to_addrs(&host, validated_url.resolved_addrs())
+        .build()
+        .map_err(FetchUrlError::ClientBuild)?;
+    let client = clients
+        .lock()
+        .expect("pinned client cache lock is not poisoned")
+        .entry(key)
+        .or_insert(client)
+        .clone();
+    Ok(client
+        .request(method, validated_url.url().clone())
+        .timeout(timeout))
+}
+
 async fn read_remote_registry_data_api_one(
     sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
@@ -2484,19 +2579,23 @@ async fn read_remote_registry_data_api_one(
         ("fields".to_string(), fields.join(",")),
         (lookup_field.clone(), value_query_string(&lookup_value)?),
     ];
-    let request_url = url.clone();
-    let body = send_request_with_retry(sources, connection, "rda", &url, move |token| {
-        add_correlation_header(
-            sources
-                .client
-                .get(request_url.clone())
-                .timeout(sources.request_timeout)
-                .bearer_auth(token)
-                .header("accept", "application/json")
-                .header("data-purpose", purpose),
-        )
-        .query(&query_pairs)
-    })
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "rda",
+        &url,
+        reqwest::Method::GET,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .query(&query_pairs)
+        },
+    )
     .await?;
     let rows = body
         .get("data")
@@ -2522,20 +2621,24 @@ async fn read_external_dci_http_one(
     let lookup_value = lookup_value(binding, subject)?;
     let url = source_url(&connection.base_url, &connection.dci.search_path)?;
     let request_body = dci_search_request_body(&connection.dci, binding, &lookup_value)?;
-    let request_url = url.clone();
-    let body = send_request_with_retry(sources, connection, "dci", &url, move |token| {
-        add_correlation_header(
-            sources
-                .client
-                .post(request_url.clone())
-                .timeout(sources.request_timeout)
-                .bearer_auth(token)
-                .header("accept", "application/json")
-                .header("content-type", "application/json")
-                .header("data-purpose", purpose),
-        )
-        .json(&request_body)
-    })
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "dci",
+        &url,
+        reqwest::Method::POST,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .json(&request_body)
+        },
+    )
     .await?;
     let rows = match get_json_path(&body, &connection.dci.records_path).and_then(Value::as_array) {
         Some(rows) => rows,
@@ -2611,21 +2714,24 @@ async fn read_remote_registry_data_api_many(
         (filter_name, in_values.join(",")),
     ];
     let timeout_budget = bulk_timeout(connection, n);
-    let request_url = url.clone();
-    let body_result =
-        send_request_with_retry(sources, connection, "rda_bulk", &url, move |token| {
+    let body_result = send_request_with_retry(
+        sources,
+        connection,
+        "rda_bulk",
+        &url,
+        reqwest::Method::GET,
+        timeout_budget,
+        move |request, token| {
             add_correlation_header(
-                sources
-                    .client
-                    .get(request_url.clone())
-                    .timeout(timeout_budget)
+                request
                     .bearer_auth(token)
                     .header("accept", "application/json")
                     .header("data-purpose", purpose),
             )
             .query(&query_pairs)
-        })
-        .await;
+        },
+    )
+    .await;
     let body = match body_result {
         Ok(body) => body,
         Err(e) => {
@@ -2785,22 +2891,25 @@ async fn read_external_dci_http_many(
     });
     add_dci_envelope_options(&connection.dci, &mut request_body);
     let timeout_budget = bulk_timeout(connection, n_valid);
-    let request_url = url.clone();
-    let body_result =
-        send_request_with_retry(sources, connection, "dci_bulk", &url, move |token| {
+    let body_result = send_request_with_retry(
+        sources,
+        connection,
+        "dci_bulk",
+        &url,
+        reqwest::Method::POST,
+        timeout_budget,
+        move |request, token| {
             add_correlation_header(
-                sources
-                    .client
-                    .post(request_url.clone())
-                    .timeout(timeout_budget)
+                request
                     .bearer_auth(token)
                     .header("accept", "application/json")
                     .header("content-type", "application/json")
                     .header("data-purpose", purpose),
             )
             .json(&request_body)
-        })
-        .await;
+        },
+    )
+    .await;
     let body = match body_result {
         Ok(body) => body,
         Err(e) => {
@@ -2932,20 +3041,10 @@ async fn send_request_with_retry(
     connection: &ResolvedEvidenceSourceConnection,
     connector: &'static str,
     url: &reqwest::Url,
-    build_request: impl Fn(String) -> reqwest::RequestBuilder,
+    method: reqwest::Method,
+    request_timeout: Duration,
+    build_request: impl Fn(reqwest::RequestBuilder, String) -> reqwest::RequestBuilder,
 ) -> Result<Value, EvidenceError> {
-    if let Err(error) = connection.fetch_url_policy.validate(url) {
-        tracing::warn!(
-            target: "registry_notary_server::outbound",
-            connection_id = %connection.id,
-            connector = connector,
-            scheme = url.scheme(),
-            host = url.host_str().unwrap_or("<missing>"),
-            error = %error,
-            "source URL rejected by fetch policy",
-        );
-        return Err(EvidenceError::SourceUnavailable);
-    }
     let permit = connection
         .semaphore
         .clone()
@@ -2976,13 +3075,57 @@ async fn send_request_with_retry(
         force_refresh_next = false;
         let token = match connection
             .auth
-            .bearer_token(&sources.client, &connection.fetch_url_policy, force_refresh)
+            .bearer_token(&connection.fetch_url_policy, force_refresh)
             .await
         {
             Ok(token) => token,
             Err(error) => break Err(error),
         };
-        let outcome = build_request(token).send().await;
+        let validated_url = match connection
+            .fetch_url_policy
+            .validate_for_immediate_fetch_with_timeout(url, SOURCE_REQUEST_TIMEOUT)
+            .await
+        {
+            Ok(validated_url) => validated_url,
+            Err(error) => {
+                tracing::warn!(
+                    target: "registry_notary_server::outbound",
+                    connection_id = %connection.id,
+                    connector = connector,
+                    scheme = url.scheme(),
+                    host = url.host_str().unwrap_or("<missing>"),
+                    error = %error,
+                    "source URL rejected by fetch policy",
+                );
+                break Err(EvidenceError::SourceUnavailable);
+            }
+        };
+        tracing::debug!(
+            target: "registry_notary_server::outbound",
+            connection_id = %connection.id,
+            connector = connector,
+            scheme = url.scheme(),
+            host = url.host_str().unwrap_or("<missing>"),
+            resolved_ips = ?validated_url.resolved_ips(),
+            "source URL validated for pinned immediate fetch",
+        );
+        let request = match pinned_request_builder(&validated_url, method.clone(), request_timeout)
+        {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::error!(
+                    target: "registry_notary_server::outbound",
+                    connection_id = %connection.id,
+                    connector = connector,
+                    scheme = url.scheme(),
+                    host = url.host_str().unwrap_or("<missing>"),
+                    error = %error,
+                    "source request could not use pinned fetch target",
+                );
+                break Err(EvidenceError::SourceUnavailable);
+            }
+        };
+        let outcome = build_request(request, token).send().await;
         let retryable = match &outcome {
             Err(_) => true,
             Ok(response) => response.status().is_server_error(),
@@ -3351,7 +3494,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::response::Redirect;
-    use axum::routing::get;
+    use axum::routing::{get, post};
     use axum_test::TestServer;
     #[cfg(feature = "pkcs11")]
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -3376,6 +3519,83 @@ mod tests {
     #[cfg(feature = "pkcs11")]
     static SOFTHSM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    #[test]
+    fn cached_source_token_debug_redacts_access_token() {
+        let token = CachedSourceToken {
+            access_token: "source-access-token-secret".to_string(),
+            refresh_after: Instant::now(),
+        };
+
+        let debug = format!("{token:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("source-access-token-secret"));
+    }
+
+    #[test]
+    fn request_identifier_hashes_are_deterministic_and_non_raw() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+
+        let first = Hashed::<RequestIdentifier>::from_hash(hasher.hash("request-jti-1"));
+        let again = Hashed::<RequestIdentifier>::from_hash(hasher.hash("request-jti-1"));
+        let other = Hashed::<RequestIdentifier>::from_hash(hasher.hash("request-jti-2"));
+
+        assert_eq!(first, again);
+        assert_ne!(first, other);
+        assert_ne!(first.as_str(), "request-jti-1");
+    }
+
+    #[tokio::test]
+    async fn pinned_request_builder_sends_get_and_post_to_validated_target() {
+        let app = Router::new()
+            .route("/get", get(|| async { "pinned-get" }))
+            .route("/post", post(|| async { "pinned-post" }));
+        let server = TestServer::builder().http_transport().build(app);
+        let base_url = server.server_address().expect("server address").to_string();
+        let base_url = base_url.trim_end_matches('/');
+        let get_url = format!("{base_url}/get").parse().expect("GET URL parses");
+        let post_url = format!("{base_url}/post").parse().expect("POST URL parses");
+        let policy = FetchUrlPolicy::dev();
+
+        let validated_get = policy
+            .validate_for_immediate_fetch_with_timeout(&get_url, Duration::from_secs(2))
+            .await
+            .expect("GET URL validates");
+        let get_response =
+            pinned_request_builder(&validated_get, reqwest::Method::GET, Duration::from_secs(2))
+                .expect("GET request builds from validated URL")
+                .send()
+                .await
+                .expect("GET request sends");
+        assert_eq!(get_response.status(), reqwest::StatusCode::OK);
+        let get_body = get_response.text().await.expect("GET response body reads");
+
+        let validated_post = policy
+            .validate_for_immediate_fetch_with_timeout(&post_url, Duration::from_secs(2))
+            .await
+            .expect("POST URL validates");
+        let post_response = pinned_request_builder(
+            &validated_post,
+            reqwest::Method::POST,
+            Duration::from_secs(2),
+        )
+        .expect("POST request builds from validated URL")
+        .body("ignored")
+        .send()
+        .await
+        .expect("POST request sends");
+        assert_eq!(post_response.status(), reqwest::StatusCode::OK);
+        let post_body = post_response
+            .text()
+            .await
+            .expect("POST response body reads");
+
+        assert_eq!(get_body, "pinned-get");
+        assert_eq!(post_body, "pinned-post");
+        assert!(!validated_get.resolved_ips().is_empty());
+        assert!(!validated_post.resolved_ips().is_empty());
+    }
+
     fn audit_event() -> EvidenceAuditEvent {
         EvidenceAuditEvent {
             event_id: "01HX0000000000000000000000".to_string(),
@@ -3395,11 +3615,11 @@ mod tests {
             federation_issuer: None,
             federation_profile: None,
             federation_purpose: None,
-            federation_request_jti: None,
+            federation_request_jti_hash: None,
             federation_subject_ref_hash: None,
             denial_code: None,
             token_claim_name: None,
-            correlation_id: None,
+            correlation_id_hash: None,
             credential_profile: None,
             protocol: None,
             credential_configuration_id: None,
@@ -3856,12 +4076,10 @@ credential_profiles:
         assert_eq!(event.claim_hash.as_deref(), Some("sha256:claim-hash"));
         assert_eq!(event.access_mode, Some(AccessMode::SelfAttestation));
         assert!(event.principal_id_hash.is_some());
+        let expected_correlation_hash = AuditKeyHasher::unkeyed_dev_only().hash("req-123");
         assert_eq!(
-            event
-                .correlation_id
-                .as_ref()
-                .map(BoundedCorrelationId::as_str),
-            Some("req-123")
+            event.correlation_id_hash.as_ref().map(Hashed::as_str),
+            Some(expected_correlation_hash.as_str())
         );
         assert_eq!(
             event.denial_code,

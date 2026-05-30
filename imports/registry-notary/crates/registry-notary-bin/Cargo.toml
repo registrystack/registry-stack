@@ -13,7 +13,7 @@ name = "registry-notary"
 path = "src/main.rs"
 
 [features]
-default = ["registry-notary-cel"]
+default = []
 registry-notary-cel = ["registry-notary-server/registry-notary-cel"]
 
 [dependencies]

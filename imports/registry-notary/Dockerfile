@@ -22,6 +22,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot@sha256:bd2899c12b335c827750ccf2359879
 
 COPY --from=builder /usr/local/bin/registry-notary /usr/local/bin/registry-notary
 
+ENV REGISTRY_NOTARY_BIND=0.0.0.0:8080
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/registry-notary"]

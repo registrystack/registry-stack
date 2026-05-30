@@ -2,9 +2,7 @@
 
 use axum::http::HeaderMap;
 use axum::response::Response;
-use registry_notary_core::{
-    AccessMode, BoundedCorrelationId, ConfigMetadata, FEDERATION_PROTOCOL_V0_1,
-};
+use registry_notary_core::{AccessMode, ConfigMetadata, FEDERATION_PROTOCOL_V0_1};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -74,15 +72,19 @@ pub(super) fn federation_audit_event(
         federation_issuer: audit.issuer,
         federation_profile: audit.profile,
         federation_purpose: audit.purpose,
-        federation_request_jti: audit.request_jti,
+        federation_request_jti_hash: audit.request_jti.as_deref().and_then(|request_jti| {
+            audit_pipeline.map(|pipeline| pipeline.hash_request_identifier(request_jti))
+        }),
         federation_subject_ref_hash: audit.subject_ref_hash,
         denial_code: None,
         token_claim_name: None,
-        correlation_id: headers
+        correlation_id_hash: headers
             .get("x-request-id")
             .or_else(|| headers.get("x-correlation-id"))
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| BoundedCorrelationId::new(value.to_string()).ok()),
+            .and_then(|value| {
+                audit_pipeline.map(|pipeline| pipeline.hash_request_identifier(value))
+            }),
         credential_profile: None,
         protocol: ConfigMetadata::new(FEDERATION_PROTOCOL_V0_1).ok(),
         credential_configuration_id: None,

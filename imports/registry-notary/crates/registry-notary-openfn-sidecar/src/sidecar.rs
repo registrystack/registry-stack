@@ -230,6 +230,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
 
     let pool = WorkerPool::new(WorkerPoolConfig {
         command,
+        forbidden_env_names: sensitive_worker_env_names(&config),
         max_workers: config.limits.max_workers,
         request_timeout: Duration::from_millis(config.limits.worker_timeout_ms),
         max_request_bytes: config.limits.max_request_bytes,
@@ -258,6 +259,22 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         .route("/metrics", get(metrics))
         .route("/datasets/{dataset}/{entity}", get(lookup))
         .with_state(state))
+}
+
+fn sensitive_worker_env_names(config: &SidecarConfig) -> BTreeSet<OsString> {
+    config
+        .sources
+        .values()
+        .map(|source| OsString::from(&source.credential_env))
+        .chain(
+            config
+                .auth
+                .bearer_tokens
+                .iter()
+                .filter_map(|token| token.hash_env.as_ref())
+                .map(OsString::from),
+        )
+        .collect()
 }
 
 pub async fn run(config: SidecarConfig) -> Result<(), Box<dyn std::error::Error>> {

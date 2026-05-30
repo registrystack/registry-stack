@@ -13,6 +13,7 @@ struct FixtureRequest {
     sleep_ms: Option<u64>,
     stdout_bytes: Option<usize>,
     stderr_bytes: Option<usize>,
+    env_keys: Option<Vec<String>>,
     value: Option<Value>,
 }
 
@@ -62,6 +63,30 @@ fn main() {
                     write_json(&mut stdout, json!({ "ok": true, "pid": process::id() }));
                 }
             }
+            Some("env") => {
+                let mut values = serde_json::Map::new();
+                for key in request.env_keys.unwrap_or_default() {
+                    values.insert(
+                        key.clone(),
+                        env::var(&key).map_or(Value::Null, Value::String),
+                    );
+                }
+                write_json(
+                    &mut stdout,
+                    json!({ "ok": true, "pid": process::id(), "env": values }),
+                );
+            }
+            #[cfg(unix)]
+            Some("rlimits") => {
+                write_json(
+                    &mut stdout,
+                    json!({
+                        "ok": true,
+                        "pid": process::id(),
+                        "rlimits": resource_limits(),
+                    }),
+                );
+            }
             Some("exit") => {
                 process::exit(6);
             }
@@ -76,6 +101,49 @@ fn main() {
                 );
             }
         }
+    }
+}
+
+#[cfg(unix)]
+fn resource_limits() -> serde_json::Map<String, Value> {
+    let limits = serde_json::Map::from_iter([
+        ("cpu".to_string(), resource_limit(libc::RLIMIT_CPU)),
+        ("fsize".to_string(), resource_limit(libc::RLIMIT_FSIZE)),
+        ("nofile".to_string(), resource_limit(libc::RLIMIT_NOFILE)),
+        ("core".to_string(), resource_limit(libc::RLIMIT_CORE)),
+    ]);
+    #[cfg(target_os = "linux")]
+    {
+        let mut limits = limits;
+        limits.insert("nproc".to_string(), resource_limit(libc::RLIMIT_NPROC));
+        limits
+    }
+    #[cfg(not(target_os = "linux"))]
+    limits
+}
+
+#[cfg(unix)]
+#[cfg(target_os = "linux")]
+type RlimitResource = libc::__rlimit_resource_t;
+
+#[cfg(unix)]
+#[cfg(not(target_os = "linux"))]
+type RlimitResource = libc::c_int;
+
+#[cfg(unix)]
+fn resource_limit(resource: RlimitResource) -> Value {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let result = unsafe { libc::getrlimit(resource, &mut limit) };
+    if result == 0 {
+        json!({
+            "soft": limit.rlim_cur,
+            "hard": limit.rlim_max,
+        })
+    } else {
+        Value::Null
     }
 }
 

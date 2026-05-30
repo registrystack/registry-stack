@@ -65,7 +65,7 @@ evidence:
       issuer: did:web:agriculture.demo.example.gov
       signing_key: registry-notary-demo
       vct: https://demo.example.gov/credentials/smallholder-farmer/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - farmer-under-4ha
       holder_binding:

@@ -72,7 +72,7 @@ evidence:
       issuer: did:web:perf.registry-notary.example
       signing_key: perf-issuer
       vct: https://perf.registry-notary.example/credentials/smallholder-farmer/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - farmer-under-4ha
       holder_binding:

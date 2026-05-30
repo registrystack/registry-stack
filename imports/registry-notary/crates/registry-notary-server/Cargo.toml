@@ -9,7 +9,7 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["registry-notary-cel"]
+default = []
 registry-notary-cel = ["dep:crosswalk-core"]
 pkcs11 = ["dep:cryptoki", "dep:hex", "dep:async-trait"]
 

@@ -957,10 +957,11 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
         allowed["federation_purpose"],
         json!("https://purpose.example.test/eligibility")
     );
-    assert_eq!(
-        allowed["federation_request_jti"],
-        json!("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6")
-    );
+    assert!(allowed.get("federation_request_jti").is_none());
+    assert!(allowed["federation_request_jti_hash"]
+        .as_str()
+        .expect("request jti hash is string")
+        .starts_with("hmac-sha256:"));
     assert!(allowed["federation_subject_ref_hash"]
         .as_str()
         .expect("subject ref hash is string")
@@ -1695,7 +1696,11 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         "{evaluate_audit}"
     );
     assert!(evaluate_audit["policy_hash"].is_string());
-    assert_eq!(evaluate_audit["correlation_id"], json!("req-self-attest-1"));
+    assert!(evaluate_audit.get("correlation_id").is_none());
+    assert!(evaluate_audit["correlation_id_hash"]
+        .as_str()
+        .expect("correlation id hash is string")
+        .starts_with("hmac-sha256:"));
     assert!(evaluate_audit.get("principal_id").is_none());
     assert!(evaluate_audit.get("principal_id_hash").is_some());
 
@@ -1709,7 +1714,11 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         .expect("render audit record exists");
     assert_eq!(render_audit["access_mode"], json!("self_attestation"));
     assert!(render_audit["policy_hash"].is_string());
-    assert_eq!(render_audit["correlation_id"], json!("req-self-attest-1"));
+    assert!(render_audit.get("correlation_id").is_none());
+    assert!(render_audit["correlation_id_hash"]
+        .as_str()
+        .expect("correlation id hash is string")
+        .starts_with("hmac-sha256:"));
 
     idp.stop().await;
 }
@@ -2528,8 +2537,9 @@ async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
         json!("self_attestation.subject_mismatch")
     );
     assert_eq!(denied["token_claim_name"], json!("national_id"));
-    assert!(denied["correlation_id"].is_string());
-    assert_ne!(denied["correlation_id"], json!("bad value"));
+    assert!(denied.get("correlation_id").is_none());
+    assert!(denied["correlation_id_hash"].is_string());
+    assert_ne!(denied["correlation_id_hash"], json!("bad value"));
 
     idp.stop().await;
 }
@@ -3134,6 +3144,48 @@ async fn standalone_server_extract_claim_works_without_default_features() {
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["results"][0]["value"], json!(3.5));
+}
+
+#[cfg(not(feature = "registry-notary-cel"))]
+#[tokio::test]
+async fn standalone_server_rejects_cel_claim_without_cel_feature() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/claims/evaluate")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "subject": { "id": "person-1" },
+            "claims": ["farmer-under-4ha"],
+            "disclosure": "predicate"
+        }))
+        .await;
+
+    response.assert_status(StatusCode::NOT_IMPLEMENTED);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("claim.operation_unsupported"));
 }
 
 #[test]

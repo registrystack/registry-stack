@@ -40,7 +40,7 @@ evidence:
       issuer: did:web:openspp-disability.demo.example.gov
       signing_key: registry-notary-demo
       vct: https://demo.example.gov/credentials/openspp-disability/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - disability-registry-record-exists
         - disability-has-disability
