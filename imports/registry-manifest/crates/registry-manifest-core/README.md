@@ -1,7 +1,8 @@
 # registry-manifest-core
 
 Portable metadata contracts, validators, compilers, and renderers for registry
-catalogs.
+catalogs. This crate is the commons contract/schema kernel used by Registry
+Relay, Registry Notary metadata workflows, and Registry Lab fixtures.
 
 This crate is the source of truth for metadata manifests. It stays independent
 of Registry Relay runtime concerns so static publishers, CLIs, and services can

@@ -58,6 +58,15 @@ Validate all checked-in profile descriptors and fixtures:
 cargo run -p registry-manifest-cli -- validate-profiles profiles
 ```
 
+Run the commons contract-kernel check, optionally with consumer manifests:
+
+```sh
+scripts/check-contract-kernel.sh ../registry-lab/config/static-metadata/metadata.yaml
+```
+
+The script runs formatting, clippy, workspace tests, checked-in profile
+validation, and static publication for any passed consumer manifests.
+
 ## Supported Render Formats
 
 - `catalog`
