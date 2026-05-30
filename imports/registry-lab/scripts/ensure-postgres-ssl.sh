@@ -21,6 +21,8 @@ openssl req \
   -nodes \
   -subj "/CN=localhost" \
   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+  -addext "keyUsage=digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth" \
   -keyout "${key_path}" \
   -out "${cert_path}" \
   >/dev/null 2>&1
