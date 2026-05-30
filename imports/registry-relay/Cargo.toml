@@ -79,7 +79,7 @@ jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }
 humantime-serde = { version = "1" }
-registry-manifest-core = { version = "0.1.1", git = "https://github.com/jeremi/registry-manifest", tag = "v0.1.2" }
+registry-manifest-core = { version = "0.1.2", path = "../registry-manifest/crates/registry-manifest-core" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 registry-platform-authcommon = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-authcommon" }

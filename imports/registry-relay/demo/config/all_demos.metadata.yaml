@@ -17,6 +17,24 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
+federation:
+  node_id: did:web:all-demos.demo.example.gov
+  issuer: https://all-demos.demo.example.gov
+  jwks_uri: https://all-demos.demo.example.gov/.well-known/jwks.json
+  federation_api: https://all-demos.demo.example.gov/federation
+  supported_protocol_versions:
+  - registry-notary-federation/v0.1
+evaluation_profiles:
+- id: benefits-person-v1
+  ruleset: benefits-person-v1
+  claim_id: benefits_person
+  subject_id_type: id
+  max_source_observed_age_seconds: 86400
+- id: education-student-v1
+  ruleset: education-student-v1
+  claim_id: education_student
+  subject_id_type: id
+  max_source_observed_age_seconds: 86400
 requirements:
 - id: benefits_person_requirement
   iri: https://demo.example.gov/requirements/benefits-person
@@ -68,7 +86,9 @@ datasets:
     - id
     access:
       kind: registry-notary
-      conforms_to: registry_relay:registry-notary-v1
+      conforms_to: registry-notary-federation/v0.1
+      endpoint_url: https://benefits-notary.demo.example.gov
+      discovery_url: https://benefits-notary.demo.example.gov/.well-known/evidence-service
       ruleset: benefits-person-v1
     policy:
       purpose:
@@ -506,7 +526,9 @@ datasets:
     - id
     access:
       kind: registry-notary
-      conforms_to: registry_relay:registry-notary-v1
+      conforms_to: registry-notary-federation/v0.1
+      endpoint_url: https://education-notary.demo.example.gov
+      discovery_url: https://education-notary.demo.example.gov/.well-known/evidence-service
       ruleset: education-student-v1
     policy:
       purpose:

@@ -50,6 +50,29 @@ catalog:
   title: Test
   publisher:
     name: Test
+federation:
+  node_id: did:web:data.example.test
+  issuer: https://data.example.test
+  jwks_uri: https://data.example.test/.well-known/jwks.json
+  federation_api: https://data.example.test/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: exact-name
+    ruleset: exact-name
+    claim_id: exact_name
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: exact-name-targeted
+    ruleset: exact-name-targeted
+    claim_id: exact_name_targeted
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: hidden-name
+    ruleset: hidden-name
+    claim_id: hidden_name
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
 requirements:
   - id: name_requirement
     iri: https://data.example.test/requirements/name
@@ -96,7 +119,7 @@ datasets:
         lookup_keys: [given_name]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://evidence.example.test/individual-name
           discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: exact-name
@@ -116,7 +139,7 @@ datasets:
         lookup_keys: [given_name]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://evidence.example.test/individual-targeted-name
           discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: exact-name-targeted
@@ -133,7 +156,7 @@ datasets:
         lookup_keys: [given_name]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://evidence.example.test/individual-alternate-name
           discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: exact-name
@@ -150,7 +173,7 @@ datasets:
         lookup_keys: [given_name]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://evidence.example.test/individual-hidden-name
           discovery_url: https://evidence.example.test/.well-known/registry-notary
           ruleset: hidden-name
@@ -167,7 +190,7 @@ datasets:
         lookup_keys: [given_name]
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
+          conforms_to: registry-notary-federation/v0.1
           endpoint_url: https://evidence.example.test
           discovery_url: https://evidence.example.test/.well-known/evidence-service
           ruleset: exact-name

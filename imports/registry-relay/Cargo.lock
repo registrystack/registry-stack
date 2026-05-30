@@ -3966,6 +3966,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxiri"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54b4ed3a7192fa19f5f48f99871f2755047fabefd7f222f12a1df1773796a102"
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4718,9 +4724,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.1.1"
-source = "git+https://github.com/jeremi/registry-manifest?tag=v0.1.2#77125ec04f50157749a257eab3661ef82e613ce3"
+version = "0.1.2"
 dependencies = [
+ "oxiri",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

@@ -14,6 +14,19 @@ catalog:
   application_profiles:
     - id: bregdcat-ap
       version: '3.0'
+federation:
+  node_id: did:web:health-registry.demo.example.gov
+  issuer: https://health-registry.demo.example.gov
+  jwks_uri: https://health-registry.demo.example.gov/.well-known/jwks.json
+  federation_api: https://health-registry.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: health-service-availability-v1
+    ruleset: health-service-availability-v1
+    claim_id: health_service_availability
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
 requirements:
   - id: health_linked_support_requirement
     iri: https://demo.example.gov/requirements/health-linked-support
@@ -53,9 +66,9 @@ datasets:
           - national_id
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
-          endpoint_url: http://shared-eligibility-evidence-server:8080
-          discovery_url: http://shared-eligibility-evidence-server:8080/.well-known/evidence-service
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://shared-eligibility-notary:8080
+          discovery_url: https://shared-eligibility-notary:8080/.well-known/evidence-service
           ruleset: health-service-availability-v1
         policy:
           purpose:

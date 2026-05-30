@@ -19,6 +19,8 @@ env:
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
   REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
+  REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
+  REGISTRY_MANIFEST_REF: main
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
 
@@ -67,6 +69,17 @@ jobs:
 
       - name: Link cel-mapping path dependency
         run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable   # pinned to major stable channel
@@ -147,6 +160,17 @@ jobs:
       - name: Link cel-mapping path dependency
         run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
 
+      - name: Checkout registry-manifest
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
@@ -195,6 +219,17 @@ jobs:
 
       - name: Link cel-mapping path dependency
         run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -287,6 +322,14 @@ jobs:
           ref: ${{ env.CEL_MAPPING_REF }}
           path: cel-mapping
 
+      - name: Checkout registry-manifest
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
       # Buildx + GHA cache backend persists the Dockerfile's
       # `RUN --mount=type=cache` cargo registry and target directories
       # across runs. First run is a cold compile; subsequent runs reuse
@@ -301,6 +344,7 @@ jobs:
           file: Dockerfile
           build-contexts: |
             registry-platform=./registry-platform
+            registry-manifest=./registry-manifest
             cel-mapping=./cel-mapping
           tags: registry-relay:ci
           load: false

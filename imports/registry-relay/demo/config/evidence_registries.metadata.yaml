@@ -15,6 +15,19 @@ catalog:
   application_profiles:
     - id: bregdcat-ap
       version: '3.0'
+federation:
+  node_id: did:web:agriculture.demo.example.gov
+  issuer: https://agriculture.demo.example.gov
+  jwks_uri: https://agriculture.demo.example.gov/.well-known/jwks.json
+  federation_api: https://agriculture.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: farmer-under-4ha-v1
+    ruleset: farmer-under-4ha-v1
+    claim_id: smallholder_farmer
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
 requirements:
   - id: smallholder_land_requirement
     iri: https://demo.example.gov/requirements/smallholder-under-4ha
@@ -97,9 +110,9 @@ datasets:
           - national_id
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
-          endpoint_url: http://127.0.0.1:4255
-          discovery_url: http://127.0.0.1:4255/.well-known/evidence-service
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://registry-notary.demo.example.gov
+          discovery_url: https://registry-notary.demo.example.gov/.well-known/evidence-service
           ruleset: farmer-under-4ha-v1
         policy:
           purpose:

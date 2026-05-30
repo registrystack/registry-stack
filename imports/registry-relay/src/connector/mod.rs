@@ -6,6 +6,7 @@
 //! existing source/format stack. Future database connectors can either
 //! produce snapshot batches or a live `TableProvider`.
 
+use std::env;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -275,9 +276,7 @@ impl PostgresConnector {
             ))
         })?;
         let client_config = postgres_config_require_tls(&url, &self.connection_env)?;
-        let tls = native_tls::TlsConnector::builder()
-            .build()
-            .map_err(|_| ConnectorError::SourceUnreadable("postgres TLS setup failed".into()))?;
+        let tls = postgres_tls_connector().await?;
         let connector = MakeTlsConnector::new(tls);
         let (client, connection) =
             tokio::time::timeout(self.connect_timeout, client_config.connect(connector))
@@ -498,6 +497,22 @@ fn postgres_config_require_tls(
         )));
     }
     Ok(config)
+}
+
+async fn postgres_tls_connector() -> Result<native_tls::TlsConnector, ConnectorError> {
+    let mut builder = native_tls::TlsConnector::builder();
+    if let Ok(path) = env::var("DATA_GATE_POSTGRES_ROOT_CERT_PATH") {
+        let pem = tokio::fs::read(path).await.map_err(|_| {
+            ConnectorError::SourceUnreadable("postgres TLS root certificate is unreadable".into())
+        })?;
+        let certificate = native_tls::Certificate::from_pem(&pem).map_err(|_| {
+            ConnectorError::SourceUnreadable("postgres TLS root certificate is invalid".into())
+        })?;
+        builder.add_root_certificate(certificate);
+    }
+    builder
+        .build()
+        .map_err(|_| ConnectorError::SourceUnreadable("postgres TLS setup failed".into()))
 }
 
 impl TableConnector for PostgresConnector {

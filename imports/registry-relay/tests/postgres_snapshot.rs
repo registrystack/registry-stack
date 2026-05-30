@@ -4,8 +4,8 @@
 //! Run with:
 //! DATA_GATE_POSTGRES_TEST_URL='postgres://...?sslmode=require' cargo test --test postgres_snapshot -- --ignored
 
-use std::env;
 use std::sync::Arc;
+use std::{env, fs};
 
 use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
 use datafusion::execution::context::SessionContext;
@@ -21,7 +21,12 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 }
 
 async fn postgres_client(url: &str) -> Result<tokio_postgres::Client, Box<dyn std::error::Error>> {
-    let tls = native_tls::TlsConnector::builder().build()?;
+    let mut builder = native_tls::TlsConnector::builder();
+    if let Ok(path) = env::var("DATA_GATE_POSTGRES_ROOT_CERT_PATH") {
+        let pem = fs::read(path)?;
+        builder.add_root_certificate(native_tls::Certificate::from_pem(&pem)?);
+    }
+    let tls = builder.build()?;
     let connector = MakeTlsConnector::new(tls);
     let (client, connection) = tokio_postgres::connect(url, connector).await?;
     tokio::spawn(async move {
