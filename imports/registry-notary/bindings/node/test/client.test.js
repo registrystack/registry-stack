@@ -36,7 +36,7 @@ test("evaluate converts camelCase request fields and response fields", async () 
     results: [{ claimId: "date-of-birth", issuedAt: "2026-05-29T00:00:00Z" }],
   });
   assert.equal(calls.length, 1);
-  assert.equal(String(calls[0].url), "https://notary.example/claims/evaluate");
+  assert.equal(String(calls[0].url), "https://notary.example/v1/evaluations");
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.signal, controller.signal);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
@@ -116,7 +116,7 @@ test("batchEvaluateRequest sends Idempotency-Key when supplied", async () => {
   );
 
   assert.equal(result.batch_id, "batch-1");
-  assert.equal(String(calls[0].url), "https://notary.example/claims/batch-evaluate");
+  assert.equal(String(calls[0].url), "https://notary.example/v1/batch-evaluations");
   assert.equal(calls[0].init.headers.get("Idempotency-Key"), "batch-key");
 });
 
@@ -145,10 +145,10 @@ test("core helper methods cover claims, render, issue, and credential status", a
     baseUrl: "https://notary.example",
     fetch: async (url, init) => {
       calls.push({ url, init });
-      if (String(url).endsWith("/claims")) return jsonResponse({ data: [{ id: "age" }] });
-      if (String(url).endsWith("/claims/claim%20one")) return jsonResponse({ id: "claim one" });
-      if (String(url).endsWith("/evidence/render")) return jsonResponse({ document: { ok: true } });
-      if (String(url).endsWith("/credentials/issue")) return jsonResponse({ credential_id: "cred-1" });
+      if (String(url).endsWith("/v1/claims")) return jsonResponse({ data: [{ id: "age" }] });
+      if (String(url).endsWith("/v1/claims/claim%20one")) return jsonResponse({ id: "claim one" });
+      if (String(url).endsWith("/v1/evaluations/eval-1/render")) return jsonResponse({ document: { ok: true } });
+      if (String(url).endsWith("/v1/credentials")) return jsonResponse({ credential_id: "cred-1" });
       return jsonResponse({ credential_id: "cred-1", status: "valid" });
     },
   });
@@ -167,7 +167,20 @@ test("core helper methods cover claims, render, issue, and credential status", a
   });
   assert.equal(calls[0].init.method, "GET");
   assert.equal(calls[2].init.method, "POST");
-  assert.equal(String(calls[4].url), "https://notary.example/credentials/status/cred-1");
+  assert.equal(String(calls[4].url), "https://notary.example/v1/credentials/cred-1/status");
+  assert.deepEqual(JSON.parse(calls[2].init.body), { format: "json" });
+});
+
+test("renderRequest rejects missing request object", async () => {
+  const client = new RegistryNotaryClient({
+    baseUrl: "https://notary.example",
+    fetch: async () => jsonResponse({}),
+  });
+
+  await assert.rejects(
+    client.renderRequest(null),
+    (error) => error instanceof NotaryError && error.code === "request.invalid_type",
+  );
 });
 
 test("constructor rejects unsafe base configuration", () => {

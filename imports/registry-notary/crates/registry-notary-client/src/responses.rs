@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Client-owned response DTOs and ergonomic wrappers.
+//! Client-owned response types and ergonomic wrappers.
 
 use std::fmt;
 
@@ -26,21 +26,21 @@ macro_rules! impl_safe_debug {
     };
 }
 
-/// Response body for `POST /claims/evaluate`.
+/// Response body for `POST /v1/evaluations`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluateResponse {
     /// Claim results returned by the server.
     pub results: Vec<ClaimResultView>,
 }
 
-/// Response body for `GET /claims`.
+/// Response body for `GET /v1/claims`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListClaimsResponse {
     /// Claim definitions as server-owned JSON documents.
     pub data: Vec<serde_json::Value>,
 }
 
-/// Response body for `GET /formats`.
+/// Response body for `GET /v1/formats`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormatsResponse {
     /// Supported evidence formats.
@@ -112,7 +112,7 @@ pub struct CredentialStatusUpdateRequest {
     pub status: String,
 }
 
-/// Response body for `POST /admin/reload`.
+/// Response body for `POST /admin/v1/reload`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AdminReloadResponse {
     /// Whether reload executed.

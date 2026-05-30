@@ -23,7 +23,10 @@ async fn client_evaluates_against_real_standalone_server() {
 
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let upstream_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")

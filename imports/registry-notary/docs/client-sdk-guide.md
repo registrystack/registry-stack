@@ -13,8 +13,10 @@ retry behavior, JWKS refresh behavior, and redacted error mapping.
 | Python | `registry-notary` | Dictionary-friendly sync and async wrapper |
 | Node.js | `@registry-notary/client` | Promise client with TypeScript declarations |
 
-The Rust crate is the source of truth. Python and Node expose the same core
-routes, but keep JSON as dictionaries or plain objects.
+The Rust crate is the source of truth. Python and Node expose the main
+application, discovery, OID4VCI, and federation helpers, but keep JSON as
+dictionaries or plain objects. Rust additionally exposes operational, admin,
+and format helpers.
 
 ## Common Concepts
 
@@ -23,8 +25,9 @@ routes, but keep JSON as dictionaries or plain objects.
 Use the service root URL. A path prefix is allowed and is preserved when routes
 are joined.
 
-Clients require HTTPS for non-loopback hosts. Local debug and test workflows may
-use `http://127.0.0.1`, `http://localhost`, or `http://[::1]`.
+Clients require HTTPS for non-loopback hosts. Rust allows HTTP loopback only in
+debug or `test-support` builds. Python and Node local workflows may use
+`http://127.0.0.1`, `http://localhost`, or `http://[::1]`.
 
 ### Authentication
 
@@ -54,14 +57,15 @@ Request options support:
 - `request_id`, mapped to `X-Request-Id`.
 - `traceparent`, mapped to W3C trace context.
 - `idempotency_key`, mapped to `Idempotency-Key` only for batch evaluation.
-- `accept`, for Rust and facade callers that need an explicit `Accept`.
+- `accept`, for Rust, JSON facade, and selected Python request helpers that
+  need an explicit `Accept`. Node does not expose a public accept override.
 
 ### Retry Contract
 
 Retries are disabled by default. When enabled, they are still route-aware:
 
 - GET routes may retry transport errors, 429, or 503 according to the policy.
-- `POST /claims/batch-evaluate` may retry only when an `Idempotency-Key` is
+- `POST /v1/batch-evaluations` may retry only when an `Idempotency-Key` is
   supplied.
 - Evaluation, render, credential issuance, OID4VCI credential, and federation
   submission are never retried because those POST routes are not deduplicated by
@@ -153,7 +157,7 @@ if let Some(result) = response.body.result_for("person-is-alive") {
 }
 ```
 
-### Raw DTO Evaluation
+### Raw Request Evaluation
 
 ```rust
 use registry_notary_client::RequestOptions;
@@ -175,7 +179,7 @@ let options = RequestOptions::builder()
     .traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
     .build();
 
-let response = client.evaluate_dto(request, options).await?;
+let response = client.evaluate_request(request, options).await?;
 ```
 
 ### Batch Evaluation
@@ -212,10 +216,11 @@ let request = BatchEvaluateRequest {
 };
 
 let options = RequestOptions::builder()
+    .purpose("benefits_eligibility")
     .idempotency_key("batch-2026-05-29-001")
     .build();
 
-let response = client.batch_evaluate_dto(request, options).await?;
+let response = client.batch_evaluate_request(request, options).await?;
 println!("succeeded: {}", response.body.summary.succeeded);
 ```
 
@@ -234,11 +239,17 @@ options. `raw_issuer_jwks` bypasses that cache.
 
 ### Render And Credential Issuance
 
+The render route carries `evaluation_id` in the path. Rust accepts the core
+`RenderRequest` DTO and moves `evaluation_id` into
+`/v1/evaluations/{evaluation_id}/render` before sending the body. Python and
+Node raw helpers accept canonical snake_case JSON, require a mapping/object,
+extract `evaluation_id`, and send the remaining fields as the route body.
+
 ```rust
 use registry_notary_core::{CredentialIssueRequest, RenderRequest};
 
 let rendered = client
-    .render_dto(
+    .render_request(
         RenderRequest {
             evaluation_id: "eval-1".to_string(),
             format: "application/vnd.registry-notary.claim-result+json".to_string(),
@@ -251,7 +262,7 @@ let rendered = client
     .await?;
 
 let credential = client
-    .issue_credential_dto(
+    .issue_credential_request(
         CredentialIssueRequest {
             evaluation_id: "eval-1".to_string(),
             credential_profile: None,
@@ -360,16 +371,17 @@ result = client.evaluate(
     subject_id="person-1",
     id_type="national_id",
     claims=["person-is-alive"],
-    disclosure="predicate",
 )
 ```
 
-Raw wire shape is available through `evaluate_request`:
+Use `evaluate_request` for optional wire fields such as `disclosure` or
+`format`:
 
 ```python
 result = client.evaluate_request({
     "subject": {"id": "person-1", "id_type": "national_id"},
     "claims": ["person-is-alive"],
+    "disclosure": "predicate",
     "purpose": "benefits_eligibility",
 })
 ```
@@ -404,6 +416,25 @@ result = client.batch_evaluate_request(
 )
 ```
 
+### Render And Credential Issuance
+
+Raw render requests use canonical snake_case JSON and must include
+`evaluation_id`. The Python wrapper rejects non-mapping inputs before it reads
+or sends any fields.
+
+```python
+rendered = client.render_request({
+    "evaluation_id": "eval-1",
+    "format": "application/vnd.registry-notary.claim-result+json",
+    "disclosure": "predicate",
+})
+
+credential = client.issue_credential_request({
+    "evaluation_id": "eval-1",
+    "credential_profile": "person_is_alive_sd_jwt",
+})
+```
+
 ### Discovery, Status, OID4VCI, Federation
 
 ```python
@@ -411,6 +442,7 @@ claims = client.list_claims()
 claim = client.get_claim("person-is-alive")
 jwks = client.issuer_jwks()
 client.refresh_jwks()
+key = client.get_jwk("key-1")
 status = client.credential_status("credential-1")
 
 metadata = client.oid4vci_issuer_metadata()
@@ -426,7 +458,11 @@ response_jws = client.federation_evaluate_jws("eyJ...")
 from registry_notary.errors import NotaryProblemError, NotaryTransportError
 
 try:
-    client.evaluate(subject_id="person-1", claims=["person-is-alive"])
+    client.evaluate(
+        subject_id="person-1",
+        id_type="national_id",
+        claims=["person-is-alive"],
+    )
 except NotaryProblemError as exc:
     print(exc.status, exc.code, exc.request_id)
 except NotaryTransportError:
@@ -478,6 +514,18 @@ const result = await client.evaluateRequest({
 });
 ```
 
+Render uses the route-shaped API. `renderRequest` requires a plain request
+object with snake_case `evaluation_id`, removes `evaluation_id` from the JSON
+body, and posts the rest to `/v1/evaluations/{evaluation_id}/render`.
+
+```js
+const rendered = await client.renderRequest({
+  evaluation_id: "eval-1",
+  format: "application/vnd.registry-notary.claim-result+json",
+  disclosure: "predicate",
+});
+```
+
 ### Abort And Retry
 
 ```js
@@ -515,6 +563,7 @@ const claims = await client.listClaims();
 const claim = await client.getClaim("person-is-alive");
 const jwks = await client.issuerJwks();
 await client.refreshJwks();
+const key = await client.getJwk("key-1");
 const status = await client.credentialStatus("credential-1");
 
 const metadata = await client.oid4vciIssuerMetadata();
@@ -546,20 +595,20 @@ try {
 | --- | --- | --- | --- |
 | `GET /healthz` | `health` | not exposed | not exposed |
 | `GET /ready` | `ready` | not exposed | not exposed |
-| `POST /admin/reload` | `admin_reload` | not exposed | not exposed |
+| `POST /admin/v1/reload` | `admin_reload` | not exposed | not exposed |
 | `GET /openapi.json` | `openapi_json` | not exposed | not exposed |
 | `GET /.well-known/evidence-service` | `service_document` | `service_document` | `serviceDocument` |
 | `GET /.well-known/evidence/jwks.json` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuerJwks`, `refreshJwks`, `rawIssuerJwks` |
 | `GET /metrics` | `metrics` | not exposed | not exposed |
-| `GET /claims` | `list_claims` | `list_claims` | `listClaims` |
-| `GET /claims/{id}` | `get_claim` | `get_claim` | `getClaim` |
-| `GET /formats` | `list_formats` | not exposed | not exposed |
-| `POST /claims/evaluate` | `evaluate`, `evaluate_dto` | `evaluate`, `evaluate_request`, `aevaluate`, `aevaluate_request` | `evaluate`, `evaluateRequest` |
-| `POST /claims/batch-evaluate` | `batch_evaluate_dto` | `batch_evaluate_request`, `abatch_evaluate_request` | `batchEvaluate`, `batchEvaluateRequest` |
-| `POST /evidence/render` | `render_dto` | `render_request`, `arender_request` | `renderRequest` |
-| `POST /credentials/issue` | `issue_credential_dto` | `issue_credential_request`, `aissue_credential_request` | `issueCredentialRequest` |
-| `GET /credentials/status/{id}` | `credential_status` | `credential_status` | `credentialStatus` |
-| `POST /admin/credentials/status/{id}` | `update_credential_status` | not exposed | not exposed |
+| `GET /v1/claims` | `list_claims` | `list_claims` | `listClaims` |
+| `GET /v1/claims/{id}` | `get_claim` | `get_claim` | `getClaim` |
+| `GET /v1/formats` | `list_formats` | not exposed | not exposed |
+| `POST /v1/evaluations` | `evaluate`, `evaluate_request` | `evaluate`, `evaluate_request`, `aevaluate`, `aevaluate_request` | `evaluate`, `evaluateRequest` |
+| `POST /v1/batch-evaluations` | `batch_evaluate_request` | `batch_evaluate_request`, `abatch_evaluate_request` | `batchEvaluate`, `batchEvaluateRequest` |
+| `POST /v1/evaluations/{evaluation_id}/render` | `render_request` | `render_request`, `arender_request` | `renderRequest` |
+| `POST /v1/credentials` | `issue_credential_request` | `issue_credential_request`, `aissue_credential_request` | `issueCredentialRequest` |
+| `GET /v1/credentials/{id}/status` | `credential_status` | `credential_status` | `credentialStatus` |
+| `POST /admin/v1/credentials/{id}/status` | `update_credential_status` | not exposed | not exposed |
 | `GET /.well-known/openid-credential-issuer` | `oid4vci_issuer_metadata` | `oid4vci_issuer_metadata` | `oid4vciIssuerMetadata` |
 | `GET /oid4vci/credential-offer` | `oid4vci_credential_offer` | `oid4vci_credential_offer` | `oid4vciCredentialOffer` |
 | `POST /oid4vci/nonce` | `oid4vci_nonce` | `oid4vci_nonce` | `oid4vciNonce` |

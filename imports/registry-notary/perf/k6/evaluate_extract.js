@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scenario: single-claim extract evaluation.
 //
-// POST /claims/evaluate with the extract claim (default: date-of-birth).
+// POST /v1/evaluations with the extract claim (default: date-of-birth).
 // Hot path: auth, single DCI POST to the stub, extract rule, audit emit.
 
 import http from 'k6/http';
@@ -44,7 +44,7 @@ export default function (ctx) {
     claims: [ctx.claim],
   });
 
-  const res = http.post(`${baseUrl()}/claims/evaluate`, payload, {
+  const res = http.post(`${baseUrl()}/v1/evaluations`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 

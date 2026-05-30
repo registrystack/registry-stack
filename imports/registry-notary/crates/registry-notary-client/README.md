@@ -38,8 +38,12 @@ if let Some(result) = response.body.first_result() {
 
 - `RegistryNotaryClient::builder(base_url)` creates a client.
 - `evaluate(subject_id)` starts the ergonomic evaluation builder.
-- `evaluate_dto`, `batch_evaluate_dto`, `render_dto`, and
-  `issue_credential_dto` accept core wire DTOs.
+- `evaluate_request`, `batch_evaluate_request`, `render_request`, and
+  `issue_credential_request` accept core wire request types. `render_request`
+  extracts `evaluation_id` into the route path before sending the body.
+- `health`, `ready`, `admin_reload`, `openapi_json`, `metrics`, `list_claims`,
+  `get_claim`, and `list_formats` cover operational, discovery, claim catalog,
+  and format routes.
 - `service_document`, `issuer_jwks`, `refresh_jwks`, and `raw_issuer_jwks`
   cover discovery and key rotation workflows.
 - `credential_status` and `update_credential_status` cover minimal credential
@@ -64,7 +68,8 @@ Rust, Python, and Node.js.
 The client:
 
 - rejects multiple auth modes at build time;
-- requires HTTPS for non-loopback hosts;
+- requires HTTPS for non-loopback hosts, with HTTP loopback allowed only in
+  debug or `test-support` builds;
 - disables redirects and ignores proxy environment variables;
 - bounds every response body;
 - returns successful response status in `NotaryResponse<T>`;
@@ -75,9 +80,9 @@ The client:
   nonces, SD-JWT disclosures, token material, and credential response bodies
   from `Debug`, `Display`, and portable errors.
 
-## DTO Contract
+## Wire Contract
 
-Request DTOs come from `registry-notary-core` where the server wire contract is
+Request types come from `registry-notary-core` where the server wire contract is
 shared. Batch evaluation uses `registry_notary_core::BatchEvaluateResponse`
 directly. Client-owned wrappers such as `Evaluation` and
 `CredentialIssueResponse` exist for ergonomic accessors or redacted formatting,

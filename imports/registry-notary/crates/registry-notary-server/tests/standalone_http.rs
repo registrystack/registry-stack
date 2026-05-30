@@ -22,7 +22,9 @@ use registry_notary_core::{
     SD_JWT_VC_SIGNING_ALG,
 };
 use registry_notary_server::{standalone_router, StandaloneServerError};
-use registry_platform_audit::{verify_jsonl_lines, AuditEnvelope};
+use registry_platform_audit::{
+    verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
+};
 #[cfg(feature = "registry-notary-cel")]
 use registry_platform_crypto::verify;
 use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
@@ -894,7 +896,10 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -1012,7 +1017,10 @@ async fn federation_two_standalone_notaries_smoke() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -1091,7 +1099,7 @@ async fn federation_denial_happens_before_source_read() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/farmer_registry/farmer",
+            "/v1/datasets/farmer_registry/entities/farmer/records",
             get(move || {
                 let source_hits = Arc::clone(&source_hits_for_route);
                 async move {
@@ -1270,7 +1278,7 @@ async fn federation_emergency_denylist_blocks_before_source_read() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/farmer_registry/farmer",
+            "/v1/datasets/farmer_registry/entities/farmer/records",
             get(move || {
                 let source_hits = Arc::clone(&source_hits_for_route);
                 async move {
@@ -1331,7 +1339,7 @@ async fn federation_request_claims_must_match_profile_before_source_read() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/farmer_registry/farmer",
+            "/v1/datasets/farmer_registry/entities/farmer/records",
             get(move || {
                 let source_hits = Arc::clone(&source_hits_for_route);
                 async move {
@@ -1381,7 +1389,10 @@ async fn federation_stale_source_observation_returns_signed_evaluation_error() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -1440,7 +1451,10 @@ async fn federation_audit_write_failure_replaces_signed_success() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -1507,17 +1521,17 @@ async fn admin_reload_401_unauth_403_wrong_scope_200_admin() {
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let unauthenticated = server.post("/admin/reload").await;
+    let unauthenticated = server.post("/admin/v1/reload").await;
     unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
 
     let wrong_scope = server
-        .post("/admin/reload")
+        .post("/admin/v1/reload")
         .add_header("x-api-key", "wrong-scope-token")
         .await;
     wrong_scope.assert_status(StatusCode::FORBIDDEN);
 
     let admin = server
-        .post("/admin/reload")
+        .post("/admin/v1/reload")
         .add_header("x-api-key", "admin-token")
         .await;
     admin.assert_status_ok();
@@ -1628,16 +1642,38 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let denied = server.get("/claims").await;
+    let denied = server.get("/v1/claims").await;
     denied.assert_status(StatusCode::UNAUTHORIZED);
 
     let response = server
-        .get("/claims")
+        .get("/v1/claims")
         .add_header("authorization", format!("Bearer {token}"))
         .await;
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["data"][0]["id"], json!("farmed-land-size"));
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let id_token_typ = sign_ed25519_compact_jwt(
+        fixtures::ED25519_PRIVATE_JWK,
+        "id_token",
+        "registry-platform-testing-ed25519-1",
+        json!({
+            "iss": idp.issuer(),
+            "sub": "caseworker",
+            "aud": "registry-notary",
+            "azp": "registry-client",
+            "scope": "farmer_registry:evidence_verification",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 300,
+        }),
+    );
+    let wrong_typ = server
+        .get("/v1/claims")
+        .add_header("authorization", format!("Bearer {id_token_typ}"))
+        .await;
+    wrong_typ.assert_status(StatusCode::UNAUTHORIZED);
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
     let envelopes = audit_envelopes(&audit_path);
@@ -1733,7 +1769,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/people/person",
+            "/v1/datasets/people/entities/person/records",
             get(self_attestation_registry_data_api),
         ));
     let base_url = upstream
@@ -1778,7 +1814,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     assert!(jwks_body["keys"][0].get("d").is_none());
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("authorization", authorization.clone())
         .add_header("x-request-id", "req-self-attest-1")
         .json(&json!({
@@ -1800,11 +1836,10 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         .to_string();
 
     let render = server
-        .post("/evidence/render")
+        .post(&format!("/v1/evaluations/{evaluation_id}/render"))
         .add_header("authorization", authorization)
         .add_header("x-request-id", "req-self-attest-1")
         .json(&json!({
-            "evaluation_id": evaluation_id,
             "disclosure": "value",
             "format": "application/vnd.registry-notary.claim-result+json"
         }))
@@ -1825,7 +1860,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     let evaluate_audit = records
         .iter()
         .find(|record| {
-            record["path"] == json!("/claims/evaluate")
+            record["path"] == json!("/v1/evaluations")
                 && record["decision"] == json!("evaluate")
                 && record["status"] == json!(200)
         })
@@ -1847,7 +1882,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     let render_audit = records
         .iter()
         .find(|record| {
-            record["path"] == json!("/evidence/render")
+            record["path"] == json!("/v1/evaluations/{evaluation_id}/render")
                 && record["decision"] == json!("render")
                 && record["status"] == json!(200)
         })
@@ -1970,7 +2005,7 @@ async fn public_probe_routes_remain_public_except_metrics() {
         .await
         .assert_status_ok();
     server
-        .get("/credentials/status/urn:ulid:01HX0000000000000000000000")
+        .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .await
         .assert_status(StatusCode::NOT_FOUND);
     server
@@ -2019,7 +2054,7 @@ async fn service_document_advertises_credential_status_when_enabled() {
     );
     assert_eq!(
         body["credential_capabilities"]["sd_jwt_vc"]["credential_status_url"],
-        json!("/credentials/status/{credential_id}")
+        json!("/v1/credentials/{credential_id}/status")
     );
     assert!(!body["credential_capabilities"]["unsupported_features"]
         .as_array()
@@ -2060,7 +2095,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
         .build(standalone_router(enabled_config).expect("enabled router builds"));
 
     let invalid_status = enabled_server
-        .post("/admin/credentials/status/urn:ulid:01HX0000000000000000000000")
+        .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .add_header("x-api-key", "admin-token")
         .json(&json!({ "status": "deleted" }))
         .await;
@@ -2072,7 +2107,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
     );
 
     let missing_admin_scope = enabled_server
-        .post("/admin/credentials/status/urn:ulid:01HX0000000000000000000000")
+        .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .add_header("x-api-key", "api-token")
         .json(&json!({ "status": "revoked" }))
         .await;
@@ -2098,7 +2133,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
         .build(standalone_router(disabled_config).expect("disabled router builds"));
 
     let disabled = disabled_server
-        .post("/admin/credentials/status/urn:ulid:01HX0000000000000000000000")
+        .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .add_header("x-api-key", "admin-token")
         .json(&json!({ "status": "revoked" }))
         .await;
@@ -2107,7 +2142,7 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
     assert_eq!(disabled_body["code"], json!("credential_status.disabled"));
 
     let disabled_public = disabled_server
-        .get("/credentials/status/urn:ulid:01HX0000000000000000000000")
+        .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .await;
     disabled_public.assert_status(StatusCode::NOT_FOUND);
 }
@@ -2150,7 +2185,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/people/person",
+            "/v1/datasets/people/entities/person/records",
             get(self_attestation_registry_data_api),
         ));
     let base_url = upstream
@@ -2188,7 +2223,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     let server = TestServer::builder().http_transport().build(app);
 
     let missing_status = server
-        .get("/credentials/status/urn:ulid:01HX0000000000000000000000")
+        .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .await;
     missing_status.assert_status(StatusCode::NOT_FOUND);
     let missing_status_body: Value = missing_status.json();
@@ -2266,7 +2301,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         payload["status"],
         json!({
             "type": "RegistryNotaryCredentialStatus",
-            "statusUrl": format!("http://127.0.0.1:4325/credentials/status/{credential_id}")
+            "statusUrl": format!("http://127.0.0.1:4325/v1/credentials/{credential_id}/status")
         })
     );
     assert!(body["c_nonce"]
@@ -2274,7 +2309,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         .is_some_and(|value| !value.is_empty()));
 
     let status = server
-        .get(&format!("/credentials/status/{credential_id}"))
+        .get(&format!("/v1/credentials/{credential_id}/status"))
         .await;
     status.assert_status_ok();
     let status_body: Value = status.json();
@@ -2295,7 +2330,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         "nbf": now,
     }));
     let revoked = server
-        .post(&format!("/admin/credentials/status/{credential_id}"))
+        .post(&format!("/admin/v1/credentials/{credential_id}/status"))
         .add_header("authorization", format!("Bearer {admin_token}"))
         .json(&json!({ "status": "revoked" }))
         .await;
@@ -2304,7 +2339,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     assert_eq!(revoked_body["status"], json!("revoked"));
 
     let status_after_revoke = server
-        .get(&format!("/credentials/status/{credential_id}"))
+        .get(&format!("/v1/credentials/{credential_id}/status"))
         .await;
     status_after_revoke.assert_status_ok();
     let status_after_revoke_body: Value = status_after_revoke.json();
@@ -2337,6 +2372,93 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
 }
 
 #[tokio::test]
+async fn oid4vci_credential_route_rejects_replayed_nonce() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let nonce = server
+        .post("/oid4vci/nonce")
+        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
+        .await;
+    nonce.assert_status_ok();
+    let nonce_body: Value = nonce.json();
+    let nonce = nonce_body["c_nonce"]
+        .as_str()
+        .expect("nonce is returned")
+        .to_string();
+    let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let credential_request = json!({
+        "format": "dc+sd-jwt",
+        "credential_configuration_id": "person_is_alive_sd_jwt",
+        "proof": {
+            "proof_type": "jwt",
+            "jwt": proof
+        }
+    });
+
+    let first = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&credential_request)
+        .await;
+    first.assert_status_ok();
+
+    let replay = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&credential_request)
+        .await;
+    replay.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = replay.json();
+    assert_eq!(body["error"], json!("invalid_proof"));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn direct_credentials_issue_creates_retrievable_status_record() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -2346,7 +2468,7 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/people/person",
+            "/v1/datasets/people/entities/person/records",
             get(self_attestation_registry_data_api),
         ));
     let base_url = upstream
@@ -2387,7 +2509,7 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
     let authorization = format!("Bearer {token}");
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("authorization", authorization.clone())
         .json(&json!({
             "subject": {
@@ -2410,7 +2532,7 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
         sign_direct_holder_proof(&holder_id, &evaluation_id, "direct-credential-status-jti-1");
 
     let issue = server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .add_header("authorization", authorization)
         .json(&json!({
             "evaluation_id": evaluation_id,
@@ -2452,7 +2574,7 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
         .expect("credential id returned");
 
     let status = server
-        .get(&format!("/credentials/status/{credential_id}"))
+        .get(&format!("/v1/credentials/{credential_id}/status"))
         .await;
     status.assert_status_ok();
     let status_body: Value = status.json();
@@ -2476,7 +2598,7 @@ async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     let upstream = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/people/person",
+            "/v1/datasets/people/entities/person/records",
             get(self_attestation_registry_data_api),
         ));
     let base_url = upstream
@@ -2516,7 +2638,7 @@ async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     let authorization = format!("Bearer {token}");
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("authorization", authorization.clone())
         .json(&json!({
             "subject": {
@@ -2535,7 +2657,7 @@ async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
         .expect("evaluation id returned");
 
     let issue = server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .add_header("authorization", authorization)
         .json(&json!({
             "evaluation_id": evaluation_id,
@@ -2682,7 +2804,7 @@ async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
     }));
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("authorization", format!("Bearer {token}"))
         .add_header("x-request-id", "bad value")
         .json(&json!({
@@ -2714,7 +2836,7 @@ async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
     let denied = records
         .iter()
         .find(|record| {
-            record["path"] == json!("/claims/evaluate")
+            record["path"] == json!("/v1/evaluations")
                 && record["decision"] == json!("evaluate_denied")
                 && record["status"] == json!(403)
         })
@@ -2756,7 +2878,7 @@ async fn request_body_limit_returns_413_above_threshold() {
 
     let too_large = Bytes::from(vec![b' '; 1024 * 1024 + 1]);
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("content-type", "application/json")
         .bytes(too_large)
@@ -2796,7 +2918,7 @@ async fn error_responses_match_rfc_7807_shape() {
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let response = server.get("/claims").await;
+    let response = server.get("/v1/claims").await;
 
     response.assert_status(StatusCode::UNAUTHORIZED);
     let content_type = response
@@ -2938,7 +3060,7 @@ async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
     let server = TestServer::builder().http_transport().build(app);
 
     let wallet = server
-        .method(Method::OPTIONS, "/claims/evaluate")
+        .method(Method::OPTIONS, "/v1/evaluations")
         .add_header("origin", "https://wallet.example.gov")
         .add_header("access-control-request-method", "POST")
         .add_header(
@@ -2963,7 +3085,7 @@ async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
     );
 
     let ops = server
-        .method(Method::OPTIONS, "/claims/evaluate")
+        .method(Method::OPTIONS, "/v1/evaluations")
         .add_header("origin", "https://ops.example.test")
         .add_header("access-control-request-method", "POST")
         .await;
@@ -2982,7 +3104,10 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
 
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -2998,7 +3123,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let denied = server.get("/claims").await;
+    let denied = server.get("/v1/claims").await;
     denied.assert_status(StatusCode::UNAUTHORIZED);
 
     let openapi = server
@@ -3008,7 +3133,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     openapi.assert_status_ok();
     let openapi_body: Value = openapi.json();
     assert_eq!(openapi_body["openapi"], json!("3.1.0"));
-    assert!(openapi_body["paths"]["/claims/evaluate"].is_object());
+    assert!(openapi_body["paths"]["/v1/evaluations"].is_object());
 
     let discovery = server
         .get("/.well-known/evidence-service")
@@ -3022,7 +3147,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     );
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -3039,7 +3164,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     #[cfg(feature = "registry-notary-cel")]
     {
         let cel_response = server
-            .post("/claims/evaluate")
+            .post("/v1/evaluations")
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
@@ -3080,7 +3205,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     let metrics_body = metrics.text();
     assert!(metrics_body.contains("registry_notary_http_requests_total"));
     assert!(metrics_body.contains(
-        "registry_notary_http_requests_total{method=\"POST\",route=\"/claims/evaluate\",status_class=\"2xx\"}"
+        "registry_notary_http_requests_total{method=\"POST\",route=\"/v1/evaluations\",status_class=\"2xx\"}"
     ));
     assert!(metrics_body
         .contains("registry_notary_source_requests_total{connector=\"rda\",outcome=\"success\"}"));
@@ -3115,7 +3240,7 @@ async fn audit_chain_bootstraps_from_sink_tail() {
         .http_transport()
         .build(standalone_router(config.clone()).expect("first router builds"));
     first
-        .get("/claims")
+        .get("/v1/claims")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
@@ -3123,12 +3248,18 @@ async fn audit_chain_bootstraps_from_sink_tail() {
         .http_transport()
         .build(standalone_router(config).expect("second router builds"));
     second
-        .get("/claims")
+        .get("/v1/claims")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
     let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
-    verify_jsonl_lines(contents.lines()).expect("audit chain verifies");
+    assert!(
+        verify_jsonl_lines(contents.lines()).is_err(),
+        "runtime audit chain must not verify with the dev-only unkeyed hasher"
+    );
+    let hasher = AuditChainHasher::from_env("REGISTRY_NOTARY_AUDIT_HASH_SECRET")
+        .expect("configured audit chain secret loads");
+    verify_jsonl_lines_with_hasher(contents.lines(), &hasher).expect("audit chain verifies");
     let envelopes = audit_envelopes(&audit_path);
     assert_eq!(envelopes.len(), 2);
     assert_eq!(envelopes[1].prev_hash, Some(envelopes[0].record_hash));
@@ -3153,11 +3284,11 @@ async fn audit_chain_detects_inserted_envelope() {
         .http_transport()
         .build(standalone_router(config.clone()).expect("first router builds"));
     first
-        .get("/claims")
+        .get("/v1/claims")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
     first
-        .get("/claims")
+        .get("/v1/claims")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
@@ -3170,7 +3301,7 @@ async fn audit_chain_detects_inserted_envelope() {
         .http_transport()
         .build(standalone_router(config).expect("second router builds"));
     let response = second
-        .get("/claims")
+        .get("/v1/claims")
         .add_header("x-api-key", "api-token")
         .await;
 
@@ -3210,7 +3341,7 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -3285,7 +3416,7 @@ async fn standalone_server_maps_dci_register_not_found_to_source_not_found() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -3311,7 +3442,10 @@ async fn standalone_server_extract_claim_works_without_default_features() {
 
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -3327,7 +3461,7 @@ async fn standalone_server_extract_claim_works_without_default_features() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -3354,7 +3488,10 @@ async fn standalone_server_rejects_cel_claim_without_cel_feature() {
 
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/farmer_registry/farmer", get(registry_data_api)));
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
     let base_url = upstream
         .server_address()
         .expect("HTTP transport exposes upstream address")
@@ -3369,7 +3506,7 @@ async fn standalone_server_rejects_cel_claim_without_cel_feature() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({

@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use registry_notary_core::{
-    BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest, RenderRequest,
-    SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
+    BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest,
+    RenderEvaluationRequest, RenderRequest, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{Method, StatusCode, Url};
@@ -145,7 +145,7 @@ impl RegistryNotaryClient {
         .await
     }
 
-    /// Trigger `POST /admin/reload`.
+    /// Trigger `POST /admin/v1/reload`.
     ///
     /// Requires the server-side admin scope or equivalent API key.
     pub async fn admin_reload(
@@ -153,7 +153,7 @@ impl RegistryNotaryClient {
         options: RequestOptions,
     ) -> Result<NotaryResponse<AdminReloadResponse>, NotaryClientError> {
         self.post_json(
-            "/admin/reload",
+            "/admin/v1/reload",
             &serde_json::json!({}),
             options,
             LIMIT_SMALL,
@@ -384,14 +384,14 @@ impl RegistryNotaryClient {
         .await
     }
 
-    /// List configured claim definitions with `GET /claims`.
+    /// List configured claim definitions with `GET /v1/claims`.
     ///
     /// The current server contract returns a bounded, unpaginated list.
     pub async fn list_claims(
         &self,
         options: RequestOptions,
     ) -> Result<NotaryResponse<ListClaimsResponse>, NotaryClientError> {
-        self.get_json("/claims", options, LIMIT_DISCOVERY, ErrorKind::Problem)
+        self.get_json("/v1/claims", options, LIMIT_DISCOVERY, ErrorKind::Problem)
             .await
     }
 
@@ -402,7 +402,7 @@ impl RegistryNotaryClient {
         options: RequestOptions,
     ) -> Result<NotaryResponse<serde_json::Value>, NotaryClientError> {
         self.get_json(
-            &format!("/claims/{}", encode_path_segment(claim_id)),
+            &format!("/v1/claims/{}", encode_path_segment(claim_id)),
             options,
             LIMIT_DISCOVERY,
             ErrorKind::Problem,
@@ -415,7 +415,7 @@ impl RegistryNotaryClient {
         &self,
         options: RequestOptions,
     ) -> Result<NotaryResponse<FormatsResponse>, NotaryClientError> {
-        self.get_json("/formats", options, LIMIT_DISCOVERY, ErrorKind::Problem)
+        self.get_json("/v1/formats", options, LIMIT_DISCOVERY, ErrorKind::Problem)
             .await
     }
 
@@ -437,9 +437,10 @@ impl RegistryNotaryClient {
 
     /// Submit a raw typed [`EvaluateRequest`].
     ///
-    /// This method is best when the caller already has a core DTO. It applies
-    /// default purpose and claim-result format handling before sending.
-    pub async fn evaluate_dto(
+    /// This method is best when the caller already has the core wire request.
+    /// It applies default purpose and claim-result format handling before
+    /// sending.
+    pub async fn evaluate_request(
         &self,
         mut request: EvaluateRequest,
         options: RequestOptions,
@@ -454,7 +455,7 @@ impl RegistryNotaryClient {
             request.format = Some(FORMAT_CLAIM_RESULT_JSON.to_string());
         }
         self.post_json(
-            "/claims/evaluate",
+            "/v1/evaluations",
             &request,
             options,
             LIMIT_OPERATION,
@@ -468,7 +469,7 @@ impl RegistryNotaryClient {
     ///
     /// Batch evaluation is the only POST route where the client allows
     /// `Idempotency-Key`; retries require that key.
-    pub async fn batch_evaluate_dto(
+    pub async fn batch_evaluate_request(
         &self,
         mut request: BatchEvaluateRequest,
         options: RequestOptions,
@@ -483,7 +484,7 @@ impl RegistryNotaryClient {
             request.format = Some(FORMAT_CLAIM_RESULT_JSON.to_string());
         }
         self.post_json(
-            "/claims/batch-evaluate",
+            "/v1/batch-evaluations",
             &request,
             options,
             LIMIT_BATCH,
@@ -494,15 +495,25 @@ impl RegistryNotaryClient {
     }
 
     /// Render a stored evaluation into a requested evidence format.
-    pub async fn render_dto(
+    ///
+    /// The server models `evaluation_id` as a path parameter. This method accepts
+    /// the core [`RenderRequest`] DTO for caller ergonomics, then moves
+    /// `evaluation_id` into `/v1/evaluations/{evaluation_id}/render` before the
+    /// request body is serialized.
+    pub async fn render_request(
         &self,
         request: RenderRequest,
         options: RequestOptions,
     ) -> Result<NotaryResponse<serde_json::Value>, NotaryClientError> {
         self.reject_idempotency(&options)?;
+        let path = format!(
+            "/v1/evaluations/{}/render",
+            encode_path_segment(&request.evaluation_id)
+        );
+        let body = RenderEvaluationRequest::from(request);
         self.post_json(
-            "/evidence/render",
-            &request,
+            &path,
+            &body,
             options,
             LIMIT_OPERATION,
             RouteRetry::PostNoRetry,
@@ -515,14 +526,14 @@ impl RegistryNotaryClient {
     ///
     /// Returned credential material is present in typed fields but redacted from
     /// `Debug` output.
-    pub async fn issue_credential_dto(
+    pub async fn issue_credential_request(
         &self,
         request: CredentialIssueRequest,
         options: RequestOptions,
     ) -> Result<NotaryResponse<CredentialIssueResponse>, NotaryClientError> {
         self.reject_idempotency(&options)?;
         self.post_json(
-            "/credentials/issue",
+            "/v1/credentials",
             &request,
             options,
             LIMIT_OPERATION,
@@ -539,7 +550,10 @@ impl RegistryNotaryClient {
         options: RequestOptions,
     ) -> Result<NotaryResponse<CredentialStatusResponse>, NotaryClientError> {
         self.get_json(
-            &format!("/credentials/status/{}", encode_path_segment(credential_id)),
+            &format!(
+                "/v1/credentials/{}/status",
+                encode_path_segment(credential_id)
+            ),
             options,
             LIMIT_SMALL,
             ErrorKind::Problem,
@@ -557,7 +571,7 @@ impl RegistryNotaryClient {
         self.reject_idempotency(&options)?;
         self.post_json(
             &format!(
-                "/admin/credentials/status/{}",
+                "/admin/v1/credentials/{}/status",
                 encode_path_segment(credential_id)
             ),
             &CredentialStatusUpdateRequest {
@@ -1168,7 +1182,7 @@ impl<'a> EvaluateBuilder<'a> {
             ..RequestOptions::default()
         };
         self.client
-            .evaluate_dto(request, options)
+            .evaluate_request(request, options)
             .await
             .map(|response| {
                 let request_id = response.request_id;

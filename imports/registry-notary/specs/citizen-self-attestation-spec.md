@@ -1,5 +1,10 @@
 # Citizen Self-Attestation Spec
 
+Current status: implemented for evaluation, render, credential issuance, batch
+denial, rate-limit guard, and OpenID4VCI facade integration in 0.3.0. External
+wallet and lab smoke coverage remains separate from the in-repo implementation
+status.
+
 ## Goal
 
 Add an optional Registry Notary mode that lets an authenticated citizen request
@@ -40,11 +45,11 @@ V1 is deliberately small:
 1. A citizen authenticates through a trusted OIDC issuer.
 2. The issuer returns a JWT access token with a verified stable
    subject-binding claim.
-3. The citizen calls `POST /claims/evaluate` for exactly one `subject.id`.
+3. The citizen calls `POST /v1/evaluations` for exactly one `subject.id`.
 4. Notary verifies the token, scopes, allow-lists, and exact subject binding
    before reading any source.
 5. Notary returns a configured claim result.
-6. If requested, the citizen calls `POST /credentials/issue` for the same
+6. If requested, the citizen calls `POST /v1/credentials` for the same
    evaluation and supplies holder DID proof.
 7. Notary issues a short-lived, holder-bound SD-JWT VC.
 
@@ -70,7 +75,7 @@ V1 must be reviewed against at least these threats:
 | Scope escalation | Self-attestation uses a narrow dedicated scope plus internal derived source-read policy after all citizen guards pass |
 | Holder proof replay | Existing holder proof replay protection and short proof lifetime |
 | Holder DID is assumed to equal the citizen | V1 does not make that claim; holder binding and subject binding are separate controls |
-| Credential presented after source state changes | Short credential validity and explicit non-revocation limitation in v1 |
+| Credential presented after source state changes | Short credential validity and optional status checks when enabled |
 | Audit or artifact leaks citizen identifiers | Redaction, bounded audit context, and non-disclosure tests |
 | Excessive request volume or enumeration attempts | Per-principal and per-client rate limits for self-attestation paths |
 
@@ -91,7 +96,7 @@ linkability, detectability, and disclosure.
   credential issuance.
 - Self-attestation must allow only configured claims, formats, disclosures, and
   operations.
-- Self-attestation v1 must reject `/claims/batch-evaluate`.
+- Self-attestation v1 must reject `/v1/batch-evaluations`.
 - Credential issuance must remain holder-bound when the selected credential
   profile requires holder binding. For citizen-facing SD-JWT VC issuance, the
   recommended v1 profile requires `holder_binding.mode = did:jwk` and
@@ -108,8 +113,9 @@ linkability, detectability, and disclosure.
   source records.
 - Self-attestation paths must have rate limits that bound subject probing,
   repeated denial attempts, and credential issuance attempts.
-- Self-attestation credentials must be short-lived in v1 and documented as
-  non-revocation-aware unless a later credential status design is added.
+- Self-attestation credentials remain short-lived by default. Optional
+  `RegistryNotaryCredentialStatus` may be enabled separately and must not be
+  treated as a complete revocation or refresh lifecycle.
 
 ## Non-Goals
 
@@ -416,7 +422,7 @@ source reads.
 
 ### Evaluation
 
-For `POST /claims/evaluate`:
+For `POST /v1/evaluations`:
 
 1. Authenticate the bearer token through the configured OIDC verifier.
 2. Classify the request as `machine_client` or `self_attestation`.
@@ -457,7 +463,7 @@ For rendering an existing evaluation:
 
 ### Credential Issuance
 
-For `POST /credentials/issue`:
+For `POST /v1/credentials`:
 
 1. Require the stored evaluation to match the current authorization tuple:
    principal hash, access mode, issuer, and client or audience when present.
@@ -478,7 +484,7 @@ For `POST /credentials/issue`:
 
 ### Batch Evaluation
 
-`POST /claims/batch-evaluate` must return a stable authorization error for
+`POST /v1/batch-evaluations` must return a stable authorization error for
 self-attestation principals in v1. Batch can be revisited only after an explicit
 delegation and subject-list policy exists.
 
@@ -533,10 +539,10 @@ self-attestation policy details.
 
 V1 credentials are short-lived attestations over the source state observed at
 evaluation time. Credential profiles used for self-attestation should set a
-short `validity_seconds` appropriate for the claim. V1 does not include
-revocation, credential status lists, source change notifications, or automatic
-refresh. Those need a separate design before long-lived citizen credentials are
-issued.
+short `validity_seconds` appropriate for the claim. V1 does not require
+credential status, source change notifications, or automatic refresh. Optional
+`RegistryNotaryCredentialStatus` can be enabled separately, but it is not a
+complete long-lived citizen credential lifecycle by itself.
 
 V1 citizen-facing credential validity must not exceed
 `self_attestation.token_policy.max_credential_validity_seconds`, with a

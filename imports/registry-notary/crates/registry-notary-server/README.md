@@ -96,11 +96,11 @@ Each credential profile controls the credential lifetime with
 
 Set `credential_status.enabled = true` to add a storage-backed credential
 status endpoint. Issued SD-JWT VC payloads then include a `status.statusUrl`
-claim pointing at `/credentials/status/{credential_id}`. The store supports
+claim pointing at `/v1/credentials/{credential_id}/status`. The store supports
 `in_memory` for lab deployments and `redis` for deployable multi-process
 instances. The public endpoint returns `valid`, `suspended`, `revoked`, or
 derived `expired`; admins update mutable states through
-`POST /admin/credentials/status/{credential_id}` with the
+`POST /admin/v1/credentials/{credential_id}/status` with the
 `registry_notary:admin` scope. Status records contain only credential lifecycle
 metadata, not subject ids, holder keys, claim values, disclosures, or source
 rows.

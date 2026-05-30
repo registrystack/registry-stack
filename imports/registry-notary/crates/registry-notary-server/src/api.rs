@@ -18,7 +18,7 @@ use registry_notary_core::{
     ClaimRef, ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig,
     EvaluateRequest, EvidenceConfig, EvidenceError, EvidencePrincipal, FederationConfig, Hashed,
     HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, PolicyIdentifier,
-    RateLimitBucket, RenderRequest, SelfAttestationConfig, SelfAttestationDenialCode,
+    RateLimitBucket, RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
     SelfAttestationScopePolicy, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
     VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
@@ -31,7 +31,7 @@ use registry_platform_oid4vci::{
     NonceRequest as Oid4vciNonceRequest, NonceResponse, ProofValidationPolicy, WireError,
     PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
-use registry_platform_replay::{ReplayInsertOutcome, ReplayKey, ReplayScope, RequiredReplayError};
+use registry_platform_replay::{require_consume_once, ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -66,7 +66,7 @@ where
     Router::new()
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
-        .route("/admin/reload", post(admin_reload))
+        .route("/admin/v1/reload", post(admin_reload))
         .route("/openapi.json", get(openapi_json))
         .route("/.well-known/evidence-service", get(service_document))
         .route("/.well-known/evidence/jwks.json", get(issuer_jwks))
@@ -77,19 +77,19 @@ where
         .route("/oid4vci/credential-offer", get(oid4vci_credential_offer))
         .route("/oid4vci/nonce", post(oid4vci_nonce))
         .route("/oid4vci/credential", post(oid4vci_credential))
-        .route("/claims", get(list_claims))
-        .route("/claims/{claim_id}", get(get_claim))
-        .route("/formats", get(list_formats))
-        .route("/claims/evaluate", post(evaluate))
-        .route("/claims/batch-evaluate", post(batch_evaluate))
-        .route("/evidence/render", post(render))
-        .route("/credentials/issue", post(issue_credential))
+        .route("/v1/claims", get(list_claims))
+        .route("/v1/claims/{claim_id}", get(get_claim))
+        .route("/v1/formats", get(list_formats))
+        .route("/v1/evaluations", post(evaluate))
+        .route("/v1/batch-evaluations", post(batch_evaluate))
+        .route("/v1/evaluations/{evaluation_id}/render", post(render))
+        .route("/v1/credentials", post(issue_credential))
         .route(
-            "/credentials/status/{credential_id}",
+            "/v1/credentials/{credential_id}/status",
             get(get_credential_status),
         )
         .route(
-            "/admin/credentials/status/{credential_id}",
+            "/admin/v1/credentials/{credential_id}/status",
             post(update_credential_status),
         )
 }
@@ -124,6 +124,7 @@ pub async fn oid4vci_proof_precheck_middleware(
             expected_nonce: None,
             max_lifetime: Duration::from_secs(state.oid4vci.proof.max_age_seconds),
             future_skew: Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
+            forbidden_holder_keys: &[],
         },
         OffsetDateTime::now_utc().unix_timestamp(),
     )
@@ -615,7 +616,7 @@ fn advertise_credential_status(document: &mut Value) {
     document["credential_capabilities"]["sd_jwt_vc"]["status_methods"] =
         json!(["RegistryNotaryCredentialStatus"]);
     document["credential_capabilities"]["sd_jwt_vc"]["credential_status_url"] =
-        json!("/credentials/status/{credential_id}");
+        json!("/v1/credentials/{credential_id}/status");
     if let Some(features) =
         document["credential_capabilities"]["unsupported_features"].as_array_mut()
     {
@@ -777,6 +778,7 @@ async fn oid4vci_credential(
             expected_nonce: None,
             max_lifetime: Duration::from_secs(state.oid4vci.proof.max_age_seconds),
             future_skew: Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
+            forbidden_holder_keys: &[],
         },
         OffsetDateTime::now_utc().unix_timestamp(),
     ) {
@@ -817,16 +819,17 @@ async fn oid4vci_credential(
             Ok(key) => key,
             Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
         };
-        match state
-            .replay
-            .nonce_store()
-            .consume_nonce(&replay_scope, &replay_key)
-            .await
+        match require_consume_once(
+            state.replay.nonce_store().as_ref(),
+            &replay_scope,
+            &replay_key,
+        )
+        .await
         {
-            Ok(ReplayInsertOutcome::Inserted) => {
+            Ok(()) => {
                 state.metrics.record_replay("oid4vci_nonce", "consumed");
             }
-            Ok(ReplayInsertOutcome::AlreadySeen) => {
+            Err(RequiredReplayError::AlreadySeen) => {
                 state.metrics.record_replay("oid4vci_nonce", "replayed");
                 return oid4vci_error_response(Oid4vciWireError::InvalidProof);
             }
@@ -1420,7 +1423,8 @@ async fn batch_evaluate(
 async fn render(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
-    Json(request): Json<RenderRequest>,
+    Path(evaluation_id): Path<String>,
+    Json(request): Json<RenderEvaluationRequest>,
 ) -> Response {
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
@@ -1428,6 +1432,7 @@ async fn render(
     let Some(Extension(principal)) = principal else {
         return evidence_error_response(EvidenceError::MissingCredential);
     };
+    let request = request.with_evaluation_id(evaluation_id);
     let evaluation_id = request.evaluation_id.clone();
     let requested_claims = request.claims.clone();
     let evidence = match state.enabled_evidence() {
@@ -3397,6 +3402,7 @@ mod tests {
         CREDENTIAL_STATUS_STORAGE_REDIS,
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
+    use registry_platform_replay::ReplayInsertOutcome;
     use registry_platform_testing::sign_openid4vci_proof_jwt;
     use std::future::Future;
     use std::pin::Pin;

@@ -505,7 +505,7 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
     );
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .json(&json!({
             "subject": {
                 "id": SUBJECT_ID,
@@ -542,9 +542,8 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
         principal,
     );
     let render = changed_policy_server
-        .post("/evidence/render")
+        .post(&format!("/v1/evaluations/{evaluation_id}/render"))
         .json(&json!({
-            "evaluation_id": evaluation_id,
             "format": FORMAT_CLAIM_RESULT_JSON,
             "disclosure": "value"
         }))
@@ -565,7 +564,7 @@ async fn self_attestation_render_rejects_same_evaluation_for_different_principal
     );
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .json(&json!({
             "subject": {
                 "id": SUBJECT_ID,
@@ -589,9 +588,8 @@ async fn self_attestation_render_rejects_same_evaluation_for_different_principal
         self_attestation_principal_with_id("citizen-raw-principal-b"),
     );
     let render = different_principal_server
-        .post("/evidence/render")
+        .post(&format!("/v1/evaluations/{evaluation_id}/render"))
         .json(&json!({
-            "evaluation_id": evaluation_id,
             "format": FORMAT_CLAIM_RESULT_JSON,
             "disclosure": "value"
         }))
@@ -612,7 +610,7 @@ async fn self_attestation_credential_issuance_hides_other_principal_evaluation_i
     );
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .json(&json!({
             "subject": {
                 "id": SUBJECT_ID,
@@ -636,7 +634,7 @@ async fn self_attestation_credential_issuance_hides_other_principal_evaluation_i
         self_attestation_principal_with_id("citizen-raw-principal-b"),
     );
     let denied = different_principal_server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .json(&json!({
             "evaluation_id": evaluation_id,
             "credential_profile": "civil_status_sd_jwt",
@@ -662,7 +660,7 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
     );
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .json(&json!({
             "subject": {
                 "id": SUBJECT_ID,
@@ -692,9 +690,8 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
     store.insert(stored);
 
     let render = server
-        .post("/evidence/render")
+        .post(&format!("/v1/evaluations/{evaluation_id}/render"))
         .json(&json!({
-            "evaluation_id": evaluation_id,
             "format": FORMAT_CLAIM_RESULT_JSON,
             "disclosure": "value"
         }))
@@ -715,7 +712,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
     );
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .json(&json!({
             "subject": {
                 "id": SUBJECT_ID,
@@ -734,7 +731,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
         .to_string();
 
     let missing_holder = server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .json(&json!({
             "evaluation_id": evaluation_id,
             "credential_profile": "civil_status_sd_jwt",
@@ -753,7 +750,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
     let holder_id = holder_did_jwk();
     let proof = sign_holder_proof(&holder_id, &evaluation_id);
     let issued = server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .json(&json!({
             "evaluation_id": evaluation_id,
             "credential_profile": "civil_status_sd_jwt",
@@ -788,7 +785,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
     );
 
     let replay = server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .json(&json!({
             "evaluation_id": evaluation_id,
             "credential_profile": "civil_status_sd_jwt",
@@ -828,7 +825,7 @@ async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
     let server = build_issuance_server(config, Arc::clone(&store), self_attestation_principal());
 
     let evaluate = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .json(&json!({
             "subject": {
                 "id": SUBJECT_ID,
@@ -847,7 +844,7 @@ async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
         .to_string();
 
     let denied = server
-        .post("/credentials/issue")
+        .post("/v1/credentials")
         .json(&json!({
             "evaluation_id": evaluation_id,
             "credential_profile": "machine_only_sd_jwt",

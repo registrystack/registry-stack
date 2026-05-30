@@ -72,6 +72,9 @@ impl FederationRuntimeState {
                     audiences: vec![config.node_id.clone()],
                     allowed_algorithms: vec![Algorithm::EdDSA],
                     allowed_typ: vec![FEDERATION_REQUEST_JWT_TYP.to_string()],
+                    allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                    allowed_userinfo_typ: vec!["JWT".to_string()],
+                    userinfo_requires_exp: true,
                     scope_claim: "scope".to_string(),
                     scope_separator: ' ',
                     scope_map: None,
@@ -98,5 +101,110 @@ impl FederationRuntimeState {
             metrics,
             audit,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use registry_notary_core::{
+        FederationEvaluationProfileConfig, FederationPairwiseSubjectHashConfig,
+        FederationSigningConfig, FEDERATION_PROTOCOL_V0_1,
+    };
+    use registry_platform_replay::InMemoryReplayStore;
+    use registry_platform_testing::{fixtures, sign_ed25519_compact_jwt, MockIdp};
+    use serde_json::json;
+    use time::OffsetDateTime;
+
+    fn test_federation_config(peer_issuer: &str, peer_jwks_uri: &str) -> FederationConfig {
+        FederationConfig {
+            enabled: true,
+            node_id: "did:web:agency-a.example.gov".to_string(),
+            issuer: "https://agency-a.example.gov".to_string(),
+            jwks_uri: "https://agency-a.example.gov/federation/jwks.json".to_string(),
+            federation_api: "https://agency-a.example.gov/federation/v1".to_string(),
+            supported_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
+            signing: FederationSigningConfig {
+                signing_key: "federation-key".to_string(),
+            },
+            pairwise_subject_hash: FederationPairwiseSubjectHashConfig {
+                secret_env: "TEST_FEDERATION_RUNTIME_PAIRWISE_SECRET".to_string(),
+            },
+            peers: vec![FederationPeerConfig {
+                node_id: "did:web:agency-b.example.gov".to_string(),
+                issuer: peer_issuer.to_string(),
+                jwks_uri: peer_jwks_uri.to_string(),
+                allow_insecure_localhost: true,
+                allowed_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
+                allowed_purposes: vec!["https://purpose.example.test/eligibility".to_string()],
+                allowed_profiles: vec!["farmer_under_4ha".to_string()],
+                source_scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                ..FederationPeerConfig::default()
+            }],
+            evaluation_profiles: vec![FederationEvaluationProfileConfig {
+                id: "farmer_under_4ha".to_string(),
+                ruleset: "farmer-under-4ha-v1".to_string(),
+                claim_id: "farmer-under-4ha".to_string(),
+                subject_id_type: "national_id".to_string(),
+                ..FederationEvaluationProfileConfig::default()
+            }],
+            ..FederationConfig::default()
+        }
+    }
+
+    fn federation_token(issuer: &str, typ: &str) -> String {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        sign_ed25519_compact_jwt(
+            fixtures::ED25519_PRIVATE_JWK,
+            typ,
+            "registry-platform-testing-ed25519-1",
+            json!({
+                "iss": issuer,
+                "sub": "did:web:agency-b.example.gov",
+                "aud": "did:web:agency-a.example.gov",
+                "scope": "farmer_registry:evidence_verification",
+                "iat": now,
+                "nbf": now,
+                "exp": now + 300,
+                "jti": "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q999",
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn federation_runtime_verifier_accepts_only_federation_request_typ() {
+        std::env::set_var(
+            "TEST_FEDERATION_RUNTIME_PAIRWISE_SECRET",
+            "federation-pairwise-secret",
+        );
+        let idp = MockIdp::start().await;
+        let config = test_federation_config(&idp.issuer(), &idp.jwks_uri());
+        let runtime = FederationRuntimeState::from_config(
+            &config,
+            Arc::new(fixtures::ed25519_signer()),
+            None,
+            Arc::new(InMemoryReplayStore::new()),
+            Arc::new(AppMetrics::default()),
+        )
+        .expect("federation runtime builds");
+        let peer = runtime
+            .peers_by_issuer
+            .get(&idp.issuer())
+            .expect("peer verifier is registered");
+
+        peer.verifier
+            .verify(&federation_token(&idp.issuer(), FEDERATION_REQUEST_JWT_TYP))
+            .await
+            .expect("federation request typ is accepted");
+        peer.verifier
+            .verify(&federation_token(&idp.issuer(), "JWT"))
+            .await
+            .expect_err("plain JWT typ is rejected for federation");
+        peer.verifier
+            .verify(&federation_token(&idp.issuer(), "id_token"))
+            .await
+            .expect_err("ID token typ is rejected for federation");
+
+        idp.stop().await;
     }
 }

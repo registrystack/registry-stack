@@ -166,7 +166,7 @@ impl CredentialStatusStore {
     }
 
     pub(crate) fn status_url(&self, credential_id: &str) -> String {
-        format!("{}/credentials/status/{}", self.base_url, credential_id)
+        format!("{}/v1/credentials/{}/status", self.base_url, credential_id)
     }
 
     pub(crate) async fn record_issued(
@@ -419,7 +419,7 @@ mod tests {
             store.status_claim("credential-1"),
             Some(json!({
                 "type": "RegistryNotaryCredentialStatus",
-                "statusUrl": "https://issuer.example/credentials/status/credential-1"
+                "statusUrl": "https://issuer.example/v1/credentials/credential-1/status"
             }))
         );
     }

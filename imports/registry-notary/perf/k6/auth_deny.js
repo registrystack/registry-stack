@@ -44,8 +44,8 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const claimsUrl = `${baseUrl()}/claims`;
-  const evaluateUrl = `${baseUrl()}/claims/evaluate`;
+  const claimsUrl = `${baseUrl()}/v1/claims`;
+  const evaluateUrl = `${baseUrl()}/v1/evaluations`;
   const evaluatePayload = JSON.stringify({
     subject: { id: 'subj-0000000', id_type: 'NATIONAL_ID' },
     claims: ['date-of-birth'],

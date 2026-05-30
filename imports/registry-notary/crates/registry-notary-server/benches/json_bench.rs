@@ -35,7 +35,7 @@ fn build_audit_event() -> EvidenceAuditEvent {
         )),
         decision: "allow".to_string(),
         method: "POST".to_string(),
-        path: "/claims/evaluate".to_string(),
+        path: "/v1/evaluations".to_string(),
         status: 200,
         verification_id: Some("01HWQZPJ3VXKM8N2BF5CSRTE4E".to_string()),
         claim_hash: Some(

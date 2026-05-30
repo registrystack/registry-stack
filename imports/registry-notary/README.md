@@ -12,6 +12,11 @@ and redacted audit event emission. Registry Relay or Registry Manifest may
 publish metadata that points to a Registry Notary, but Registry Notary does
 not import or link Registry Relay code.
 
+Shared security and operations primitives come from sibling
+`registry-platform-*` crates, including audit envelopes, auth common code,
+cache/replay stores, HTTP security helpers, OIDC, OpenID4VCI, and SD-JWT
+support.
+
 ## Layout
 
 - [`crates/registry-notary-core`](crates/registry-notary-core/README.md):
@@ -21,12 +26,38 @@ not import or link Registry Relay code.
   Axum routes, runtime evaluation, renderers, credential issuance wiring, HTTP
   Registry Data API and DCI source connectors, auth middleware, audit emission,
   and standalone app assembly.
+- [`crates/registry-notary-client`](crates/registry-notary-client/README.md):
+  typed Rust HTTP client, JSON facade, route-aware retry, bounded response
+  reads, JWKS refresh, and redacted errors.
 - [`crates/registry-notary-bin`](crates/registry-notary-bin/README.md):
   process startup, config loading, bind address, tracing, graceful shutdown, and
   OpenAPI generation.
 - [`crates/registry-notary-openfn-sidecar`](crates/registry-notary-openfn-sidecar/README.md):
   synchronous Registry Data API-shaped sidecar for running pinned OpenFn adaptor
   jobs behind Registry Notary source lookups.
+- [`bindings/python`](bindings/python): `registry-notary` sync and async
+  dictionary-friendly Python wrapper.
+- [`bindings/node`](bindings/node): `@registry-notary/client` Promise client
+  with TypeScript declarations.
+- [`docs/client-sdk-guide.md`](docs/client-sdk-guide.md): Rust, Python, and
+  Node.js SDK usage guide.
+- [`docs/operator-config-reference.md`](docs/operator-config-reference.md):
+  adopter-facing configuration reference for auth, evidence, sources, replay,
+  status, self-attestation, OID4VCI, and federation.
+- [`docs/source-claim-modeling-guide.md`](docs/source-claim-modeling-guide.md):
+  source connector, claim modeling, disclosure, batch, and OpenFn sidecar
+  guidance for implementation teams.
+- [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md):
+  production-readiness checklist for network boundaries, secrets, Redis,
+  audit, metrics, source access, signing keys, and rollback.
+- [`docs/credential-lifecycle-status.md`](docs/credential-lifecycle-status.md):
+  short-lived credential lifecycle, optional live status, retention,
+  suspension, revocation, and verifier caveats.
+- [`docs/self-attestation-operator-guide.md`](docs/self-attestation-operator-guide.md):
+  citizen OIDC subject binding, token policy, allow-lists, rate limits, and
+  rollout guidance.
+- [`docs/oid4vci-wallet-interop.md`](docs/oid4vci-wallet-interop.md):
+  practical OpenID4VCI wallet facade setup and compatibility checklist.
 - `demo/config/registry-notary.yaml`: split demo config used by
   `registry-relay`'s narrated Registry Notary walkthrough.
 - [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
@@ -38,19 +69,9 @@ not import or link Registry Relay code.
   standalone quickstart for `init dci`, the explicit OpenCRVS DCI config edits,
   `doctor`, `explain-config`, `--env-file`, source OAuth, and demo SD-JWT VC
   issuance.
-- [`docs/opencrvs-dci-setup-simplification-spec.md`](docs/opencrvs-dci-setup-simplification-spec.md):
-  implementation-aligned setup simplification spec for the generic env-file,
-  source-auth, diagnostics, initializer, API-key hash, and demo issuer
-  workflows.
 - [`docs/signing-key-provider.md`](docs/signing-key-provider.md):
   SD-JWT VC signing-key provider configuration, rotation, PKCS#11 setup, and
   verification checklist.
-- [`docs/federated-notary-manifest-spec.md`](docs/federated-notary-manifest-spec.md):
-  Registry Manifest-backed federation, peer discovery, trust, delegated
-  evaluation, credential issuance, and audit checkpoint design.
-- [`docs/federated-evaluation-mvp-spec.md`](docs/federated-evaluation-mvp-spec.md):
-  first practical federation slice for static-peer, signed delegated
-  evaluation.
 - [`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md):
   minimal static-peer setup, env vars, replay limitation, and verification
   checklist for the MVP.
@@ -58,6 +79,9 @@ not import or link Registry Relay code.
   scenario catalog for where Notary helps, who is involved, current support
   status, and the gaps surfaced by local evaluation, federation, proof, issuance,
   and audit workflows.
+- [`specs/`](specs/README.md): design specifications and implementation traces for
+  self-attestation, static-peer federation, manifest-backed federation,
+  OpenID4VCI wallet facade, OpenFn sidecar source integration, and scalability.
 
 ## Credential Conformance
 
@@ -68,7 +92,9 @@ instead of carrying key material themselves. Local JWK keys support development
 and mounted-secret deployments; PKCS#11 keys are available behind the optional
 server feature for HSM-backed signing. Credential profiles default to a
 short-lived 600-second validity when `validity_seconds` is omitted, and explicit
-values remain bounded by the self-attestation token policy ceiling.
+values remain bounded by `evidence.max_credential_validity_seconds`.
+Self-attestation credential profiles are additionally bounded by
+`self_attestation.token_policy.max_credential_validity_seconds`.
 
 The supported wire contract and explicit non-support list are defined in
 [`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
@@ -93,7 +119,7 @@ and returns a compact JWS response with
 The MVP is deliberately scoped to delegated evaluation. It does not implement
 open federation, dynamic trust chains, audit checkpoint exchange, or federated
 credential issuance. See
-[`docs/federated-evaluation-mvp-spec.md`](docs/federated-evaluation-mvp-spec.md)
+[`specs/federated-evaluation-mvp-spec.md`](specs/federated-evaluation-mvp-spec.md)
 and
 [`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md)
 for the wire profile, config shape, replay limitation, and rollout checklist.
@@ -139,7 +165,7 @@ lifecycle callbacks.
 Operators can enable a storage-backed status endpoint with
 `credential_status.enabled = true`. When enabled, issued SD-JWT VC payloads
 include a `status` claim whose `statusUrl` points to
-`/credentials/status/{credential_id}`. The backing store can be in-memory for
+`/v1/credentials/{credential_id}/status`. The backing store can be in-memory for
 lab deployments or Redis for deployable multi-process instances:
 
 ```yaml
@@ -155,7 +181,7 @@ credential_status:
 
 The public status endpoint returns `valid`, `suspended`, `revoked`, or derived
 `expired`. Operators update mutable states through
-`POST /admin/credentials/status/{credential_id}` with the
+`POST /admin/v1/credentials/{credential_id}/status` with the
 `registry_notary:admin` scope. Status records intentionally contain no subject
 ids, holder keys, claim values, SD-JWT disclosures, or source rows.
 

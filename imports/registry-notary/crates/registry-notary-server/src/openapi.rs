@@ -3,7 +3,7 @@
 
 use registry_notary_core::model::{
     BatchEvaluateRequest, BatchSubjectRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest,
-    HolderRequest, RenderRequest, SubjectRequest, FORMAT_SD_JWT_VC,
+    HolderRequest, RenderEvaluationRequest, SubjectRequest, FORMAT_SD_JWT_VC,
     SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
     SD_JWT_VC_SIGNING_ALG,
 };
@@ -59,7 +59,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/admin/reload": {
+            "/admin/v1/reload": {
                 "post": {
                     "summary": "Request a standalone config reload",
                     "operationId": "adminReload",
@@ -289,7 +289,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/claims": {
+            "/v1/claims": {
                 "get": {
                     "summary": "List claims visible to the caller",
                     "operationId": "listClaims",
@@ -299,7 +299,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/claims/{claim_id}": {
+            "/v1/claims/{claim_id}": {
                 "get": {
                     "summary": "Get one claim definition",
                     "operationId": "getClaim",
@@ -318,7 +318,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/formats": {
+            "/v1/formats": {
                 "get": {
                     "summary": "List supported output formats",
                     "operationId": "listFormats",
@@ -328,7 +328,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/claims/evaluate": {
+            "/v1/evaluations": {
                 "post": {
                     "summary": "Evaluate claims for one subject",
                     "operationId": "evaluateClaims",
@@ -391,7 +391,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/claims/batch-evaluate": {
+            "/v1/batch-evaluations": {
                 "post": {
                     "summary": "Evaluate claims for multiple subjects inline",
                     "operationId": "batchEvaluateClaims",
@@ -424,15 +424,23 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/evidence/render": {
+            "/v1/evaluations/{evaluation_id}/render": {
                 "post": {
                     "summary": "Render a stored evaluation",
                     "operationId": "renderEvidence",
+                    "parameters": [
+                        {
+                            "name": "evaluation_id",
+                            "in": "path",
+                            "required": true,
+                            "schema": { "type": "string" }
+                        }
+                    ],
                     "requestBody": {
                         "required": true,
                         "content": {
                             "application/json": {
-                                "schema": { "$ref": "#/components/schemas/RenderRequest" }
+                                "schema": { "$ref": "#/components/schemas/RenderEvaluationRequest" }
                             }
                         }
                     },
@@ -448,7 +456,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/credentials/issue": {
+            "/v1/credentials": {
                 "post": {
                     "summary": "Issue a credential from a stored evaluation",
                     "operationId": "issueCredential",
@@ -473,7 +481,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/credentials/status/{credential_id}": {
+            "/v1/credentials/{credential_id}/status": {
                 "get": {
                     "summary": "Fetch credential lifecycle status",
                     "operationId": "getCredentialStatus",
@@ -493,7 +501,7 @@ fn build_openapi_document() -> OpenApi {
                     }
                 }
             },
-            "/admin/credentials/status/{credential_id}": {
+            "/admin/v1/credentials/{credential_id}/status": {
                 "post": {
                     "summary": "Update credential lifecycle status",
                     "operationId": "updateCredentialStatus",
@@ -576,9 +584,10 @@ fn build_openapi_document() -> OpenApi {
         "BatchEvaluateRequest".to_string(),
         BatchEvaluateRequest::schema(),
     );
-    components
-        .schemas
-        .insert("RenderRequest".to_string(), RenderRequest::schema());
+    components.schemas.insert(
+        "RenderEvaluationRequest".to_string(),
+        RenderEvaluationRequest::schema(),
+    );
     components.schemas.insert(
         "CredentialIssueRequest".to_string(),
         CredentialIssueRequest::schema(),
@@ -668,7 +677,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_json_response(
         document,
-        "/admin/reload",
+        "/admin/v1/reload",
         "post",
         "200",
         "Standalone router accepted the reload request",
@@ -680,7 +689,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/reload",
+        "/admin/v1/reload",
         "post",
         "401",
         "Missing or invalid credential",
@@ -688,7 +697,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/reload",
+        "/admin/v1/reload",
         "post",
         "403",
         "Caller lacks registry_notary:admin scope",
@@ -712,7 +721,7 @@ fn add_response_examples(document: &mut Value) {
                 "version": env!("CARGO_PKG_VERSION")
             },
             "paths": {
-                "/claims/evaluate": {}
+                "/v1/evaluations": {}
             }
         }),
     );
@@ -863,7 +872,7 @@ fn add_response_examples(document: &mut Value) {
     }
     set_json_response(
         document,
-        "/claims",
+        "/v1/claims",
         "get",
         "200",
         "Visible claims",
@@ -871,7 +880,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims",
+        "/v1/claims",
         "get",
         "401",
         "Missing or invalid credential",
@@ -879,7 +888,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_json_response(
         document,
-        "/claims/{claim_id}",
+        "/v1/claims/{claim_id}",
         "get",
         "200",
         "Claim definition",
@@ -887,7 +896,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/{claim_id}",
+        "/v1/claims/{claim_id}",
         "get",
         "401",
         "Missing or invalid credential",
@@ -895,7 +904,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/{claim_id}",
+        "/v1/claims/{claim_id}",
         "get",
         "404",
         "Claim not found",
@@ -908,7 +917,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_json_response(
         document,
-        "/formats",
+        "/v1/formats",
         "get",
         "200",
         "Supported formats",
@@ -916,7 +925,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/formats",
+        "/v1/formats",
         "get",
         "401",
         "Missing or invalid credential",
@@ -924,7 +933,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_json_response(
         document,
-        "/claims/evaluate",
+        "/v1/evaluations",
         "post",
         "200",
         "Claim evaluation result",
@@ -932,7 +941,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/evaluate",
+        "/v1/evaluations",
         "post",
         "400",
         "Invalid request",
@@ -945,7 +954,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/evaluate",
+        "/v1/evaluations",
         "post",
         "401",
         "Missing or invalid credential",
@@ -953,7 +962,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/evaluate",
+        "/v1/evaluations",
         "post",
         "403",
         "Not authorized for requested claim, purpose, disclosure, or format",
@@ -966,13 +975,13 @@ fn add_response_examples(document: &mut Value) {
     );
     add_runtime_problem_responses(
         document,
-        "/claims/evaluate",
+        "/v1/evaluations",
         "post",
         &["406", "413", "429", "503"],
     );
     set_json_response(
         document,
-        "/claims/batch-evaluate",
+        "/v1/batch-evaluations",
         "post",
         "200",
         "Per-subject claim evaluation results",
@@ -980,7 +989,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/batch-evaluate",
+        "/v1/batch-evaluations",
         "post",
         "400",
         "Invalid request",
@@ -993,7 +1002,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/batch-evaluate",
+        "/v1/batch-evaluations",
         "post",
         "401",
         "Missing or invalid credential",
@@ -1001,7 +1010,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/claims/batch-evaluate",
+        "/v1/batch-evaluations",
         "post",
         "403",
         "Not authorized for requested claim, purpose, disclosure, or format",
@@ -1014,13 +1023,13 @@ fn add_response_examples(document: &mut Value) {
     );
     add_runtime_problem_responses(
         document,
-        "/claims/batch-evaluate",
+        "/v1/batch-evaluations",
         "post",
         &["406", "409", "413", "429", "503"],
     );
     set_json_response(
         document,
-        "/evidence/render",
+        "/v1/evaluations/{evaluation_id}/render",
         "post",
         "200",
         "Rendered evidence artifact",
@@ -1028,7 +1037,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/evidence/render",
+        "/v1/evaluations/{evaluation_id}/render",
         "post",
         "400",
         "Invalid request or disclosure widening attempt",
@@ -1041,7 +1050,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/evidence/render",
+        "/v1/evaluations/{evaluation_id}/render",
         "post",
         "401",
         "Missing or invalid credential",
@@ -1049,7 +1058,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/evidence/render",
+        "/v1/evaluations/{evaluation_id}/render",
         "post",
         "404",
         "Evaluation not found",
@@ -1057,13 +1066,13 @@ fn add_response_examples(document: &mut Value) {
     );
     add_runtime_problem_responses(
         document,
-        "/evidence/render",
+        "/v1/evaluations/{evaluation_id}/render",
         "post",
         &["406", "413", "429", "503"],
     );
     set_json_response(
         document,
-        "/credentials/issue",
+        "/v1/credentials",
         "post",
         "200",
         "Issued credential",
@@ -1071,7 +1080,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/credentials/issue",
+        "/v1/credentials",
         "post",
         "400",
         "Invalid request or disclosure widening attempt",
@@ -1084,7 +1093,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/credentials/issue",
+        "/v1/credentials",
         "post",
         "401",
         "Missing or invalid credential",
@@ -1092,7 +1101,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/credentials/issue",
+        "/v1/credentials",
         "post",
         "404",
         "Evaluation not found",
@@ -1100,13 +1109,13 @@ fn add_response_examples(document: &mut Value) {
     );
     add_runtime_problem_responses(
         document,
-        "/credentials/issue",
+        "/v1/credentials",
         "post",
         &["406", "409", "413", "429", "503"],
     );
     set_json_response(
         document,
-        "/credentials/status/{credential_id}",
+        "/v1/credentials/{credential_id}/status",
         "get",
         "200",
         "Credential status record",
@@ -1114,7 +1123,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/credentials/status/{credential_id}",
+        "/v1/credentials/{credential_id}/status",
         "get",
         "404",
         "Credential status is disabled or not found",
@@ -1122,7 +1131,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/credentials/status/{credential_id}",
+        "/v1/credentials/{credential_id}/status",
         "get",
         "503",
         "Credential status store is unavailable",
@@ -1130,7 +1139,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_json_response(
         document,
-        "/admin/credentials/status/{credential_id}",
+        "/admin/v1/credentials/{credential_id}/status",
         "post",
         "200",
         "Updated credential status record",
@@ -1138,7 +1147,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/credentials/status/{credential_id}",
+        "/admin/v1/credentials/{credential_id}/status",
         "post",
         "400",
         "Invalid status value",
@@ -1146,7 +1155,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/credentials/status/{credential_id}",
+        "/admin/v1/credentials/{credential_id}/status",
         "post",
         "401",
         "Missing or invalid credential",
@@ -1154,7 +1163,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/credentials/status/{credential_id}",
+        "/admin/v1/credentials/{credential_id}/status",
         "post",
         "403",
         "Caller lacks registry_notary:admin scope",
@@ -1167,7 +1176,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/credentials/status/{credential_id}",
+        "/admin/v1/credentials/{credential_id}/status",
         "post",
         "404",
         "Credential status is disabled or not found",
@@ -1175,7 +1184,7 @@ fn add_response_examples(document: &mut Value) {
     );
     set_problem_response(
         document,
-        "/admin/credentials/status/{credential_id}",
+        "/admin/v1/credentials/{credential_id}/status",
         "post",
         "503",
         "Credential status store is unavailable",
@@ -1619,8 +1628,8 @@ fn discovery_example() -> Value {
             "render": true,
             "credential_issue": true
         },
-        "claims_url": "/claims",
-        "formats_url": "/formats",
+        "claims_url": "/v1/claims",
+        "formats_url": "/v1/formats",
         "credential_capabilities": {
             "formats": [FORMAT_SD_JWT_VC],
             "sd_jwt_vc": {
@@ -1945,7 +1954,7 @@ mod tests {
         for route in [
             "/healthz",
             "/ready",
-            "/admin/reload",
+            "/admin/v1/reload",
             "/openapi.json",
             "/.well-known/evidence-service",
             "/.well-known/evidence/jwks.json",
@@ -1953,16 +1962,16 @@ mod tests {
             "/oid4vci/credential-offer",
             "/oid4vci/nonce",
             "/oid4vci/credential",
-            "/claims",
-            "/claims/{claim_id}",
-            "/formats",
-            "/claims/evaluate",
+            "/v1/claims",
+            "/v1/claims/{claim_id}",
+            "/v1/formats",
+            "/v1/evaluations",
             "/federation/v1/evaluations",
-            "/claims/batch-evaluate",
-            "/evidence/render",
-            "/credentials/issue",
-            "/credentials/status/{credential_id}",
-            "/admin/credentials/status/{credential_id}",
+            "/v1/batch-evaluations",
+            "/v1/evaluations/{evaluation_id}/render",
+            "/v1/credentials",
+            "/v1/credentials/{credential_id}/status",
+            "/admin/v1/credentials/{credential_id}/status",
         ] {
             assert!(paths.contains_key(route), "missing {route}");
         }
@@ -2001,7 +2010,7 @@ mod tests {
             json!([])
         );
         assert_eq!(
-            doc["paths"]["/credentials/status/{credential_id}"]["get"]["security"],
+            doc["paths"]["/v1/credentials/{credential_id}/status"]["get"]["security"],
             json!([])
         );
         assert_eq!(
@@ -2021,7 +2030,7 @@ mod tests {
             ("/healthz", "get", "200"),
             ("/ready", "get", "200"),
             ("/ready", "get", "503"),
-            ("/admin/reload", "post", "200"),
+            ("/admin/v1/reload", "post", "200"),
             ("/openapi.json", "get", "200"),
             ("/.well-known/evidence-service", "get", "200"),
             ("/.well-known/evidence/jwks.json", "get", "200"),
@@ -2029,15 +2038,19 @@ mod tests {
             ("/oid4vci/credential-offer", "get", "200"),
             ("/oid4vci/nonce", "post", "200"),
             ("/oid4vci/credential", "post", "200"),
-            ("/claims", "get", "200"),
-            ("/claims/{claim_id}", "get", "200"),
-            ("/formats", "get", "200"),
-            ("/claims/evaluate", "post", "200"),
-            ("/claims/batch-evaluate", "post", "200"),
-            ("/evidence/render", "post", "200"),
-            ("/credentials/issue", "post", "200"),
-            ("/credentials/status/{credential_id}", "get", "200"),
-            ("/admin/credentials/status/{credential_id}", "post", "200"),
+            ("/v1/claims", "get", "200"),
+            ("/v1/claims/{claim_id}", "get", "200"),
+            ("/v1/formats", "get", "200"),
+            ("/v1/evaluations", "post", "200"),
+            ("/v1/batch-evaluations", "post", "200"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "200"),
+            ("/v1/credentials", "post", "200"),
+            ("/v1/credentials/{credential_id}/status", "get", "200"),
+            (
+                "/admin/v1/credentials/{credential_id}/status",
+                "post",
+                "200",
+            ),
         ] {
             assert_json_example(&doc, path, method, status);
         }
@@ -2048,12 +2061,12 @@ mod tests {
             json!("demo.registry-notary")
         );
         assert_eq!(
-            doc["paths"]["/claims/evaluate"]["post"]["responses"]["200"]["content"]
+            doc["paths"]["/v1/evaluations"]["post"]["responses"]["200"]["content"]
                 ["application/json"]["example"]["results"][0]["claim_id"],
             json!("farmer-under-4ha")
         );
         assert_eq!(
-            doc["paths"]["/credentials/issue"]["post"]["responses"]["200"]["content"]
+            doc["paths"]["/v1/credentials"]["post"]["responses"]["200"]["content"]
                 ["application/json"]["example"]["format"],
             json!("application/dc+sd-jwt")
         );
@@ -2063,63 +2076,83 @@ mod tests {
     fn common_error_responses_have_problem_detail_examples() {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         for (path, method, status) in [
-            ("/admin/reload", "post", "401"),
-            ("/admin/reload", "post", "403"),
+            ("/admin/v1/reload", "post", "401"),
+            ("/admin/v1/reload", "post", "403"),
             ("/.well-known/evidence-service", "get", "401"),
             ("/.well-known/evidence/jwks.json", "get", "401"),
-            ("/claims", "get", "401"),
-            ("/claims/{claim_id}", "get", "401"),
-            ("/claims/{claim_id}", "get", "404"),
-            ("/formats", "get", "401"),
-            ("/claims/evaluate", "post", "400"),
-            ("/claims/evaluate", "post", "401"),
-            ("/claims/evaluate", "post", "403"),
-            ("/claims/evaluate", "post", "406"),
-            ("/claims/evaluate", "post", "413"),
-            ("/claims/evaluate", "post", "429"),
-            ("/claims/evaluate", "post", "503"),
-            ("/claims/batch-evaluate", "post", "400"),
-            ("/claims/batch-evaluate", "post", "401"),
-            ("/claims/batch-evaluate", "post", "403"),
-            ("/claims/batch-evaluate", "post", "406"),
-            ("/claims/batch-evaluate", "post", "409"),
-            ("/claims/batch-evaluate", "post", "413"),
-            ("/claims/batch-evaluate", "post", "429"),
-            ("/claims/batch-evaluate", "post", "503"),
-            ("/evidence/render", "post", "400"),
-            ("/evidence/render", "post", "401"),
-            ("/evidence/render", "post", "404"),
-            ("/evidence/render", "post", "406"),
-            ("/evidence/render", "post", "413"),
-            ("/evidence/render", "post", "429"),
-            ("/evidence/render", "post", "503"),
-            ("/credentials/issue", "post", "400"),
-            ("/credentials/issue", "post", "401"),
-            ("/credentials/issue", "post", "404"),
-            ("/credentials/issue", "post", "406"),
-            ("/credentials/issue", "post", "409"),
-            ("/credentials/issue", "post", "413"),
-            ("/credentials/issue", "post", "429"),
-            ("/credentials/issue", "post", "503"),
-            ("/credentials/status/{credential_id}", "get", "404"),
-            ("/credentials/status/{credential_id}", "get", "503"),
-            ("/admin/credentials/status/{credential_id}", "post", "400"),
-            ("/admin/credentials/status/{credential_id}", "post", "401"),
-            ("/admin/credentials/status/{credential_id}", "post", "403"),
-            ("/admin/credentials/status/{credential_id}", "post", "404"),
-            ("/admin/credentials/status/{credential_id}", "post", "503"),
+            ("/v1/claims", "get", "401"),
+            ("/v1/claims/{claim_id}", "get", "401"),
+            ("/v1/claims/{claim_id}", "get", "404"),
+            ("/v1/formats", "get", "401"),
+            ("/v1/evaluations", "post", "400"),
+            ("/v1/evaluations", "post", "401"),
+            ("/v1/evaluations", "post", "403"),
+            ("/v1/evaluations", "post", "406"),
+            ("/v1/evaluations", "post", "413"),
+            ("/v1/evaluations", "post", "429"),
+            ("/v1/evaluations", "post", "503"),
+            ("/v1/batch-evaluations", "post", "400"),
+            ("/v1/batch-evaluations", "post", "401"),
+            ("/v1/batch-evaluations", "post", "403"),
+            ("/v1/batch-evaluations", "post", "406"),
+            ("/v1/batch-evaluations", "post", "409"),
+            ("/v1/batch-evaluations", "post", "413"),
+            ("/v1/batch-evaluations", "post", "429"),
+            ("/v1/batch-evaluations", "post", "503"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "400"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "401"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "404"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "406"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "413"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "429"),
+            ("/v1/evaluations/{evaluation_id}/render", "post", "503"),
+            ("/v1/credentials", "post", "400"),
+            ("/v1/credentials", "post", "401"),
+            ("/v1/credentials", "post", "404"),
+            ("/v1/credentials", "post", "406"),
+            ("/v1/credentials", "post", "409"),
+            ("/v1/credentials", "post", "413"),
+            ("/v1/credentials", "post", "429"),
+            ("/v1/credentials", "post", "503"),
+            ("/v1/credentials/{credential_id}/status", "get", "404"),
+            ("/v1/credentials/{credential_id}/status", "get", "503"),
+            (
+                "/admin/v1/credentials/{credential_id}/status",
+                "post",
+                "400",
+            ),
+            (
+                "/admin/v1/credentials/{credential_id}/status",
+                "post",
+                "401",
+            ),
+            (
+                "/admin/v1/credentials/{credential_id}/status",
+                "post",
+                "403",
+            ),
+            (
+                "/admin/v1/credentials/{credential_id}/status",
+                "post",
+                "404",
+            ),
+            (
+                "/admin/v1/credentials/{credential_id}/status",
+                "post",
+                "503",
+            ),
         ] {
             assert_problem_example(&doc, path, method, status);
         }
 
         assert_eq!(
-            doc["paths"]["/claims/{claim_id}"]["get"]["responses"]["404"]["content"]
+            doc["paths"]["/v1/claims/{claim_id}"]["get"]["responses"]["404"]["content"]
                 ["application/problem+json"]["example"]["code"],
             json!("claim.not_found")
         );
         assert_eq!(
-            doc["paths"]["/evidence/render"]["post"]["responses"]["404"]["content"]
-                ["application/problem+json"]["example"]["code"],
+            doc["paths"]["/v1/evaluations/{evaluation_id}/render"]["post"]["responses"]["404"]
+                ["content"]["application/problem+json"]["example"]["code"],
             json!("evaluation.not_found")
         );
     }
@@ -2156,10 +2189,10 @@ mod tests {
         assert!(doc["components"]["schemas"]["ProblemDetails"].is_object());
 
         for (path, method, status) in [
-            ("/claims/evaluate", "post", "400"),
-            ("/claims/evaluate", "post", "401"),
-            ("/claims/evaluate", "post", "403"),
-            ("/credentials/issue", "post", "404"),
+            ("/v1/evaluations", "post", "400"),
+            ("/v1/evaluations", "post", "401"),
+            ("/v1/evaluations", "post", "403"),
+            ("/v1/credentials", "post", "404"),
         ] {
             assert_eq!(
                 doc["paths"][path][method]["responses"][status]["content"]

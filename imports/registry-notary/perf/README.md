@@ -12,7 +12,7 @@ search requests with seed-42 records. The perf configs point notary at the
 local stub. Replacing the stub with a real upstream (a registry-relay running
 its own perf config, for example) is left as a follow-up.
 
-Credential issuance (`POST /credentials/issue`) is intentionally not covered in
+Credential issuance (`POST /v1/credentials`) is intentionally not covered in
 v1: it requires a holder DID and a fresh Ed25519 proof of possession per
 request, which is awkward to generate live in k6. Adding that scenario is
 tracked separately.
@@ -135,13 +135,17 @@ set +a
 target/release/registry-notary --config perf/config/medium.yaml
 ```
 
-Notary has no `/ready` endpoint. Probe with an authenticated `GET /claims`
-and wait for `200`:
+Probe `/ready` and wait for `200`; it fails closed when a configured Redis
+replay or credential-status backend is unavailable. To also verify
+authenticated catalog access, probe `GET /v1/claims`:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
+  http://127.0.0.1:14255/ready
+
+curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer $REGISTRY_NOTARY_BEARER_TOKEN" \
-  http://127.0.0.1:14255/claims
+  http://127.0.0.1:14255/v1/claims
 ```
 
 ---
@@ -247,14 +251,14 @@ tier would not exercise additional notary behavior.
 
 | Scenario                  | Endpoint                        | What it measures                                                          |
 |---------------------------|---------------------------------|---------------------------------------------------------------------------|
-| `evaluate_extract`        | POST /claims/evaluate           | Hot path: auth, single source fetch, extract rule, audit emit             |
-| `evaluate_cel`            | POST /claims/evaluate           | CEL-derived claim (`farmer-under-4ha` depends on `farmed-land-size`)      |
-| `batch_evaluate_10`       | POST /claims/batch-evaluate     | Batch of 10 subjects; baseline for Stage 1 concurrency comparison         |
-| `batch_evaluate_100`      | POST /claims/batch-evaluate     | Batch of 100 subjects (equals `inline_batch_limit`); Stage 1 key scenario |
-| `batch_evaluate_1000`     | POST /claims/batch-evaluate     | Batch of 1000 subjects; expects 413 today (see Known Gaps)                |
-| `batch_evaluate`          | POST /claims/batch-evaluate     | Dynamic batch size via `REGISTRY_NOTARY_BATCH_SIZE`                      |
-| `politeness_concurrent`   | POST /claims/batch-evaluate     | Two concurrent batch calls; asserts `stub_peak_in_flight` (Stage 1 DoD)  |
-| `list_claims`             | GET /claims                     | Catalog read, no source IO                                                |
+| `evaluate_extract`        | POST /v1/evaluations           | Hot path: auth, single source fetch, extract rule, audit emit             |
+| `evaluate_cel`            | POST /v1/evaluations           | CEL-derived claim (`farmer-under-4ha` depends on `farmed-land-size`)      |
+| `batch_evaluate_10`       | POST /v1/batch-evaluations     | Batch of 10 subjects; baseline for Stage 1 concurrency comparison         |
+| `batch_evaluate_100`      | POST /v1/batch-evaluations     | Batch of 100 subjects (equals `inline_batch_limit`); Stage 1 key scenario |
+| `batch_evaluate_1000`     | POST /v1/batch-evaluations     | Batch of 1000 subjects; expects 413 today (see Known Gaps)                |
+| `batch_evaluate`          | POST /v1/batch-evaluations     | Dynamic batch size via `REGISTRY_NOTARY_BATCH_SIZE`                      |
+| `politeness_concurrent`   | POST /v1/batch-evaluations     | Two concurrent batch calls; asserts `stub_peak_in_flight` (Stage 1 DoD)  |
+| `list_claims`             | GET /v1/claims                 | Catalog read, no source IO                                                |
 | `auth_deny`               | mixed                           | 401 (missing/invalid token) and 403 (deny-path identity) only             |
 
 All scenarios pass `data-purpose: perf` so notary's purpose-required check is
@@ -327,8 +331,9 @@ Tests cover:
 | `EVIDENCE_SOURCE_STUB_BIND`             | `127.0.0.1:14256`        | Stub listen address                                    |
 | `REGISTRY_NOTARY_ISSUER_JWK`           | (generated Ed25519 JWK)  | Required by notary even when issuance is not exercised |
 
-All bearer + API-key tokens are raw strings (subject to constant-time
-comparison server-side); notary does not use hashed fingerprints.
+Client scenarios use raw bearer and API-key values. Server config reads only
+`sha256:<64 hex>` fingerprints from `*_HASH` environment variables via
+`hash_env`; raw tokens must not be stored in config.
 
 ---
 
@@ -340,17 +345,11 @@ comparison server-side); notary does not use hashed fingerprints.
    The scenario is included as a forward reference for when the limit is
    relaxed. Expect 413 responses and a note in the result file.
 
-2. **Credential issuance (`POST /credentials/issue`) not covered**: requires a
+2. **Credential issuance (`POST /v1/credentials`) not covered**: requires a
    holder DID and a fresh Ed25519 proof of possession per request. k6 does not
    have an Ed25519 library out of the box. Tracked separately.
 
-3. **`run_scenario.py` uses the wrong binary name**: the script defaults to
-   `target/release/registry-notary-bin` but the actual binary produced by
-   `cargo build --release -p registry-notary-bin` is
-   `target/release/registry-notary`. Pass `--notary-binary
-   target/release/registry-notary` when using `run_scenario.py`.
-
-4. **`stub_peak_in_flight = 1` at zero stub latency**: when the stub has no
+3. **`stub_peak_in_flight = 1` at zero stub latency**: when the stub has no
    added latency, it responds fast enough that sequential notary fan-out
    completes each request before the next one is dispatched. The counter still
    records correctly; you just need `--stub-latency-ms >= 50` to observe

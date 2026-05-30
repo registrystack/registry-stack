@@ -708,7 +708,7 @@ async fn single_subject_two_claims_shared_binding_deduplicates_to_one_upstream_c
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(counting_rda_handler),
             )
             .with_state(counter.clone()),
@@ -724,7 +724,7 @@ async fn single_subject_two_claims_shared_binding_deduplicates_to_one_upstream_c
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -756,7 +756,7 @@ async fn batch_50_subjects_3_claims_shared_binding_produces_50_upstream_calls() 
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(counting_rda_handler),
             )
             .with_state(counter.clone()),
@@ -775,7 +775,7 @@ async fn batch_50_subjects_3_claims_shared_binding_produces_50_upstream_calls() 
         .map(|i| json!({ "id": format!("person-{i}") }))
         .collect();
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -808,7 +808,7 @@ async fn claims_with_different_projected_fields_are_not_memoized_together() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(counting_rda_handler),
             )
             .with_state(counter.clone()),
@@ -824,7 +824,7 @@ async fn claims_with_different_projected_fields_are_not_memoized_together() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -866,7 +866,7 @@ async fn different_purpose_across_batches_each_reaches_upstream() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(counting_rda_handler),
             )
             .with_state(counter.clone()),
@@ -880,7 +880,7 @@ async fn different_purpose_across_batches_each_reaches_upstream() {
 
     // First call with purpose A.
     server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -893,7 +893,7 @@ async fn different_purpose_across_batches_each_reaches_upstream() {
 
     // Second call with purpose B.
     server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/subsidy")
         .json(&json!({
@@ -939,7 +939,7 @@ async fn dci_claims_with_different_query_type_are_not_memoized_together() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -978,7 +978,7 @@ async fn error_result_is_not_cached_and_second_call_can_succeed() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(counting_rda_handler),
             )
             .with_state(counter.clone()),
@@ -992,7 +992,7 @@ async fn error_result_is_not_cached_and_second_call_can_succeed() {
 
     // First batch: must fail because upstream is returning 500.
     let first = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -1013,7 +1013,7 @@ async fn error_result_is_not_cached_and_second_call_can_succeed() {
     // Second batch: upstream now returns 200. Must reach upstream (error not
     // cached).
     let second = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -1051,7 +1051,7 @@ async fn error_result_is_not_cached_and_second_call_can_succeed() {
 /// key) hits the memo and adopts `observed_at` as its `issued_at`. Both claim
 /// results in the stored evaluation therefore carry the same timestamp.
 ///
-/// We observe `issued_at` by calling `/evidence/render` with the
+/// We observe `issued_at` by calling `/v1/evaluations/{evaluation_id}/render` with the
 /// `claim-result+json` format after the batch, extracting the timestamp from
 /// each result in the rendered output.
 #[tokio::test]
@@ -1062,7 +1062,7 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(counting_rda_handler),
             )
             .with_state(counter.clone()),
@@ -1078,12 +1078,12 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
     .expect("router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    // Use the single-subject /claims/evaluate endpoint so the evaluation is
+    // Use the single-subject /v1/evaluations endpoint so the evaluation is
     // stored with a known evaluation_id. Both claims share the same binding
     // and the same `ctx.now`, so their issued_at must be equal regardless of
     // the memoization path.
     let eval_resp = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -1116,9 +1116,9 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
     //
     // For the batch path, we additionally verify iat consistency by inspecting
     // the rendered evaluation. Run a batch with one subject, two claims sharing
-    // a binding, then render via /evidence/render.
+    // a binding, then render via /v1/evaluations/{evaluation_id}/render.
     let batch_resp = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -1132,16 +1132,15 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
     let item = &batch_body["items"][0];
     assert_eq!(item["status"], json!("succeeded"));
 
-    // Retrieve the stored evaluation via /evidence/render in claim-result+json
+    // Retrieve the stored evaluation via /v1/evaluations/{evaluation_id}/render in claim-result+json
     // format, which includes `issued_at` per result.
     let eval_id = item["evaluation_id"]
         .as_str()
         .expect("batch item evaluation_id");
     let render_resp = server
-        .post("/evidence/render")
+        .post(&format!("/v1/evaluations/{eval_id}/render"))
         .add_header("x-api-key", "memo-api-token")
         .json(&json!({
-            "evaluation_id": eval_id,
             "format": "application/vnd.registry-notary.claim-result+json",
             "disclosure": "value",
         }))

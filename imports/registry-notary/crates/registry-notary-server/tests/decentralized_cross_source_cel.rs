@@ -224,11 +224,14 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
 
     let civil = TestServer::builder()
         .http_transport()
-        .build(Router::new().route("/datasets/civil_registry/civil_person", get(civil_source)));
+        .build(Router::new().route(
+            "/v1/datasets/civil_registry/entities/civil_person/records",
+            get(civil_source),
+        ));
     let social = TestServer::builder()
         .http_transport()
         .build(Router::new().route(
-            "/datasets/social_protection_registry/program_enrollment",
+            "/v1/datasets/social_protection_registry/entities/program_enrollment/records",
             get(social_source),
         ));
     let config = shared_config(
@@ -248,7 +251,7 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "shared-client-token")
         .add_header(
             "data-purpose",

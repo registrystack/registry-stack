@@ -16,7 +16,7 @@ features that are not yet part of the product surface.
 | Signing algorithm | `EdDSA` |
 | Issuer key type | `OKP/Ed25519` |
 | Holder binding DID method | `did:jwk` |
-| Credential status methods | none |
+| Credential status methods | Default: none. Optional: `RegistryNotaryCredentialStatus` when `credential_status.enabled = true`, with `statusUrl` at `/v1/credentials/{credential_id}/status`. StatusList and revocation-list profiles are not supported. |
 
 Registry Notary rejects credential profile format aliases such as
 `sd_jwt_vc` and `application/vc+sd-jwt`. Operator configuration must use the

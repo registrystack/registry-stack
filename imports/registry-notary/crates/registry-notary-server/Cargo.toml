@@ -48,7 +48,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 axum-test = { version = "20" }
-registry-platform-testing.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-notary-openfn-sidecar = { version = "0.3.0", path = "../registry-notary-openfn-sidecar" }
 serde_norway.workspace = true
 tempfile = { version = "3" }

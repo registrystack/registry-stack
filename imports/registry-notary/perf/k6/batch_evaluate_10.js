@@ -55,7 +55,7 @@ export default function (ctx) {
   const subjects = buildSubjects(__VU, __ITER);
   const payload = JSON.stringify({ subjects, claims: [ctx.claim] });
 
-  const res = http.post(`${baseUrl()}/claims/batch-evaluate`, payload, {
+  const res = http.post(`${baseUrl()}/v1/batch-evaluations`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 

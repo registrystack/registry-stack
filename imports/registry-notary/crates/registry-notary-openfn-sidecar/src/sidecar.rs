@@ -257,7 +257,10 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         .route("/healthz", get(healthz))
         .route("/ready", get(ready))
         .route("/metrics", get(metrics))
-        .route("/datasets/{dataset}/{entity}", get(lookup))
+        .route(
+            "/v1/datasets/{dataset}/entities/{entity}/records",
+            get(lookup),
+        )
         .with_state(state))
 }
 

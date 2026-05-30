@@ -30,8 +30,8 @@ use registry_notary_core::{
     StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
 };
 use registry_platform_audit::{
-    AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState, JsonlFileSink,
-    JsonlStdoutSink, SyslogSink,
+    AuditChainHasher, AuditError, AuditKeyHasher, AuditSink as PlatformAuditSink, ChainState,
+    JsonlFileSink, JsonlStdoutSink, SyslogSink,
 };
 use registry_platform_authcommon::{
     parse_bearer_token, parse_fingerprint, verify_api_key, FingerprintFormatError,
@@ -266,12 +266,14 @@ fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
             | "/oid4vci/credential"
-            | "/formats"
-            | "/evidence/render"
-            | "/credentials/issue"
-    ) || path == "/claims"
-        || path.starts_with("/claims/")
-        || path.starts_with("/credentials/status/")
+            | "/v1/formats"
+            | "/v1/evaluations"
+            | "/v1/batch-evaluations"
+            | "/v1/credentials"
+    ) || path == "/v1/claims"
+        || path.starts_with("/v1/claims/")
+        || path.starts_with("/v1/evaluations/")
+        || path.starts_with("/v1/credentials/")
 }
 
 fn apply_self_attestation_wallet_cors_headers(
@@ -1588,6 +1590,9 @@ impl Authenticator {
                         audiences: oidc.audiences.clone(),
                         allowed_algorithms,
                         allowed_typ: oidc.allowed_typ.clone(),
+                        allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                        allowed_userinfo_typ: vec!["JWT".to_string()],
+                        userinfo_requires_exp: true,
                         scope_claim: oidc.scope_claim.clone(),
                         scope_separator,
                         scope_map: Some(
@@ -1678,6 +1683,7 @@ pub(crate) struct AuditPipeline {
     sink: Arc<dyn PlatformAuditSink>,
     chain: Arc<OnceCell<ChainState>>,
     hasher: AuditKeyHasher,
+    chain_hasher: AuditChainHasher,
 }
 
 impl std::fmt::Debug for AuditPipeline {
@@ -1698,6 +1704,7 @@ impl AuditPipeline {
             .as_deref()
             .ok_or(StandaloneServerError::MissingAuditHashSecretEnv)?;
         let hasher = AuditKeyHasher::from_env(hash_secret_env)?;
+        let chain_hasher = AuditChainHasher::from_env(hash_secret_env)?;
         let sink: Arc<dyn PlatformAuditSink> = match config.sink.as_str() {
             "stdout" => {
                 validate_no_file_audit_fields(config, "stdout")?;
@@ -1735,6 +1742,7 @@ impl AuditPipeline {
             sink,
             chain: Arc::new(OnceCell::new()),
             hasher,
+            chain_hasher,
         })
     }
 
@@ -1744,6 +1752,7 @@ impl AuditPipeline {
             sink,
             chain: Arc::new(OnceCell::new()),
             hasher: AuditKeyHasher::unkeyed_dev_only(),
+            chain_hasher: AuditChainHasher::unkeyed_dev_only(),
         }
     }
 
@@ -1758,7 +1767,10 @@ impl AuditPipeline {
     pub(crate) async fn emit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
         let chain = self
             .chain
-            .get_or_try_init(|| async { ChainState::bootstrap(self.sink.as_ref()).await })
+            .get_or_try_init(|| async {
+                ChainState::bootstrap_or_start_empty(self.sink.as_ref(), self.chain_hasher.clone())
+                    .await
+            })
             .await?;
         let record = serde_json::to_value(event).map_err(AuditError::Json)?;
         chain.append(self.sink.as_ref(), record).await?;
@@ -1981,7 +1993,7 @@ fn is_public_probe_path(path: &str) -> bool {
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
-    ) || path.starts_with("/credentials/status/")
+    ) || path.starts_with("/v1/credentials/")
 }
 
 async fn admin_metrics_handler(
@@ -3247,9 +3259,12 @@ fn registry_data_api_url(
     httputil_url::append_path_segments(
         &base,
         &[
+            "v1",
             "datasets",
             binding.dataset.as_str(),
+            "entities",
             binding.entity.as_str(),
+            "records",
         ],
     )
     .map_err(|_| EvidenceError::SourceUnavailable)
@@ -3618,7 +3633,7 @@ mod tests {
             principal_id_hash: Some(Hashed::from_hash("sha256:caseworker")),
             decision: "allowed".to_string(),
             method: "GET".to_string(),
-            path: "/claims".to_string(),
+            path: "/v1/claims".to_string(),
             status: 200,
             verification_id: None,
             claim_hash: None,
@@ -4082,7 +4097,7 @@ credential_profiles:
             Some(&principal),
             &AuditKeyHasher::unkeyed_dev_only(),
             "POST",
-            "/claims/evaluate",
+            "/v1/evaluations",
             BoundedCorrelationId::new("req-123").expect("test correlation id is bounded"),
             &response,
         );
@@ -4641,7 +4656,7 @@ sources:
             self_attestation_rate_keys: None,
         };
         let request = Request::builder()
-            .uri("/claims")
+            .uri("/v1/claims")
             .header(header::AUTHORIZATION, "BEARER api-token")
             .body(Body::empty())
             .expect("request builds");
@@ -5046,7 +5061,7 @@ sources:
 
         assert_eq!(
             url.as_str(),
-            "https://registry.example.test/api/datasets/farmer%2Fregistry/farmer%3Factive"
+            "https://registry.example.test/api/v1/datasets/farmer%2Fregistry/entities/farmer%3Factive/records"
         );
     }
 
@@ -5100,7 +5115,7 @@ sources:
         std::env::set_var("TEST_EVIDENCE_SOURCE_REDIRECT_TOKEN", "source-token");
         let app = Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(|| async { Redirect::temporary("/redirect-target") }),
             )
             .route(

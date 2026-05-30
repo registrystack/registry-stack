@@ -327,7 +327,7 @@ mod tests {
         let credential_id = new_credential_id();
         let status = json!({
             "type": "RegistryNotaryCredentialStatus",
-            "statusUrl": format!("https://issuer.example/credentials/status/{credential_id}")
+            "statusUrl": format!("https://issuer.example/v1/credentials/{credential_id}/status")
         });
         let signed = issue(
             &test_profile(),

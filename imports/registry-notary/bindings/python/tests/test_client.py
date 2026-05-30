@@ -131,7 +131,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             result = client.evaluate(subject_id="subj-1", id_type="NATIONAL_ID", claims=["age"])
 
         self.assertEqual(result["results"][0]["claim_id"], "age")
-        self.assertEqual(recorder.requests[0]["path"], "/claims/evaluate")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/evaluations")
         self.assertEqual(
             recorder.requests[0]["body"],
             {"subject": {"id": "subj-1", "id_type": "NATIONAL_ID"}, "claims": ["age"]},
@@ -179,7 +179,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             result = client.batch_evaluate_request(request, idempotency_key="batch-key")
 
         self.assertEqual(result["batch_id"], "batch-1")
-        self.assertEqual(recorder.requests[0]["path"], "/claims/batch-evaluate")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/batch-evaluations")
         self.assertEqual(recorder.requests[0]["headers"]["Idempotency-Key"], "batch-key")
         self.assertEqual(recorder.requests[0]["headers"]["Data-Purpose"], "benefits")
 
@@ -215,7 +215,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             listed = client.list_claims()
 
         self.assertEqual(listed["data"][0]["id"], "age")
-        self.assertEqual(recorder.requests[0]["path"], "/claims")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/claims")
 
         recorder = _Recorder(body={"document": {"ok": True}})
         with Server(recorder) as base_url:
@@ -223,7 +223,8 @@ class RegistryNotaryClientTests(unittest.TestCase):
             rendered = client.render_request({"evaluation_id": "eval-1", "format": "json"})
 
         self.assertEqual(rendered["document"]["ok"], True)
-        self.assertEqual(recorder.requests[0]["path"], "/evidence/render")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/evaluations/eval-1/render")
+        self.assertNotIn("evaluation_id", recorder.requests[0]["body"])
 
         recorder = _Recorder(body={"credential_id": "cred-1"})
         with Server(recorder) as base_url:
@@ -231,7 +232,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             issued = client.issue_credential_request({"subject": {"id": "subj-1"}})
 
         self.assertEqual(issued["credential_id"], "cred-1")
-        self.assertEqual(recorder.requests[0]["path"], "/credentials/issue")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/credentials")
 
         recorder = _Recorder(body={"credential_id": "cred-1", "status": "valid"})
         with Server(recorder) as base_url:
@@ -239,7 +240,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             status = client.credential_status("cred-1")
 
         self.assertEqual(status["status"], "valid")
-        self.assertEqual(recorder.requests[0]["path"], "/credentials/status/cred-1")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/credentials/cred-1/status")
 
         recorder = _Recorder(body={"id": "claim one"})
         with Server(recorder) as base_url:
@@ -247,7 +248,15 @@ class RegistryNotaryClientTests(unittest.TestCase):
             claim = client.get_claim("claim one")
 
         self.assertEqual(claim["id"], "claim one")
-        self.assertEqual(recorder.requests[0]["path"], "/claims/claim%20one")
+        self.assertEqual(recorder.requests[0]["path"], "/v1/claims/claim%20one")
+
+    def test_render_request_rejects_invalid_request_type(self) -> None:
+        client = RegistryNotaryClient(base_url="https://notary.example")
+
+        with self.assertRaises(NotaryError) as error:
+            client.render_request(None)  # type: ignore[arg-type]
+
+        self.assertEqual(error.exception.code, "request.invalid_type")
 
     def test_problem_error_mapping_redacts_detail(self) -> None:
         recorder = _Recorder(

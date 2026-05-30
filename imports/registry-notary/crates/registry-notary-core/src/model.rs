@@ -709,6 +709,42 @@ pub struct RenderRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct RenderEvaluationRequest {
+    pub format: String,
+    #[serde(default)]
+    pub disclosure: Option<String>,
+    #[serde(default)]
+    pub claims: Option<Vec<String>>,
+    #[serde(default)]
+    pub purpose: Option<String>,
+}
+
+impl RenderEvaluationRequest {
+    #[must_use]
+    pub fn with_evaluation_id(self, evaluation_id: String) -> RenderRequest {
+        RenderRequest {
+            evaluation_id,
+            format: self.format,
+            disclosure: self.disclosure,
+            claims: self.claims,
+            purpose: self.purpose,
+        }
+    }
+}
+
+impl From<RenderRequest> for RenderEvaluationRequest {
+    fn from(request: RenderRequest) -> Self {
+        Self {
+            format: request.format,
+            disclosure: request.disclosure,
+            claims: request.claims,
+            purpose: request.purpose,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CredentialIssueRequest {
     pub evaluation_id: String,
     #[serde(default)]
@@ -1021,7 +1057,7 @@ mod tests {
             principal_id_hash: Some(Hashed::from_hash("hmac-sha256:principal")),
             decision: "denied".to_string(),
             method: "POST".to_string(),
-            path: "/claims/evaluate".to_string(),
+            path: "/v1/evaluations".to_string(),
             status: 403,
             verification_id: None,
             claim_hash: Some("sha256:claims".to_string()),
@@ -1094,7 +1130,7 @@ mod tests {
             "occurred_at": "2026-05-25T00:00:00Z",
             "decision": "allowed",
             "method": "GET",
-            "path": "/claims",
+            "path": "/v1/claims",
             "status": 200
         }))
         .expect("legacy audit event deserializes");

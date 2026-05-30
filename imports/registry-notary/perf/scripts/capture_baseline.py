@@ -288,12 +288,16 @@ def main() -> int:
             env=env,
             log_path=reports_dir / f"baseline-{timestamp}.notary.log",
         )
+        if not _wait_for(f"{base_url}/ready", headers={}, timeout=READY_TIMEOUT):
+            print("notary failed to become ready; aborting", file=sys.stderr)
+            return 3
+
         if not _wait_for(
-            f"{base_url}/claims",
+            f"{base_url}/v1/claims",
             headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"},
             timeout=READY_TIMEOUT,
         ):
-            print("notary failed to become ready; aborting", file=sys.stderr)
+            print("notary failed authenticated catalog probe; aborting", file=sys.stderr)
             return 3
 
         scenarios = [

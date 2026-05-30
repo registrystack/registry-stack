@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn facade_accepts_canonical_snake_case_json() {
-    let app = Router::new().route("/claims/evaluate", post(evaluate_handler));
+    let app = Router::new().route("/v1/evaluations", post(evaluate_handler));
     let base = spawn(app).await;
     let client = RegistryNotaryClient::builder(base)
         .bearer_token("bearer-secret")
@@ -42,19 +42,22 @@ async fn facade_accepts_canonical_snake_case_json() {
 #[tokio::test]
 async fn facade_core_methods_share_typed_validation_and_wire_shape() {
     let app = Router::new()
-        .route("/claims/batch-evaluate", post(batch_handler))
-        .route("/evidence/render", post(render_handler))
-        .route("/credentials/issue", post(issue_handler))
+        .route("/v1/batch-evaluations", post(batch_handler))
         .route(
-            "/claims",
+            "/v1/evaluations/{evaluation_id}/render",
+            post(render_handler),
+        )
+        .route("/v1/credentials", post(issue_handler))
+        .route(
+            "/v1/claims",
             get(|| async { Json(json!({ "data": [{ "id": "claim-a" }] })) }),
         )
         .route(
-            "/claims/claim-a",
+            "/v1/claims/claim-a",
             get(|| async { Json(json!({ "id": "claim-a" })) }),
         )
         .route(
-            "/credentials/status/cred-1",
+            "/v1/credentials/cred-1/status",
             get(|| async { Json(credential_status("valid")) }),
         );
     let base = spawn(app).await;
@@ -108,7 +111,7 @@ async fn facade_core_methods_share_typed_validation_and_wire_shape() {
 
 #[tokio::test]
 async fn facade_error_excludes_detail() {
-    let app = Router::new().route("/claims", get(problem_handler));
+    let app = Router::new().route("/v1/claims", get(problem_handler));
     let base = spawn(app).await;
     let client = RegistryNotaryClient::builder(base)
         .bearer_token("bearer-secret")

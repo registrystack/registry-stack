@@ -189,7 +189,7 @@ async fn batch_response_family_deserializes_from_wire_json() {
 
 #[tokio::test]
 async fn evaluate_sends_safe_headers_and_parses_metadata() {
-    let app = Router::new().route("/claims/evaluate", post(evaluate_handler));
+    let app = Router::new().route("/v1/evaluations", post(evaluate_handler));
     let base = spawn(app).await;
     let client = RegistryNotaryClient::builder(base)
         .bearer_token("bearer-secret")
@@ -284,7 +284,7 @@ async fn metrics_returns_text_body() {
 async fn typed_route_methods_parse_success_responses_and_escape_paths() {
     let app = Router::new()
         .route("/healthz", get(health_handler))
-        .route("/admin/reload", post(admin_reload_handler))
+        .route("/admin/v1/reload", post(admin_reload_handler))
         .route(
             "/openapi.json",
             get(|| async { Json(json!({ "openapi": "3.1.0" })) }),
@@ -294,9 +294,9 @@ async fn typed_route_methods_parse_success_responses_and_escape_paths() {
             get(|| async { Json(json!({ "issuer": "notary.example" })) }),
         )
         .route("/.well-known/evidence/jwks.json", get(jwks_static_handler))
-        .route("/claims/{claim_id}", get(claim_handler))
+        .route("/v1/claims/{claim_id}", get(claim_handler))
         .route(
-            "/formats",
+            "/v1/formats",
             get(|| async {
                 Json(json!({
                     "formats": [
@@ -305,14 +305,17 @@ async fn typed_route_methods_parse_success_responses_and_escape_paths() {
                 }))
             }),
         )
-        .route("/evidence/render", post(render_handler))
-        .route("/credentials/issue", post(issue_credential_handler))
         .route(
-            "/credentials/status/{credential_id}",
+            "/v1/evaluations/{evaluation_id}/render",
+            post(render_handler),
+        )
+        .route("/v1/credentials", post(issue_credential_handler))
+        .route(
+            "/v1/credentials/{credential_id}/status",
             get(credential_status_handler),
         )
         .route(
-            "/admin/credentials/status/{credential_id}",
+            "/admin/v1/credentials/{credential_id}/status",
             post(update_credential_status_handler),
         );
     let base = spawn(app).await;
@@ -375,7 +378,7 @@ async fn typed_route_methods_parse_success_responses_and_escape_paths() {
     );
     assert_eq!(
         client
-            .render_dto(
+            .render_request(
                 registry_notary_core::RenderRequest {
                     evaluation_id: "eval-1".to_string(),
                     format: FORMAT_CLAIM_RESULT_JSON.to_string(),
@@ -392,7 +395,7 @@ async fn typed_route_methods_parse_success_responses_and_escape_paths() {
     );
     assert_eq!(
         client
-            .issue_credential_dto(
+            .issue_credential_request(
                 registry_notary_core::CredentialIssueRequest {
                     evaluation_id: "eval-1".to_string(),
                     credential_profile: None,
@@ -431,7 +434,7 @@ async fn typed_route_methods_parse_success_responses_and_escape_paths() {
 
 #[tokio::test]
 async fn purpose_conflict_fails_client_side() {
-    let app = Router::new().route("/claims/evaluate", post(evaluate_handler));
+    let app = Router::new().route("/v1/evaluations", post(evaluate_handler));
     let base = spawn(app).await;
     let client = RegistryNotaryClient::builder(base)
         .bearer_token("bearer-secret")
@@ -440,7 +443,7 @@ async fn purpose_conflict_fails_client_side() {
         .expect("client builds");
 
     let error = client
-        .evaluate_dto(
+        .evaluate_request(
             registry_notary_core::EvaluateRequest {
                 subject: registry_notary_core::SubjectRequest {
                     id: "subject-1".to_string(),
@@ -464,7 +467,10 @@ async fn purpose_conflict_fails_client_side() {
 
 #[tokio::test]
 async fn idempotency_is_rejected_on_routes_that_ignore_it() {
-    let app = Router::new().route("/evidence/render", post(|| async { Json(json!({})) }));
+    let app = Router::new().route(
+        "/v1/evaluations/{evaluation_id}/render",
+        post(|| async { Json(json!({})) }),
+    );
     let base = spawn(app).await;
     let client = RegistryNotaryClient::builder(base)
         .bearer_token("bearer-secret")
@@ -472,7 +478,7 @@ async fn idempotency_is_rejected_on_routes_that_ignore_it() {
         .expect("client builds");
 
     let error = client
-        .render_dto(
+        .render_request(
             registry_notary_core::RenderRequest {
                 evaluation_id: "eval-1".to_string(),
                 format: FORMAT_CLAIM_RESULT_JSON.to_string(),
@@ -497,7 +503,7 @@ async fn idempotency_is_rejected_on_routes_that_ignore_it() {
 async fn batch_retry_requires_idempotency_key() {
     let state = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
-        .route("/claims/batch-evaluate", post(flaky_batch_handler))
+        .route("/v1/batch-evaluations", post(flaky_batch_handler))
         .with_state(Arc::clone(&state));
     let base = spawn(app).await;
     let retry_policy = RetryPolicy {
@@ -525,7 +531,7 @@ async fn batch_retry_requires_idempotency_key() {
     };
 
     let without_key = client
-        .batch_evaluate_dto(request.clone(), RequestOptions::default())
+        .batch_evaluate_request(request.clone(), RequestOptions::default())
         .await
         .expect_err("without key no retry occurs");
     assert!(matches!(without_key, NotaryClientError::Problem { .. }));
@@ -533,7 +539,7 @@ async fn batch_retry_requires_idempotency_key() {
     state.store(0, Ordering::SeqCst);
 
     let with_key = client
-        .batch_evaluate_dto(
+        .batch_evaluate_request(
             request,
             RequestOptions::builder()
                 .idempotency_key("batch-key")
@@ -549,7 +555,7 @@ async fn batch_retry_requires_idempotency_key() {
 async fn retry_after_delta_on_problem_controls_retry_delay() {
     let state = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
-        .route("/claims", get(retry_after_then_claims_handler))
+        .route("/v1/claims", get(retry_after_then_claims_handler))
         .with_state(Arc::clone(&state));
     let base = spawn(app).await;
     let retry_policy = RetryPolicy {
@@ -579,7 +585,7 @@ async fn retry_after_delta_on_problem_controls_retry_delay() {
 async fn retry_after_http_date_uses_server_date_for_retry_delay() {
     let state = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
-        .route("/claims", get(retry_after_http_date_then_claims_handler))
+        .route("/v1/claims", get(retry_after_http_date_then_claims_handler))
         .with_state(Arc::clone(&state));
     let base = spawn(app).await;
     let retry_policy = RetryPolicy {
@@ -636,7 +642,7 @@ async fn accepted_status_decode_error_keeps_response_status() {
 #[tokio::test]
 async fn decode_error_display_is_opaque() {
     let app = Router::new().route(
-        "/claims",
+        "/v1/claims",
         get(|| async {
             (
                 StatusCode::OK,
@@ -662,7 +668,7 @@ async fn decode_error_display_is_opaque() {
 
 #[tokio::test]
 async fn problem_debug_redacts_detail() {
-    let app = Router::new().route("/claims", get(problem_with_sensitive_detail));
+    let app = Router::new().route("/v1/claims", get(problem_with_sensitive_detail));
     let base = spawn(app).await;
     let client = RegistryNotaryClient::builder(base)
         .bearer_token("bearer-secret")
@@ -705,7 +711,7 @@ async fn body_too_large_error_is_opaque_and_carries_request_id() {
 #[tokio::test]
 async fn content_encoding_header_is_not_auto_decompressed() {
     let app = Router::new().route(
-        "/claims",
+        "/v1/claims",
         get(|| async {
             (
                 StatusCode::OK,
@@ -916,13 +922,14 @@ async fn jwks_static_handler() -> Response {
 }
 
 async fn claim_handler(Path(claim_id): Path<String>, uri: Uri) -> Response {
-    assert_eq!(uri.path(), "/claims/claim%20one");
+    assert_eq!(uri.path(), "/v1/claims/claim%20one");
     Json(json!({ "id": claim_id, "title": "Claim One" })).into_response()
 }
 
-async fn render_handler(body: Bytes) -> Response {
+async fn render_handler(Path(evaluation_id): Path<String>, body: Bytes) -> Response {
+    assert_eq!(evaluation_id, "eval-1");
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("render body parses");
-    assert_eq!(parsed["evaluation_id"], "eval-1");
+    assert!(parsed.get("evaluation_id").is_none());
     Json(json!({ "rendered": true })).into_response()
 }
 
@@ -943,7 +950,7 @@ async fn issue_credential_handler(body: Bytes) -> Response {
 }
 
 async fn credential_status_handler(Path(credential_id): Path<String>, uri: Uri) -> Response {
-    assert_eq!(uri.path(), "/credentials/status/cred%201");
+    assert_eq!(uri.path(), "/v1/credentials/cred%201/status");
     Json(credential_status_json(&credential_id, "valid")).into_response()
 }
 

@@ -10,9 +10,8 @@ Starts the source stub and the notary binary, waits until both are
 responsive, runs the requested k6 scenario while sampling the notary
 process, then tears both down cleanly.
 
-Notary has no /ready endpoint, so readiness is probed with an
-authenticated GET /claims (the harness must already know the bearer token,
-which it reads from the env file).
+Notary readiness is probed with /ready, then the authenticated catalog path is
+checked with GET /v1/claims.
 
 Usage:
     uv run perf/scripts/run_scenario.py \\
@@ -176,8 +175,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--notary-binary",
-        default="target/release/registry-notary-bin",
-        help="Built notary binary (default: target/release/registry-notary-bin).",
+        default="target/release/registry-notary",
+        help="Built notary binary (default: target/release/registry-notary).",
     )
     parser.add_argument(
         "--stub-profile",
@@ -259,12 +258,16 @@ def main() -> int:
             log_path=notary_log,
         )
 
+        if not _wait_for(f"{base_url}/ready", headers={}, timeout=READY_TIMEOUT_SEC):
+            print("notary failed to become ready; aborting", file=sys.stderr)
+            return 3
+
         if not _wait_for(
-            f"{base_url}/claims",
+            f"{base_url}/v1/claims",
             headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"},
             timeout=READY_TIMEOUT_SEC,
         ):
-            print("notary failed to become ready; aborting", file=sys.stderr)
+            print("notary failed authenticated catalog probe; aborting", file=sys.stderr)
             return 3
 
         # Begin sampling notary.

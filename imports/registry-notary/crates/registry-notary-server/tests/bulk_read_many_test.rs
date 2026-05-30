@@ -431,7 +431,7 @@ async fn rda_bulk_collapses_100_subjects_into_one_in_filter_request() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(rda_collection_handler),
             )
             .with_state(recorder.clone()),
@@ -455,7 +455,7 @@ async fn rda_bulk_collapses_100_subjects_into_one_in_filter_request() {
         "disclosure": "value",
     });
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&body)
@@ -492,7 +492,7 @@ async fn rda_bulk_falls_back_to_per_subject_on_collision() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(rda_collision_handler),
             )
             .with_state(recorder.clone()),
@@ -516,7 +516,7 @@ async fn rda_bulk_falls_back_to_per_subject_on_collision() {
         "disclosure": "value",
     });
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&body)
@@ -564,7 +564,7 @@ async fn dci_bulk_collapses_100_subjects_into_one_search_post() {
         "disclosure": "value",
     });
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&body)
@@ -644,7 +644,7 @@ async fn dci_bulk_missing_response_entry_surfaces_source_not_found_for_that_subj
         "disclosure": "value",
     });
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&body)
@@ -711,7 +711,7 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
     let upstream_a = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(rda_per_subject_handler),
             )
             .with_state(recorder_a.clone()),
@@ -732,7 +732,7 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
 
     let subjects = build_subjects(8);
     let response_a = server_a
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -750,15 +750,15 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
         recorder_a.total(),
     );
 
-    // --- Pass B: per-subject /claims/evaluate baseline ---------------------
-    // Run /claims/evaluate (single-subject) for each subject in turn. The
+    // --- Pass B: per-subject /v1/evaluations baseline ---------------------
+    // Run /v1/evaluations (single-subject) for each subject in turn. The
     // per-subject `read_one` code path is what bulk_mode=none must mirror
     // byte-for-byte at the wire level.
     let recorder_b = UpstreamRecorder::new();
     let upstream_b = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(rda_per_subject_handler),
             )
             .with_state(recorder_b.clone()),
@@ -775,7 +775,7 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
     let server_b = TestServer::builder().http_transport().build(app_b);
     for subject in &subjects {
         let r = server_b
-            .post("/claims/evaluate")
+            .post("/v1/evaluations")
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({

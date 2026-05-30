@@ -136,7 +136,7 @@ sources:
 
 async fn authorized_lookup(server: &TestServer, lookup_value: &str) {
     server
-        .get(&format!("/datasets/{DATASET}/{ENTITY}"))
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
         .add_query_param(LOOKUP_FIELD, lookup_value)
         .add_query_param("fields", "national_id,birth_date")
         .add_query_param("limit", "2")

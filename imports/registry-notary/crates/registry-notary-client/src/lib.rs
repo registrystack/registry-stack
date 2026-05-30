@@ -2,7 +2,7 @@
 //! Typed Registry Notary HTTP client.
 //!
 //! This crate is the Rust client for Registry Notary. It wraps the HTTP API
-//! with typed request and response DTOs, strict transport defaults, bounded
+//! with typed request and response types, strict transport defaults, bounded
 //! response reads, route-aware retries, and redacted error surfaces.
 //!
 //! # Quick start
@@ -32,13 +32,13 @@
 //! # }
 //! ```
 //!
-//! # Wire DTOs and helper wrappers
+//! # Wire request types and helper wrappers
 //!
-//! Request DTOs come from `registry-notary-core` for routes whose wire shapes
+//! Request types come from `registry-notary-core` for routes whose wire shapes
 //! are part of the service contract. Batch evaluation now uses
 //! [`registry_notary_core::BatchEvaluateResponse`] directly. The helper
 //! wrappers in [`responses`] are not compatibility workarounds; they add
-//! redacted formatting or ergonomic accessors on top of the wire DTOs.
+//! redacted formatting or ergonomic accessors on top of the wire responses.
 //!
 //! # Feature flags
 //!

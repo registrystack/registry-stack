@@ -99,7 +99,7 @@ export class RegistryNotaryClient {
     const headerPurpose = options.purpose ?? this.#defaultPurpose;
     assertPurposeCompatible(bodyPurpose, headerPurpose);
 
-    const body = await this.requestJson("/claims/evaluate", request, {
+    const body = await this.requestJson("/v1/evaluations", request, {
       accept: CLAIM_RESULT_JSON,
       purpose: headerPurpose,
       requestId: options.requestId ?? options.request_id,
@@ -155,7 +155,7 @@ export class RegistryNotaryClient {
     const headerPurpose = options.purpose ?? this.#defaultPurpose;
     assertPurposeCompatible(bodyPurpose, headerPurpose);
 
-    const body = await this.requestJson("/claims/batch-evaluate", request, {
+    const body = await this.requestJson("/v1/batch-evaluations", request, {
       accept: CLAIM_RESULT_JSON,
       purpose: headerPurpose,
       requestId: options.requestId ?? options.request_id,
@@ -176,7 +176,7 @@ export class RegistryNotaryClient {
    * @returns {Promise<unknown>}
    */
   async listClaims(options = {}) {
-    return await this.getJson("/claims", {
+    return await this.getJson("/v1/claims", {
       accept: "application/json",
       requestId: options.requestId,
       signal: options.signal,
@@ -189,7 +189,7 @@ export class RegistryNotaryClient {
    * @returns {Promise<unknown>}
    */
   async getClaim(claimId, options = {}) {
-    return await this.getJson(`/claims/${encodeURIComponent(claimId)}`, {
+    return await this.getJson(`/v1/claims/${encodeURIComponent(claimId)}`, {
       accept: "application/json",
       requestId: options.requestId,
       signal: options.signal,
@@ -197,12 +197,31 @@ export class RegistryNotaryClient {
   }
 
   /**
+   * Render evidence from canonical snake_case JSON.
+   *
+   * `evaluation_id` is required in the request object and is used as the route
+   * path parameter. It is not sent in the request body.
+   *
    * @param {Record<string, unknown>} request
    * @param {{ requestId?: string, traceparent?: string, signal?: AbortSignal }} [options]
    * @returns {Promise<unknown>}
    */
   async renderRequest(request, options = {}) {
-    return await this.requestJson("/evidence/render", request, {
+    if (request === null || request === undefined || typeof request !== "object" || Array.isArray(request)) {
+      throw new NotaryError("render request requires a request object", {
+        kind: "client",
+        code: "request.invalid_type",
+      });
+    }
+    const evaluationId = stringProperty(request, "evaluation_id");
+    if (evaluationId === undefined || evaluationId.length === 0) {
+      throw new NotaryError("render request requires evaluation_id", {
+        kind: "client",
+        code: "request.missing_evaluation_id",
+      });
+    }
+    const { evaluation_id: _evaluationId, ...body } = request;
+    return await this.requestJson(`/v1/evaluations/${encodeURIComponent(evaluationId)}/render`, body, {
       accept: "application/json",
       requestId: options.requestId,
       traceparent: options.traceparent,
@@ -217,7 +236,7 @@ export class RegistryNotaryClient {
    * @returns {Promise<unknown>}
    */
   async issueCredentialRequest(request, options = {}) {
-    return await this.requestJson("/credentials/issue", request, {
+    return await this.requestJson("/v1/credentials", request, {
       accept: "application/json",
       requestId: options.requestId,
       traceparent: options.traceparent,
@@ -232,7 +251,7 @@ export class RegistryNotaryClient {
    * @returns {Promise<unknown>}
    */
   async credentialStatus(credentialId, options = {}) {
-    return await this.getJson(`/credentials/status/${encodeURIComponent(credentialId)}`, {
+    return await this.getJson(`/v1/credentials/${encodeURIComponent(credentialId)}/status`, {
       accept: "application/json",
       requestId: options.requestId,
       signal: options.signal,

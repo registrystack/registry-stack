@@ -1021,7 +1021,7 @@ impl RegistryNotaryRuntime {
         let request_hash = hash_json(&request)?;
         let scoped_key = options.idempotency_key.map(|key| {
             format!(
-                "{}:/claims/batch-evaluate:{}",
+                "{}:/v1/batch-evaluations:{}",
                 principal.principal_id,
                 sha256_hex(key.as_bytes())
             )

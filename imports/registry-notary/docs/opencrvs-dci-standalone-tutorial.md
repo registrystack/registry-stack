@@ -135,6 +135,11 @@ evidence:
       format: application/dc+sd-jwt
       issuer: did:web:localhost
       signing_key: registry-notary-demo
+      vct: https://registry-notary.local/credentials/dci-record
+      validity_seconds: 600
+      allowed_claims: [opencrvs-birth-record-exists]
+      holder_binding:
+        mode: none
 ```
 
 The value in `private_jwk_env` names the environment variable containing the
@@ -248,7 +253,7 @@ set +a
 Use a known test UIN from the OpenCRVS environment owner:
 
 ```bash
-curl -fsS http://127.0.0.1:4255/claims/evaluate \
+curl -fsS http://127.0.0.1:4255/v1/evaluations \
   -H "content-type: application/json" \
   -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \
@@ -282,7 +287,7 @@ evaluate the claim in SD-JWT VC format and capture the returned `evaluation_id`:
 
 ```bash
 EVALUATION_ID="$(
-  curl -fsS http://127.0.0.1:4255/claims/evaluate \
+  curl -fsS http://127.0.0.1:4255/v1/evaluations \
     -H "content-type: application/json" \
     -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
     -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \
@@ -298,7 +303,7 @@ EVALUATION_ID="$(
 Then issue the demo credential:
 
 ```bash
-curl -fsS http://127.0.0.1:4255/credentials/issue \
+curl -fsS http://127.0.0.1:4255/v1/credentials \
   -H "content-type: application/json" \
   -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \

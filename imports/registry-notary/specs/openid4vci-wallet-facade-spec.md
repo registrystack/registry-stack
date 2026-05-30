@@ -26,8 +26,8 @@ Wallet
 Registry Notary already supports citizen self-attestation through its custom
 API surface:
 
-1. `POST /claims/evaluate`
-2. `POST /credentials/issue`
+1. `POST /v1/evaluations`
+2. `POST /v1/credentials`
 
 That shape is practical for scripts and portals, but wallets generally expect
 OpenID4VCI:
@@ -40,7 +40,7 @@ OpenID4VCI:
 Notary can already issue `application/dc+sd-jwt` credentials, but its holder
 proof is currently stricter and more Notary-specific than the standard
 OpenID4VCI proof JWT most wallets generate. The facade therefore needs to adapt
-the protocol without weakening the existing Notary `/credentials/issue`
+the protocol without weakening the existing Notary `/v1/credentials`
 contract.
 
 ## Actors
@@ -76,7 +76,7 @@ cause a registry source read before subject binding succeeds.
 - Delegation, guardianship, representative access, or multi-subject flows.
 - Proving that the wallet holder DID is the same identifier as the civil
   subject.
-- Changing the existing `/claims/evaluate` and `/credentials/issue` protocol.
+- Changing the existing `/v1/evaluations` and `/v1/credentials` protocol.
 
 ## Protocol Surface
 
@@ -148,8 +148,7 @@ Returns a credential offer for a configured credential configuration id.
 V1 supports:
 
 - query parameter `credential_configuration_id`;
-- JSON response containing the offer object and deep-link URL;
-- plain-text URL response when `Accept: text/plain` is supplied.
+- JSON response containing the credential offer object directly.
 
 The offer must not include a subject id. The subject is derived only from the
 verified eSignet token at credential issuance time.
@@ -158,16 +157,14 @@ Example response:
 
 ```json
 {
-  "credential_offer": {
-    "credential_issuer": "http://127.0.0.1:4325",
-    "credential_configuration_ids": ["person_is_alive_sd_jwt"],
-    "grants": {
-      "authorization_code": {
-        "issuer_state": "..."
-      }
+  "credential_issuer": "http://127.0.0.1:4325",
+  "credential_configuration_ids": ["person_is_alive_sd_jwt"],
+  "grants": {
+    "authorization_code": {
+      "issuer_state": "...",
+      "authorization_server": "https://id.example.gov"
     }
-  },
-  "url": "openid-credential-offer://?credential_offer=..."
+  }
 }
 ```
 
@@ -184,8 +181,12 @@ Example response:
 }
 ```
 
-The endpoint is public in V1 but rate-limited. It does not accept or return a
-subject id. The nonce is later consumed by `POST /oid4vci/credential`.
+The endpoint reserves replay-protected nonces. Deployments should apply gateway
+or service-level rate limiting if public exposure requires it. The request may
+omit `credential_configuration_id` only when exactly one credential
+configuration is configured; otherwise clients must supply it. The endpoint does
+not accept or return a subject id. The nonce is later consumed by
+`POST /oid4vci/credential`.
 
 ### `POST /oid4vci/credential`
 
@@ -196,6 +197,7 @@ Example request:
 
 ```json
 {
+  "format": "dc+sd-jwt",
   "credential_configuration_id": "person_is_alive_sd_jwt",
   "proof": {
     "proof_type": "jwt",
@@ -216,7 +218,7 @@ Processing order is security-sensitive:
    proof is valid.
 7. Construct the internal subject from the verified binding claim.
 8. Run the same self-attestation subject-binding guard used by
-   `/claims/evaluate`.
+   `/v1/evaluations`.
 9. Only then read the configured registry source.
 10. Issue the configured SD-JWT VC profile.
 11. Return the credential response.
@@ -230,7 +232,6 @@ Example response:
 {
   "credential": "eyJ...~WyI...~",
   "format": "dc+sd-jwt",
-  "credential_configuration_id": "person_is_alive_sd_jwt",
   "c_nonce": "...",
   "c_nonce_expires_in": 300
 }
@@ -319,7 +320,7 @@ Validation rules:
 - Holder binding does not prove holder-equals-civil-subject.
 - No raw token, raw civil id, holder private key, source credential, or source
   row appears in logs, audit events, script artifacts, or error bodies.
-- Existing `/claims/evaluate` and `/credentials/issue` behavior remains
+- Existing `/v1/evaluations` and `/v1/credentials` behavior remains
   unchanged unless self-attestation config already changes it.
 
 ## V1 Trust And Privacy Boundaries
@@ -363,11 +364,11 @@ Privacy boundaries:
 ## Holder Proof Compatibility
 
 OpenID4VCI wallets normally produce a standard proof JWT. Notary currently
-requires a custom holder proof on `/credentials/issue` that binds additional
+requires a custom holder proof on `/v1/credentials` that binds additional
 internal values such as `evaluation_id`, `credential_profile`, disclosure hash,
 and claim set.
 
-V1 must keep the existing strict proof for `/credentials/issue` and add a
+V1 must keep the existing strict proof for `/v1/credentials` and add a
 separate OpenID4VCI proof validator for `/oid4vci/credential`.
 
 The OpenID4VCI validator must:
@@ -492,7 +493,7 @@ Extend or reuse existing SD-JWT utilities for:
 
 The existing Notary-specific holder proof validator remains available. The
 OpenID4VCI proof validator must be a separate API so callers cannot
-accidentally relax `/credentials/issue`.
+accidentally relax `/v1/credentials`.
 
 ### `registry-platform-crypto`
 
@@ -638,8 +639,9 @@ is a compatibility finding and should be documented before patching.
 ### Walt
 
 Walt should be tested through credential offer ingestion. The preferred smoke
-target is a Walt Wallet API call that consumes the generated
-`openid-credential-offer://` URL and receives the credential.
+target is a Walt Wallet API call that consumes the offer JSON directly, or a
+lab-constructed `openid-credential-offer://` URL derived from that JSON, and
+receives the credential.
 
 No Walt code change should be required for V1.
 
@@ -745,6 +747,8 @@ The feature is complete only when every item below is true:
   denied.
 - The facade denies unknown credential configuration ids.
 - The facade denies unsupported formats.
+- Credential responses do not echo `credential_configuration_id`; that value is
+  retained in audit metadata.
 - The facade denies missing proof.
 - The facade denies wrong proof audience.
 - The facade denies stale or overlong proof lifetime.
@@ -767,10 +771,10 @@ The feature is complete only when every item below is true:
   audit field assertion, not by log text.
 - The issued credential remains compatible with the existing Notary SD-JWT VC
   profile.
-- The existing `/claims/evaluate` and `/credentials/issue` tests still pass.
-- The facade does not relax the existing strict `/credentials/issue` holder
+- The existing `/v1/evaluations` and `/v1/credentials` tests still pass.
+- The facade does not relax the existing strict `/v1/credentials` holder
   proof validator.
-- A boundary test posts an OpenID4VCI-shaped proof to `/credentials/issue` and
+- A boundary test posts an OpenID4VCI-shaped proof to `/v1/credentials` and
   receives the strict endpoint's holder-proof error.
 - Audit events include `protocol = openid4vci`, `access_mode =
   self_attestation`, credential configuration id, credential profile, denial
@@ -887,7 +891,7 @@ Parallel workers:
 - Worker D: own audit schema/type changes and denial-code definitions only;
   Worker C wires them into `api.rs` to avoid overlapping route edits.
 - Reviewer: check auth order, subject-binding order, audit redaction, and that
-  `/credentials/issue` proof validation was not weakened.
+  `/v1/credentials` proof validation was not weakened.
 
 Exit criteria:
 

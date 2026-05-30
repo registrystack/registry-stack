@@ -380,7 +380,7 @@ async fn outbound_semaphore_caps_upstream_in_flight_at_max() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(slow_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -420,7 +420,7 @@ async fn outbound_semaphore_caps_upstream_in_flight_at_max() {
         let body = body.clone();
         handles.push(tokio::spawn(async move {
             server
-                .post("/claims/batch-evaluate")
+                .post("/v1/batch-evaluations")
                 .add_header("x-api-key", "api-token")
                 .add_header("data-purpose", "https://purpose.example.test/eligibility")
                 .json(&body)
@@ -463,7 +463,7 @@ async fn oauth_source_auth_fetches_form_token_once_and_reads_source() {
         Router::new()
             .route("/oauth/token", post(oauth_token_form))
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(oauth_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -484,7 +484,7 @@ async fn oauth_source_auth_fetches_form_token_once_and_reads_source() {
 
     for id in ["person-1", "person-2"] {
         let response = server
-            .post("/claims/evaluate")
+            .post("/v1/evaluations")
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
@@ -520,7 +520,7 @@ async fn oauth_source_auth_supports_json_token_requests() {
         Router::new()
             .route("/oauth/token", post(oauth_token_json))
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(oauth_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -542,7 +542,7 @@ async fn oauth_source_auth_supports_json_token_requests() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -571,7 +571,7 @@ async fn oauth_source_auth_refreshes_before_expiry_when_token_ttl_is_short() {
         Router::new()
             .route("/oauth/token", post(oauth_token_form))
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(oauth_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -592,7 +592,7 @@ async fn oauth_source_auth_refreshes_before_expiry_when_token_ttl_is_short() {
 
     for id in ["person-1", "person-2"] {
         let response = server
-            .post("/claims/evaluate")
+            .post("/v1/evaluations")
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
@@ -625,7 +625,7 @@ async fn oauth_source_auth_coalesces_concurrent_initial_token_fetch() {
         Router::new()
             .route("/oauth/token", post(oauth_token_form))
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(oauth_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -648,7 +648,7 @@ async fn oauth_source_auth_coalesces_concurrent_initial_token_fetch() {
         .map(|i| json!({ "id": format!("person-{i}") }))
         .collect();
     let response = server
-        .post("/claims/batch-evaluate")
+        .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -681,7 +681,7 @@ async fn oauth_source_auth_applies_fetch_url_policy_to_token_url() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(oauth_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -703,7 +703,7 @@ async fn oauth_source_auth_applies_fetch_url_policy_to_token_url() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -741,7 +741,7 @@ async fn oauth_source_auth_refreshes_once_after_unauthorized_source_response() {
         Router::new()
             .route("/oauth/token", post(oauth_token_form))
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(oauth_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -761,7 +761,7 @@ async fn oauth_source_auth_refreshes_once_after_unauthorized_source_response() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -801,7 +801,7 @@ async fn outbound_retries_once_on_http_500_and_returns_success() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(flaky_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -822,7 +822,7 @@ async fn outbound_retries_once_on_http_500_and_returns_success() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
@@ -853,7 +853,7 @@ async fn outbound_gives_up_after_one_retry_when_upstream_keeps_failing() {
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
-                "/datasets/farmer_registry/farmer",
+                "/v1/datasets/farmer_registry/entities/farmer/records",
                 get(flaky_registry_data_api),
             )
             .with_state(metrics.clone()),
@@ -874,7 +874,7 @@ async fn outbound_gives_up_after_one_retry_when_upstream_keeps_failing() {
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
-        .post("/claims/evaluate")
+        .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scenario: catalog read.
 //
-// Repeatedly GETs /claims to baseline the auth + JSON-serialize path with no
+// Repeatedly GETs /v1/claims to baseline the auth + JSON-serialize path with no
 // source IO. Useful as a control: regressions here indicate auth/audit or
 // runtime listing cost, not upstream behavior.
 
@@ -35,7 +35,7 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const res = http.get(`${baseUrl()}/claims`, {
+  const res = http.get(`${baseUrl()}/v1/claims`, {
     headers: bearerHeaders(ctx.token),
   });
 

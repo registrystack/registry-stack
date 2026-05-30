@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scenario: CEL-derived claim evaluation.
 //
-// POST /claims/evaluate with the CEL claim (default: farmer-under-4ha). The
+// POST /v1/evaluations with the CEL claim (default: farmer-under-4ha). The
 // claim depends on farmed-land-size, so notary performs:
 //   1. DCI POST to fetch farmed_land_size_hectares (extract claim)
 //   2. CEL evaluation of `claims.farmed_land_size.value < 4.0`
@@ -49,7 +49,7 @@ export default function (ctx) {
     disclosure: 'predicate',
   });
 
-  const res = http.post(`${baseUrl()}/claims/evaluate`, payload, {
+  const res = http.post(`${baseUrl()}/v1/evaluations`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 

@@ -159,7 +159,7 @@ class RegistryNotaryClient:
 
         effective_purpose = self._effective_purpose(request, purpose)
         response = self._post_json(
-            "/claims/evaluate",
+            "/v1/evaluations",
             request,
             purpose=effective_purpose,
             request_id=request_id,
@@ -183,7 +183,7 @@ class RegistryNotaryClient:
 
         effective_purpose = self._effective_purpose(request, purpose)
         response = self._post_json(
-            "/claims/batch-evaluate",
+            "/v1/batch-evaluations",
             request,
             purpose=effective_purpose,
             request_id=request_id,
@@ -202,11 +202,30 @@ class RegistryNotaryClient:
         traceparent: str | None = None,
         accept: str | None = None,
     ) -> dict[str, Any]:
-        """Render evidence from canonical snake_case JSON."""
+        """Render evidence from canonical snake_case JSON.
 
+        ``evaluation_id`` is required in the request mapping and is used as the
+        route path parameter. It is not sent in the request body.
+        """
+
+        if not isinstance(request, Mapping):
+            raise NotaryError(
+                kind="client",
+                code="request.invalid_type",
+                title="request must be a mapping",
+            )
+        evaluation_id = request.get("evaluation_id")
+        if not isinstance(evaluation_id, str) or not evaluation_id:
+            raise NotaryError(
+                kind="client",
+                code="request.missing_evaluation_id",
+                title="render request requires evaluation_id",
+            )
+        body = dict(request)
+        body.pop("evaluation_id", None)
         response = self._post_json(
-            "/evidence/render",
-            request,
+            f"/v1/evaluations/{quote(evaluation_id, safe='')}/render",
+            body,
             purpose=None,
             request_id=request_id,
             traceparent=traceparent,
@@ -227,7 +246,7 @@ class RegistryNotaryClient:
         """Issue a credential from canonical snake_case JSON."""
 
         response = self._post_json(
-            "/credentials/issue",
+            "/v1/credentials",
             request,
             purpose=None,
             request_id=request_id,
@@ -239,11 +258,11 @@ class RegistryNotaryClient:
         return self._decode_json_response(response)
 
     def list_claims(self, *, request_id: str | None = None) -> dict[str, Any]:
-        return self._decode_json_response(self._get("/claims", request_id=request_id))
+        return self._decode_json_response(self._get("/v1/claims", request_id=request_id))
 
     def get_claim(self, claim_id: str, *, request_id: str | None = None) -> dict[str, Any]:
         return self._decode_json_response(
-            self._get(f"/claims/{quote(claim_id, safe='')}", request_id=request_id)
+            self._get(f"/v1/claims/{quote(claim_id, safe='')}", request_id=request_id)
         )
 
     def credential_status(
@@ -254,7 +273,7 @@ class RegistryNotaryClient:
     ) -> dict[str, Any]:
         return self._decode_json_response(
             self._get(
-                f"/credentials/status/{quote(credential_id, safe='')}",
+                f"/v1/credentials/{quote(credential_id, safe='')}/status",
                 request_id=request_id,
             )
         )

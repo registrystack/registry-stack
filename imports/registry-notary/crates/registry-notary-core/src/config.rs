@@ -2678,11 +2678,11 @@ fn default_api_base_url() -> String {
 }
 
 fn default_claims_url() -> String {
-    "/claims".to_string()
+    "/v1/claims".to_string()
 }
 
 fn default_formats_url() -> String {
-    "/formats".to_string()
+    "/v1/formats".to_string()
 }
 
 const fn default_inline_batch_limit() -> usize {

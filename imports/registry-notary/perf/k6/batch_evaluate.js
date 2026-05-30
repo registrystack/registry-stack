@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scenario: batch evaluate over N subjects.
 //
-// POST /claims/batch-evaluate with REGISTRY_NOTARY_BATCH_SIZE distinct
+// POST /v1/batch-evaluations with REGISTRY_NOTARY_BATCH_SIZE distinct
 // subjects. Uses the extract claim by default to keep the per-subject work
 // directly comparable to evaluate_extract.
 
@@ -58,7 +58,7 @@ export default function (ctx) {
     claims: [ctx.claim],
   });
 
-  const res = http.post(`${baseUrl()}/claims/batch-evaluate`, payload, {
+  const res = http.post(`${baseUrl()}/v1/batch-evaluations`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),
   });
 

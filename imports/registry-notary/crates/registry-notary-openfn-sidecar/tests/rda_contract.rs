@@ -159,7 +159,7 @@ async fn authorized_lookup(server: &TestServer, lookup_value: &str) -> TestRespo
 
 fn lookup_request(server: &TestServer, lookup_value: &str) -> axum_test::TestRequest {
     server
-        .get(&format!("/datasets/{DATASET}/{ENTITY}"))
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
         .add_query_param(LOOKUP_FIELD, lookup_value)
         .add_query_param("fields", "national_id,birth_date")
         .add_query_param("limit", "2")
@@ -956,7 +956,7 @@ async fn invalid_query_size_and_parameter_limits_are_rejected_before_dispatch() 
 
     let too_many_predicates = harness
         .server
-        .get(&format!("/datasets/{DATASET}/{ENTITY}"))
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
         .add_query_param(LOOKUP_FIELD, "person-123")
         .add_query_param("other_id", "person-123")
         .add_header("authorization", format!("Bearer {TOKEN}"))
@@ -978,7 +978,7 @@ async fn missing_fields_projection_is_rejected_before_dispatch() {
 
     let response = harness
         .server
-        .get(&format!("/datasets/{DATASET}/{ENTITY}"))
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
         .add_query_param(LOOKUP_FIELD, "person-123")
         .add_query_param("limit", "2")
         .add_header("authorization", format!("Bearer {TOKEN}"))

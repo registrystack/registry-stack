@@ -62,7 +62,28 @@ Acceptance criteria:
 - Replay attempts, invalid holder proofs, and stale evaluations are denied and
   audited without exposing holder private material.
 
-## 4. Notary Evaluates A Claim Through An OpenFn Sidecar Source
+## 4. Wallet Retrieves A Credential Through OpenID4VCI
+
+As a wallet holder, I want my wallet to use OpenID4VCI to retrieve a
+Registry Notary credential, so that I can use a standards-oriented wallet flow
+without exposing raw registry records.
+
+Acceptance criteria:
+
+- Issuer metadata and credential offers expose only configured public metadata,
+  never a civil subject id.
+- The wallet obtains a nonce, submits an OIDC bearer token and proof JWT, and
+  requests `format: dc+sd-jwt`.
+- Registry Notary verifies the token, credential configuration, proof JWT,
+  nonce when enabled, and self-attestation subject binding before any source
+  read.
+- The credential request body cannot supply or override the subject.
+- The response contains an SD-JWT VC credential and optional nonce fields,
+  without echoing sensitive token, proof, or subject material.
+- Audit metadata records protocol, credential configuration, credential
+  profile, and hashed identifiers only.
+
+## 5. Notary Evaluates A Claim Through An OpenFn Sidecar Source
 
 As an implementer, I want Registry Notary to evaluate claims using a
 Registry Data API-shaped sidecar backed by pinned OpenFn adaptor jobs, so that
@@ -81,4 +102,3 @@ Acceptance criteria:
   smoke lookups are missing or mismatched.
 - Sidecar timeouts, worker saturation, invalid output, target failures, and
   credential non-disclosure are handled explicitly.
-

@@ -1,5 +1,10 @@
 # OpenFn Sidecar Source Spike
 
+> Historical note: this file records the initial sidecar spike and decision
+> trail. For adopter-facing setup, use
+> [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) and
+> [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md).
+
 This spike explores using an OpenFn-powered sidecar as a one-record source for
 Registry Notary claim evaluation. The starting point is intentionally narrow:
 support one subject lookup at a time, return at most one normalized source
@@ -115,35 +120,36 @@ attested or disclosed.
 ## Notary Config Sketch
 
 ```yaml
-source_connections:
-  openfn_crvs:
-    base_url: http://127.0.0.1:9191
-    allow_insecure_localhost: true
-    token_env: OPENFN_SIDECAR_TOKEN
+evidence:
+  source_connections:
+    openfn_crvs:
+      base_url: http://127.0.0.1:9191
+      allow_insecure_localhost: true
+      token_env: OPENFN_SIDECAR_TOKEN
 
-claims:
-  - id: date-of-birth
-    source_bindings:
-      crvs:
-        connector: registry_data_api
-        connection: openfn_crvs
-        required_scope: civil_registry:evidence_verification
-        dataset: civil_registry
-        entity: civil_person
-        lookup:
-          input: subject_id
-          field: national_id
-          op: eq
-          cardinality: one
-        fields:
-          birth_date:
-            field: birth_date
-            type: date
-            required: true
-    rule:
-      type: extract
-      source: crvs
-      field: birth_date
+  claims:
+    - id: date-of-birth
+      source_bindings:
+        crvs:
+          connector: registry_data_api
+          connection: openfn_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: subject_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: crvs
+        field: birth_date
 ```
 
 ## Spike Evidence
