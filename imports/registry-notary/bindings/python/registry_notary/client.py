@@ -62,15 +62,23 @@ class RegistryNotaryClient:
         user_agent: str | None = None,
         retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
         transport: Any | None = None,
+        allow_insecure_internal_http: bool = False,
     ) -> None:
         parsed = urlsplit(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise NotaryError(kind="build", code="build.invalid_url", title="Invalid base URL")
-        if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+        if (
+            parsed.scheme == "http"
+            and not _is_loopback_host(parsed.hostname)
+            and not allow_insecure_internal_http
+        ):
             raise NotaryError(
                 kind="build",
                 code="build.insecure_base_url",
-                title="Base URL must use https unless the host is loopback",
+                title=(
+                    "Base URL must use https unless the host is loopback or "
+                    "allow_insecure_internal_http is enabled"
+                ),
             )
         if bearer_token and api_key:
             raise NotaryError(
@@ -101,7 +109,7 @@ class RegistryNotaryClient:
         *,
         subject_id: str,
         id_type: str,
-        claims: Iterable[str],
+        claims: Iterable[str | Mapping[str, Any]],
         purpose: str | None = None,
         request_id: str | None = None,
         traceparent: str | None = None,
@@ -111,7 +119,7 @@ class RegistryNotaryClient:
 
         request = {
             "subject": {"id": subject_id, "id_type": id_type},
-            "claims": list(claims),
+            "claims": _claim_list(claims),
         }
         return self.evaluate_request(
             request,
@@ -126,7 +134,7 @@ class RegistryNotaryClient:
         *,
         subject_id: str,
         id_type: str,
-        claims: Iterable[str],
+        claims: Iterable[str | Mapping[str, Any]],
         purpose: str | None = None,
         request_id: str | None = None,
         traceparent: str | None = None,
@@ -136,7 +144,7 @@ class RegistryNotaryClient:
 
         request = {
             "subject": {"id": subject_id, "id_type": id_type},
-            "claims": list(claims),
+            "claims": _claim_list(claims),
         }
         return await self.aevaluate_request(
             request,
@@ -797,6 +805,16 @@ def _coerce_retry_policy(policy: RetryPolicy | Mapping[str, Any] | None) -> Retr
     if isinstance(policy, RetryPolicy):
         return policy
     return RetryPolicy(**dict(policy))
+
+
+def _claim_list(claims: Iterable[str | Mapping[str, Any]]) -> list[str | Mapping[str, Any]]:
+    if isinstance(claims, str) or isinstance(claims, Mapping):
+        raise NotaryError(
+            kind="client",
+            code="request.invalid_claims",
+            title="claims must be an iterable of claim strings or claim reference mappings",
+        )
+    return list(claims)
 
 
 def _allowed_attempts(policy: RetryPolicy, retry_kind: str, idempotency_key: str | None) -> int:

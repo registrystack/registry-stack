@@ -11,6 +11,9 @@ guides, tutorials, SDK docs, and release notes stay in `docs/`.
 - [`federated-notary-manifest-spec.md`](federated-notary-manifest-spec.md):
   manifest-backed federation, trust, delegated evaluation, credential issuance,
   and audit checkpoint design.
+- [`notary-api-v1-route-cleanup-proposal.md`](notary-api-v1-route-cleanup-proposal.md):
+  implemented route cleanup design record for the stable `/v1` REST API
+  surface.
 - [`openid4vci-wallet-facade-spec.md`](openid4vci-wallet-facade-spec.md):
   OpenID4VCI wallet facade design and current compatibility profile.
 - [`openfn-sidecar-source-spec.md`](openfn-sidecar-source-spec.md):

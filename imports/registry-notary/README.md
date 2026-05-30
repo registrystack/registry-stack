@@ -81,7 +81,8 @@ support.
   and audit workflows.
 - [`specs/`](specs/README.md): design specifications and implementation traces for
   self-attestation, static-peer federation, manifest-backed federation,
-  OpenID4VCI wallet facade, OpenFn sidecar source integration, and scalability.
+  the `/v1` REST route cleanup, OpenID4VCI wallet facade, OpenFn sidecar source
+  integration, and scalability.
 
 ## Credential Conformance
 

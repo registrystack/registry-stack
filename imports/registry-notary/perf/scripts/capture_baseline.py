@@ -78,8 +78,6 @@ def _wait_for(url: str, headers: dict[str, str], timeout: float) -> bool:
                     return True
                 last_err = RuntimeError(f"unexpected status {resp.status}")
         except urllib.error.HTTPError as err:
-            if 400 <= err.code < 500:
-                return True
             last_err = err
         except (urllib.error.URLError, OSError) as err:
             last_err = err

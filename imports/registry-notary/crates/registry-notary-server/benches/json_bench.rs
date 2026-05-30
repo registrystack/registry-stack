@@ -3,8 +3,8 @@
 //!
 //! Covers:
 //! - `EvidenceAuditEvent` serialization (written as a JSONL line on every request).
-//! - `ClaimResultView` serialization (returned in /claims/evaluate and
-//!   /claims/batch-evaluate responses).
+//! - `ClaimResultView` serialization (returned in `/v1/evaluations` and
+//!   `/v1/batch-evaluations` responses).
 //! - DCI response envelope deserialization (parsed from an upstream source on
 //!   every evaluate call that reaches the source).
 //! - Stage-3 bulk response deserialization for RDA (one `{"data": [...N rows]}`

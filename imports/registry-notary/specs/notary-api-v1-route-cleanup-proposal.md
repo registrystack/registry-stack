@@ -1,4 +1,4 @@
-# Registry Notary API V1 Route Cleanup Proposal
+# Registry Notary API V1 Route Cleanup Design Record
 
 ## Summary
 

@@ -124,6 +124,12 @@ class RegistryNotaryClientTests(unittest.TestCase):
             RegistryNotaryClient(base_url="http://notary.example")
         self.assertEqual(cleartext.exception.code, "build.insecure_base_url")
 
+        client = RegistryNotaryClient(
+            base_url="http://registry-notary:8080",
+            allow_insecure_internal_http=True,
+        )
+        self.assertIn("http://registry-notary:8080", repr(client))
+
     def test_high_level_evaluate_uses_python_args_and_wire_snake_case(self) -> None:
         recorder = _Recorder()
         with Server(recorder) as base_url:
@@ -156,6 +162,25 @@ class RegistryNotaryClientTests(unittest.TestCase):
 
         self.assertEqual(recorder.requests[0]["body"], raw_request)
         self.assertEqual(recorder.requests[0]["headers"]["Data-Purpose"], "eligibility")
+
+    def test_high_level_evaluate_rejects_single_claim_string_or_mapping(self) -> None:
+        client = RegistryNotaryClient(base_url="https://notary.example")
+
+        with self.assertRaises(NotaryError) as string_error:
+            client.evaluate(
+                subject_id="subj-1",
+                id_type="NATIONAL_ID",
+                claims="age",  # type: ignore[arg-type]
+            )
+        self.assertEqual(string_error.exception.code, "request.invalid_claims")
+
+        with self.assertRaises(NotaryError) as mapping_error:
+            client.evaluate(
+                subject_id="subj-1",
+                id_type="NATIONAL_ID",
+                claims={"id": "age", "version": "2026-05"},  # type: ignore[arg-type]
+            )
+        self.assertEqual(mapping_error.exception.code, "request.invalid_claims")
 
     def test_async_evaluate_returns_response(self) -> None:
         recorder = _Recorder()
@@ -426,6 +451,117 @@ class RegistryNotaryClientTests(unittest.TestCase):
         self.assertEqual(recorder.requests[3]["body"], {"proof": {"jwt": "holder-proof-secret"}})
         self.assertEqual(recorder.requests[4]["body"], "request.jws.compact")
         self.assertEqual(recorder.requests[4]["headers"]["Content-Type"], "application/jwt")
+
+    def test_openspp_contract_routes_versioned_refs_retries_jwks_and_problem_codes(self) -> None:
+        retry_policy = RetryPolicy(
+            max_attempts=2,
+            base_delay=0,
+            max_delay=0,
+            retry_unavailable=True,
+        )
+        versioned_ref = {"id": "eligibility.open_spp", "version": "2026-05"}
+        recorder = _Recorder(
+            responses=[
+                (200, {"data": [{"id": "eligibility.open_spp", "version": "2026-05"}]}, None),
+                (200, {"id": "eligibility.open_spp", "version": "2026-05"}, None),
+                (
+                    200,
+                    {
+                        "evaluation_id": "eval-1",
+                        "results": [
+                            {
+                                "claim_id": "eligibility.open_spp",
+                                "claim_version": "2026-05",
+                                "satisfied": True,
+                            }
+                        ],
+                    },
+                    None,
+                ),
+                (503, {"code": "source.unavailable", "title": "Source unavailable"}, None),
+                (200, {"batch_id": "batch-1", "status": "completed"}, None),
+                (200, {"keys": [{"kid": "key-1"}]}, None),
+                (200, {"credential_id": "cred-1"}, None),
+                (200, {"status": "valid"}, None),
+                (404, {"code": "claim.version_not_found", "title": "Claim version not found"}, None),
+            ]
+        )
+
+        with Server(recorder) as base_url:
+            client = RegistryNotaryClient(
+                base_url=base_url,
+                default_purpose="openspp.eligibility",
+                retry_policy=retry_policy,
+            )
+            claims = client.list_claims()
+            claim = client.get_claim("eligibility.open_spp")
+            evaluation = client.evaluate(
+                subject_id="beneficiary-1",
+                id_type="openspp_id",
+                claims=[versioned_ref],
+            )
+            batch = client.batch_evaluate_request(
+                {
+                    "subjects": [{"id": "beneficiary-1", "id_type": "openspp_id"}],
+                    "claims": [versioned_ref],
+                },
+                idempotency_key="openspp-batch-1",
+            )
+            jwks = client.issuer_jwks()
+            issued = client.issue_credential_request({"evaluation_id": "eval-1"})
+            status = client.credential_status("cred-1")
+            with self.assertRaises(NotaryProblemError) as missing_version:
+                client.evaluate_request({
+                    "subject": {"id": "beneficiary-1", "id_type": "openspp_id"},
+                    "claims": [{"id": "eligibility.open_spp", "version": "missing"}],
+                })
+
+        self.assertEqual(claims["data"][0]["id"], "eligibility.open_spp")
+        self.assertEqual(claim["version"], "2026-05")
+        self.assertEqual(evaluation["results"][0]["claim_version"], "2026-05")
+        self.assertEqual(batch["batch_id"], "batch-1")
+        self.assertEqual(jwks["keys"][0]["kid"], "key-1")
+        self.assertEqual(issued["credential_id"], "cred-1")
+        self.assertEqual(status["status"], "valid")
+        self.assertEqual(missing_version.exception.code, "claim.version_not_found")
+        self.assertEqual([request["path"] for request in recorder.requests], [
+            "/v1/claims",
+            "/v1/claims/eligibility.open_spp",
+            "/v1/evaluations",
+            "/v1/batch-evaluations",
+            "/v1/batch-evaluations",
+            "/.well-known/evidence/jwks.json",
+            "/v1/credentials",
+            "/v1/credentials/cred-1/status",
+            "/v1/evaluations",
+        ])
+        self.assertEqual(recorder.requests[2]["body"]["claims"], [versioned_ref])
+        self.assertEqual(recorder.requests[2]["headers"]["Accept"], "application/vnd.registry-notary.claim-result+json")
+        self.assertEqual(recorder.requests[3]["headers"]["Idempotency-Key"], "openspp-batch-1")
+        self.assertEqual(recorder.requests[4]["headers"]["Idempotency-Key"], "openspp-batch-1")
+
+    def test_openspp_problem_codes_are_preserved_for_policy_mapping(self) -> None:
+        stable_codes = [
+            "source.not_found",
+            "source.ambiguous",
+            "source.unavailable",
+            "claim.not_found",
+            "claim.version_not_found",
+            "claim.format_not_supported",
+            "auth.purpose_required",
+            "auth.missing_credential",
+            "idempotency.conflict",
+            "batch.too_large",
+        ]
+
+        for code in stable_codes:
+            with self.subTest(code=code):
+                recorder = _Recorder(status=400, body={"code": code, "title": "Contract problem"})
+                with Server(recorder) as base_url:
+                    client = RegistryNotaryClient(base_url=base_url)
+                    with self.assertRaises(NotaryProblemError) as raised:
+                        client.list_claims()
+                self.assertEqual(raised.exception.code, code)
 
     def test_oid4vci_errors_redact_description_and_nonce(self) -> None:
         recorder = _Recorder(

@@ -137,7 +137,9 @@ target/release/registry-notary --config perf/config/medium.yaml
 
 Probe `/ready` and wait for `200`; it fails closed when a configured Redis
 replay or credential-status backend is unavailable. To also verify
-authenticated catalog access, probe `GET /v1/claims`:
+authenticated catalog access, probe `GET /v1/claims` and require a `2xx`
+response. Any `4xx` or `5xx` response means the route, token, or server state
+is not ready for perf measurement:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \

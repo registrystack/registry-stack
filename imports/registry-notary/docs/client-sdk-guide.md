@@ -29,6 +29,12 @@ Clients require HTTPS for non-loopback hosts. Rust allows HTTP loopback only in
 debug or `test-support` builds. Python and Node local workflows may use
 `http://127.0.0.1`, `http://localhost`, or `http://[::1]`.
 
+Python also exposes an explicit lab/internal escape hatch for Docker Compose
+and private service-network deployments:
+`allow_insecure_internal_http=True`. Use it only when transport is already
+protected by the deployment boundary or a local development network. Production
+service URLs should remain HTTPS.
+
 ### Authentication
 
 Configure exactly one auth mode:
@@ -101,6 +107,20 @@ disclosures, nonces, Authorization, `X-Api-Key`, or Problem Details `detail`.
 
 The Rust `portable()` error envelope is intended for language bindings and FFI.
 It intentionally excludes sensitive detail strings.
+
+The following application problem `code` values are part of the stable client
+contract for policy mapping:
+
+- `source.not_found`
+- `source.ambiguous`
+- `source.unavailable`
+- `claim.not_found`
+- `claim.version_not_found`
+- `claim.format_not_supported`
+- `auth.purpose_required`
+- `auth.missing_credential`
+- `idempotency.conflict`
+- `batch.too_large`
 
 ## Rust
 
@@ -345,6 +365,13 @@ let response = handle
 
 ## Python
 
+`bindings/python/registry_notary` is the supported Python client package for
+downstream applications. Keep these public names stable for application
+integrations: `RegistryNotaryClient`, `RetryPolicy`, `evaluate`,
+`evaluate_request`, `batch_evaluate_request`, `list_claims`, `get_claim`,
+`issuer_jwks`, `raw_issuer_jwks`, `render_request`,
+`issue_credential_request`, and `credential_status`.
+
 ### Install For Local Development
 
 ```bash
@@ -364,6 +391,17 @@ client = RegistryNotaryClient(
 )
 ```
 
+For internal lab or Compose service names that intentionally use cleartext
+HTTP, make the exception explicit:
+
+```python
+client = RegistryNotaryClient(
+    base_url="http://registry-notary:8080",
+    default_purpose="benefits_eligibility",
+    allow_insecure_internal_http=True,
+)
+```
+
 ### Evaluate
 
 ```python
@@ -380,11 +418,15 @@ Use `evaluate_request` for optional wire fields such as `disclosure` or
 ```python
 result = client.evaluate_request({
     "subject": {"id": "person-1", "id_type": "national_id"},
-    "claims": ["person-is-alive"],
+    "claims": [{"id": "person-is-alive", "version": "2026-05"}],
     "disclosure": "predicate",
     "purpose": "benefits_eligibility",
 })
 ```
+
+Claim references may be plain strings or pinned objects with `id` and
+`version`. The same versioned claim reference shape is supported for single
+evaluation and batch evaluation.
 
 Async evaluation helpers are prefixed with `a`, for example `aevaluate` and
 `aevaluate_request`.

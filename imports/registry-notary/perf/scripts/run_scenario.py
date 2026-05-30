@@ -129,14 +129,10 @@ def _wait_for(url: str, headers: dict[str, str], timeout: float) -> bool:
             with urllib.request.urlopen(request, timeout=1.0) as response:
                 if 200 <= response.status < 300:
                     return True
-                # 3xx/5xx: keep polling until we get a clean 2xx or time out.
+                # Non-2xx responses are not readiness. Keep polling so route
+                # drift or auth failures cannot look like a healthy run.
                 last_err = RuntimeError(f"unexpected status {response.status}")
         except urllib.error.HTTPError as err:
-            # urlopen raises HTTPError for 4xx and 5xx. A 4xx means the service
-            # is up and responding (we just lack the right credentials for the
-            # probe), which is enough to declare it ready.
-            if 400 <= err.code < 500:
-                return True
             last_err = err
         except (urllib.error.URLError, OSError) as err:
             last_err = err
