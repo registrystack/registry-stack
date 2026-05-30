@@ -10,3 +10,6 @@
 [submodule "vendor/cel-mapping"]
 	path = vendor/cel-mapping
 	url = git@github.com:PublicSchema/crosswalk.git
+[submodule "vendor/registry-manifest"]
+	path = vendor/registry-manifest
+	url = git@github.com:jeremi/registry-manifest.git

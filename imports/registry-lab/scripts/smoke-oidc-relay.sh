@@ -10,6 +10,7 @@ env_file="${REGISTRY_LAB_ZITADEL_ENV_FILE:-"${output_dir}/zitadel.env"}"
 config_path="${output_dir}/oidc-social-protection-relay.yaml"
 log_path="${output_dir}/oidc-social-protection-relay.log"
 port="${REGISTRY_LAB_OIDC_RELAY_PORT:-4314}"
+relay_features="${REGISTRY_RELAY_FEATURES:-spdci-api-standards,standards-cel-mapping,ogcapi-edr}"
 
 wait_zitadel_init() {
   local deadline="${ZITADEL_WAIT_SECONDS:-180}"
@@ -90,6 +91,7 @@ auth:
   mode: oidc
   oidc:
     issuer: ${OIDC_ISSUER}
+    allow_dev_insecure_fetch_urls: true
     audience:
 ${audience_block}
     discovery_url: ${OIDC_ISSUER%/}/.well-known/openid-configuration
@@ -233,7 +235,11 @@ write_config "${token}"
 rm -rf "${output_dir}/oidc-relay-cache"
 (
   cd "${relay_dir}"
-  cargo run -- --config "${config_path}"
+  cargo build --bin registry-relay --features "${relay_features}"
+)
+(
+  cd "${relay_dir}"
+  cargo run --bin registry-relay --features "${relay_features}" -- --config "${config_path}"
 ) >"${log_path}" 2>&1 &
 relay_pid="$!"
 trap 'kill "${relay_pid}" >/dev/null 2>&1 || true' EXIT

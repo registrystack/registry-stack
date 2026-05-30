@@ -5,6 +5,7 @@ relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", "../registry-relay"
 notary_src := env_var_or_default("REGISTRY_NOTARY_SOURCE_DIR", "../registry-notary")
 openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", "../registry-notary")
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", "../registry-platform")
+manifest_src := env_var_or_default("REGISTRY_MANIFEST_REPO", "./vendor/registry-manifest")
 cel_mapping_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "./vendor/cel-mapping")
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
@@ -14,6 +15,7 @@ export REGISTRY_OPENFN_NOTARY_SOURCE_DIR := openfn_notary_src
 export REGISTRY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR := platform_src
+export REGISTRY_MANIFEST_REPO := manifest_src
 export CEL_MAPPING_SOURCE_DIR := cel_mapping_src
 export REGISTRY_RELAY_FEATURES := relay_features
 
@@ -29,6 +31,7 @@ setup:
 generate:
     uv run scripts/generate-fixtures.py
     scripts/generate-demo-secrets.py
+    scripts/ensure-postgres-ssl.sh
     scripts/publish-static-metadata.sh
 
 # Build the default demo topology.
@@ -300,6 +303,7 @@ live-stories:
 agri-generate:
     uv run scripts/generate-agri-fixtures.py
     scripts/generate-demo-secrets.py
+    scripts/ensure-postgres-ssl.sh
     scripts/publish-static-metadata.sh
     @if docker compose -f compose.yaml --profile agri ps -q agri-registry-relay 2>/dev/null | grep -q .; then just agri-down && just agri-up; fi
 
@@ -307,6 +311,7 @@ agri-generate:
 agri-generate-planning:
     AGRI_FIXTURE_SCALE=planning uv run scripts/generate-agri-fixtures.py
     scripts/generate-demo-secrets.py
+    scripts/ensure-postgres-ssl.sh
     scripts/publish-static-metadata.sh
     @if docker compose -f compose.yaml --profile agri ps -q agri-registry-relay 2>/dev/null | grep -q .; then just agri-down && just agri-up; fi
 

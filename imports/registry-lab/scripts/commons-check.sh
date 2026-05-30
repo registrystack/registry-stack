@@ -3,7 +3,7 @@ set -euo pipefail
 
 lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 platform_dir="${REGISTRY_PLATFORM_SOURCE_DIR:-${lab_root}/../registry-platform}"
-manifest_dir="${REGISTRY_MANIFEST_REPO:-${lab_root}/../registry-manifest}"
+manifest_dir="${REGISTRY_MANIFEST_REPO:-${lab_root}/vendor/registry-manifest}"
 relay_dir="${REGISTRY_RELAY_SOURCE_DIR:-${lab_root}/../registry-relay}"
 notary_dir="${REGISTRY_NOTARY_SOURCE_DIR:-${lab_root}/../registry-notary}"
 

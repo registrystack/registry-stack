@@ -29,19 +29,18 @@ diagnose_missing() {
   cat >&2 <<EOF
 Missing ${name} checkout required for the service-first discovery path.
   looked at: ${resolved}
-  configured by: ${env_var:-default sibling checkout}
+  configured by: ${env_var:-default vendored checkout}
   current value: ${raw}
   expected: ${expected}
 
 Fix:
   export ${env_var}=/absolute/path/to/${name}
-or place ${name} next to registry-lab at:
-  ${demo_dir}/../${name}
+or place ${name} under registry-lab/vendor and point ${env_var} there.
 EOF
 }
 
 manifest_path() {
-  local raw="${REGISTRY_MANIFEST_REPO:-../registry-manifest}"
+  local raw="${REGISTRY_MANIFEST_REPO:-./vendor/registry-manifest}"
   local resolved
   resolved="$(resolve_dir "${raw}")"
   if [[ ! -f "${resolved}/Cargo.toml" ]] || ! grep -R --include 'Cargo.toml' 'name = "registry-manifest-cli"' "${resolved}" >/dev/null 2>&1; then

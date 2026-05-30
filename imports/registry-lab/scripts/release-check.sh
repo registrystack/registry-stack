@@ -22,6 +22,7 @@ cd "${demo_dir}"
 scripts/check-service-first-deps.sh all
 uv run scripts/generate-fixtures.py
 scripts/generate-demo-secrets.py --print-summary >/dev/null
+scripts/ensure-postgres-ssl.sh
 scripts/publish-static-metadata.sh
 docker compose -f compose.yaml build
 docker compose -f compose.yaml up -d

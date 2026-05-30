@@ -724,6 +724,7 @@ auth:
   mode: oidc
   oidc:
     issuer: {issuer}
+    allow_dev_insecure_fetch_urls: true
     audience:
 {audience_yaml}
     discovery_url: {issuer.rstrip("/")}/.well-known/openid-configuration
@@ -1500,7 +1501,8 @@ INSERT INTO demo_story.beneficiaries VALUES
     port = int(os.environ.get("REGISTRY_LAB_POSTGRES_STORY_PORT", "4315"))
     config = write_postgres_story_config(out, port)
     relay_env = {
-        "POSTGRES_STORY_DATABASE_URL": f"postgres://postgres:postgres@127.0.0.1:{os.environ.get('REGISTRY_LAB_POSTGRES_PORT', '54329')}/registry_lab?sslmode=disable",
+        "POSTGRES_STORY_DATABASE_URL": f"postgres://postgres:postgres@127.0.0.1:{os.environ.get('REGISTRY_LAB_POSTGRES_PORT', '54329')}/registry_lab?sslmode=require",
+        "DATA_GATE_POSTGRES_ROOT_CERT_PATH": str(ROOT / "config/postgres/ssl/server.crt"),
         "POSTGRES_STORY_READER_HASH": fingerprint(token),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": env("REGISTRY_RELAY_AUDIT_HASH_SECRET", values),
     }

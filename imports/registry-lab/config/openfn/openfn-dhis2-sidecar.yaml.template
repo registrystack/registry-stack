@@ -32,7 +32,7 @@ worker:
     - "/opt/openfn/openfn_worker.mjs"
     - "--version"
     - "--require-adaptor"
-    - "@openfn/language-http@7.2.0"
+    - "@openfn/language-http@7.3.1"
     - "--require-adaptor"
     - "@openfn/language-common@3.2.3"
 
@@ -41,11 +41,12 @@ sources:
     dataset: dhis2_tracker
     entity: person
     workflow:
+      start: lookup
       steps:
         - id: lookup
           expression: /opt/openfn/jobs/dhis2-health-lookup.js
           adaptors:
-            - "@openfn/language-http@7.2.0"
+            - "@openfn/language-http@7.3.1"
     credential_env: OPENFN_DHIS2_DEMO_CREDENTIAL_JSON
     allowed_base_urls:
       - https://play.im.dhis2.org/stable-2-43-0

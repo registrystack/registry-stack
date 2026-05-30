@@ -25,7 +25,8 @@ cd "${demo_dir}"
 docker compose -f "${compose_file}" up -d postgres
 wait_postgres
 
-export DATA_GATE_POSTGRES_TEST_URL="${DATA_GATE_POSTGRES_TEST_URL:-postgres://postgres:postgres@127.0.0.1:${postgres_port}/registry_lab?sslmode=disable}"
+export DATA_GATE_POSTGRES_TEST_URL="${DATA_GATE_POSTGRES_TEST_URL:-postgres://postgres:postgres@127.0.0.1:${postgres_port}/registry_lab?sslmode=require}"
+export DATA_GATE_POSTGRES_ROOT_CERT_PATH="${DATA_GATE_POSTGRES_ROOT_CERT_PATH:-"${demo_dir}/config/postgres/ssl/server.crt"}"
 
 cd "${relay_dir}"
 cargo test --test postgres_snapshot -- --ignored --test-threads=1
