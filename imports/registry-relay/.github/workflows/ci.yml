@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
 
@@ -148,7 +148,9 @@ jobs:
         run: ln -s "$GITHUB_WORKSPACE/cel-mapping" "$GITHUB_WORKSPACE/../cel-mapping"
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --version 0.19.7 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.7
 
       - name: Run cargo-deny
         run: cargo deny check licenses advisories bans sources
@@ -264,6 +266,7 @@ jobs:
   # ── Container image build ────────────────────────────────────────────────
   docker-build:
     name: docker-build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
