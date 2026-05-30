@@ -22,6 +22,10 @@ execute(
       ? state.data.data
       : Array.isArray(state.data?.records)
         ? state.data.records
+        : Array.isArray(state.response?.body?.data)
+          ? state.response.body.data
+          : Array.isArray(state.response?.body?.records)
+            ? state.response.body.records
         : [];
 
     return {

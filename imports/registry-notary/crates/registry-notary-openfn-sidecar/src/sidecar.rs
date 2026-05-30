@@ -708,50 +708,77 @@ async fn run_smoke_lookups(state: &Arc<AppState>) -> Result<(), SidecarError> {
         let Some(smoke) = &source.smoke_lookup else {
             continue;
         };
-        let mut request = json!({
-            "source_id": source_id,
-            "dataset": source.dataset,
-            "entity": source.entity,
-            "lookup": {
-                "field": smoke.field,
-                "value": smoke.value,
-            },
-            "fields": smoke.fields,
-            "limit": 1,
-            "purpose": smoke.purpose,
-            "correlation_id": "startup-smoke",
-            "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
-        });
-        add_source_execution(&mut request, source);
-        let response =
-            state
-                .pool
-                .execute_json(request)
-                .await
-                .map_err(|error| SidecarError::SmokeLookup {
+        let deadline =
+            Instant::now() + Duration::from_millis(state.config.limits.liveness_window_ms.max(1));
+        let retry_after = Duration::from_secs(state.config.limits.retry_after_seconds.max(1));
+        let mut last_reason = "smoke lookup was not attempted".to_string();
+        let mut attempted = false;
+
+        loop {
+            if attempted && Instant::now() >= deadline {
+                return Err(SidecarError::SmokeLookup {
                     source_id: source_id.clone(),
-                    reason: smoke_error_reason(&error),
-                })?;
-        let Some(records) = response.get("data").and_then(Value::as_array) else {
-            return Err(SidecarError::SmokeLookup {
-                source_id: source_id.clone(),
-                reason: "worker response did not contain data array".to_string(),
+                    reason: last_reason,
+                });
+            }
+            attempted = true;
+
+            let mut request = json!({
+                "source_id": source_id,
+                "dataset": source.dataset,
+                "entity": source.entity,
+                "lookup": {
+                    "field": smoke.field,
+                    "value": smoke.value,
+                },
+                "fields": smoke.fields,
+                "limit": 1,
+                "purpose": smoke.purpose,
+                "correlation_id": "startup-smoke",
+                "configuration": state.credentials.get(source_id).cloned().unwrap_or(Value::Null),
             });
-        };
-        if !records.iter().any(|record| {
-            record
-                .get(&smoke.field)
-                .and_then(Value::as_str)
-                .is_some_and(|value| value == smoke.value)
-        }) {
-            return Err(SidecarError::SmokeLookup {
-                source_id: source_id.clone(),
-                reason: format!(
-                    "worker response did not contain expected smoke record for {}",
-                    smoke.field
-                ),
-            });
-        };
+            add_source_execution(&mut request, source);
+            match state.pool.execute_json(request).await {
+                Ok(response) => {
+                    if let Some(records) = response.get("data").and_then(Value::as_array) {
+                        if records.iter().any(|record| {
+                            record
+                                .get(&smoke.field)
+                                .and_then(Value::as_str)
+                                .is_some_and(|value| value == smoke.value)
+                        }) {
+                            break;
+                        }
+                        last_reason = format!(
+                            "worker response did not contain expected smoke record for {}",
+                            smoke.field
+                        );
+                    } else if let Some(code) =
+                        response.pointer("/error/code").and_then(Value::as_str)
+                    {
+                        last_reason = response
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .map(|message| format!("worker returned error {code}: {message}"))
+                            .unwrap_or_else(|| format!("worker returned error {code}"));
+                    } else {
+                        last_reason = "worker response did not contain data array".to_string();
+                    }
+                }
+                Err(error) => {
+                    last_reason = smoke_error_reason(&error);
+                }
+            }
+
+            if Instant::now() >= deadline {
+                return Err(SidecarError::SmokeLookup {
+                    source_id: source_id.clone(),
+                    reason: last_reason,
+                });
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            tokio::time::sleep(retry_after.min(remaining)).await;
+        }
     }
     Ok(())
 }

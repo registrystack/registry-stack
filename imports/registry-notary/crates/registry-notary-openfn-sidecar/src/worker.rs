@@ -751,9 +751,9 @@ impl Worker {
 #[cfg(unix)]
 #[cfg(target_os = "linux")]
 fn apply_memory_limit(bytes: u64) -> io::Result<()> {
-    apply_resource_limit(libc::RLIMIT_AS, bytes).or_else(|error| {
+    apply_resource_limit(libc::RLIMIT_DATA, bytes).or_else(|error| {
         if error.raw_os_error() == Some(libc::EINVAL) {
-            apply_resource_limit(libc::RLIMIT_DATA, bytes)
+            apply_resource_limit(libc::RLIMIT_AS, bytes)
         } else {
             Err(error)
         }

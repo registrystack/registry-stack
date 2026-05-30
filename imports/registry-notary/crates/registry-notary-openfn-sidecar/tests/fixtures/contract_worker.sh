@@ -29,6 +29,13 @@ while IFS= read -r line; do
     *smoke-person*)
       printf '%s\n' '{"data":[{"national_id":"smoke-person"}]}'
       ;;
+    *flaky-smoke*)
+      if [ "$(grep -c 'flaky-smoke' "$attempt_log" || true)" -lt 2 ]; then
+        printf '%s\n' '{"error":{"code":"target_rate_limit","retry_after_seconds":1}}'
+      else
+        printf '%s\n' '{"data":[{"national_id":"flaky-smoke"}]}'
+      fi
+      ;;
     *missing-person*)
       printf '%s\n' '{"data":[]}'
       ;;

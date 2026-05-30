@@ -65,6 +65,7 @@ async function executeLookup(request) {
     {
       workflow: {
         steps: workflow.steps,
+        start: workflow.start,
       },
       options: {
         start: workflow.start,
@@ -87,7 +88,12 @@ async function executeLookup(request) {
   }
   const records = extractRecords(result);
   if (!Array.isArray(records)) {
-    return { error: { code: 'invalid_job_result' } };
+    return {
+      error: {
+        code: 'invalid_job_result',
+        message: describeResultShape(result, request),
+      },
+    };
   }
   return { data: records };
 }
@@ -249,7 +255,48 @@ function extractRecords(state) {
   if (Array.isArray(state?.data?.records)) {
     return state.data.records;
   }
+  if (Array.isArray(state?.response?.body?.data)) {
+    return state.response.body.data;
+  }
+  if (Array.isArray(state?.response?.body?.records)) {
+    return state.response.body.records;
+  }
   return undefined;
+}
+
+function describeResultShape(state, request) {
+  const data = state?.data;
+  const responseBody = state?.response?.body;
+  return JSON.stringify({
+    workflow_start: request?.workflow?.start,
+    workflow_step_count: Array.isArray(request?.workflow?.steps)
+      ? request.workflow.steps.length
+      : null,
+    workflow_step_ids: Array.isArray(request?.workflow?.steps)
+      ? request.workflow.steps.map(step => step?.id)
+      : [],
+    workflow_step_expressions: Array.isArray(request?.workflow?.steps)
+      ? request.workflow.steps.map(step => step?.expression)
+      : [],
+    workflow_step_adaptors: Array.isArray(request?.workflow?.steps)
+      ? request.workflow.steps.map(step => step?.adaptors)
+      : [],
+    has_configuration: Boolean(request?.configuration),
+    configuration_keys: objectKeys(request?.configuration),
+    data_type: Array.isArray(data) ? 'array' : typeof data,
+    data_keys: objectKeys(data),
+    response_keys: objectKeys(state?.response),
+    response_body_type: Array.isArray(responseBody) ? 'array' : typeof responseBody,
+    response_body_keys: objectKeys(responseBody),
+    has_error: Boolean(state?.error ?? state?.data?.error),
+  });
+}
+
+function objectKeys(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return [];
+  }
+  return Object.keys(value).sort();
 }
 
 function resolveAdaptor(specifier) {

@@ -891,7 +891,10 @@ async fn startup_rejects_smoke_lookup_that_does_not_return_expected_record() {
     );
     let tmp = TempDir::new().expect("temp dir");
     let manifest = manifest_yaml(
-        &HarnessOptions::default(),
+        &HarnessOptions {
+            liveness_window_ms: 5,
+            ..HarnessOptions::default()
+        },
         &tmp.path().join("attempts.jsonl"),
     )
     .replace("value: smoke-person", "value: missing-person");
@@ -904,6 +907,32 @@ async fn startup_rejects_smoke_lookup_that_does_not_return_expected_record() {
     assert!(error.contains("smoke lookup"));
     assert!(error.contains("expected smoke record"));
     assert!(!error.contains("fixture-token"));
+}
+
+#[tokio::test]
+async fn startup_retries_smoke_lookup_within_liveness_window() {
+    std::env::set_var(
+        CREDENTIAL_ENV,
+        r#"{"baseUrl":"https://opencrvs.example.test","apiToken":"fixture-token"}"#,
+    );
+    let tmp = TempDir::new().expect("temp dir");
+    let attempt_log = tmp.path().join("attempts.jsonl");
+    let manifest = manifest_yaml(
+        &HarnessOptions {
+            liveness_window_ms: 1_100,
+            ..HarnessOptions::default()
+        },
+        &attempt_log,
+    )
+    .replace("value: smoke-person", "value: flaky-smoke");
+    let config: SidecarConfig = serde_norway::from_str(&manifest).expect("manifest parses");
+
+    let _ = sidecar_router(config)
+        .await
+        .expect("router should retry a transient smoke lookup response");
+
+    let attempts = fs::read_to_string(attempt_log).expect("attempt log exists");
+    assert_eq!(attempts.matches("flaky-smoke").count(), 2);
 }
 
 #[tokio::test]
