@@ -24,7 +24,6 @@ use registry_notary_core::{
 use registry_notary_server::{openapi_document, standalone_router};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
-use reqwest::Client;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -879,18 +878,9 @@ async fn live_diagnostics(
     subject_id_type: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
-        Ok(client) => client,
-        Err(err) => {
-            return vec![Diagnostic::fail(
-                format!("HTTP client build failed: {err}"),
-                "check local TLS and HTTP client dependencies",
-            )];
-        }
-    };
     for (connection_id, connection) in &config.evidence.source_connections {
         if let Some(SourceAuthConfig::Oauth2ClientCredentials(auth)) = &connection.source_auth {
-            match fetch_oauth_token_for_doctor(&client, connection_id, connection, auth).await {
+            match fetch_oauth_token_for_doctor(connection_id, connection, auth).await {
                 Ok(token) => {
                     diagnostics.push(Diagnostic::ok(format!(
                         "{connection_id} OAuth token fetched without printing the token"
@@ -898,7 +888,6 @@ async fn live_diagnostics(
                     if let Some(subject_id) = subject_id {
                         diagnostics.push(
                             dci_record_probe(
-                                &client,
                                 config,
                                 connection_id,
                                 connection,
@@ -927,7 +916,6 @@ async fn live_diagnostics(
 }
 
 async fn fetch_oauth_token_for_doctor(
-    client: &Client,
     connection_id: &str,
     connection: &registry_notary_core::SourceConnectionConfig,
     auth: &Oauth2ClientCredentialsSourceAuthConfig,
@@ -941,10 +929,10 @@ async fn fetch_oauth_token_for_doctor(
             ));
         }
     };
-    let token_url = match cli_fetch_url_policy(connection)
+    let validated_token_url = match cli_fetch_url_policy(connection)
         .validate_dns_pinned_for_immediate_fetch(&token_url)
     {
-        Ok(validated) => validated.url().clone(),
+        Ok(validated) => validated,
         Err(err) => {
             return Err(Diagnostic::fail(
                 format!("{connection_id} OAuth token_url is blocked by fetch policy: {err}"),
@@ -970,7 +958,14 @@ async fn fetch_oauth_token_for_doctor(
             ));
         }
     };
-    let mut request = client.post(token_url);
+    let mut request = validated_token_url
+        .immediate_post_with_timeout(Duration::from_secs(10))
+        .map_err(|err| {
+            Diagnostic::fail(
+                format!("{connection_id} OAuth token request could not be built: {err}"),
+                "check token_url reachability and local network/TLS settings",
+            )
+        })?;
     if auth.request_format == "json" {
         let mut body = json!({
             "grant_type": "client_credentials",
@@ -1029,7 +1024,6 @@ async fn fetch_oauth_token_for_doctor(
 }
 
 async fn dci_record_probe(
-    client: &Client,
     config: &StandaloneRegistryNotaryConfig,
     connection_id: &str,
     connection: &registry_notary_core::SourceConnectionConfig,
@@ -1060,8 +1054,10 @@ async fn dci_record_probe(
             );
         }
     };
-    let url = match cli_fetch_url_policy(connection).validate_dns_pinned_for_immediate_fetch(&url) {
-        Ok(validated) => validated.url().clone(),
+    let validated_url = match cli_fetch_url_policy(connection)
+        .validate_dns_pinned_for_immediate_fetch(&url)
+    {
+        Ok(validated) => validated,
         Err(err) => {
             return Diagnostic::fail(
                 format!("{connection_id} DCI search URL is blocked by fetch policy: {err}"),
@@ -1078,8 +1074,16 @@ async fn dci_record_probe(
             );
         }
     };
-    let response = match client
-        .post(url)
+    let request = match validated_url.immediate_post_with_timeout(Duration::from_secs(10)) {
+        Ok(request) => request,
+        Err(err) => {
+            return Diagnostic::fail(
+                format!("{connection_id} DCI search request could not be built: {err}"),
+                "check source base_url reachability and local network/TLS settings",
+            );
+        }
+    };
+    let response = match request
         .bearer_auth(token)
         .header("accept", "application/json")
         .header("content-type", "application/json")

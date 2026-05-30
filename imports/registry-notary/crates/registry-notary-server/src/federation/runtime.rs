@@ -67,20 +67,13 @@ impl FederationRuntimeState {
                 fetch_url_policy,
             ));
             let verifier = Arc::new(TokenVerifier::new(
-                TokenVerifierConfig {
-                    issuer: peer.issuer.clone(),
-                    audiences: vec![config.node_id.clone()],
-                    allowed_algorithms: vec![Algorithm::EdDSA],
-                    allowed_typ: vec![FEDERATION_REQUEST_JWT_TYP.to_string()],
-                    allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
-                    allowed_userinfo_typ: vec!["JWT".to_string()],
-                    userinfo_requires_exp: true,
-                    scope_claim: "scope".to_string(),
-                    scope_separator: ' ',
-                    scope_map: None,
-                    allowed_clients: Vec::new(),
-                    leeway: Duration::from_secs(config.clock_leeway_seconds),
-                },
+                TokenVerifierConfig::registry_notary_federation_request_profile(
+                    peer.issuer.clone(),
+                    config.node_id.clone(),
+                    vec![Algorithm::EdDSA],
+                    FEDERATION_REQUEST_JWT_TYP,
+                )
+                .with_leeway(Duration::from_secs(config.clock_leeway_seconds)),
                 fetcher,
             ));
             peers_by_issuer.insert(

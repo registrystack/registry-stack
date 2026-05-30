@@ -18,7 +18,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: main
+  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
 

@@ -26,12 +26,12 @@ use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_crypto::SigningProvider;
 use registry_platform_oid4vci::{
-    validate_proof_jwt, CredentialConfigurationMetadata, CredentialIssuerMetadata, CredentialOffer,
-    CredentialRequest as Oid4vciCredentialRequest, CredentialResponse as Oid4vciCredentialResponse,
-    NonceRequest as Oid4vciNonceRequest, NonceResponse, ProofValidationPolicy, WireError,
-    PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
+    consume_validated_proof_nonce_once, validate_proof_jwt, CredentialConfigurationMetadata,
+    CredentialIssuerMetadata, CredentialOffer, CredentialRequest as Oid4vciCredentialRequest,
+    CredentialResponse as Oid4vciCredentialResponse, NonceRequest as Oid4vciNonceRequest,
+    NonceResponse, ProofValidationPolicy, WireError, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
-use registry_platform_replay::{require_consume_once, ReplayKey, ReplayScope, RequiredReplayError};
+use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -119,13 +119,12 @@ pub async fn oid4vci_proof_precheck_middleware(
     }
     if validate_proof_jwt(
         &request.proof.jwt,
-        &ProofValidationPolicy {
-            audience: &state.oid4vci.credential_issuer,
-            expected_nonce: None,
-            max_lifetime: Duration::from_secs(state.oid4vci.proof.max_age_seconds),
-            future_skew: Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
-            forbidden_holder_keys: &[],
-        },
+        &ProofValidationPolicy::credential_endpoint(
+            &state.oid4vci.credential_issuer,
+            None,
+            Duration::from_secs(state.oid4vci.proof.max_age_seconds),
+            Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
+        ),
         OffsetDateTime::now_utc().unix_timestamp(),
     )
     .is_err()
@@ -773,13 +772,12 @@ async fn oid4vci_credential(
         };
     let validated_proof = match validate_proof_jwt(
         &request.proof.jwt,
-        &ProofValidationPolicy {
-            audience: &state.oid4vci.credential_issuer,
-            expected_nonce: None,
-            max_lifetime: Duration::from_secs(state.oid4vci.proof.max_age_seconds),
-            future_skew: Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
-            forbidden_holder_keys: &[],
-        },
+        &ProofValidationPolicy::credential_endpoint(
+            &state.oid4vci.credential_issuer,
+            None,
+            Duration::from_secs(state.oid4vci.proof.max_age_seconds),
+            Duration::from_secs(state.oid4vci.proof.max_clock_skew_seconds),
+        ),
         OffsetDateTime::now_utc().unix_timestamp(),
     ) {
         Ok(proof) => proof,
@@ -819,7 +817,9 @@ async fn oid4vci_credential(
             Ok(key) => key,
             Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
         };
-        match require_consume_once(
+        match consume_validated_proof_nonce_once(
+            &validated_proof,
+            nonce,
             state.replay.nonce_store().as_ref(),
             &replay_scope,
             &replay_key,
@@ -829,13 +829,13 @@ async fn oid4vci_credential(
             Ok(()) => {
                 state.metrics.record_replay("oid4vci_nonce", "consumed");
             }
-            Err(RequiredReplayError::AlreadySeen) => {
+            Err(registry_platform_oid4vci::ProofError::InvalidNonce) => {
                 state.metrics.record_replay("oid4vci_nonce", "replayed");
                 return oid4vci_error_response(Oid4vciWireError::InvalidProof);
             }
             Err(_) => {
-                state.metrics.record_replay("oid4vci_nonce", "error");
-                return oid4vci_error_response(Oid4vciWireError::ServerError);
+                state.metrics.record_replay("oid4vci_nonce", "invalid");
+                return oid4vci_error_response(Oid4vciWireError::InvalidProof);
             }
         }
     }
