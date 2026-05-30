@@ -213,6 +213,30 @@ pub struct ProofValidationPolicy<'a> {
     pub forbidden_holder_keys: &'a [PublicJwk],
 }
 
+impl<'a> ProofValidationPolicy<'a> {
+    #[must_use]
+    pub fn credential_endpoint(
+        audience: &'a str,
+        expected_nonce: Option<&'a str>,
+        max_lifetime: Duration,
+        future_skew: Duration,
+    ) -> Self {
+        Self {
+            audience,
+            expected_nonce,
+            max_lifetime,
+            future_skew,
+            forbidden_holder_keys: &[],
+        }
+    }
+
+    #[must_use]
+    pub fn with_forbidden_holder_keys(mut self, forbidden_holder_keys: &'a [PublicJwk]) -> Self {
+        self.forbidden_holder_keys = forbidden_holder_keys;
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedProof {
     pub holder_jwk: PublicJwk,
@@ -353,6 +377,26 @@ pub async fn validate_challenged_proof_jwt(
         .await
         .map_err(|_| ProofError::InvalidNonce)?;
     Ok(proof)
+}
+
+/// Consume the nonce from an already validated credential-endpoint proof.
+///
+/// This helper supports consumers that derive their replay key from deployment
+/// context instead of using the raw nonce string as the replay key.
+pub async fn consume_validated_proof_nonce_once(
+    proof: &ValidatedProof,
+    expected_nonce: &str,
+    nonce_store: &dyn ConsumableNonceStore,
+    nonce_scope: &ReplayScope,
+    nonce_key: &ReplayKey,
+) -> Result<(), ProofError> {
+    if proof.nonce.as_deref() != Some(expected_nonce) {
+        return Err(ProofError::InvalidNonce);
+    }
+    require_consume_once(nonce_store, nonce_scope, nonce_key)
+        .await
+        .map_err(|_| ProofError::InvalidNonce)?;
+    Ok(())
 }
 
 fn reject_header(header: &Value) -> Result<(), ProofError> {
@@ -731,6 +775,39 @@ mod tests {
                 &scope,
             )
             .await,
+            Err(ProofError::InvalidNonce)
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_endpoint_policy_and_nonce_helper_consume_once() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let store = InMemoryConsumableNonceStore::new();
+        let scope = ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("scope");
+        let nonce_key = ReplayKey::new("hashed-n-replay").expect("nonce key");
+        store
+            .reserve_nonce(
+                &scope,
+                &nonce_key,
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
+            )
+            .await
+            .expect("nonce reserves");
+        let policy = ProofValidationPolicy::credential_endpoint(
+            "https://issuer.example",
+            Some("n-replay"),
+            Duration::from_secs(300),
+            Duration::from_secs(30),
+        );
+        let proof = validate_proof_jwt(&valid_proof(&key, "n-replay"), &policy, 1001)
+            .expect("proof validates");
+
+        consume_validated_proof_nonce_once(&proof, "n-replay", &store, &scope, &nonce_key)
+            .await
+            .expect("reserved nonce consumes once");
+        assert_eq!(
+            consume_validated_proof_nonce_once(&proof, "n-replay", &store, &scope, &nonce_key)
+                .await,
             Err(ProofError::InvalidNonce)
         );
     }

@@ -535,6 +535,129 @@ pub struct TokenVerifierConfig {
     pub leeway: Duration,
 }
 
+impl TokenVerifierConfig {
+    /// Build the standard resource-server access-token profile.
+    ///
+    /// Access tokens must carry one of `allowed_typ`. Related ID tokens and
+    /// UserInfo JWTs use the project defaults accepted by Relay and Notary:
+    /// ID token `typ` values `JWT` and `id_token`, UserInfo JWT `typ` value
+    /// `JWT`, and required UserInfo expiration by default.
+    pub fn access_token_profile(
+        issuer: impl Into<String>,
+        audiences: Vec<String>,
+        allowed_algorithms: Vec<Algorithm>,
+        allowed_typ: Vec<String>,
+    ) -> Self {
+        Self {
+            issuer: issuer.into(),
+            audiences,
+            allowed_algorithms,
+            allowed_typ,
+            allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+            allowed_userinfo_typ: vec!["JWT".to_string()],
+            userinfo_requires_exp: true,
+            scope_claim: "scope".to_string(),
+            scope_separator: ' ',
+            scope_map: None,
+            allowed_clients: Vec::new(),
+            leeway: Duration::ZERO,
+        }
+    }
+
+    /// Build a profile for project-specific typed request JWTs such as Notary
+    /// federation requests.
+    pub fn typed_request_profile(
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+        allowed_algorithms: Vec<Algorithm>,
+        typ: impl Into<String>,
+    ) -> Self {
+        Self::access_token_profile(
+            issuer,
+            vec![audience.into()],
+            allowed_algorithms,
+            vec![typ.into()],
+        )
+    }
+
+    /// Registry Relay access-token verifier profile.
+    pub fn registry_relay_access_profile(
+        issuer: impl Into<String>,
+        audiences: Vec<String>,
+        allowed_algorithms: Vec<Algorithm>,
+        allowed_typ: Vec<String>,
+    ) -> Self {
+        Self::access_token_profile(issuer, audiences, allowed_algorithms, allowed_typ)
+    }
+
+    /// Registry Notary self-attestation access-token verifier profile.
+    pub fn registry_notary_access_profile(
+        issuer: impl Into<String>,
+        audiences: Vec<String>,
+        allowed_algorithms: Vec<Algorithm>,
+        allowed_typ: Vec<String>,
+    ) -> Self {
+        Self::access_token_profile(issuer, audiences, allowed_algorithms, allowed_typ)
+    }
+
+    /// Registry Notary federation request JWT verifier profile.
+    pub fn registry_notary_federation_request_profile(
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+        allowed_algorithms: Vec<Algorithm>,
+        typ: impl Into<String>,
+    ) -> Self {
+        Self::typed_request_profile(issuer, audience, allowed_algorithms, typ)
+    }
+
+    #[must_use]
+    pub fn with_scope_claim(mut self, scope_claim: impl Into<String>) -> Self {
+        self.scope_claim = scope_claim.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_scope_separator(mut self, scope_separator: char) -> Self {
+        self.scope_separator = scope_separator;
+        self
+    }
+
+    #[must_use]
+    pub fn with_scope_map(mut self, scope_map: Option<HashMap<String, Vec<String>>>) -> Self {
+        self.scope_map = scope_map;
+        self
+    }
+
+    #[must_use]
+    pub fn with_allowed_clients(mut self, allowed_clients: Vec<String>) -> Self {
+        self.allowed_clients = allowed_clients;
+        self
+    }
+
+    #[must_use]
+    pub fn with_leeway(mut self, leeway: Duration) -> Self {
+        self.leeway = leeway;
+        self
+    }
+
+    #[must_use]
+    pub fn with_related_token_typ(
+        mut self,
+        allowed_id_typ: Vec<String>,
+        allowed_userinfo_typ: Vec<String>,
+    ) -> Self {
+        self.allowed_id_typ = allowed_id_typ;
+        self.allowed_userinfo_typ = allowed_userinfo_typ;
+        self
+    }
+
+    #[must_use]
+    pub fn with_userinfo_requires_exp(mut self, userinfo_requires_exp: bool) -> Self {
+        self.userinfo_requires_exp = userinfo_requires_exp;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Claims {
     #[serde(default)]
@@ -1058,6 +1181,45 @@ mod tests {
             max_doc_bytes: DEFAULT_DOC_BYTES,
             request_timeout: Duration::from_secs(1),
         }
+    }
+
+    #[test]
+    fn token_verifier_profiles_set_safe_related_token_defaults() {
+        let config = TokenVerifierConfig::registry_relay_access_profile(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec![Algorithm::EdDSA],
+            vec!["at+jwt".to_string()],
+        )
+        .with_scope_claim("permissions")
+        .with_scope_separator(',')
+        .with_allowed_clients(vec!["client-a".to_string()])
+        .with_leeway(Duration::from_secs(30));
+
+        assert_eq!(config.allowed_typ, vec!["at+jwt"]);
+        assert_eq!(config.allowed_id_typ, vec!["JWT", "id_token"]);
+        assert_eq!(config.allowed_userinfo_typ, vec!["JWT"]);
+        assert!(config.userinfo_requires_exp);
+        assert_eq!(config.scope_claim, "permissions");
+        assert_eq!(config.scope_separator, ',');
+        assert_eq!(config.allowed_clients, vec!["client-a"]);
+        assert_eq!(config.leeway, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn federation_request_profile_binds_single_audience_and_type() {
+        let config = TokenVerifierConfig::registry_notary_federation_request_profile(
+            "https://peer.example",
+            "did:web:agency-a.example.gov",
+            vec![Algorithm::EdDSA],
+            "registry-notary-federation+jwt",
+        );
+
+        assert_eq!(config.audiences, vec!["did:web:agency-a.example.gov"]);
+        assert_eq!(config.allowed_typ, vec!["registry-notary-federation+jwt"]);
+        assert_eq!(config.allowed_id_typ, vec!["JWT", "id_token"]);
+        assert_eq!(config.allowed_userinfo_typ, vec!["JWT"]);
+        assert!(config.userinfo_requires_exp);
     }
 
     fn rsa_jwk_with_modulus_bytes(kid: &str, modulus_bytes: usize) -> Jwk {

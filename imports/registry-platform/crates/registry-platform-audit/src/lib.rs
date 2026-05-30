@@ -180,6 +180,106 @@ impl ChainState {
     }
 }
 
+/// Named audit-chain profile for applications that need to bootstrap a chain
+/// without owning the low-level hash mode selection.
+#[derive(Clone, Debug)]
+pub struct AuditChainProfile {
+    hasher: AuditChainHasher,
+}
+
+impl AuditChainProfile {
+    /// Production profile backed by the HMAC secret in `env_var_name`.
+    pub fn production_from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        Ok(Self {
+            hasher: AuditChainHasher::from_env(env_var_name)?,
+        })
+    }
+
+    /// Registry Relay production audit-chain profile.
+    pub fn registry_relay_from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        Self::production_from_env(env_var_name)
+    }
+
+    /// Registry Notary production audit-chain profile.
+    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        Self::production_from_env(env_var_name)
+    }
+
+    /// Explicit test and local-development profile.
+    #[must_use]
+    pub fn dev_unkeyed() -> Self {
+        Self {
+            hasher: AuditChainHasher::unkeyed_dev_only(),
+        }
+    }
+
+    #[must_use]
+    pub fn hasher(&self) -> AuditChainHasher {
+        self.hasher.clone()
+    }
+
+    pub async fn bootstrap_or_start_empty(
+        &self,
+        sink: &dyn AuditSink,
+    ) -> Result<ChainState, AuditError> {
+        ChainState::bootstrap_or_start_empty(sink, self.hasher()).await
+    }
+}
+
+/// Shared application audit profile for keyed chain integrity and identifier
+/// hashing.
+#[derive(Clone, Debug)]
+pub struct AuditProfile {
+    chain_hasher: AuditChainHasher,
+    key_hasher: AuditKeyHasher,
+}
+
+impl AuditProfile {
+    /// Production profile backed by the HMAC secret in `env_var_name`.
+    pub fn production_from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        Ok(Self {
+            chain_hasher: AuditChainHasher::from_env(env_var_name)?,
+            key_hasher: AuditKeyHasher::from_env(env_var_name)?,
+        })
+    }
+
+    /// Registry Relay production audit profile.
+    pub fn registry_relay_from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        Self::production_from_env(env_var_name)
+    }
+
+    /// Registry Notary production audit profile.
+    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        Self::production_from_env(env_var_name)
+    }
+
+    /// Explicit test and local-development profile.
+    #[must_use]
+    pub fn unkeyed_dev_only() -> Self {
+        Self {
+            chain_hasher: AuditChainHasher::unkeyed_dev_only(),
+            key_hasher: AuditKeyHasher::unkeyed_dev_only(),
+        }
+    }
+
+    #[must_use]
+    pub fn chain_hasher(&self) -> AuditChainHasher {
+        self.chain_hasher.clone()
+    }
+
+    #[must_use]
+    pub fn key_hasher(&self) -> AuditKeyHasher {
+        self.key_hasher.clone()
+    }
+
+    pub async fn bootstrap_or_start_empty(
+        &self,
+        sink: &dyn AuditSink,
+    ) -> Result<ChainState, AuditError> {
+        ChainState::bootstrap_or_start_empty(sink, self.chain_hasher()).await
+    }
+}
+
 #[async_trait]
 pub trait AuditSink: Send + Sync {
     async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError>;
@@ -1741,6 +1841,45 @@ mod tests {
             hashed,
             AuditKeyHasher::unkeyed_dev_only().hash("subject-123")
         );
+    }
+
+    #[tokio::test]
+    async fn audit_profile_uses_one_secret_for_chain_and_identifier_hashing() {
+        let name = "REGISTRY_PLATFORM_AUDIT_PROFILE_TEST_SECRET";
+        env::set_var(name, "0123456789abcdef0123456789abcdef");
+        let profile = AuditProfile::registry_notary_from_env(name).expect("profile");
+        env::remove_var(name);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::new(&path);
+
+        let chain = profile
+            .bootstrap_or_start_empty(&sink)
+            .await
+            .expect("chain bootstraps");
+        chain
+            .append(&sink, json!({ "event": "profiled" }))
+            .await
+            .expect("append");
+        let contents = fs::read_to_string(&path).expect("audit file");
+
+        assert!(verify_jsonl_lines(contents.lines()).is_err());
+        verify_jsonl_lines_with_hasher(contents.lines(), &profile.chain_hasher())
+            .expect("profile chain verifies");
+        assert!(profile
+            .key_hasher()
+            .hash("subject-123")
+            .starts_with(KEYED_HASH_PREFIX));
+    }
+
+    #[test]
+    fn audit_profile_dev_mode_is_explicitly_unkeyed() {
+        let profile = AuditProfile::unkeyed_dev_only();
+
+        assert!(profile
+            .key_hasher()
+            .hash("subject-123")
+            .starts_with(UNKEYED_HASH_PREFIX));
     }
 
     #[test]

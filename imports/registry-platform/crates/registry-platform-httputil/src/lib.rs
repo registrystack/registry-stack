@@ -402,6 +402,39 @@ impl ValidatedFetchUrl {
         &self,
         timeout: Duration,
     ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_request_with_timeout(reqwest::Method::GET, timeout)
+    }
+
+    /// Build an immediate POST request from this validated URL.
+    ///
+    /// This is useful for token endpoints and other SSRF-sensitive POST
+    /// requests that need the same DNS pinning guarantee as [`Self::immediate_get`].
+    pub fn immediate_post(&self) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_post_with_timeout(DEFAULT_VALIDATED_FETCH_TIMEOUT)
+    }
+
+    /// Build an immediate POST request with an explicit request timeout.
+    pub fn immediate_post_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_request_with_timeout(reqwest::Method::POST, timeout)
+    }
+
+    /// Build an immediate request from this validated URL.
+    pub fn immediate_request(
+        &self,
+        method: reqwest::Method,
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_request_with_timeout(method, DEFAULT_VALIDATED_FETCH_TIMEOUT)
+    }
+
+    /// Build an immediate request with an explicit request timeout.
+    pub fn immediate_request_with_timeout(
+        &self,
+        method: reqwest::Method,
+        timeout: Duration,
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
         let host = self
             .url
             .host_str()
@@ -415,7 +448,7 @@ impl ValidatedFetchUrl {
             .resolve_to_addrs(&host, &self.resolved_addrs)
             .build()
             .map_err(FetchUrlError::ClientBuild)?;
-        Ok(client.get(self.url.clone()).timeout(timeout))
+        Ok(client.request(method, self.url.clone()).timeout(timeout))
     }
 }
 
@@ -765,7 +798,25 @@ mod tests {
             .expect("pinned request builder builds")
             .build()
             .expect("request builds");
+        assert_eq!(request.method(), reqwest::Method::GET);
         assert_eq!(request.timeout(), Some(&timeout));
+    }
+
+    #[test]
+    fn immediate_post_builds_request_from_validated_url() {
+        let url = reqwest::Url::parse("https://93.184.216.34/token").expect("url parses");
+        let validated = FetchUrlPolicy::strict()
+            .validate_for_immediate_fetch(&url)
+            .expect("public HTTPS IP accepted");
+
+        let request = validated
+            .immediate_post()
+            .expect("pinned request builder builds")
+            .build()
+            .expect("request builds");
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.url(), &url);
+        assert_eq!(request.timeout(), Some(&DEFAULT_VALIDATED_FETCH_TIMEOUT));
     }
 
     #[tokio::test]

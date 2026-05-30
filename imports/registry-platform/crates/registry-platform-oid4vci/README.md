@@ -15,7 +15,10 @@ registry services acting as credential issuers.
   credential endpoint. Validates structure, `typ`, signature, audience, nonce,
   and time bounds. Returns a `ValidatedProof` carrying the holder JWK and
   verified claims.
-- `ProofValidationPolicy` for configuring validation parameters.
+- `ProofValidationPolicy::credential_endpoint` for configuring credential
+  endpoint validation without hand-filling policy fields.
+- `consume_validated_proof_nonce_once` for binding a validated proof nonce to a
+  required replay store consume operation.
 - Wire types for nonce, credential, and error responses.
 
 ## Spec References
@@ -27,10 +30,10 @@ registry services acting as credential issuers.
 
 ## Security Notes
 
-- **Nonce replay is a caller responsibility.** `validate_proof_jwt` validates that
-  the nonce in the proof matches `policy.expected_nonce`, but it does not track
-  nonce usage across calls. Callers must store and reject used nonces. The
-  `ValidatedProof::nonce` field carries the nonce back for this purpose.
+- **Nonce replay is a caller responsibility.** `validate_proof_jwt` validates
+  that the nonce in the proof matches `policy.expected_nonce`, but it does not
+  track nonce usage across calls. Use `consume_validated_proof_nonce_once` with
+  a `registry-platform-replay` store to reject reused nonces after validation.
 - Proof JWTs must use EdDSA with `did:jwk` holder binding. RS\*/PS\*/ES\* keys
   and `jku`/`x5u`/`x5c`/`crit` headers are rejected.
 - Proof audience is validated against `policy.audience` before any JWKS lookup.

@@ -24,37 +24,31 @@ use registry_platform_oidc::{
 };
 
 async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
-let discovery = fetch_discovery(
-    &OidcDiscoveryConfig {
-        issuer: "https://issuer.example".to_string(),
-        jwks_uri_override: None,
-        discovery_timeout: Duration::from_secs(5),
-        max_doc_bytes: 1024 * 1024,
-    },
-)
-.await?;
+    let discovery = fetch_discovery(
+        &OidcDiscoveryConfig {
+            issuer: "https://issuer.example".to_string(),
+            jwks_uri_override: None,
+            discovery_timeout: Duration::from_secs(5),
+            max_doc_bytes: 1024 * 1024,
+        },
+    )
+    .await?;
 
-let fetcher = Arc::new(JwksFetcher::new(
-    discovery.jwks_uri,
-    JwksFetcherConfig::defaults(),
-));
+    let fetcher = Arc::new(JwksFetcher::new(
+        discovery.jwks_uri,
+        JwksFetcherConfig::defaults(),
+    ));
 
-let verifier = TokenVerifier::new(
-    TokenVerifierConfig {
-        issuer: "https://issuer.example".to_string(),
-        audiences: vec!["registry-api".to_string()],
-        allowed_algorithms: vec![Algorithm::EdDSA],
-        allowed_typ: vec!["JWT".to_string()],
-        scope_claim: "scope".to_string(),
-        scope_separator: ' ',
-        scope_map: None,
-        allowed_clients: vec!["registry-client".to_string()],
-        leeway: Duration::from_secs(60),
-    },
-    fetcher,
-);
+    let config = TokenVerifierConfig::registry_relay_access_profile(
+        "https://issuer.example",
+        vec!["registry-api".to_string()],
+        vec![Algorithm::EdDSA],
+        vec!["at+jwt".to_string()],
+    )
+    .with_allowed_clients(vec!["registry-client".to_string()])
+    .with_leeway(Duration::from_secs(60));
 
-Ok(verifier)
+    Ok(TokenVerifier::new(config, fetcher))
 }
 ```
 
@@ -65,8 +59,10 @@ Ok(verifier)
   development.
 - Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the
   configured timeout, including DNS validation.
-- Allowed algorithms and token types must be explicit. Keep `allowed_algorithms`
-  as narrow as the provider allows.
+- Use the named profiles for standard Relay and Notary flows so related ID token
+  and UserInfo JWT `typ` checks stay aligned. Allowed access-token algorithms
+  and token types remain explicit inputs; keep `allowed_algorithms` as narrow as
+  the provider allows.
 - `kid` values are capped generously and unknown `kid` entries are evicted from
   the negative cache to keep issuer compatibility without unbounded memory use.
   Negative `kid` entries are retried after the forced-refresh cooldown so real

@@ -15,27 +15,29 @@ helpers for registry services.
 - `verify_chain_with_anchors` and `verify_jsonl_lines_with_anchors` for
   verification against trusted start or tail/head hashes stored outside the
   JSONL logs.
-- `AuditKeyHasher` and `redact` helpers for privacy-safe audit fields.
+- `AuditChainProfile`, `AuditProfile`, `AuditKeyHasher`, and `redact` helpers
+  for production keyed chains and privacy-safe audit fields.
 
 ## Typical Use
 
 ```rust
-use registry_platform_audit::{ChainState, JsonlFileSink};
+use registry_platform_audit::{AuditProfile, JsonlFileSink};
 use serde_json::json;
 
 async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> {
-let sink = JsonlFileSink::new("audit.jsonl");
-let chain = ChainState::bootstrap_unkeyed_dev_only(&sink).await?;
+    let sink = JsonlFileSink::new("audit.jsonl");
+    let profile = AuditProfile::registry_notary_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
+    let chain = profile.bootstrap_or_start_empty(&sink).await?;
 
-let envelope = chain
-    .append(&sink, json!({
-        "event": "credential.issued",
-        "subject_ref": "hmac-sha256:...",
-    }))
-    .await?;
+    let envelope = chain
+        .append(&sink, json!({
+            "event": "credential.issued",
+            "subject_ref": profile.key_hasher().hash("did:example:123"),
+        }))
+        .await?;
 
-assert!(envelope.prev_hash.is_some() || chain.last_hash().await.is_some());
-Ok(())
+    assert!(envelope.prev_hash.is_some() || chain.last_hash().await.is_some());
+    Ok(())
 }
 ```
 
@@ -43,8 +45,9 @@ Ok(())
 
 - `JsonlFileSink::new` rotates at 10 MiB and retains 5 files by default.
 - `JsonlFileSink::with_rotation(path, 0, max_files)` disables size rotation.
-- `ChainState::bootstrap` reads the sink tail hash before new appends, which is
-  the normal startup path for persistent sinks.
+- `AuditProfile::bootstrap_or_start_empty` and
+  `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before
+  new appends, which is the normal startup path for persistent sinks.
 - `JsonlStdoutSink` and `SyslogSink` cannot report a historical tail hash, so
   each process starts a fresh chain unless a consumer stores the tail elsewhere.
 
@@ -83,8 +86,9 @@ fn verify_against_stored_tail(
   schema and remain compatible with existing persisted audit logs.
 - The chain does not replace durable storage, retention policy, clock integrity,
   or off-host log shipping.
-- Use keyed `AuditKeyHasher::from_env` in production. `unkeyed_dev_only` is for
-  tests and local development.
+- Use `AuditProfile::registry_relay_from_env` or
+  `AuditProfile::registry_notary_from_env` in production. `unkeyed_dev_only` is
+  for tests and local development.
 - Redaction helpers intentionally avoid preserving email local parts, phone
   digits, or sensitive query values.
 
