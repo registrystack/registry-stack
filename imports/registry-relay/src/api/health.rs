@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `/health` and `/ready` handlers.
+//! `/healthz` and `/ready` handlers.
 //!
 //! Both endpoints are unauthenticated; load balancers, container
 //! orchestrators, and uptime probes hit them without credentials. The
@@ -7,7 +7,7 @@
 //!
 //! ## Semantics
 //!
-//! * `/health` reports process liveness only. It does not consult any
+//! * `/healthz` reports process liveness only. It does not consult any
 //!   dependency state and always returns 200.
 //! * `/ready` reports ingest readiness when a readiness watch receiver
 //!   is installed. Without that extension, it returns a trivial 200 for
@@ -24,7 +24,7 @@ use tokio::sync::watch;
 
 use crate::ingest::ReadinessSnapshot;
 
-/// Sub-router carrying both `/health` and `/ready`. Returned to
+/// Sub-router carrying both `/healthz` and `/ready`. Returned to
 /// `server::build_app` so it can mount this set on the main router
 /// *outside* the auth layer.
 pub fn router<S>() -> Router<S>
@@ -32,7 +32,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/health", get(health))
+        .route("/healthz", get(health))
         .route("/ready", get(ready))
 }
 

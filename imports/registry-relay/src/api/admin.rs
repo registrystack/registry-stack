@@ -33,9 +33,9 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/admin/reload", post(reload_all))
+        .route("/admin/v1/reload", post(reload_all))
         .route(
-            "/admin/datasets/{dataset_id}/tables/{table_id}/reload",
+            "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload",
             post(reload_table),
         )
 }

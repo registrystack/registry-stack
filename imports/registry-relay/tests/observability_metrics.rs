@@ -288,7 +288,7 @@ async fn metrics_response_is_plain_prometheus_text_with_request_and_readiness_me
 
     fixture
         .public
-        .get("/health")
+        .get("/healthz")
         .await
         .assert_status(StatusCode::OK);
     fixture
@@ -298,7 +298,7 @@ async fn metrics_response_is_plain_prometheus_text_with_request_and_readiness_me
         .assert_status(StatusCode::OK);
     fixture
         .admin
-        .get("/health")
+        .get("/healthz")
         .await
         .assert_status(StatusCode::OK);
 
@@ -328,7 +328,7 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
 
     fixture
         .admin
-        .post(&format!("/admin/reload?raw={SENSITIVE_QUERY_VALUE}"))
+        .post(&format!("/admin/v1/reload?raw={SENSITIVE_QUERY_VALUE}"))
         .add_header("Authorization", format!("Bearer {ADMIN_TOKEN}"))
         .add_header("Data-Purpose", SENSITIVE_PURPOSE)
         .add_header("x-request-id", SENSITIVE_REQUEST_ID)
@@ -337,7 +337,7 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
     fixture
         .public
         .get(&format!(
-            "/health?request_id={SENSITIVE_REQUEST_ID}&purpose={SENSITIVE_PURPOSE}"
+            "/healthz?request_id={SENSITIVE_REQUEST_ID}&purpose={SENSITIVE_PURPOSE}"
         ))
         .await
         .assert_status(StatusCode::OK);

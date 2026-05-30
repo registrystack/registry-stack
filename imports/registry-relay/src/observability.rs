@@ -488,22 +488,28 @@ fn method_label(method: &str) -> &'static str {
 
 fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
     match pattern {
-        "/health" => EndpointKind::Health,
+        "/healthz" => EndpointKind::Health,
         "/ready" => EndpointKind::Ready,
-        "/metrics" | "/admin/reload" | "/admin/datasets/{dataset_id}/tables/{table_id}/reload" => {
-            EndpointKind::Admin
+        "/metrics"
+        | "/admin/v1/reload"
+        | "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload" => EndpointKind::Admin,
+        "/v1/datasets" | "/metadata" | "/metadata/catalog" | "/metadata/dcat" => {
+            EndpointKind::Catalog
         }
-        "/datasets" | "/metadata" | "/metadata/catalog" | "/metadata/dcat" => EndpointKind::Catalog,
-        "/datasets/{dataset_id}" => EndpointKind::Dataset,
-        "/datasets/{dataset_id}/{entity}/schema" => EndpointKind::Schema,
-        "/datasets/{dataset_id}/{entity}/verify" => EndpointKind::Verify,
-        "/datasets/{dataset_id}/{entity}" => EndpointKind::Rows,
-        "/datasets/{dataset_id}/{entity}/{id}" => EndpointKind::Rows,
-        "/datasets/{dataset_id}/{entity}/{id}/{relationship}" => EndpointKind::Rows,
-        "/datasets/{dataset_id}/aggregates" => EndpointKind::AggregateList,
-        "/datasets/{dataset_id}/aggregates/{aggregate_id}" => EndpointKind::Aggregate,
-        "/datasets/{dataset_id}/aggregates/{aggregate_id}/query" => EndpointKind::Aggregate,
-        "/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata" => EndpointKind::AggregateList,
+        "/v1/datasets/{dataset_id}" => EndpointKind::Dataset,
+        "/v1/datasets/{dataset_id}/entities/{entity}/schema" => EndpointKind::Schema,
+        "/v1/datasets/{dataset_id}/entities/{entity}/verify" => EndpointKind::Verify,
+        "/v1/datasets/{dataset_id}/entities/{entity}/records" => EndpointKind::Rows,
+        "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}" => EndpointKind::Rows,
+        "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}" => {
+            EndpointKind::Rows
+        }
+        "/v1/datasets/{dataset_id}/aggregates" => EndpointKind::AggregateList,
+        "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}" => EndpointKind::Aggregate,
+        "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query" => EndpointKind::Aggregate,
+        "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata" => {
+            EndpointKind::AggregateList
+        }
         "/ogc/edr/v1/collections/{collection_id}/area" => EndpointKind::OgcEdrArea,
         "/openapi.json" => EndpointKind::Openapi,
         _ => EndpointKind::Other,
@@ -511,19 +517,19 @@ fn endpoint_kind_from_pattern(pattern: &str) -> EndpointKind {
 }
 
 fn endpoint_kind_from_path(path: &str) -> EndpointKind {
-    if path == "/health" {
+    if path == "/healthz" {
         EndpointKind::Health
     } else if path == "/ready" {
         EndpointKind::Ready
     } else if path == "/metrics" || path.starts_with("/admin") {
         EndpointKind::Admin
-    } else if path == "/datasets" || path == "/metadata" || path.starts_with("/metadata/") {
+    } else if path == "/v1/datasets" || path == "/metadata" || path.starts_with("/metadata/") {
         EndpointKind::Catalog
     } else if path == "/openapi.json" || path.starts_with("/openapi") {
         EndpointKind::Openapi
     } else if path.starts_with("/ogc/edr/v1/") {
         classify_edr_endpoint(path)
-    } else if path.starts_with("/datasets/") {
+    } else if path.starts_with("/v1/datasets/") {
         classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
@@ -533,16 +539,22 @@ fn endpoint_kind_from_path(path: &str) -> EndpointKind {
 fn classify_dataset_endpoint(path: &str) -> EndpointKind {
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     match segments.as_slice() {
-        ["datasets", _dataset] => EndpointKind::Dataset,
-        ["datasets", _dataset, _entity, "schema"] => EndpointKind::Schema,
-        ["datasets", _dataset, "aggregates"] => EndpointKind::AggregateList,
-        ["datasets", _dataset, "aggregates", _aggregate]
-        | ["datasets", _dataset, "aggregates", _aggregate, "query"] => EndpointKind::Aggregate,
-        ["datasets", _dataset, "aggregates", _aggregate, "metadata"] => EndpointKind::AggregateList,
-        ["datasets", _dataset, _entity, "verify"] => EndpointKind::Verify,
-        ["datasets", _dataset, _entity] => EndpointKind::Rows,
-        ["datasets", _dataset, _entity, _id] => EndpointKind::Rows,
-        ["datasets", _dataset, _entity, _id, _relationship] => EndpointKind::Rows,
+        ["v1", "datasets", _dataset] => EndpointKind::Dataset,
+        ["v1", "datasets", _dataset, "entities", _entity, "schema"] => EndpointKind::Schema,
+        ["v1", "datasets", _dataset, "aggregates"] => EndpointKind::AggregateList,
+        ["v1", "datasets", _dataset, "aggregates", _aggregate]
+        | ["v1", "datasets", _dataset, "aggregates", _aggregate, "query"] => {
+            EndpointKind::Aggregate
+        }
+        ["v1", "datasets", _dataset, "aggregates", _aggregate, "metadata"] => {
+            EndpointKind::AggregateList
+        }
+        ["v1", "datasets", _dataset, "entities", _entity, "verify"] => EndpointKind::Verify,
+        ["v1", "datasets", _dataset, "entities", _entity, "records"] => EndpointKind::Rows,
+        ["v1", "datasets", _dataset, "entities", _entity, "records", _id] => EndpointKind::Rows,
+        ["v1", "datasets", _dataset, "entities", _entity, "records", _id, "relationships", _relationship] => {
+            EndpointKind::Rows
+        }
         _ => EndpointKind::Dataset,
     }
 }

@@ -45,6 +45,13 @@ impl PlatformAuditSink for FileSink {
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
         self.inner.tail_hash().await
     }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &registry_platform_audit::AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        self.inner.tail_hash_with_hasher(hasher).await
+    }
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), AuditError> {

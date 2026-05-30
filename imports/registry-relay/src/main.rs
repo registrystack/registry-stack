@@ -460,7 +460,21 @@ fn build_audit_sink(config: &Config) -> Result<Arc<AuditPipeline>, Error> {
             "audit.chain is accepted for config compatibility; platform audit envelopes are always chained"
         );
     }
-    Ok(Arc::new(AuditPipeline::new(sink)))
+    let chain_hasher = config
+        .audit
+        .hash_secret_env
+        .as_deref()
+        .map(registry_platform_audit::AuditChainHasher::from_env)
+        .transpose()
+        .map_err(|err| {
+            error!(error = %err, "audit chain secret failed validation");
+            Error::from(ConfigError::ValidationError)
+        })?
+        .unwrap_or_else(registry_platform_audit::AuditChainHasher::unkeyed_dev_only);
+    Ok(Arc::new(AuditPipeline::new_with_chain_hasher(
+        sink,
+        chain_hasher,
+    )))
 }
 
 fn audit_sink_kind(config: &Config) -> &'static str {
@@ -511,7 +525,77 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::OperationalLogFormat;
+    use super::{build_audit_sink, OperationalLogFormat};
+    use registry_platform_audit::{
+        verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
+    };
+    use registry_relay::audit::{AuditRecord, EndpointKind};
+    use registry_relay::config::Config;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    fn sample_audit_record() -> AuditRecord {
+        AuditRecord {
+            ts: "2026-05-15T10:00:00.123Z".to_string(),
+            request_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            principal_id: Some("statistics_office".to_string()),
+            auth_mode: Some("api_key".to_string()),
+            remote_addr: "127.0.0.1".to_string(),
+            method: "GET".to_string(),
+            path: "/v1/datasets".to_string(),
+            endpoint_kind: EndpointKind::Catalog,
+            dataset_id: None,
+            entity_name: None,
+            table_id: None,
+            relationship: None,
+            aggregate_id: None,
+            underlying_kind: None,
+            collection_id: None,
+            primary_key: None,
+            offering_id: None,
+            verification_id: None,
+            verification_decision: None,
+            claim_hash: None,
+            evidence_hash: None,
+            scopes_used: vec!["catalog".to_string()],
+            query_params: json!({}),
+            purpose: Some("ci-smoke".to_string()),
+            status_code: 200,
+            row_count: None,
+            null_geometry_count: None,
+            invalid_geometry_count: None,
+            geometry_vertex_count: None,
+            suppressed_groups: None,
+            duration_ms: 7,
+            error_code: None,
+            provenance: None,
+        }
+    }
+
+    fn config_with_file_audit(path: &std::path::Path, hash_secret_env: &str) -> Config {
+        serde_saphyr::from_str(&format!(
+            r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: file
+  path: '{}'
+  hash_secret_env: {}
+"#,
+            path.display(),
+            hash_secret_env
+        ))
+        .expect("test config parses")
+    }
 
     #[test]
     fn operational_log_format_defaults_to_text_for_empty_or_unknown_values() {
@@ -540,5 +624,29 @@ mod tests {
             OperationalLogFormat::parse(" JSONL "),
             OperationalLogFormat::Json
         );
+    }
+
+    #[tokio::test]
+    async fn build_audit_sink_uses_configured_hash_secret_for_chain() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let env_name = "REGISTRY_RELAY_TEST_AUDIT_CHAIN_SECRET";
+        std::env::set_var(env_name, "0123456789abcdef0123456789abcdef");
+        let config = config_with_file_audit(&path, env_name);
+
+        let sink = build_audit_sink(&config).expect("audit sink builds");
+        sink.write_record(sample_audit_record())
+            .await
+            .expect("audit record writes");
+        sink.flush().await.expect("audit sink flushes");
+
+        let contents = std::fs::read_to_string(&path).expect("audit file was written");
+        assert!(
+            verify_jsonl_lines(contents.lines()).is_err(),
+            "runtime audit chain must not verify with the dev-only unkeyed hasher"
+        );
+        let hasher = AuditChainHasher::from_env(env_name).expect("audit chain secret loads");
+        verify_jsonl_lines_with_hasher(contents.lines(), &hasher)
+            .expect("audit chain verifies with configured secret");
     }
 }

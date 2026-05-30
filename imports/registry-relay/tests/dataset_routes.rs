@@ -199,7 +199,9 @@ fn principal(scopes: &[&str]) -> Principal {
 
 #[tokio::test]
 async fn datasets_lists_only_datasets_with_entity_metadata_scope() {
-    let resp = server(&["social_registry:metadata"]).get("/datasets").await;
+    let resp = server(&["social_registry:metadata"])
+        .get("/v1/datasets")
+        .await;
 
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
@@ -216,14 +218,14 @@ async fn datasets_lists_only_datasets_with_entity_metadata_scope() {
         data[0]["conforms_to"][0],
         "https://example.test/profile/social"
     );
-    assert_eq!(data[0]["links"]["self"], "/datasets/social_registry");
+    assert_eq!(data[0]["links"]["self"], "/v1/datasets/social_registry");
     assert_eq!(data[0]["entities"], serde_json::json!(["household"]));
 }
 
 #[tokio::test]
 async fn datasets_filter_entities_inside_visible_dataset_by_metadata_scope() {
     let resp = server(&["social_registry:individual:metadata"])
-        .get("/datasets")
+        .get("/v1/datasets")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -237,7 +239,7 @@ async fn datasets_filter_entities_inside_visible_dataset_by_metadata_scope() {
 #[tokio::test]
 async fn evidence_verification_only_scope_cannot_read_datasets() {
     let resp = server(&["social_registry:evidence_verification"])
-        .get("/datasets")
+        .get("/v1/datasets")
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
@@ -247,7 +249,7 @@ async fn evidence_verification_only_scope_cannot_read_datasets() {
 
 #[tokio::test]
 async fn datasets_returns_scope_denied_when_no_dataset_is_visible() {
-    let resp = server(&["social_registry:rows"]).get("/datasets").await;
+    let resp = server(&["social_registry:rows"]).get("/v1/datasets").await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
     let body: Value = resp.json();
@@ -257,7 +259,7 @@ async fn datasets_returns_scope_denied_when_no_dataset_is_visible() {
 #[tokio::test]
 async fn dataset_returns_single_summary_when_scope_matches_entity_in_dataset() {
     let resp = server(&["payments:metadata"])
-        .get("/datasets/payments")
+        .get("/v1/datasets/payments")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -267,7 +269,7 @@ async fn dataset_returns_single_summary_when_scope_matches_entity_in_dataset() {
     assert_eq!(body["sensitivity"], "confidential");
     assert_eq!(body["access_rights"], "non_public");
     assert_eq!(body["update_frequency"], "weekly");
-    assert_eq!(body["links"]["self"], "/datasets/payments");
+    assert_eq!(body["links"]["self"], "/v1/datasets/payments");
     assert_eq!(body["entities"], serde_json::json!(["payment"]));
 }
 
@@ -275,7 +277,7 @@ async fn dataset_returns_single_summary_when_scope_matches_entity_in_dataset() {
 #[tokio::test]
 async fn dataset_summary_advertises_visible_ogc_standard_service() {
     let resp = ogc_server(&["social_registry:metadata"])
-        .get("/datasets/social_registry")
+        .get("/v1/datasets/social_registry")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -295,7 +297,7 @@ async fn dataset_summary_advertises_visible_ogc_standard_service() {
 #[tokio::test]
 async fn dataset_summary_hides_ogc_standard_service_when_feature_is_disabled() {
     let resp = server(&["social_registry:metadata"])
-        .get("/datasets/social_registry")
+        .get("/v1/datasets/social_registry")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -308,7 +310,7 @@ async fn dataset_summary_hides_ogc_standard_service_when_feature_is_disabled() {
 #[tokio::test]
 async fn dataset_summary_advertises_visible_spdci_standard_service() {
     let resp = spdci_server(&["social_registry:metadata"])
-        .get("/datasets/social_registry")
+        .get("/v1/datasets/social_registry")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -322,7 +324,7 @@ async fn dataset_summary_advertises_visible_spdci_standard_service() {
 #[tokio::test]
 async fn dataset_denies_without_metadata_scope_for_that_dataset() {
     let resp = server(&["social_registry:metadata"])
-        .get("/datasets/payments")
+        .get("/v1/datasets/payments")
         .await;
 
     resp.assert_status(StatusCode::FORBIDDEN);
@@ -333,7 +335,7 @@ async fn dataset_denies_without_metadata_scope_for_that_dataset() {
 #[tokio::test]
 async fn dataset_returns_unknown_dataset_for_missing_id() {
     let resp = server(&["social_registry:metadata"])
-        .get("/datasets/missing")
+        .get("/v1/datasets/missing")
         .await;
 
     resp.assert_status(StatusCode::NOT_FOUND);

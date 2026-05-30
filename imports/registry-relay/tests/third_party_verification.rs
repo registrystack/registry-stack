@@ -397,7 +397,7 @@ async fn third_party_verifier_can_verify_vc_against_did_document_jwk() {
 
     // Step 2: request a signed VC from the issuance endpoint.
     let issue_resp = server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     issue_resp.assert_status_ok();
@@ -427,7 +427,7 @@ async fn third_party_verifier_can_verify_vc_against_did_document_jwk() {
         assert_eq!(token.claims.iss, ISSUER_DID);
         assert_eq!(
             token.claims.sub,
-            "https://gw.example/datasets/social_registry/individual/ind-1"
+            "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1"
         );
         // The validity window is sane.
         assert!(token.claims.nbf <= token.claims.iat + 1);
@@ -514,7 +514,7 @@ async fn older_vc_verifies_against_retired_key_published_after_rotation() {
     let old_server = TestServer::new(old_app);
 
     let issue_resp = old_server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     issue_resp.assert_status_ok();
@@ -567,7 +567,7 @@ async fn older_vc_verifies_against_retired_key_published_after_rotation() {
     assert_eq!(token.claims.iss, ISSUER_DID);
     assert_eq!(
         token.claims.sub,
-        "https://gw.example/datasets/social_registry/individual/ind-1"
+        "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1"
     );
 }
 
@@ -614,7 +614,7 @@ async fn delegated_mode_vc_verifies_against_ministry_hosted_did_document() {
     );
 
     let issue_resp = server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     issue_resp.assert_status_ok();
@@ -653,6 +653,6 @@ async fn delegated_mode_vc_verifies_against_ministry_hosted_did_document() {
     assert_eq!(token.claims.iss, ministry_did);
     assert_eq!(
         token.claims.sub,
-        "https://gw.example/datasets/social_registry/individual/ind-1"
+        "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1"
     );
 }

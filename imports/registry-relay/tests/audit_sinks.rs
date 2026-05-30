@@ -4,6 +4,9 @@
 use std::fs;
 use std::path::Path;
 
+use registry_platform_audit::{
+    verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
+};
 use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, FileSink, SyslogSink};
 use serde_json::Value;
 use tempfile::tempdir;
@@ -53,7 +56,7 @@ async fn file_sink_writes_jsonl_and_creates_parent_dir() {
     let path = dir.path().join("nested").join("audit.jsonl");
     let sink = AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("sink"));
 
-    sink.write_record(sample_record("/datasets"))
+    sink.write_record(sample_record("/v1/datasets"))
         .await
         .expect("write");
     sink.flush().await.expect("flush");
@@ -72,7 +75,7 @@ async fn file_sink_writes_jsonl_and_creates_parent_dir() {
         value["record_hash"].as_str().expect("record_hash").len(),
         64
     );
-    assert_eq!(value["record"]["path"], "/datasets");
+    assert_eq!(value["record"]["path"], "/v1/datasets");
     assert_eq!(value["record"]["endpoint_kind"], "catalog");
 }
 
@@ -128,6 +131,39 @@ async fn file_sink_bootstraps_chain_from_existing_tail() {
     assert_eq!(lines.len(), 2);
     let second_value: Value = serde_json::from_str(lines[1]).expect("second platform envelope");
     assert_eq!(second_value["prev_hash"], first_hash);
+}
+
+#[tokio::test]
+async fn file_sink_bootstraps_keyed_chain_from_existing_tail() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("audit.jsonl");
+    let env_name = "REGISTRY_RELAY_TEST_FILE_AUDIT_CHAIN_SECRET";
+    std::env::set_var(env_name, "0123456789abcdef0123456789abcdef");
+    let hasher = AuditChainHasher::from_env(env_name).expect("test audit chain secret loads");
+    let first_sink = AuditPipeline::new_with_chain_hasher(
+        std::sync::Arc::new(FileSink::new(&path, 100, 14).expect("first sink")),
+        hasher.clone(),
+    );
+    first_sink
+        .write_record(sample_record("/first"))
+        .await
+        .expect("first write");
+
+    let restarted_sink = AuditPipeline::new_with_chain_hasher(
+        std::sync::Arc::new(FileSink::new(&path, 100, 14).expect("restarted sink")),
+        hasher.clone(),
+    );
+    restarted_sink
+        .write_record(sample_record("/second"))
+        .await
+        .expect("second write");
+
+    let contents = fs::read_to_string(&path).expect("audit file");
+    assert!(
+        verify_jsonl_lines(contents.lines()).is_err(),
+        "keyed audit chain must not verify with the dev-only unkeyed hasher"
+    );
+    verify_jsonl_lines_with_hasher(contents.lines(), &hasher).expect("keyed audit chain verifies");
 }
 
 #[tokio::test]

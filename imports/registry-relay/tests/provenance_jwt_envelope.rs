@@ -77,9 +77,9 @@ fn vc_jwt_envelope_is_well_shaped_and_verifies() {
         claim_type: ClaimType::AggregateResult,
         issuer_did: "did:web:example.test".to_string(),
         verification_method_id: "did:web:example.test#key-1".to_string(),
-        subject_uri: "https://gw.example/datasets/foo/entity/X".to_string(),
+        subject_uri: "https://gw.example/v1/datasets/foo/entities/entity/records/X".to_string(),
         credential_subject: json!({
-            "id": "https://gw.example/datasets/foo/entity/X",
+            "id": "https://gw.example/v1/datasets/foo/entities/entity/records/X",
             "dataset": "foo",
             "entity": "entity",
             "subjectId": "X",
@@ -143,7 +143,10 @@ fn vc_jwt_envelope_is_well_shaped_and_verifies() {
     // issuer == iss; sub == subject_uri.
     assert_eq!(payload["issuer"], "did:web:example.test");
     assert_eq!(payload["iss"], "did:web:example.test");
-    assert_eq!(payload["sub"], "https://gw.example/datasets/foo/entity/X");
+    assert_eq!(
+        payload["sub"],
+        "https://gw.example/v1/datasets/foo/entities/entity/records/X"
+    );
 
     // credentialSubject is verbatim.
     assert_eq!(payload["credentialSubject"]["predicate"], "is_eligible");

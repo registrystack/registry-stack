@@ -18,7 +18,7 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: registry-stack-rename-downstream-2026-05-29
+  REGISTRY_PLATFORM_REF: main
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk
   CEL_MAPPING_REF: ca7411d735f1507b9db0db637f79aff7e4ae4611
 

@@ -26,8 +26,8 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/datasets", get(datasets))
-        .route("/datasets/{dataset_id}", get(dataset))
+        .route("/v1/datasets", get(datasets))
+        .route("/v1/datasets/{dataset_id}", get(dataset))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -176,7 +176,7 @@ fn dataset_summary(
         update_frequency: update_frequency(dataset.update_frequency),
         conforms_to: dataset.conforms_to.clone(),
         links: DatasetLinks {
-            self_url: format!("/datasets/{}", dataset.id),
+            self_url: format!("/v1/datasets/{}", dataset.id),
             ogc_collections: standards
                 .ogc_api_features
                 .as_ref()

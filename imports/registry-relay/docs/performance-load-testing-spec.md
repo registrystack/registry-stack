@@ -56,14 +56,14 @@ Use a load tool such as `k6` for scripted scenarios and thresholds. Use a quick 
 
 Required public endpoints:
 
-- `GET /health`
+- `GET /healthz`
 - `GET /ready`
-- `GET /datasets`
-- `GET /datasets/{dataset_id}`
-- `GET /datasets/{dataset_id}/{entity}/schema`
-- `GET /datasets/{dataset_id}/{entity}`
-- `GET /datasets/{dataset_id}/{entity}/{id}`
-- `GET /datasets/{dataset_id}/{entity}/aggregates`
+- `GET /v1/datasets`
+- `GET /v1/datasets/{dataset_id}`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/schema`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}`
+- `GET /v1/datasets/{dataset_id}/aggregates`
 - `GET /metadata/catalog`
 - `GET /metadata/dcat/bregdcat-ap`
 
@@ -121,7 +121,7 @@ The 5,000,000 row tier may be skipped on local machines when the generated fixtu
 Request:
 
 ```text
-GET /datasets/clinic_capacity/facility
+GET /v1/datasets/clinic_capacity/entities/facility/records
 If-None-Match: "<known-etag>"
 Authorization: Bearer <valid rows token>
 ```
@@ -143,7 +143,7 @@ Current implementation note: `src/api/entity.rs` currently calls `query.read_col
 Request:
 
 ```text
-GET /datasets/clinic_capacity/facility
+GET /v1/datasets/clinic_capacity/entities/facility/records
 Authorization: Bearer <valid rows token>
 ```
 

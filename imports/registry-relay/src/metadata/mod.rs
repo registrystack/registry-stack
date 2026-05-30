@@ -6,9 +6,9 @@
 //! those two views into stable JSON documents for metadata routes.
 //!
 //! These renderers power Registry Relay's own route surface
-//! (`/datasets/.../schema`, the generated OpenAPI document) and emit a
+//! (`/v1/datasets/.../schema`, the generated OpenAPI document) and emit a
 //! Relay-specific vocabulary (`belongs_to`/`has_many`/`has_one`,
-//! `{base}/datasets/{ds}/{entity}/fields/{name}` URLs). Standards-facing
+//! `{base}/v1/datasets/{ds}/entities/{entity}/fields/{name}` URLs). Standards-facing
 //! renderers (DCAT-AP, BRegDCAT-AP, SHACL, JSON Schema Draft 2020-12)
 //! live in `registry-manifest-core` and are reached via the
 //! `core_adapter` submodule for routes mounted under `/metadata/*`.

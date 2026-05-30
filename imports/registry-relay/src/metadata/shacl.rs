@@ -109,7 +109,7 @@ pub(crate) fn dcat_ap_document_from_catalog(catalog: CatalogDocument) -> Value {
     obj
 }
 
-/// Builds the flat route schema served at `/datasets/{ds}/{entity}/schema`.
+/// Builds the flat route schema served at `/v1/datasets/{ds}/entities/{entity}/schema`.
 ///
 /// Despite living in `shacl.rs`, this is neither SHACL nor JSON Schema:
 /// it is Relay's own `{dataset_id, entity, fields[], relationships[], links}`
@@ -814,7 +814,7 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
     let relationship_properties = entity.relationships.iter().map(|relationship| {
         let path = relationship.concept_uri.clone().unwrap_or_else(|| {
             format!(
-                "{base_url}/datasets/{}/{}/relationships/{}",
+                "{base_url}/v1/datasets/{}/entities/{}/relationships/{}",
                 dataset.dataset_id, entity.name, relationship.name
             )
         });
@@ -825,7 +825,7 @@ fn entity_shape(base_url: &str, dataset: &DatasetMetadata, entity: &EntityMetada
             .map(|target| entity_class_uri(base_url, &dataset.dataset_id, target))
             .unwrap_or_else(|| {
                 format!(
-                    "{base_url}/datasets/{}/{}/schema",
+                    "{base_url}/v1/datasets/{}/entities/{}/schema",
                     dataset.dataset_id, relationship.target
                 )
             });

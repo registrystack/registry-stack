@@ -66,7 +66,7 @@ pub(crate) fn signed_vc_requested<'a>(
 /// VC `credentialSubject.id` and JWT `sub`.
 pub(crate) fn entity_subject_uri(config: &Config, dataset: &str, entity: &str, id: &str) -> String {
     let base = config.catalog.base_url.trim_end_matches('/');
-    format!("{base}/datasets/{dataset}/{entity}/{id}")
+    format!("{base}/v1/datasets/{dataset}/entities/{entity}/records/{id}")
 }
 
 /// Build the canonical subject URI for an aggregate result, used as the
@@ -74,7 +74,7 @@ pub(crate) fn entity_subject_uri(config: &Config, dataset: &str, entity: &str, i
 /// the gateway exposes.
 pub(crate) fn aggregate_subject_uri(config: &Config, dataset: &str, aggregate_id: &str) -> String {
     let base = config.catalog.base_url.trim_end_matches('/');
-    format!("{base}/datasets/{dataset}/aggregates/{aggregate_id}")
+    format!("{base}/v1/datasets/{dataset}/aggregates/{aggregate_id}")
 }
 
 /// Common path: hand a built `credentialSubject` to the orchestrator,

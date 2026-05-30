@@ -24,7 +24,10 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
 ## Repository Map
 
 - [config/example.yaml](config/example.yaml): canonical example config.
+- [docs/README.md](docs/README.md): documentation map, status labels, and missing-doc backlog.
+- [docs/client-integration.md](docs/client-integration.md): language-neutral caller integration guide.
 - [docs/configuration.md](docs/configuration.md): operator-facing configuration reference.
+- [docs/deployment-hardening.md](docs/deployment-hardening.md): production hardening checklist.
 - [docs/xlsx-readiness-contract.md](docs/xlsx-readiness-contract.md): checklist for using XLSX workbooks as stable Registry Relay sources.
 - [docs/api.md](docs/api.md): authentication, endpoint, filtering, pagination, and error contract.
 - [docs/metadata.md](docs/metadata.md): portable metadata manifests, static publication, and `/metadata/*` routes.
@@ -35,9 +38,13 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Publi
   workspace for registry-backed claim evaluation, rendering, and credential
   issuance.
 - [docs/ops.md](docs/ops.md): deployment and operations runbook.
+- [docs/openapi-release-policy.md](docs/openapi-release-policy.md): static and runtime OpenAPI release rules.
 - [docs/provenance.md](docs/provenance.md): signed Verifiable Credentials guide.
+- [docs/relay-scenario-catalog.md](docs/relay-scenario-catalog.md): personas, scenarios, and support status.
+- [docs/standards-adapter-operator-guide.md](docs/standards-adapter-operator-guide.md): operator checklist for optional standards adapters.
 - [docs/use-cases.md](docs/use-cases.md): core product journeys.
 - [docs/development.md](docs/development.md): local development, verification, and contribution notes.
+- [docs/release-notes.md](docs/release-notes.md): adopter-facing release notes and known limits.
 - [registry-manifest-core](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-core): portable metadata manifest model, validation, and renderers.
 - [registry-manifest-cli](https://github.com/jeremi/registry-manifest/tree/main/crates/registry-manifest-cli): local metadata validation, rendering, and static publish CLI.
 - [profiles/](profiles/): non-normative example profile descriptors and fixture metadata manifests.
@@ -145,6 +152,8 @@ auth:
 
 See [config/example.oidc.yaml](config/example.oidc.yaml) for a complete drop-in alternative targeting a local Zitadel and [docs/configuration.md](docs/configuration.md#oidc-oauth2) for the full field reference plus the granular `auth.*` failure-code taxonomy. The publicschema.com dev compose stack provisions a Zitadel instance you can point at directly; `scripts/mint-zitadel-token.sh` and `tests/oidc_zitadel.rs` exercise the path end-to-end.
 
+Relay validates the access-token JOSE `typ` header against `auth.oidc.token_types`, which defaults to `JWT` and `at+jwt`. The shared verifier currently rejects tokens that omit `typ`; configure the IdP to emit an access-token type header rather than bypassing that check in Relay.
+
 ## Run Locally
 
 The example config references data under `./data/social_registry.xlsx`, so either adapt the path or copy a fixture into place:
@@ -162,7 +171,7 @@ just run
 Health endpoints are unauthenticated:
 
 ```sh
-curl -i http://127.0.0.1:8080/health
+curl -i http://127.0.0.1:8080/healthz
 curl -i http://127.0.0.1:8080/ready
 ```
 
@@ -170,7 +179,7 @@ Protected endpoints require a configured API key:
 
 ```sh
 curl -H "Authorization: Bearer $PROGRAM_SYSTEM_API_KEY" \
-  http://127.0.0.1:8080/datasets
+  http://127.0.0.1:8080/v1/datasets
 ```
 
 ## Public API Shape
@@ -200,6 +209,7 @@ GET /metadata/ogc/records
 GET /metadata/ogc/records/{record_id}
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
+GET /.well-known/api-catalog
 GET /ogc/v1                                 (feature: ogcapi-features)
 GET /ogc/v1/conformance                     (feature: ogcapi-features)
 GET /ogc/v1/collections                     (feature: ogcapi-features)
@@ -213,14 +223,25 @@ GET /ogc/v1/records/collections             (feature: ogcapi-records)
 GET /ogc/v1/records/collections/{collection_id}  (feature: ogcapi-records)
 GET /ogc/v1/records/collections/{collection_id}/items  (feature: ogcapi-records)
 GET /ogc/v1/records/collections/{collection_id}/items/{record_id}  (feature: ogcapi-records)
-GET /datasets
-GET /datasets/{dataset_id}
-GET /datasets/{dataset_id}/{entity}/schema
-GET /datasets/{dataset_id}/{entity}
-GET /datasets/{dataset_id}/{entity}/{id}
-GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-GET /datasets/{dataset_id}/{entity}/aggregates
-GET /datasets/{dataset_id}/{entity}/aggregates/{aggregate_id}
+GET /ogc/edr/v1                             (feature: ogcapi-edr)
+GET /ogc/edr/v1/conformance                 (feature: ogcapi-edr)
+GET /ogc/edr/v1/collections                 (feature: ogcapi-edr)
+GET /ogc/edr/v1/collections/{collection_id} (feature: ogcapi-edr)
+GET|POST /ogc/edr/v1/collections/{collection_id}/area  (feature: ogcapi-edr)
+GET /v1/datasets
+GET /v1/datasets/{dataset_id}
+GET /v1/datasets/{dataset_id}/entities/{entity}/schema
+GET /v1/datasets/{dataset_id}/entities/{entity}/records
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}
+GET /v1/datasets/{dataset_id}/aggregates
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}
+POST /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata
+GET /v1/datasets/{dataset_id}/indicators
+GET /v1/datasets/{dataset_id}/indicators/{indicator_id}
+GET /v1/datasets/{dataset_id}/dimensions
+GET /v1/datasets/{dataset_id}/dimensions/{dimension_id}
 POST /dci/{registry}/registry/sync/search   (feature: spdci-api-standards)
 POST /dci/{registry}/registry/sync/disabled (feature: spdci-api-standards)
 POST /dci/{registry}/registry/sync/get-disability-details  (feature: spdci-api-standards)

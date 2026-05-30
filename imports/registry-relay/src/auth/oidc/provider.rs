@@ -6,8 +6,8 @@
 //! 1. Read `Authorization: Bearer <jwt>`. OIDC does not accept the
 //!    `X-Api-Key` header; that header is the API-key provider's legacy
 //!    surface only.
-//! 2. Decode the JOSE header. Reject tokens whose `typ` is not in the
-//!    configured allowlist (defaults to `JWT` / `at+jwt`), whose `alg`
+//! 2. Decode the JOSE header. Reject tokens whose `typ` is missing or not in
+//!    the configured allowlist (defaults to `JWT` / `at+jwt`), whose `alg`
 //!    is not in the configured allowlist (defaults to RS256/ES256/EdDSA;
 //!    HS\* and `none` are intentionally excluded), or that have no
 //!    `kid`.
@@ -108,10 +108,10 @@ impl OidcAuth {
                 issuer: config.issuer.clone(),
                 audiences: config.audience.clone(),
                 allowed_algorithms: algorithms.clone(),
-                // Relay preserves its historical behavior where an absent
-                // `typ` is accepted when `JWT` is configured. We enforce token
-                // types before delegating to the platform verifier.
-                allowed_typ: Vec::new(),
+                allowed_typ: config.token_types.clone(),
+                allowed_id_typ: Vec::new(),
+                allowed_userinfo_typ: Vec::new(),
+                userinfo_requires_exp: true,
                 scope_claim: config.scope_claim.clone(),
                 scope_separator: ' ',
                 scope_map: None,
@@ -159,8 +159,6 @@ impl OidcAuth {
                 }
             }
             None => {
-                // Absent `typ` is conventionally JWT. Honour it only if
-                // the configured allowlist contains JWT.
                 if !self.token_types.contains("jwt") {
                     tracing::debug!(
                         target: "registry_relay::auth",
@@ -845,7 +843,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_typ_is_accepted_when_jwt_in_allowlist() {
+    async fn missing_typ_is_rejected_even_when_jwt_in_allowlist() {
         let (sk, vk) = fresh_keypair();
         let token = mint(
             &sk,
@@ -855,7 +853,8 @@ mod tests {
             },
         );
         let provider = provider_from(base_config(), jwks_for(TEST_KID, &vk));
-        provider.verify(&token).await.expect("missing typ accepted");
+        let err = provider.verify(&token).await.expect_err("missing typ");
+        assert!(matches!(err, AuthError::MalformedCredential));
     }
 
     #[tokio::test]

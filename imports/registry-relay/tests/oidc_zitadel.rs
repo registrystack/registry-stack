@@ -173,7 +173,7 @@ fn oidc_config(env: &ZitadelEnv, audience: Vec<String>) -> OidcConfig {
         audience,
         jwks_url: None,
         discovery_url: Some(env.discovery_url()),
-        allow_dev_insecure_fetch_urls: false,
+        allow_dev_insecure_fetch_urls: true,
         algorithms: vec![
             OidcAlgorithm::Rs256,
             OidcAlgorithm::Es256,
@@ -195,9 +195,12 @@ async fn build_provider(cfg: &OidcConfig) -> Arc<OidcAuth> {
         .discovery_url
         .as_deref()
         .expect("discovery_url is set in test config");
-    let fetcher = ReqwestJwksFetcher::from_discovery_url(discovery_url, &cfg.issuer)
-        .await
-        .expect("discovery resolves");
+    let fetcher = if cfg.allow_dev_insecure_fetch_urls {
+        ReqwestJwksFetcher::from_discovery_url_for_dev(discovery_url, &cfg.issuer).await
+    } else {
+        ReqwestJwksFetcher::from_discovery_url(discovery_url, &cfg.issuer).await
+    }
+    .expect("discovery resolves");
     Arc::new(OidcAuth::new(cfg, Arc::new(fetcher)))
 }
 
@@ -353,9 +356,10 @@ async fn oidc_zitadel_happy_and_failure_paths() {
     //    enforces an issuer match per RFC 8414), then the provider is
     //    constructed manually with the bogus-issuer config so only the
     //    verify-time `iss` check fires.
-    let real_fetcher = ReqwestJwksFetcher::from_discovery_url(env.discovery_url(), &env.issuer)
-        .await
-        .expect("discovery resolves against real issuer");
+    let real_fetcher =
+        ReqwestJwksFetcher::from_discovery_url_for_dev(env.discovery_url(), &env.issuer)
+            .await
+            .expect("discovery resolves against real issuer");
     let mut bogus_iss_cfg = oidc_config(&env, aud);
     bogus_iss_cfg.issuer = "https://wrong-issuer.example.test".to_string();
     let bogus_iss_provider = Arc::new(OidcAuth::new(&bogus_iss_cfg, Arc::new(real_fetcher)));

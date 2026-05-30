@@ -110,20 +110,20 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     // ---- Service ----
     insert_json_path(
         &mut paths,
-        "/health",
+        "/healthz",
         "get",
         "Liveness probe",
         "HealthResponse",
     );
-    set_op_id(&mut paths, "/health", "get", "get_health");
+    set_op_id(&mut paths, "/healthz", "get", "get_health");
     set_description(
         &mut paths,
-        "/health",
+        "/healthz",
         "get",
         "Returns 200 once the gateway process has started. Unauthenticated.",
     );
-    mark_public(&mut paths, "/health", "get");
-    tag(&mut paths, "/health", "get", TAG_SERVICE);
+    mark_public(&mut paths, "/healthz", "get");
+    tag(&mut paths, "/healthz", "get", TAG_SERVICE);
 
     insert_json_path(
         &mut paths,
@@ -454,33 +454,33 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
 
     insert_json_path(
         &mut paths,
-        "/datasets",
+        "/v1/datasets",
         "get",
         "List datasets",
         "DatasetList",
     );
-    set_op_id(&mut paths, "/datasets", "get", "list_datasets");
+    set_op_id(&mut paths, "/v1/datasets", "get", "list_datasets");
     set_description(
         &mut paths,
-        "/datasets",
+        "/v1/datasets",
         "get",
         "Lists every dataset visible to the calling principal.",
     );
     set_json_response_example(
         &mut paths,
-        "/datasets",
+        "/v1/datasets",
         "get",
         "200",
         "datasets",
         "Dataset list for the visible Relay catalog.",
         relay_dataset_list_example(catalog),
     );
-    tag(&mut paths, "/datasets", "get", TAG_CATALOG);
+    tag(&mut paths, "/v1/datasets", "get", TAG_CATALOG);
 
     for dataset in &catalog.datasets {
         let dataset_slug = op_id_slug(&dataset.dataset_id);
 
-        let dataset_path = format!("/datasets/{}", dataset.dataset_id);
+        let dataset_path = format!("/v1/datasets/{}", dataset.dataset_id);
         paths.insert(
             dataset_path.clone(),
             json_path_item("get", "Dataset metadata", "DatasetSummary"),
@@ -531,7 +531,10 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             let entity_desc = entity.description.as_deref().unwrap_or("");
 
             // List records
-            let collection_path = format!("/datasets/{}/{}", dataset.dataset_id, entity.name);
+            let collection_path = format!(
+                "/v1/datasets/{}/entities/{}/records",
+                dataset.dataset_id, entity.name
+            );
             paths.insert(
                 collection_path.clone(),
                 entity_collection_path_item("List records", &collection_component, entity_config),
@@ -571,7 +574,10 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             tag(&mut paths, &collection_path, "get", &entity_tag);
 
             // Get record by id
-            let record_path = format!("/datasets/{}/{}/{{id}}", dataset.dataset_id, entity.name);
+            let record_path = format!(
+                "/v1/datasets/{}/entities/{}/records/{{id}}",
+                dataset.dataset_id, entity.name
+            );
             paths.insert(
                 record_path.clone(),
                 entity_record_path_item("Get record by id", &component, entity_config),
@@ -625,8 +631,10 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             tag(&mut paths, &record_path, "get", &entity_tag);
 
             // Field schema (JSON Schema view)
-            let field_schema_path =
-                format!("/datasets/{}/{}/schema", dataset.dataset_id, entity.name);
+            let field_schema_path = format!(
+                "/v1/datasets/{}/entities/{}/schema",
+                dataset.dataset_id, entity.name
+            );
             paths.insert(
                 field_schema_path.clone(),
                 json_path_item("get", "Field schema", &format!("{component}Schema")),
@@ -653,7 +661,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             // Relationships
             for relationship in &entity.relationships {
                 let relationship_path = format!(
-                    "/datasets/{}/{}/{{id}}/{}",
+                    "/v1/datasets/{}/entities/{}/records/{{id}}/relationships/{}",
                     dataset.dataset_id, entity.name, relationship.name
                 );
                 paths.insert(
@@ -697,7 +705,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
         if let Some(dataset_config) = dataset_config(config, &dataset.dataset_id) {
             if !dataset_config.aggregates.is_empty() {
                 let aggregate_tag = aggregate_tag_name(&dataset.dataset_id);
-                let aggregates_path = format!("/datasets/{}/aggregates", dataset.dataset_id);
+                let aggregates_path = format!("/v1/datasets/{}/aggregates", dataset.dataset_id);
                 paths.insert(
                     aggregates_path.clone(),
                     json_path_item("get", "List dataset aggregates", "AggregateListResponse"),
@@ -720,7 +728,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 tag(&mut paths, &aggregates_path, "get", &aggregate_tag);
 
                 let aggregate_run_path = format!(
-                    "/datasets/{}/aggregates/{{aggregate_id}}",
+                    "/v1/datasets/{}/aggregates/{{aggregate_id}}",
                     dataset.dataset_id
                 );
                 paths.insert(
@@ -766,7 +774,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 tag(&mut paths, &aggregate_run_path, "post", &aggregate_tag);
 
                 let aggregate_query_path = format!(
-                    "/datasets/{}/aggregates/{{aggregate_id}}/query",
+                    "/v1/datasets/{}/aggregates/{{aggregate_id}}/query",
                     dataset.dataset_id
                 );
                 paths.insert(
@@ -791,7 +799,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 tag(&mut paths, &aggregate_query_path, "post", &aggregate_tag);
 
                 let aggregate_metadata_path = format!(
-                    "/datasets/{}/aggregates/{{aggregate_id}}/metadata",
+                    "/v1/datasets/{}/aggregates/{{aggregate_id}}/metadata",
                     dataset.dataset_id
                 );
                 paths.insert(
@@ -817,7 +825,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 );
                 tag(&mut paths, &aggregate_metadata_path, "get", &aggregate_tag);
 
-                let indicators_path = format!("/datasets/{}/indicators", dataset.dataset_id);
+                let indicators_path = format!("/v1/datasets/{}/indicators", dataset.dataset_id);
                 paths.insert(
                     indicators_path.clone(),
                     json_path_item("get", "List dataset indicators", "AggregateIndicatorList"),
@@ -840,7 +848,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 tag(&mut paths, &indicators_path, "get", &aggregate_tag);
 
                 let indicator_path =
-                    format!("/datasets/{}/indicators/{{item_id}}", dataset.dataset_id);
+                    format!("/v1/datasets/{}/indicators/{{item_id}}", dataset.dataset_id);
                 paths.insert(
                     indicator_path.clone(),
                     path_item_with_params(
@@ -864,7 +872,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 );
                 tag(&mut paths, &indicator_path, "get", &aggregate_tag);
 
-                let dimensions_path = format!("/datasets/{}/dimensions", dataset.dataset_id);
+                let dimensions_path = format!("/v1/datasets/{}/dimensions", dataset.dataset_id);
                 paths.insert(
                     dimensions_path.clone(),
                     json_path_item("get", "List dataset dimensions", "AggregateDimensionList"),
@@ -887,7 +895,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 tag(&mut paths, &dimensions_path, "get", &aggregate_tag);
 
                 let dimension_path =
-                    format!("/datasets/{}/dimensions/{{item_id}}", dataset.dataset_id);
+                    format!("/v1/datasets/{}/dimensions/{{item_id}}", dataset.dataset_id);
                 paths.insert(
                     dimension_path.clone(),
                     path_item_with_params(
@@ -1356,7 +1364,7 @@ fn tag(paths: &mut Map<String, Value>, path: &str, method: &str, tag: &str) {
 }
 
 /// Override the document-level security requirement on a single
-/// operation so it advertises as unauthenticated. Used for `/health`
+/// operation so it advertises as unauthenticated. Used for `/healthz`
 /// and `/ready`, which are merged onto the public sub-router in
 /// `crate::server::build_app_with_provenance`.
 fn mark_public(paths: &mut Map<String, Value>, path: &str, method: &str) {
@@ -1369,13 +1377,13 @@ fn mark_public(paths: &mut Map<String, Value>, path: &str, method: &str) {
 
 fn code_samples_for_collection(dataset_id: &str, entity_name: &str) -> Vec<Value> {
     let curl = format!(
-        "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/{dataset_id}/{entity_name}?limit=10'"
+        "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/v1/datasets/{dataset_id}/entities/{entity_name}/records?limit=10'"
     );
     let python = format!(
         "import os, httpx\n\n\
          token = os.environ['REGISTRY_RELAY_TOKEN']\n\
          resp = httpx.get(\n    \
-         'http://localhost:4242/datasets/{dataset_id}/{entity_name}',\n    \
+         'http://localhost:4242/v1/datasets/{dataset_id}/entities/{entity_name}/records',\n    \
          params={{'limit': 10}},\n    \
          headers={{'Authorization': f'Bearer {{token}}'}}\n\
          )\n\
@@ -1393,14 +1401,14 @@ fn code_samples_for_collection(dataset_id: &str, entity_name: &str) -> Vec<Value
 
 fn code_samples_for_record(dataset_id: &str, entity_name: &str) -> Vec<Value> {
     let curl = format!(
-        "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/datasets/{dataset_id}/{entity_name}/$ID'"
+        "curl -sS \\\n  -H 'Authorization: Bearer $REGISTRY_RELAY_TOKEN' \\\n  'http://localhost:4242/v1/datasets/{dataset_id}/entities/{entity_name}/records/$ID'"
     );
     let python = format!(
         "import os, httpx\n\n\
          token = os.environ['REGISTRY_RELAY_TOKEN']\n\
          record_id = '...'\n\
          resp = httpx.get(\n    \
-         f'http://localhost:4242/datasets/{dataset_id}/{entity_name}/{{record_id}}',\n    \
+         f'http://localhost:4242/v1/datasets/{dataset_id}/entities/{entity_name}/records/{{record_id}}',\n    \
          headers={{'Authorization': f'Bearer {{token}}'}}\n\
          )\n\
          resp.raise_for_status()\n\
@@ -1472,7 +1480,7 @@ fn relay_dataset_summary_example(dataset: &DatasetMetadata) -> Value {
         "update_frequency": dataset.update_frequency,
         "conforms_to": dataset.conforms_to,
         "links": {
-            "self": format!("/datasets/{}", dataset.dataset_id),
+            "self": format!("/v1/datasets/{}", dataset.dataset_id),
         },
         "entities": dataset
             .entities
@@ -4104,7 +4112,7 @@ mod tests {
                 public_services: Vec::new(),
                 compiled_policy: None,
                 links: DatasetLinks {
-                    self_url: "https://data.example.test/datasets/social_registry".to_string(),
+                    self_url: "https://data.example.test/v1/datasets/social_registry".to_string(),
                     ogc_collections: None,
                     ogc_records: None,
                 },
@@ -4126,10 +4134,10 @@ mod tests {
                     }],
                     relationships: Vec::new(),
                     links: EntityLinks {
-                        collection: "https://data.example.test/datasets/social_registry/individual"
+                        collection: "https://data.example.test/v1/datasets/social_registry/entities/individual/records"
                             .to_string(),
                         schema:
-                            "https://data.example.test/datasets/social_registry/individual/schema"
+                            "https://data.example.test/v1/datasets/social_registry/entities/individual/schema"
                                 .to_string(),
                         ogc_collection: None,
                         ogc_items: None,
@@ -4285,8 +4293,8 @@ mod tests {
         }
 
         for path in [
-            "/datasets/social_registry/individual/{id}",
-            "/datasets/social_registry/aggregates/{aggregate_id}",
+            "/v1/datasets/social_registry/entities/individual/records/{id}",
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}",
         ] {
             let op = &doc["paths"][path]["get"];
             assert_eq!(

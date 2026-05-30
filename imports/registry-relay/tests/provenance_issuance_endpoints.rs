@@ -414,7 +414,8 @@ fn audit_record_for(sink: &InMemorySink, path: &str) -> Value {
     envelope["record"].clone()
 }
 
-const INDIVIDUAL_RECORD_AUDIT_PATH: &str = "/datasets/social_registry/individual/{id}";
+const INDIVIDUAL_RECORD_AUDIT_PATH: &str =
+    "/v1/datasets/social_registry/entities/individual/records/{id}";
 
 // ---------------------------------------------------------------------------
 // /datasets/{dataset_id}/{entity}/{id}
@@ -425,7 +426,7 @@ async fn entity_record_plain_json_path_unchanged_without_accept_header() {
     let harness = build_entity_harness("PROVENANCE_ISSUANCE_RECORD_PLAIN_JWK");
     let resp = harness
         .server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .await;
     resp.assert_status_ok();
     let body: Value = resp.json();
@@ -437,7 +438,7 @@ async fn entity_record_returns_signed_vc_when_accept_opts_in() {
     let harness = build_entity_harness("PROVENANCE_ISSUANCE_RECORD_VC_JWK");
     let resp = harness
         .server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status_ok();
@@ -476,7 +477,7 @@ async fn aggregate_plain_json_path_unchanged_without_accept_header() {
     let harness = build_aggregate_harness("PROVENANCE_ISSUANCE_AGGREGATE_PLAIN_JWK");
     let resp = harness
         .server
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .await;
     resp.assert_status_ok();
     let body: Value = resp.json();
@@ -489,7 +490,7 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
     let harness = build_aggregate_harness("PROVENANCE_ISSUANCE_AGGREGATE_VC_JWK");
     let resp = harness
         .server
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status_ok();
@@ -522,12 +523,12 @@ async fn aggregate_returns_signed_vc_when_accept_opts_in() {
 
     let record = audit_record_for(
         &harness.audit_sink,
-        "/datasets/social_registry/aggregates/by_municipality",
+        "/v1/datasets/social_registry/aggregates/by_municipality",
     );
     assert_eq!(record["provenance"]["claim_type"], "AggregateResult");
     assert_eq!(
         record["provenance"]["subject"],
-        "https://gw.example/datasets/social_registry/aggregates/by_municipality"
+        "https://gw.example/v1/datasets/social_registry/aggregates/by_municipality"
     );
 }
 
@@ -582,7 +583,7 @@ async fn aggregate_vc_as_of_reflects_resource_registered_at() {
     let server = TestServer::new(router);
 
     let resp = server
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status_ok();
@@ -645,7 +646,7 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     // Plain-JSON path: capture the disclosure-controlled shape we
     // expect the VC subject to mirror.
     let plain_resp = server
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .await;
     plain_resp.assert_status_ok();
     let plain_body: Value = plain_resp.json();
@@ -658,7 +659,7 @@ async fn aggregate_vc_subject_reflects_disclosure_suppression() {
     // Signed-VC path: decode the JWS and assert credentialSubject
     // mirrors the suppression result.
     let signed_resp = server
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .add_header("accept", "application/vc+jwt")
         .await;
     signed_resp.assert_status_ok();
@@ -752,7 +753,7 @@ async fn production_app_builder_issues_vc_after_real_api_key_auth() {
     let server = TestServer::new(app);
 
     let resp = server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("authorization", format!("Bearer {FULL_STACK_RAW_API_KEY}"))
         .add_header("accept", "application/vc+jwt")
         .await;
@@ -824,7 +825,7 @@ async fn entity_record_returns_plain_json_when_provenance_state_is_absent() {
     let server = TestServer::new(router);
 
     let resp = server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     resp.assert_status(StatusCode::OK);

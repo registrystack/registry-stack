@@ -240,7 +240,7 @@ A full drop-in alternative to `config/example.yaml` lives at `config/example.oid
 | `scope_claim`     | Name of the JWT claim to read scopes from (the config field itself is always a single string; defaults to `scope`). The claim's *value* in the token may be a space-separated string (RFC 8693 / RFC 9068), a JSON array of strings, or a JSON object whose keys are the scope names (Zitadel's `urn:zitadel:iam:org:project:roles`); all three shapes are accepted at verify time. |
 | `scope_map`       | Optional rename map applied before scope-based access checks. Adapt IdP role names to the relay's `<dataset_id>:<level>` shape.                               |
 | `allowed_clients` | Optional allowlist matched against the token's `azp` (preferred) or `client_id`. Empty list means any client is accepted.                                     |
-| `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default.                     |
+| `token_types`     | Accepted JOSE `typ` header values. Defaults to `JWT` and `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are intentionally rejected by default, and tokens without `typ` are rejected by the shared verifier. |
 
 ### Discovery vs explicit JWKS
 
@@ -283,7 +283,7 @@ cd ../publicschema.com
 docker compose -f compose/dev.compose.yaml up -d zitadel zitadel-init
 
 # 2. Mint a test access token.
-cd ../registry_relay
+cd ../registry-relay
 TOKEN="$(./scripts/mint-zitadel-token.sh)"
 
 # 3. Run the relay against the OIDC example.

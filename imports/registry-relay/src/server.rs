@@ -34,7 +34,7 @@
 //!    `config.server.request_body_timeout`.
 //! 10. `TimeoutLayer`: built from `config.server.request_timeout`.
 //! 11. Auth middleware on a *sub-router* that mounts data-plane routes
-//!     only. The health sub-router is merged separately so `/health`
+//!     only. The health sub-router is merged separately so `/healthz`
 //!     and `/ready` stay unauthenticated.
 //!
 //! ## Admin listener
@@ -42,7 +42,7 @@
 //! [`build_admin_app`] mirrors [`build_app`] for the optional admin
 //! listener (`config.server.admin_bind`). Admin routes are intentionally
 //! kept off the public data-plane listener. The admin listener carries
-//! `/health`, admin-listener-only `/metrics`, table reload, and
+//! `/healthz`, admin-listener-only `/metrics`, table reload, and
 //! registry-wide reload.
 //!
 //! ## What lives elsewhere
@@ -359,7 +359,7 @@ pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
 
 /// Assemble the admin HTTP application for `config.server.admin_bind`.
 ///
-/// Mounts the same `/health` route as the main listener so operators
+/// Mounts the same `/healthz` route as the main listener so operators
 /// can probe the second port without authentication. Admin reload
 /// routes are mounted behind authentication and their handlers enforce
 /// the `admin` scope.

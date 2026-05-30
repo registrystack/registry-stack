@@ -367,7 +367,7 @@ pub fn attach_compiled_policies(
 
 fn dataset_links(base_url: &str, dataset_id: &str, entities: &[EntityMetadata]) -> DatasetLinks {
     DatasetLinks {
-        self_url: format!("{base_url}/datasets/{dataset_id}"),
+        self_url: format!("{base_url}/v1/datasets/{dataset_id}"),
         ogc_collections: ogc_collections_url(base_url, dataset_id, entities),
         ogc_records: ogc_records_url(base_url, entities),
     }
@@ -614,7 +614,10 @@ pub fn entity_metadata(
         fields,
         relationships,
         links: EntityLinks {
-            collection: format!("{base_url}/datasets/{dataset_id}/{}", entity.name),
+            collection: format!(
+                "{base_url}/v1/datasets/{dataset_id}/entities/{}/records",
+                entity.name
+            ),
             schema: format!(
                 "{base_url}/metadata/schema/{dataset_id}/{}/schema.json",
                 entity.name
@@ -670,7 +673,7 @@ pub fn field_property_uri(
 ) -> String {
     field.concept_uri.clone().unwrap_or_else(|| {
         format!(
-            "{base_url}/datasets/{dataset_id}/{entity_name}/fields/{}",
+            "{base_url}/v1/datasets/{dataset_id}/entities/{entity_name}/fields/{}",
             field.name
         )
     })
@@ -678,10 +681,12 @@ pub fn field_property_uri(
 
 #[must_use]
 pub fn entity_class_uri(base_url: &str, dataset_id: &str, entity: &EntityMetadata) -> String {
-    entity
-        .concept_uri
-        .clone()
-        .unwrap_or_else(|| format!("{base_url}/datasets/{dataset_id}/{}/schema", entity.name))
+    entity.concept_uri.clone().unwrap_or_else(|| {
+        format!(
+            "{base_url}/v1/datasets/{dataset_id}/entities/{}/schema",
+            entity.name
+        )
+    })
 }
 
 #[must_use]

@@ -430,12 +430,12 @@ In Bruno, run the `Cross-Demo Workflows` folder requests 12 through 14
 in order:
 
 1. **`12-scholarship-subject-lookup.bru`** uses `linkageKey`
-   (`linkage_service`) to call `GET /datasets/subject_registry/subject?education_student_alias={{studentAlias}}`.
+   (`linkage_service`) to call `GET /v1/datasets/subject_registry/entities/subject/records?education_student_alias={{studentAlias}}`.
    This is the only call in the flow that returns the cross-dataset alias
    mapping. The response carries the matching `benefits_household_alias`.
 2. **`13-scholarship-read-household.bru`** uses `rowsKey`
    (`casework_system`) with the alias from step 2 to call
-   `GET /datasets/benefits_casework/household?id=<benefits_household_alias>`.
+   `GET /v1/datasets/benefits_casework/entities/household/records?id=<benefits_household_alias>`.
 3. **`14-scholarship-benefits-district-aggregate.bru`** uses `aggregateKey`
    (`planning_analyst`) to run a benefits aggregate that gives the
    district-level eligibility picture without enumerating households.

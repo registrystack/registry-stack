@@ -300,8 +300,9 @@ links.
 
 ## Relay Endpoints
 
-When Relay loads a split manifest, authenticated callers can access scoped
-metadata through:
+Authenticated callers can access scoped metadata through these routes. When the
+runtime config loads a split manifest, Relay renders from that compiled portable
+manifest; otherwise it derives a scoped metadata view from runtime config.
 
 ```text
 GET /.well-known/api-catalog
@@ -331,7 +332,7 @@ GET /metadata/evidence-offerings/{offering_id}
 These routes use the caller's `metadata` scopes. They do not grant row access,
 evidence-verification access, aggregate access, or admin access.
 
-`/metadata/*` is the canonical standards-facing metadata surface. `/datasets`
+`/metadata/*` is the canonical standards-facing metadata surface. `/v1/datasets`
 and runtime entity routes remain operational data-plane discovery surfaces for
 Relay clients.
 

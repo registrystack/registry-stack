@@ -2,11 +2,11 @@
 //! End-to-end tests for HTTP health, readiness, and cross-cutting layers.
 //!
 //! Coverage:
-//! * `/health` returns 200 with the documented JSON body and echoes an
+//! * `/healthz` returns 200 with the documented JSON body and echoes an
 //!   `x-request-id` header.
 //! * `/ready` returns 200 when `build_app` is used without resource
 //!   readiness state.
-//! * The audit middleware fires for every request: hitting `/health`
+//! * The audit middleware fires for every request: hitting `/healthz`
 //!   with an `InMemorySink` produces exactly one record carrying the
 //!   request method, path, and status.
 //! * `server.cors.allowed_origins` is consumed: a configured origin is
@@ -16,7 +16,7 @@
 //!   hitting the admin listener proves the value reaches the
 //!   `TimeoutLayer`.
 //! * `server.admin_bind` produces a second reachable listener that
-//!   serves `/health`.
+//!   serves `/healthz`.
 //!
 //! These tests use `axum_test::TestServer` so the full middleware stack
 //! (request id, tracing, audit, CORS, body size limit, timeout) runs in
@@ -107,7 +107,7 @@ async fn health_returns_200_with_status_ok_body() {
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
-    let resp = server.get("/health").await;
+    let resp = server.get("/healthz").await;
     resp.assert_status(StatusCode::OK);
 
     let body: Value = resp.json();
@@ -120,7 +120,7 @@ async fn health_response_carries_x_request_id_header() {
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
-    let resp = server.get("/health").await;
+    let resp = server.get("/healthz").await;
     resp.assert_status(StatusCode::OK);
 
     // The audit middleware attaches `x-request-id`; the request-id
@@ -142,7 +142,7 @@ async fn client_supplied_x_request_id_is_replaced() {
     let spoofed = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
     let resp = server
-        .get("/health")
+        .get("/healthz")
         .add_header("x-request-id", spoofed)
         .await;
     resp.assert_status(StatusCode::OK);
@@ -257,7 +257,7 @@ async fn audit_middleware_fires_on_health() {
     let app = build_test_app_with_health_audit(sink);
     let server = TestServer::new(app);
 
-    let resp = server.get("/health").await;
+    let resp = server.get("/healthz").await;
     resp.assert_status(StatusCode::OK);
 
     let captured = inmem.snapshot();
@@ -270,7 +270,7 @@ async fn audit_middleware_fires_on_health() {
     let record = audit_record_from_platform_envelope(&captured[0]);
     assert_eq!(record["status_code"], 200);
     assert_eq!(record["method"], "GET");
-    assert_eq!(record["path"], "/health");
+    assert_eq!(record["path"], "/healthz");
     assert!(record["request_id"].is_string());
 }
 
@@ -281,7 +281,7 @@ async fn health_audit_is_suppressed_by_default() {
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
-    let resp = server.get("/health").await;
+    let resp = server.get("/healthz").await;
     resp.assert_status(StatusCode::OK);
 
     assert!(
@@ -306,7 +306,7 @@ async fn cors_allowed_origin_from_config_is_echoed_on_preflight() {
     // CORS preflight: OPTIONS with an Origin header. The CORS layer
     // mirrors the request's `Access-Control-Request-Method`.
     let resp = server
-        .method(axum::http::Method::OPTIONS, "/health")
+        .method(axum::http::Method::OPTIONS, "/healthz")
         .add_header("origin", "https://allowed.example.gov")
         .add_header("access-control-request-method", "GET")
         .await;
@@ -326,7 +326,7 @@ async fn cors_unconfigured_origin_is_not_echoed() {
     let server = TestServer::new(app);
 
     let resp = server
-        .method(axum::http::Method::OPTIONS, "/health")
+        .method(axum::http::Method::OPTIONS, "/healthz")
         .add_header("origin", "https://stranger.example.gov")
         .add_header("access-control-request-method", "GET")
         .await;
@@ -353,7 +353,7 @@ async fn server_request_timeout_field_reaches_timeout_layer() {
     let app = build_test_app_with_config(config, sink);
     let server = TestServer::new(app);
 
-    let resp = server.get("/health").await;
+    let resp = server.get("/healthz").await;
     resp.assert_status(StatusCode::OK);
 }
 
@@ -368,12 +368,12 @@ async fn overlong_uri_returns_414_uri_too_long() {
     let app = build_test_app(sink);
     let server = TestServer::new(app);
 
-    // Build a URI well over the 8 KiB cap. The leading `/health?` plus
+    // Build a URI well over the 8 KiB cap. The leading `/healthz?` plus
     // 9000 ASCII bytes of query string puts us comfortably past the
-    // limit. We hit `/health` because it is the simplest always-mounted
+    // limit. We hit `/healthz` because it is the simplest always-mounted
     // route; the cap is enforced before route matching.
     let big_param = "a".repeat(9_000);
-    let url = format!("/health?x={big_param}");
+    let url = format!("/healthz?x={big_param}");
     let resp = server.get(&url).await;
 
     resp.assert_status(StatusCode::URI_TOO_LONG);
@@ -385,7 +385,7 @@ async fn overlong_uri_returns_414_uri_too_long() {
 #[tokio::test]
 async fn admin_bind_serves_health_on_second_listener() {
     // Bind two ephemeral ports, spin up the main and admin routers,
-    // and confirm `/health` is reachable on both. The integration test
+    // and confirm `/healthz` is reachable on both. The integration test
     // proves that `main.rs::run` would have a working second listener
     // when `server.admin_bind` is set. We drive the server directly
     // rather than spawning the binary so the test runs in-process.
@@ -441,15 +441,15 @@ async fn admin_bind_serves_health_on_second_listener() {
         .await
     });
 
-    let client = reqwest_lite_get(main_addr, "/health").await;
-    assert_eq!(client.0, 200, "main /health responded");
+    let client = reqwest_lite_get(main_addr, "/healthz").await;
+    assert_eq!(client.0, 200, "main /healthz responded");
     assert!(
         client.1.contains("\"status\""),
         "main body contained status"
     );
 
-    let admin = reqwest_lite_get(admin_addr, "/health").await;
-    assert_eq!(admin.0, 200, "admin /health responded");
+    let admin = reqwest_lite_get(admin_addr, "/healthz").await;
+    assert_eq!(admin.0, 200, "admin /healthz responded");
     assert!(
         admin.1.contains("\"status\""),
         "admin body contained status"
@@ -559,7 +559,7 @@ async fn serve_listener_max_connections_holds_excess_request_work() {
     }));
 
     let mut held = TcpStream::connect(addr).await.expect("connect held");
-    held.write_all(format!("GET /health HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
+    held.write_all(format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
         .await
         .expect("write held partial headers");
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -567,7 +567,8 @@ async fn serve_listener_max_connections_holds_excess_request_work() {
     let mut queued = TcpStream::connect(addr).await.expect("connect queued");
     queued
         .write_all(
-            format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+            format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
         )
         .await
         .expect("write queued request");
@@ -627,11 +628,11 @@ async fn trusted_proxy_forwarded_for_reaches_audit_on_real_listener() {
 
     let response = reqwest_lite_get_with_headers(
         addr,
-        "/health",
+        "/healthz",
         &[("X-Forwarded-For", "203.0.113.10, 127.0.0.1")],
     )
     .await;
-    assert_eq!(response.0, 200, "/health responded through listener");
+    assert_eq!(response.0, 200, "/healthz responded through listener");
 
     let records = inmem.snapshot();
     assert_eq!(records.len(), 1);
@@ -647,7 +648,7 @@ async fn assert_incomplete_header_closes(addr: SocketAddr) {
 
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     stream
-        .write_all(format!("GET /health HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
+        .write_all(format!("GET /healthz HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
         .await
         .expect("write partial headers");
 

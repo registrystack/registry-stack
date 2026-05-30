@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/datasets/subject_registry/subject?canonical_id={{canonicalId}}
+  url: {{baseUrl}}/v1/datasets/subject_registry/entities/subject/records?canonical_id={{canonicalId}}
   body: none
   auth: bearer
 }

@@ -386,6 +386,7 @@ impl OperationalAuditEvent {
 pub struct AuditPipeline {
     sink: Arc<dyn registry_platform_audit::AuditSink>,
     chain: Arc<OnceCell<registry_platform_audit::ChainState>>,
+    chain_hasher: registry_platform_audit::AuditChainHasher,
 }
 
 impl std::fmt::Debug for AuditPipeline {
@@ -397,9 +398,21 @@ impl std::fmt::Debug for AuditPipeline {
 impl AuditPipeline {
     #[must_use]
     pub fn new(sink: Arc<dyn registry_platform_audit::AuditSink>) -> Self {
+        Self::new_with_chain_hasher(
+            sink,
+            registry_platform_audit::AuditChainHasher::unkeyed_dev_only(),
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_chain_hasher(
+        sink: Arc<dyn registry_platform_audit::AuditSink>,
+        chain_hasher: registry_platform_audit::AuditChainHasher,
+    ) -> Self {
         Self {
             sink,
             chain: Arc::new(OnceCell::new()),
+            chain_hasher,
         }
     }
 
@@ -415,7 +428,11 @@ impl AuditPipeline {
         let chain = self
             .chain
             .get_or_try_init(|| async {
-                registry_platform_audit::ChainState::bootstrap(self.sink.as_ref()).await
+                registry_platform_audit::ChainState::bootstrap_or_start_empty(
+                    self.sink.as_ref(),
+                    self.chain_hasher.clone(),
+                )
+                .await
             })
             .await?;
         chain.append(self.sink.as_ref(), record).await?;
@@ -844,23 +861,35 @@ fn audit_path(path: &str, context: &AuditContextExt, endpoint_kind: EndpointKind
 fn redacted_single_record_path(path: &str) -> Option<String> {
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     match segments.as_slice() {
-        ["datasets", dataset, entity, id]
+        ["v1", "datasets", dataset, "entities", entity, "records", id]
             if !dataset.is_empty()
                 && !entity.is_empty()
                 && !id.is_empty()
                 && *id != "schema"
                 && *id != "verify" =>
         {
-            Some(format!("/datasets/{dataset}/{entity}/{{id}}"))
+            Some(format!(
+                "/v1/datasets/{dataset}/entities/{entity}/records/{{id}}"
+            ))
         }
-        ["datasets", dataset, entity, id, relationship]
+        [
+            "v1",
+            "datasets",
+            dataset,
+            "entities",
+            entity,
+            "records",
+            id,
+            "relationships",
+            relationship,
+        ]
             if !dataset.is_empty()
                 && !entity.is_empty()
                 && !id.is_empty()
                 && !relationship.is_empty() =>
         {
             Some(format!(
-                "/datasets/{dataset}/{entity}/{{id}}/{relationship}"
+                "/v1/datasets/{dataset}/entities/{entity}/records/{{id}}/relationships/{relationship}"
             ))
         }
         ["ogc", "v1", "datasets", dataset, "collections", collection, "items", feature]
@@ -964,11 +993,11 @@ fn auth_mode_label(mode: crate::auth::AuthMode) -> &'static str {
 }
 
 fn classify_endpoint(path: &str) -> EndpointKind {
-    if path == "/health" {
+    if path == "/healthz" {
         EndpointKind::Health
     } else if path == "/ready" {
         EndpointKind::Ready
-    } else if path == "/datasets" || path == "/metadata" || path.starts_with("/metadata/") {
+    } else if path == "/v1/datasets" || path == "/metadata" || path.starts_with("/metadata/") {
         EndpointKind::Catalog
     } else if path.starts_with("/admin") {
         EndpointKind::Admin
@@ -978,7 +1007,7 @@ fn classify_endpoint(path: &str) -> EndpointKind {
         classify_edr_endpoint(path)
     } else if path.starts_with("/ogc/v1/") {
         classify_ogc_endpoint(path)
-    } else if path.starts_with("/datasets/") {
+    } else if path.starts_with("/v1/datasets/") {
         classify_dataset_endpoint(path)
     } else {
         EndpointKind::Other
@@ -1009,16 +1038,22 @@ fn classify_edr_endpoint(path: &str) -> EndpointKind {
 fn classify_dataset_endpoint(path: &str) -> EndpointKind {
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     match segments.as_slice() {
-        ["datasets", _dataset] => EndpointKind::Dataset,
-        ["datasets", _dataset, _entity, "schema"] => EndpointKind::Schema,
-        ["datasets", _dataset, "aggregates"] => EndpointKind::AggregateList,
-        ["datasets", _dataset, "aggregates", _aggregate]
-        | ["datasets", _dataset, "aggregates", _aggregate, "query"] => EndpointKind::Aggregate,
-        ["datasets", _dataset, "aggregates", _aggregate, "metadata"] => EndpointKind::AggregateList,
-        ["datasets", _dataset, _entity, "verify"] => EndpointKind::Verify,
-        ["datasets", _dataset, _entity] => EndpointKind::Rows,
-        ["datasets", _dataset, _entity, _id] => EndpointKind::Rows,
-        ["datasets", _dataset, _entity, _id, _relationship] => EndpointKind::Rows,
+        ["v1", "datasets", _dataset] => EndpointKind::Dataset,
+        ["v1", "datasets", _dataset, "entities", _entity, "schema"] => EndpointKind::Schema,
+        ["v1", "datasets", _dataset, "aggregates"] => EndpointKind::AggregateList,
+        ["v1", "datasets", _dataset, "aggregates", _aggregate]
+        | ["v1", "datasets", _dataset, "aggregates", _aggregate, "query"] => {
+            EndpointKind::Aggregate
+        }
+        ["v1", "datasets", _dataset, "aggregates", _aggregate, "metadata"] => {
+            EndpointKind::AggregateList
+        }
+        ["v1", "datasets", _dataset, "entities", _entity, "verify"] => EndpointKind::Verify,
+        ["v1", "datasets", _dataset, "entities", _entity, "records"] => EndpointKind::Rows,
+        ["v1", "datasets", _dataset, "entities", _entity, "records", _id] => EndpointKind::Rows,
+        ["v1", "datasets", _dataset, "entities", _entity, "records", _id, "relationships", _relationship] => {
+            EndpointKind::Rows
+        }
         _ => EndpointKind::Dataset,
     }
 }
@@ -1026,41 +1061,43 @@ fn classify_dataset_endpoint(path: &str) -> EndpointKind {
 fn infer_context_from_path(path: &str) -> AuditContextExt {
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     match segments.as_slice() {
-        ["datasets", dataset] => AuditContextExt {
+        ["v1", "datasets", dataset] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, "aggregates"] => AuditContextExt {
+        ["v1", "datasets", dataset, "aggregates"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, "aggregates", aggregate]
-        | ["datasets", dataset, "aggregates", aggregate, "query"]
-        | ["datasets", dataset, "aggregates", aggregate, "metadata"] => AuditContextExt {
+        ["v1", "datasets", dataset, "aggregates", aggregate]
+        | ["v1", "datasets", dataset, "aggregates", aggregate, "query"]
+        | ["v1", "datasets", dataset, "aggregates", aggregate, "metadata"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             aggregate_id: Some((*aggregate).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, entity]
-        | ["datasets", dataset, entity, "schema"]
-        | ["datasets", dataset, entity, "verify"] => AuditContextExt {
+        ["v1", "datasets", dataset, "entities", entity, "records"]
+        | ["v1", "datasets", dataset, "entities", entity, "schema"]
+        | ["v1", "datasets", dataset, "entities", entity, "verify"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             entity_name: Some((*entity).to_string()),
             ..AuditContextExt::default()
         },
-        ["datasets", dataset, entity, id] => AuditContextExt {
-            dataset_id: Some((*dataset).to_string()),
-            entity_name: Some((*entity).to_string()),
-            primary_key: Some((*id).to_string()),
-            ..AuditContextExt::default()
-        },
-        ["datasets", dataset, entity, id, relationship] => AuditContextExt {
+        ["v1", "datasets", dataset, "entities", entity, "records", id] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             entity_name: Some((*entity).to_string()),
             primary_key: Some((*id).to_string()),
-            relationship: Some((*relationship).to_string()),
             ..AuditContextExt::default()
         },
+        ["v1", "datasets", dataset, "entities", entity, "records", id, "relationships", relationship] => {
+            AuditContextExt {
+                dataset_id: Some((*dataset).to_string()),
+                entity_name: Some((*entity).to_string()),
+                primary_key: Some((*id).to_string()),
+                relationship: Some((*relationship).to_string()),
+                ..AuditContextExt::default()
+            }
+        }
         ["ogc", "v1", "datasets", dataset, "collections", collection, "items"] => AuditContextExt {
             dataset_id: Some((*dataset).to_string()),
             collection_id: Some((*collection).to_string()),
@@ -1104,14 +1141,14 @@ mod tests {
 
     #[test]
     fn classify_endpoint_buckets() {
-        assert_eq!(classify_endpoint("/health"), EndpointKind::Health);
+        assert_eq!(classify_endpoint("/healthz"), EndpointKind::Health);
         assert_eq!(classify_endpoint("/ready"), EndpointKind::Ready);
-        assert_eq!(classify_endpoint("/datasets"), EndpointKind::Catalog);
+        assert_eq!(classify_endpoint("/v1/datasets"), EndpointKind::Catalog);
         assert_eq!(
             classify_endpoint("/metadata/dcat/bregdcat-ap"),
             EndpointKind::Catalog
         );
-        assert_eq!(classify_endpoint("/admin/reload"), EndpointKind::Admin);
+        assert_eq!(classify_endpoint("/admin/v1/reload"), EndpointKind::Admin);
         assert_eq!(
             classify_endpoint("/ogc/v1/datasets/civic/collections/facilities/items"),
             EndpointKind::OgcCollectionItems
@@ -1121,7 +1158,7 @@ mod tests {
             EndpointKind::OgcFeature
         );
         assert_eq!(
-            classify_endpoint("/datasets/x/individual/verify"),
+            classify_endpoint("/v1/datasets/x/entities/individual/verify"),
             EndpointKind::Verify
         );
         assert_eq!(
@@ -1130,7 +1167,10 @@ mod tests {
         );
         assert_eq!(classify_endpoint("/claims/evaluate"), EndpointKind::Other);
         assert_eq!(classify_endpoint("/credentials/issue"), EndpointKind::Other);
-        assert_eq!(classify_endpoint("/datasets/x/rows"), EndpointKind::Rows);
+        assert_eq!(
+            classify_endpoint("/v1/datasets/x/entities/rows/records"),
+            EndpointKind::Rows
+        );
         assert_eq!(classify_endpoint("/anything-else"), EndpointKind::Other);
     }
 

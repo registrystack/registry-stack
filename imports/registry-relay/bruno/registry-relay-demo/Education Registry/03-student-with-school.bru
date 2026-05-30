@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/datasets/education_registry/student/{{studentAlias}}?expand=school
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/student/records/{{studentAlias}}?expand=school
   body: none
   auth: bearer
 }

@@ -34,7 +34,7 @@ fn sample_record() -> AuditRecord {
         auth_mode: Some("api_key".to_string()),
         remote_addr: "127.0.0.1".to_string(),
         method: "GET".to_string(),
-        path: "/datasets".to_string(),
+        path: "/v1/datasets".to_string(),
         endpoint_kind: EndpointKind::Catalog,
         dataset_id: None,
         entity_name: None,
@@ -566,7 +566,7 @@ async fn middleware_hashes_configured_sensitive_query_values() {
     };
     let app = Router::new()
         .route(
-            "/datasets/social_registry/individual",
+            "/v1/datasets/social_registry/entities/individual/records",
             get(|| async {
                 let mut response = StatusCode::OK.into_response();
                 response.extensions_mut().insert(AuditContextExt {
@@ -586,7 +586,7 @@ async fn middleware_hashes_configured_sensitive_query_values() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/datasets/social_registry/individual?id=IND-001234&limit=10")
+                .uri("/v1/datasets/social_registry/entities/individual/records?id=IND-001234&limit=10")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -664,7 +664,7 @@ async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
     let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
-            "/datasets/social_registry/individual/IND-001234",
+            "/v1/datasets/social_registry/entities/individual/records/IND-001234",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
@@ -674,7 +674,7 @@ async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/datasets/social_registry/individual/IND-001234")
+                .uri("/v1/datasets/social_registry/entities/individual/records/IND-001234")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -690,7 +690,10 @@ async fn middleware_hashes_primary_key_and_redacts_single_record_path() {
         records[0]
     );
     let parsed = captured_record(&records[0]);
-    assert_eq!(parsed["path"], "/datasets/social_registry/individual/{id}");
+    assert_eq!(
+        parsed["path"],
+        "/v1/datasets/social_registry/entities/individual/records/{id}"
+    );
     assert_eq!(
         parsed["primary_key"],
         sensitive_value_hash("primary_key:social_registry:individual", "IND-001234")
@@ -704,20 +707,20 @@ async fn middleware_primary_key_hash_is_stable_and_context_bound() {
     let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
-            "/datasets/social_registry/individual/IND-001234",
+            "/v1/datasets/social_registry/entities/individual/records/IND-001234",
             get(|| async { StatusCode::OK }),
         )
         .route(
-            "/datasets/other_registry/individual/IND-001234",
+            "/v1/datasets/other_registry/entities/individual/records/IND-001234",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
         .layer(Extension(pipeline.clone()));
 
     for uri in [
-        "/datasets/social_registry/individual/IND-001234",
-        "/datasets/social_registry/individual/IND-001234",
-        "/datasets/other_registry/individual/IND-001234",
+        "/v1/datasets/social_registry/entities/individual/records/IND-001234",
+        "/v1/datasets/social_registry/entities/individual/records/IND-001234",
+        "/v1/datasets/other_registry/entities/individual/records/IND-001234",
     ] {
         let resp = app
             .clone()
@@ -770,7 +773,7 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
         };
         let app = Router::new()
             .route(
-                "/datasets/social_registry/individual/IND-001234",
+                "/v1/datasets/social_registry/entities/individual/records/IND-001234",
                 get(|| async { StatusCode::OK }),
             )
             .layer(from_fn(audit_layer))
@@ -781,7 +784,7 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri("/datasets/social_registry/individual/IND-001234")
+                    .uri("/v1/datasets/social_registry/entities/individual/records/IND-001234")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -829,7 +832,7 @@ async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
     let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
-            "/datasets/social_registry/household/HH-001/members",
+            "/v1/datasets/social_registry/entities/household/records/HH-001/relationships/members",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
@@ -839,7 +842,7 @@ async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/datasets/social_registry/household/HH-001/members")
+                .uri("/v1/datasets/social_registry/entities/household/records/HH-001/relationships/members")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -853,7 +856,7 @@ async fn middleware_redacts_relationship_path_id_without_losing_relationship() {
     let parsed = captured_record(&records[0]);
     assert_eq!(
         parsed["path"],
-        "/datasets/social_registry/household/{id}/members"
+        "/v1/datasets/social_registry/entities/household/records/{id}/relationships/members"
     );
     assert_eq!(parsed["relationship"], "members");
     assert_eq!(
@@ -867,24 +870,24 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
     let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
         .route(
-            "/datasets/social_registry/individual/schema",
+            "/v1/datasets/social_registry/entities/individual/schema",
             get(|| async { StatusCode::OK }),
         )
         .route(
-            "/datasets/social_registry/individual/verify",
+            "/v1/datasets/social_registry/entities/individual/verify",
             get(|| async { StatusCode::OK }),
         )
         .route(
-            "/datasets/social_registry/aggregates",
+            "/v1/datasets/social_registry/aggregates",
             get(|| async { StatusCode::OK }),
         )
         .layer(from_fn(audit_layer))
         .layer(Extension(pipeline.clone()));
 
     for uri in [
-        "/datasets/social_registry/individual/schema",
-        "/datasets/social_registry/individual/verify",
-        "/datasets/social_registry/aggregates",
+        "/v1/datasets/social_registry/entities/individual/schema",
+        "/v1/datasets/social_registry/entities/individual/verify",
+        "/v1/datasets/social_registry/aggregates",
     ] {
         let resp = app
             .clone()
@@ -914,9 +917,9 @@ async fn middleware_leaves_non_record_dataset_paths_unredacted() {
     assert_eq!(
         paths,
         [
-            "/datasets/social_registry/individual/schema",
-            "/datasets/social_registry/individual/verify",
-            "/datasets/social_registry/aggregates",
+            "/v1/datasets/social_registry/entities/individual/schema",
+            "/v1/datasets/social_registry/entities/individual/verify",
+            "/v1/datasets/social_registry/aggregates",
         ]
     );
 }

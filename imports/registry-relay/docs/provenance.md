@@ -3,12 +3,12 @@
 `registry-relay` can return W3C Verifiable Credentials (VCs), signed as
 compact JWS, for two response families:
 
-- `GET /datasets/{dataset_id}/aggregates/{aggregate_id}` -> `AggregateResult`
-- `GET /datasets/{dataset_id}/{entity}/{id}` -> `EntityRecord`
+- `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}` -> `AggregateResult`
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}` -> `EntityRecord`
 
-Evidence verification uses a separate server-to-server JWT receipt media type,
-documented in [evidence-verification.md](evidence-verification.md), because it is not
-a holder-presentable VC.
+Evidence verification is owned by Registry Notary. Relay publishes
+evidence-offering discovery metadata, but does not host claim or evidence
+verification execution endpoints.
 
 The feature is opt-in twice over: by the operator (config flag) and by
 the caller (Accept header). When either says no, responses remain plain
@@ -130,7 +130,7 @@ config change and a process restart.
 The handler returns a signed VC only when the caller asks for one:
 
 ```http
-GET /datasets/social_registry/individual/ind-123 HTTP/1.1
+GET /v1/datasets/social_registry/entities/individual/records/ind-123 HTTP/1.1
 Accept: application/vc+jwt
 ```
 
@@ -194,9 +194,10 @@ Payload (top-level VCDM 2.0; no nested `vc` claim):
 ```
 
 `type[1]` is one of `AggregateResult` or `EntityRecord`.
-Subject URIs follow `<catalog.base_url>/datasets/<dataset>/<entity>/<id>`
+Subject URIs follow
+`<catalog.base_url>/v1/datasets/<dataset>/entities/<entity>/records/<id>`
 for entity claims and
-`<catalog.base_url>/datasets/<dataset>/aggregates/<aggregate_id>`
+`<catalog.base_url>/v1/datasets/<dataset>/aggregates/<aggregate_id>`
 for aggregates.
 
 ## PublicSchema.org Entity Credentials
@@ -284,8 +285,7 @@ three additional endpoints, all unauthenticated and content-cacheable:
   signed under a rotated-out key still verify.
 - `GET /schemas/{claim_type}/{version}` returns the JSON Schema (draft
   2020-12) describing the `credentialSubject` shape for that claim
-  type. Paths: `aggregate-result/v1.json`, `entity-record/v1.json`, and the
-  legacy `verify-result/v1.json` schema kept for old verifier fixtures.
+  type. Paths: `aggregate-result/v1.json` and `entity-record/v1.json`.
 - `GET /contexts/{vocab}/{version}` returns the JSON-LD context
   referenced from VC `@context`.
 
@@ -300,7 +300,7 @@ When a VC is issued, the audit envelope for the request grows a
 `provenance` block alongside the regular fields:
 
 ```jsonl
-{"ts":"2026-05-16T09:30:00.123Z","request_id":"01J5K8...","path":"/datasets/social_registry/individual/ind-123","status_code":200,"provenance":{"event":"provenance.vc.issued","iss":"did:web:data.example.gov","kid":"did:web:data.example.gov#issuance","jti":"urn:uuid:01J5K8M0...","claim_type":"EntityRecord","subject":"https://data.example.gov/datasets/social_registry/individual/ind-123","validity":{"iat":1747387800,"nbf":1747387800,"exp":1747388100}}}
+{"ts":"2026-05-16T09:30:00.123Z","request_id":"01J5K8...","path":"/v1/datasets/social_registry/entities/individual/records/ind-123","status_code":200,"provenance":{"event":"provenance.vc.issued","iss":"did:web:data.example.gov","kid":"did:web:data.example.gov#issuance","jti":"urn:uuid:01J5K8M0...","claim_type":"EntityRecord","subject":"https://data.example.gov/v1/datasets/social_registry/entities/individual/records/ind-123","validity":{"iat":1747387800,"nbf":1747387800,"exp":1747388100}}}
 ```
 
 The `claim_type` field tracks `type[1]` of the VC. `kid` matches the
@@ -515,7 +515,7 @@ curl -fsS \
 curl -fsS \
   -H "Authorization: Bearer ${ROW_READ_API_KEY}" \
   -H "Accept: application/vc+jwt" \
-  "https://data.example.gov/datasets/social_registry/individual/ind-123" \
+  "https://data.example.gov/v1/datasets/social_registry/entities/individual/records/ind-123" \
   -o target/provenance/vc.jwt
 ```
 
@@ -561,8 +561,9 @@ node scripts/verify_vc_jwt.mjs \
 
 ### Fixture Corpus
 
-`tests/fixtures/vc/verify-result-v1/` contains a static VC-JWT, decoded
-payload, DID Document, and JSON Schema. It is signed outside
-`registry_relay` and verified by `tests/vc_external_verifier.rs` through
-the Node verifier. Add a new fixture directory whenever the public VC
-wire contract changes or a new claim type/version is introduced.
+`tests/fixtures/vc/entity-record-v1/` and
+`tests/fixtures/vc/aggregate-result-v1/` contain static VC-JWTs, decoded
+payloads, DID Documents, and JSON Schemas. They are signed outside
+`registry-relay` and verified by `tests/vc_external_verifier.rs` through
+the Node verifier. Add a new fixture directory whenever the public VC wire
+contract changes or a new claim type/version is introduced.

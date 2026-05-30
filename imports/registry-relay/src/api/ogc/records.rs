@@ -409,7 +409,7 @@ fn record_feature_json(
         ),
         link_abs(
             base_url,
-            &format!("/datasets/{}", dataset.dataset_id),
+            &format!("/v1/datasets/{}", dataset.dataset_id),
             "describes",
             "application/json",
             Some("Registry Relay dataset metadata"),
@@ -545,7 +545,9 @@ fn inject_entity_links(base_url: &str, dataset_id: &str, entity: &mut Value) {
     );
     entity_object.insert(
         "collection".to_string(),
-        json!(format!("{base_url}/datasets/{dataset_id}/{entity_name}")),
+        json!(format!(
+            "{base_url}/v1/datasets/{dataset_id}/entities/{entity_name}/records"
+        )),
     );
 }
 

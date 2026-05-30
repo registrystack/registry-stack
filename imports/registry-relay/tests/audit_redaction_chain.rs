@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_platform_audit::{
-    verify_chain, verify_jsonl_lines, ChainState, ChainVerificationError,
+    verify_chain, verify_jsonl_lines, AuditChainHasher, ChainState, ChainVerificationError,
 };
 use registry_relay::audit::redact::{
     redact_query_with_sensitive_fields, sensitive_value_hash, QueryRedactionError, QueryRedactor,
@@ -114,7 +114,8 @@ fn redaction_surfaces_invalid_utf8_query_encoding() {
 #[tokio::test]
 async fn platform_chained_envelopes_verify_and_detect_tampering() {
     let sink = InMemorySink::new();
-    let state = ChainState::new();
+    let hasher = AuditChainHasher::unkeyed_dev_only();
+    let state = ChainState::new(hasher.clone());
     let first = state
         .append(&sink, sample_record(1))
         .await
@@ -124,13 +125,13 @@ async fn platform_chained_envelopes_verify_and_detect_tampering() {
         .await
         .expect("second append");
 
-    let result = verify_chain(&[first.clone(), second.clone()]).expect("valid chain");
+    let result = verify_chain(&[first.clone(), second.clone()], &hasher).expect("valid chain");
     assert_eq!(result.records, 2);
     assert!(result.start_prev_hash.is_none());
     assert!(result.last_hash.is_some());
 
     second.record["request_id"] = serde_json::json!("REQ-99999");
-    let err = verify_chain(&[first, second]).expect_err("tampered chain");
+    let err = verify_chain(&[first, second], &hasher).expect_err("tampered chain");
     assert!(matches!(
         err,
         ChainVerificationError::RecordHashMismatch { line: 2 }
@@ -140,7 +141,7 @@ async fn platform_chained_envelopes_verify_and_detect_tampering() {
 #[tokio::test]
 async fn platform_verification_rejects_rotation_segment_without_genesis() {
     let sink = InMemorySink::new();
-    let state = ChainState::new();
+    let state = ChainState::unkeyed_dev_only();
     let first = state
         .append(&sink, sample_record(1))
         .await
@@ -168,7 +169,7 @@ async fn platform_verification_rejects_rotation_segment_without_genesis() {
 #[tokio::test]
 async fn ten_thousand_platform_record_chain_verification_smoke_is_quick() {
     let sink = InMemorySink::new();
-    let state = ChainState::new();
+    let state = ChainState::unkeyed_dev_only();
 
     for i in 0..10_000 {
         state.append(&sink, sample_record(i)).await.expect("append");

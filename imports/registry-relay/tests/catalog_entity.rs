@@ -1177,8 +1177,8 @@ async fn openapi_json_includes_visible_entity_semantic_extensions() {
     let body: Value = resp.json();
     assert_eq!(body["openapi"], "3.1.0");
     assert_eq!(body["info"]["version"], env!("CARGO_PKG_VERSION"));
-    assert!(body["paths"]["/datasets/social_registry/household"].is_object());
-    assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
+    assert!(body["paths"]["/v1/datasets/social_registry/entities/household/records"].is_object());
+    assert!(body["paths"]["/v1/datasets/social_registry/entities/individual/records"].is_null());
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
 
     let household = &body["components"]["schemas"]["Entity_social_registry_household"];
@@ -1240,7 +1240,8 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         "#/components/schemas/Pagination"
     );
 
-    let collection_get = &body["paths"]["/datasets/social_registry/household"]["get"];
+    let collection_get =
+        &body["paths"]["/v1/datasets/social_registry/entities/household/records"]["get"];
     assert_eq!(
         collection_get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/Entity_social_registry_householdCollection"
@@ -1264,7 +1265,8 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         .any(|parameter| parameter["name"] == "expand"
             && parameter["schema"]["enum"][0] == "members"));
 
-    let record_get = &body["paths"]["/datasets/social_registry/household/{id}"]["get"];
+    let record_get =
+        &body["paths"]["/v1/datasets/social_registry/entities/household/records/{id}"]["get"];
     assert_eq!(
         record_get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/Entity_social_registry_household"
@@ -1275,11 +1277,14 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         .iter()
         .any(|parameter| parameter["name"] == "id" && parameter["in"] == "path"));
 
-    assert!(body["paths"]["/datasets/social_registry/household/verify"].is_null());
+    assert!(
+        body["paths"]["/v1/datasets/social_registry/entities/household/records/verify"].is_null()
+    );
     assert!(body["paths"]["/evidence-offerings/{offering_id}/verifications"].is_null());
 
-    let relationship_get =
-        &body["paths"]["/datasets/social_registry/household/{id}/members"]["get"];
+    let relationship_get = &body["paths"]
+        ["/v1/datasets/social_registry/entities/household/records/{id}/relationships/members"]
+        ["get"];
     assert_eq!(
         relationship_get["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
             ["pagination"]["$ref"],
@@ -1292,27 +1297,30 @@ async fn openapi_json_describes_entity_v1_client_generation_surface() {
         .any(|parameter| parameter["name"] == "cursor"));
 
     assert_eq!(
-        body["paths"]["/datasets/social_registry/aggregates"]["get"]["responses"]["200"]["content"]
-            ["application/json"]["schema"]["$ref"],
+        body["paths"]["/v1/datasets/social_registry/aggregates"]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/AggregateListResponse"
     );
     assert_eq!(
-        body["paths"]["/datasets/social_registry/aggregates/{aggregate_id}"]["get"]["responses"]
+        body["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}"]["get"]["responses"]
             ["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/AggregateResult"
     );
     assert_eq!(
-        body["paths"]["/datasets/social_registry/aggregates/{aggregate_id}/query"]["post"]
+        body["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/query"]["post"]
             ["requestBody"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/AggregateQueryRequest"
     );
     assert_eq!(
-        body["paths"]["/datasets/social_registry/aggregates/{aggregate_id}/metadata"]["get"]
+        body["paths"]["/v1/datasets/social_registry/aggregates/{aggregate_id}/metadata"]["get"]
             ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/AggregateMetadata"
     );
-    assert!(body["paths"]["/datasets/social_registry/household/aggregates"].is_null());
-    assert!(body["paths"]["/datasets/social_registry/individual"].is_null());
+    assert!(
+        body["paths"]["/v1/datasets/social_registry/entities/household/records/aggregates"]
+            .is_null()
+    );
+    assert!(body["paths"]["/v1/datasets/social_registry/entities/individual/records"].is_null());
     assert!(body["components"]["schemas"]["Entity_social_registry_individual"].is_null());
 }
 
@@ -1354,8 +1362,8 @@ async fn openapi_json_includes_catalog_response_examples_for_redoc() {
             "get",
             "application/ld+json",
         ),
-        ("/datasets", "get", "application/json"),
-        ("/datasets/social_registry", "get", "application/json"),
+        ("/v1/datasets", "get", "application/json"),
+        ("/v1/datasets/social_registry", "get", "application/json"),
     ] {
         let value = response_example(path, method, media_type);
         assert!(
@@ -1365,7 +1373,7 @@ async fn openapi_json_includes_catalog_response_examples_for_redoc() {
     }
 
     assert_eq!(
-        response_example("/datasets", "get", "application/json")["data"][0]["dataset_id"],
+        response_example("/v1/datasets", "get", "application/json")["data"][0]["dataset_id"],
         "social_registry"
     );
     assert_eq!(
@@ -1473,12 +1481,12 @@ async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready
         "X-Api-Key"
     );
 
-    // `/health` and `/ready` are on the unauthenticated sub-router in
+    // `/healthz` and `/ready` are on the unauthenticated sub-router in
     // `server::build_app_with_provenance`. Their entries override the
     // document-level requirement so codegen and Scalar's auth panel do
     // not demand a bearer for them.
     assert_eq!(
-        body["paths"]["/health"]["get"]["security"],
+        body["paths"]["/healthz"]["get"]["security"],
         serde_json::json!([])
     );
     assert_eq!(
@@ -1490,7 +1498,8 @@ async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready
     // inherits the document-level requirement. Pick the entity
     // collection route as the representative case.
     assert!(
-        body["paths"]["/datasets/social_registry/household"]["get"]["security"].is_null(),
+        body["paths"]["/v1/datasets/social_registry/entities/household/records"]["get"]["security"]
+            .is_null(),
         "protected routes should inherit document-level security, not override it"
     );
 }
@@ -1500,7 +1509,7 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
     // Scalar's sidebar groups operations by `tags`. Without this, every
     // entity's operations collapse to identical labels and the sidebar
     // becomes unusable. Each operation gets exactly one tag:
-    //   - Service: /health, /ready
+    //   - Service: /healthz, /ready
     //   - Catalog: /metadata/catalog, /datasets, /datasets/{id}, DCAT-AP
     //   - "<dataset> / <entity>": every per-entity operation, including
     // The document-level `tags` array fixes sidebar order.
@@ -1522,10 +1531,10 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
 
     let entity_tag = "social_registry / household";
     for path in [
-        "/datasets/social_registry/household",
-        "/datasets/social_registry/household/{id}",
-        "/datasets/social_registry/household/schema",
-        "/datasets/social_registry/household/{id}/members",
+        "/v1/datasets/social_registry/entities/household/records",
+        "/v1/datasets/social_registry/entities/household/records/{id}",
+        "/v1/datasets/social_registry/entities/household/schema",
+        "/v1/datasets/social_registry/entities/household/records/{id}/relationships/members",
     ] {
         assert_eq!(
             body["paths"][path]["get"]["tags"],
@@ -1535,18 +1544,21 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
     }
     let aggregate_tag = "social_registry / aggregates";
     for (path, method) in [
-        ("/datasets/social_registry/aggregates", "get"),
-        ("/datasets/social_registry/aggregates/{aggregate_id}", "get"),
+        ("/v1/datasets/social_registry/aggregates", "get"),
         (
-            "/datasets/social_registry/aggregates/{aggregate_id}",
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}",
+            "get",
+        ),
+        (
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}",
             "post",
         ),
         (
-            "/datasets/social_registry/aggregates/{aggregate_id}/query",
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}/query",
             "post",
         ),
         (
-            "/datasets/social_registry/aggregates/{aggregate_id}/metadata",
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}/metadata",
             "get",
         ),
     ] {
@@ -1558,7 +1570,7 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
     }
 
     assert_eq!(
-        body["paths"]["/health"]["get"]["tags"],
+        body["paths"]["/healthz"]["get"]["tags"],
         serde_json::json!(["Service"])
     );
     assert_eq!(
@@ -1574,11 +1586,11 @@ async fn openapi_json_groups_operations_into_sidebar_tags() {
         serde_json::json!(["Catalog"])
     );
     assert_eq!(
-        body["paths"]["/datasets"]["get"]["tags"],
+        body["paths"]["/v1/datasets"]["get"]["tags"],
         serde_json::json!(["Catalog"])
     );
     assert_eq!(
-        body["paths"]["/datasets/social_registry"]["get"]["tags"],
+        body["paths"]["/v1/datasets/social_registry"]["get"]["tags"],
         serde_json::json!(["Catalog"])
     );
 }
@@ -1667,27 +1679,27 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
     // ---- operationId on every per-entity op ----
     for (path, expected) in [
         (
-            "/datasets/social_registry/household",
+            "/v1/datasets/social_registry/entities/household/records",
             "list_social_registry_household_records",
         ),
         (
-            "/datasets/social_registry/household/{id}",
+            "/v1/datasets/social_registry/entities/household/records/{id}",
             "get_social_registry_household_record",
         ),
         (
-            "/datasets/social_registry/aggregates",
+            "/v1/datasets/social_registry/aggregates",
             "list_social_registry_aggregates",
         ),
         (
-            "/datasets/social_registry/aggregates/{aggregate_id}",
+            "/v1/datasets/social_registry/aggregates/{aggregate_id}",
             "run_social_registry_aggregate",
         ),
         (
-            "/datasets/social_registry/household/schema",
+            "/v1/datasets/social_registry/entities/household/schema",
             "get_social_registry_household_field_schema",
         ),
         (
-            "/datasets/social_registry/household/{id}/members",
+            "/v1/datasets/social_registry/entities/household/records/{id}/relationships/members",
             "get_social_registry_household_members",
         ),
     ] {
@@ -1715,8 +1727,8 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
     );
 
     // ---- 401/403 envelope on a protected route, 404 on the record path ----
-    let collection_responses =
-        &body["paths"]["/datasets/social_registry/household"]["get"]["responses"];
+    let collection_responses = &body["paths"]
+        ["/v1/datasets/social_registry/entities/household/records"]["get"]["responses"];
     for code in ["401", "403", "default"] {
         assert_eq!(
             collection_responses[code]["content"]["application/problem+json"]["schema"]["$ref"],
@@ -1724,8 +1736,8 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
             "collection responses[{code}] must point at ProblemDetails"
         );
     }
-    let record_responses =
-        &body["paths"]["/datasets/social_registry/household/{id}"]["get"]["responses"];
+    let record_responses = &body["paths"]
+        ["/v1/datasets/social_registry/entities/household/records/{id}"]["get"]["responses"];
     assert_eq!(
         record_responses["404"]["content"]["application/problem+json"]["schema"]["$ref"],
         "#/components/schemas/ProblemDetails",
@@ -1739,8 +1751,8 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
     );
 
     // ---- per-filter parameter descriptions ----
-    let collection_params = body["paths"]["/datasets/social_registry/household"]["get"]
-        ["parameters"]
+    let collection_params = body["paths"]
+        ["/v1/datasets/social_registry/entities/household/records"]["get"]["parameters"]
         .as_array()
         .expect("collection parameters");
     let region_eq = collection_params
@@ -1772,8 +1784,8 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
 
     // ---- x-codeSamples on collection and record ----
     for path in [
-        "/datasets/social_registry/household",
-        "/datasets/social_registry/household/{id}",
+        "/v1/datasets/social_registry/entities/household/records",
+        "/v1/datasets/social_registry/entities/household/records/{id}",
     ] {
         let samples = body["paths"][path]["get"]["x-codeSamples"]
             .as_array()
@@ -1815,9 +1827,9 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
             })
     };
     for gated in [
-        "/datasets/social_registry/household",
-        "/datasets/social_registry/household/{id}",
-        "/datasets/social_registry/household/{id}/members",
+        "/v1/datasets/social_registry/entities/household/records",
+        "/v1/datasets/social_registry/entities/household/records/{id}",
+        "/v1/datasets/social_registry/entities/household/records/{id}/relationships/members",
     ] {
         let param = purpose_param(gated)
             .unwrap_or_else(|| panic!("{gated} must declare the Data-Purpose header parameter"));
@@ -1826,8 +1838,8 @@ async fn openapi_json_carries_scalar_friendly_metadata_and_operation_contract() 
         assert_eq!(param["schema"]["minLength"], 1, "{gated}");
     }
     for ungated in [
-        "/datasets/social_registry/household/schema",
-        "/datasets/social_registry/aggregates",
+        "/v1/datasets/social_registry/entities/household/schema",
+        "/v1/datasets/social_registry/aggregates",
     ] {
         assert!(
             purpose_param(ungated).is_none(),

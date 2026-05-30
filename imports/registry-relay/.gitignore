@@ -34,6 +34,9 @@ demo/output/
 # Local security-review scratch directory
 /.security-review/
 
+# Local documentation review notes
+docs/internal/
+
 # Runtime dataset caches
 cache/
 

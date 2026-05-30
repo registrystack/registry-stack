@@ -2,6 +2,8 @@
 
 This guide describes the V1 HTTP contract from a client and operator point of view. It is the practical reference for calling a running gateway.
 
+Status note: the REST route shape is under active design. Use the behavioral sections here for current semantics around auth, filters, pagination, metadata, errors, standards adapters, and provenance. Refresh the route table and static OpenAPI artifact once the REST design stabilizes.
+
 ## Listeners And Surfaces
 
 The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery, aggregates, OpenAPI, optional standards adapters, and optional provenance resources.
@@ -11,7 +13,7 @@ The admin listener is optional and only exists when `server.admin_bind` is confi
 Public unauthenticated routes:
 
 ```text
-GET /health
+GET /healthz
 GET /ready
 GET /docs
 GET /docs/scalar.js
@@ -41,20 +43,21 @@ GET /metadata/ogc/records
 GET /metadata/ogc/records/{record_id}
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
-GET /datasets
-GET /datasets/{dataset_id}
-GET /datasets/{dataset_id}/{entity}/schema
-GET /datasets/{dataset_id}/{entity}
-GET /datasets/{dataset_id}/{entity}/{id}
-GET /datasets/{dataset_id}/{entity}/{id}/{relationship}
-GET /datasets/{dataset_id}/aggregates
-GET /datasets/{dataset_id}/aggregates/{aggregate_id}
-POST /datasets/{dataset_id}/aggregates/{aggregate_id}/query
-GET /datasets/{dataset_id}/aggregates/{aggregate_id}/metadata
-GET /datasets/{dataset_id}/indicators
-GET /datasets/{dataset_id}/indicators/{indicator_id}
-GET /datasets/{dataset_id}/dimensions
-GET /datasets/{dataset_id}/dimensions/{dimension_id}
+GET /.well-known/api-catalog
+GET /v1/datasets
+GET /v1/datasets/{dataset_id}
+GET /v1/datasets/{dataset_id}/entities/{entity}/schema
+GET /v1/datasets/{dataset_id}/entities/{entity}/records
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}
+GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}
+GET /v1/datasets/{dataset_id}/aggregates
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}
+POST /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query
+GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata
+GET /v1/datasets/{dataset_id}/indicators
+GET /v1/datasets/{dataset_id}/indicators/{indicator_id}
+GET /v1/datasets/{dataset_id}/dimensions
+GET /v1/datasets/{dataset_id}/dimensions/{dimension_id}
 GET /ogc/v1                                 (feature: ogcapi-features)
 GET /ogc/v1/conformance                     (feature: ogcapi-features)
 GET /ogc/v1/collections                     (feature: ogcapi-features)
@@ -91,13 +94,13 @@ Admin routes on `server.admin_bind`:
 
 ```text
 GET /metrics
-POST /admin/datasets/{dataset_id}/tables/{table_id}/reload
-POST /admin/reload
+POST /admin/v1/datasets/{dataset_id}/tables/{table_id}/reload
+POST /admin/v1/reload
 ```
 
 `GET /metrics` returns Prometheus-style `text/plain` metrics for operators. It is intentionally admin-listener only and is not mounted on `server.bind`.
 
-`POST /admin/reload` reloads every configured resource and returns a compact per-resource report. Use the table-specific route when you need to reload only one source.
+`POST /admin/v1/reload` reloads every configured resource and returns a compact `status` plus `counts` summary. Use the table-specific route when you need to reload only one source.
 
 ## Authentication
 
@@ -147,9 +150,9 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 Entity routes use configured entity names, not storage table ids. For example:
 
 ```text
-GET /datasets/social_registry/individual?municipality_code=riverbend&limit=50
-GET /datasets/social_registry/individual/ind-123
-GET /datasets/social_registry/household/hh-42/members
+GET /v1/datasets/social_registry/entities/individual/records?municipality_code=riverbend&limit=50
+GET /v1/datasets/social_registry/entities/individual/records/ind-123
+GET /v1/datasets/social_registry/entities/household/records/hh-42/relationships/members
 ```
 
 Only fields exposed through `entities[].fields` appear in responses. If `fields` is omitted, every table column is exposed under its declared name. Storage-only columns should therefore be hidden by explicitly listing the public fields.
@@ -172,9 +175,11 @@ Operators are configured per field with `ops: [eq, in, gte, lte, between]`. Arbi
 
 Some entities declare `required_filters`. Collection reads for those entities must include at least one of those fields or the gateway returns `400 entity.filter_required`. This protects sensitive resources from accidental unfiltered enumeration.
 
+Collection reads accept at most 20 filter parameters. The cap applies before query planning so overly broad or machine-generated requests fail predictably.
+
 ## Pagination And Conditional Requests
 
-Collection routes support `limit` up to the entity's configured `max_limit`. Responses may include an opaque cursor for the next page. Treat cursors as server-owned tokens and pass them back unchanged.
+Collection routes support `limit` up to the entity's configured `max_limit`. Responses may include an opaque cursor for the next page. Treat cursors as server-owned tokens and pass them back unchanged. A cursor is bound to the query shape and the current snapshot generation; malformed, tampered, or stale cursors fail with `pagination.cursor_invalidated`.
 
 Entity collection and record responses include validators where supported. Clients can use `If-None-Match` to avoid re-downloading unchanged content. A matching validator returns `304 Not Modified`.
 
@@ -195,12 +200,14 @@ When `require_purpose_header: true`, missing purpose returns `400 auth.purpose_r
 The metadata catalog is route-neutral and does not inline Relay-specific runtime
 adapters. Standards routes remain canonical at their protocol roots, such as
 `/ogc/v1/records`, `/ogc/v1`, and `/dci/{registry}/registry/sync/...`.
-`/datasets/{dataset_id}` acts as the Relay-native discovery surface that
+`/v1/datasets/{dataset_id}` acts as the Relay-native discovery surface that
 connects them back to the native dataset model.
 
 `GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, evidence-offering metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. They do not grant row, evidence verification, aggregate, or admin access.
 
-Relay-native discovery remains under `/datasets` and runtime entity routes. Portable metadata consumers should use `/metadata/*` or static publication.
+Relay-native discovery remains under `/v1/datasets` and runtime entity routes. Portable metadata consumers should use `/metadata/*` or static publication.
+
+Metadata responses include private validators for the authenticated view. Clients can send `If-None-Match`; unchanged metadata returns `304 Not Modified`. The gateway also sets `Cache-Control: private, no-store` and `Vary: Authorization` so shared caches do not reuse one principal's scoped catalog for another caller.
 
 `GET /openapi.json` is also auth-gated and metadata-filtered. The generated document includes only the operations and dataset/entity tags visible to the caller. `GET /docs` serves the local Scalar viewer and asks for a bearer token before fetching `GET /openapi.json`.
 
@@ -262,14 +269,22 @@ GET /metadata/evidence-offerings/individual_name_evidence
 
 Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Evidence offerings are discovery records for Registry Notary. Relay publishes `access.kind: registry-notary` metadata with the advertised Notary endpoint or discovery URL; clients submit claims and evidence to Registry Notary, not Relay.
 
+The list endpoint accepts metadata-only filters:
+
+```text
+GET /metadata/evidence-offerings?evidence_type=BirthCertificate
+GET /metadata/evidence-offerings?country=TH
+GET /metadata/evidence-offerings?procedure_context=https://example.gov/procedure/benefit-intake
+```
+
 Aggregates are predeclared in config. Clients can list available aggregates and execute one by id:
 
 ```text
-GET /datasets/social_registry/aggregates
-GET /datasets/social_registry/indicators
-GET /datasets/social_registry/dimensions
-GET /datasets/social_registry/aggregates/by_municipality
-POST /datasets/social_registry/aggregates/by_municipality/query
+GET /v1/datasets/social_registry/aggregates
+GET /v1/datasets/social_registry/indicators
+GET /v1/datasets/social_registry/dimensions
+GET /v1/datasets/social_registry/aggregates/by_municipality
+POST /v1/datasets/social_registry/aggregates/by_municipality/query
 ```
 
 Indicator and dimension discovery is dataset-scoped and generated from aggregate declarations. Reused indicator or dimension ids are merged into one discovery record with `queryable_via`, `valid_dimensions` for indicators, and links back to the aggregate routes.

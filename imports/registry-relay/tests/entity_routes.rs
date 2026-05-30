@@ -461,7 +461,7 @@ audit:
 #[tokio::test]
 async fn entity_schema_route_matches() {
     let resp = server()
-        .get("/datasets/social_registry/individual/schema")
+        .get("/v1/datasets/social_registry/entities/individual/schema")
         .await;
 
     resp.assert_status(StatusCode::NOT_IMPLEMENTED);
@@ -544,9 +544,9 @@ audit:
     );
 
     for url in [
-        "/datasets/social_registry/individual",
-        "/datasets/social_registry/individual/ind-1",
-        "/datasets/social_registry/individual/ind-1/household",
+        "/v1/datasets/social_registry/entities/individual/records",
+        "/v1/datasets/social_registry/entities/individual/records/ind-1",
+        "/v1/datasets/social_registry/entities/individual/records/ind-1/relationships/household",
     ] {
         let resp = server.get(url).await;
         resp.assert_status(StatusCode::NOT_IMPLEMENTED);
@@ -565,7 +565,7 @@ audit:
 async fn entity_schema_route_returns_metadata_schema_when_state_installed() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/household/schema")
+        .get("/v1/datasets/social_registry/entities/household/schema")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -601,7 +601,7 @@ async fn entity_schema_route_returns_metadata_schema_when_state_installed() {
 async fn entity_schema_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
-        .get("/datasets/social_registry/household/schema")
+        .get("/v1/datasets/social_registry/entities/household/schema")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -609,7 +609,7 @@ async fn entity_schema_returns_etag_and_honors_if_none_match() {
     assert!(etag.starts_with(r#""sha256:"#));
 
     let cached = server
-        .get("/datasets/social_registry/household/schema")
+        .get("/v1/datasets/social_registry/entities/household/schema")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -619,7 +619,9 @@ async fn entity_schema_returns_etag_and_honors_if_none_match() {
 
 #[tokio::test]
 async fn entity_collection_route_matches() {
-    let resp = server().get("/datasets/social_registry/individual").await;
+    let resp = server()
+        .get("/v1/datasets/social_registry/entities/individual/records")
+        .await;
 
     resp.assert_status(StatusCode::NOT_IMPLEMENTED);
     assert_eq!(resp.header("content-type"), "application/problem+json");
@@ -629,7 +631,7 @@ async fn entity_collection_route_matches() {
 async fn entity_collection_route_executes_query_when_state_installed() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/household?region=north")
+        .get("/v1/datasets/social_registry/entities/household/records?region=north")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -651,14 +653,14 @@ async fn entity_collection_route_executes_query_when_state_installed() {
 async fn entity_collection_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
-        .get("/datasets/social_registry/household?region=north")
+        .get("/v1/datasets/social_registry/entities/household/records?region=north")
         .await;
 
     resp.assert_status(StatusCode::OK);
     let etag = resp.header("etag").to_str().expect("etag").to_string();
 
     let cached = server
-        .get("/datasets/social_registry/household?region=north")
+        .get("/v1/datasets/social_registry/entities/household/records?region=north")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -681,7 +683,7 @@ async fn entity_collection_validates_query_before_cached_not_modified() {
     .expect("etag");
 
     let cached = server
-        .get("/datasets/social_registry/household?limit=0")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=0")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -694,7 +696,7 @@ async fn entity_collection_validates_query_before_cached_not_modified() {
 async fn entity_collection_route_parses_allowed_filter_ops() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/household?region.in=north,missing")
+        .get("/v1/datasets/social_registry/entities/household/records?region.in=north,missing")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -716,7 +718,7 @@ async fn entity_collection_route_parses_allowed_filter_ops() {
 async fn sensitive_fields_remain_in_authorized_projection() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/individual?id=p-1")
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
         .add_header("data-purpose", "casework")
         .await;
 
@@ -735,7 +737,7 @@ async fn entity_collection_route_paginates_with_opaque_cursor() {
     let server = server_with_query().await;
 
     let first = server
-        .get("/datasets/social_registry/household?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=1")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -753,7 +755,8 @@ async fn entity_collection_route_paginates_with_opaque_cursor() {
         .expect("link")
         .contains(&format!("cursor={cursor}")));
 
-    let url = format!("/datasets/social_registry/household?limit=1&cursor={cursor}");
+    let url =
+        format!("/v1/datasets/social_registry/entities/household/records?limit=1&cursor={cursor}");
     let second = server.get(&url).await;
     second.assert_status(StatusCode::OK);
     let body: Value = second.json();
@@ -770,7 +773,7 @@ async fn entity_collection_cursor_mismatch_returns_bad_request() {
     let server = server_with_query().await;
 
     let first = server
-        .get("/datasets/social_registry/household?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=1")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -778,7 +781,7 @@ async fn entity_collection_cursor_mismatch_returns_bad_request() {
         .as_str()
         .expect("first page has cursor");
 
-    let url = format!("/datasets/social_registry/household?limit=1&region=north&cursor={cursor}");
+    let url = format!("/v1/datasets/social_registry/entities/household/records?limit=1&region=north&cursor={cursor}");
     let resp = server.get(&url).await;
     resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
@@ -797,7 +800,7 @@ async fn entity_collection_stale_cursor_returns_bad_request() {
         server_with_query_version_and_signer("01J5K8M0000000000000000000", Arc::clone(&signer))
             .await;
     let first = old_server
-        .get("/datasets/social_registry/household?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=1")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -808,7 +811,8 @@ async fn entity_collection_stale_cursor_returns_bad_request() {
     let new_server =
         server_with_query_version_and_signer("01J5K8M0000000000000000001", Arc::clone(&signer))
             .await;
-    let url = format!("/datasets/social_registry/household?limit=1&cursor={cursor}");
+    let url =
+        format!("/v1/datasets/social_registry/entities/household/records?limit=1&cursor={cursor}");
     let resp = new_server.get(&url).await;
     resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
@@ -818,7 +822,7 @@ async fn entity_collection_stale_cursor_returns_bad_request() {
 #[tokio::test]
 async fn entity_record_route_matches() {
     let resp = server()
-        .get("/datasets/social_registry/individual/abc123")
+        .get("/v1/datasets/social_registry/entities/individual/records/abc123")
         .await;
 
     resp.assert_status(StatusCode::NOT_IMPLEMENTED);
@@ -828,13 +832,15 @@ async fn entity_record_route_matches() {
 #[tokio::test]
 async fn entity_record_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
-    let resp = server.get("/datasets/social_registry/household/hh-1").await;
+    let resp = server
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1")
+        .await;
 
     resp.assert_status(StatusCode::OK);
     let etag = resp.header("etag").to_str().expect("etag").to_string();
 
     let cached = server
-        .get("/datasets/social_registry/household/hh-1")
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1")
         .add_header("if-none-match", &etag)
         .await;
 
@@ -846,7 +852,7 @@ async fn entity_record_returns_etag_and_honors_if_none_match() {
 async fn entity_record_rejects_whitespace_purpose_header() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/individual/p-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1")
         .add_header("data-purpose", "   ")
         .await;
 
@@ -858,7 +864,7 @@ async fn entity_record_rejects_whitespace_purpose_header() {
 async fn entity_relationship_route_executes_query_when_state_installed() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/individual/p-1/household")
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1/relationships/household")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
@@ -877,7 +883,7 @@ async fn entity_relationship_route_executes_query_when_state_installed() {
 async fn entity_relationship_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
-        .get("/datasets/social_registry/individual/p-1/household")
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1/relationships/household")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
@@ -885,7 +891,7 @@ async fn entity_relationship_returns_etag_and_honors_if_none_match() {
     let etag = resp.header("etag").to_str().expect("etag").to_string();
 
     let cached = server
-        .get("/datasets/social_registry/individual/p-1/household")
+        .get("/v1/datasets/social_registry/entities/individual/records/p-1/relationships/household")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header("if-none-match", &etag)
         .await;
@@ -899,7 +905,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
     let server = server_with_query().await;
 
     let first = server
-        .get("/datasets/social_registry/household/hh-1/members?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
     first.assert_status(StatusCode::OK);
@@ -920,7 +926,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
         .expect("link")
         .contains(&format!("cursor={cursor}")));
 
-    let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
+    let url = format!("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1&cursor={cursor}");
     let second = server
         .get(&url)
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
@@ -941,7 +947,7 @@ async fn entity_has_many_relationship_route_paginates_with_opaque_cursor() {
 async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
     let server = server_with_query().await;
     let resp = server
-        .get("/datasets/social_registry/household/hh-1/members?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
@@ -949,7 +955,7 @@ async fn entity_has_many_relationship_returns_etag_and_honors_if_none_match() {
     let etag = resp.header("etag").to_str().expect("etag").to_string();
 
     let cached = server
-        .get("/datasets/social_registry/household/hh-1/members?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .add_header("if-none-match", &etag)
         .await;
@@ -968,7 +974,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_bad_request() {
         server_with_query_version_and_signer("01J5K8M0000000000000000000", Arc::clone(&signer))
             .await;
     let first = old_server
-        .get("/datasets/social_registry/household/hh-1/members?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
     first.assert_status(StatusCode::OK);
@@ -980,7 +986,7 @@ async fn entity_has_many_relationship_stale_cursor_returns_bad_request() {
     let new_server =
         server_with_query_version_and_signer("01J5K8M0000000000000000001", Arc::clone(&signer))
             .await;
-    let url = format!("/datasets/social_registry/household/hh-1/members?limit=1&cursor={cursor}");
+    let url = format!("/v1/datasets/social_registry/entities/household/records/hh-1/relationships/members?limit=1&cursor={cursor}");
     let resp = new_server
         .get(&url)
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
@@ -1066,10 +1072,10 @@ audit:
     );
 
     for url in [
-        "/datasets/social_registry/individual",
-        "/datasets/social_registry/individual/id-1",
-        "/datasets/social_registry/individual/schema",
-        "/datasets/social_registry/aggregates",
+        "/v1/datasets/social_registry/entities/individual/records",
+        "/v1/datasets/social_registry/entities/individual/records/id-1",
+        "/v1/datasets/social_registry/entities/individual/schema",
+        "/v1/datasets/social_registry/aggregates",
     ] {
         let resp = server.get(url).await;
         resp.assert_status(StatusCode::FORBIDDEN);
@@ -1082,7 +1088,7 @@ audit:
 async fn entity_collection_route_expands_relationships() {
     let resp = server_with_query()
         .await
-        .get("/datasets/social_registry/household?region=north&expand=members")
+        .get("/v1/datasets/social_registry/entities/household/records?region=north&expand=members")
         .add_header("data-purpose", "https://data.example.test/purposes/testing")
         .await;
 
@@ -1488,7 +1494,7 @@ audit:
 async fn entity_collection_with_required_filter_satisfied_returns_200() {
     let resp = server_with_required_filters()
         .await
-        .get("/datasets/test_dataset/item?id=item-1")
+        .get("/v1/datasets/test_dataset/entities/item/records?id=item-1")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -1500,7 +1506,7 @@ async fn entity_collection_with_required_filter_satisfied_returns_200() {
 async fn entity_collection_with_required_filter_group_id_satisfied_returns_200() {
     let resp = server_with_required_filters()
         .await
-        .get("/datasets/test_dataset/item?group_id=grp-1")
+        .get("/v1/datasets/test_dataset/entities/item/records?group_id=grp-1")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -1512,7 +1518,7 @@ async fn entity_collection_with_required_filter_group_id_satisfied_returns_200()
 async fn entity_collection_with_unrelated_filter_returns_filter_required() {
     let resp = server_with_required_filters()
         .await
-        .get("/datasets/test_dataset/item?unrelated=x")
+        .get("/v1/datasets/test_dataset/entities/item/records?unrelated=x")
         .await;
 
     // unrelated param is parsed as a filter but rejected as not_allowed
@@ -1525,7 +1531,7 @@ async fn entity_collection_with_unrelated_filter_returns_filter_required() {
 async fn entity_collection_with_no_filters_returns_filter_required() {
     let resp = server_with_required_filters()
         .await
-        .get("/datasets/test_dataset/item")
+        .get("/v1/datasets/test_dataset/entities/item/records")
         .await;
 
     resp.assert_status(StatusCode::BAD_REQUEST);
@@ -1538,7 +1544,7 @@ async fn entity_collection_with_no_filters_returns_filter_required() {
 async fn entity_collection_without_required_filters_accepts_no_filter() {
     let resp = server_with_required_filters()
         .await
-        .get("/datasets/test_dataset/thing")
+        .get("/v1/datasets/test_dataset/entities/thing/records")
         .await;
 
     // No required_filters on thing; unfiltered request should succeed.
@@ -1564,7 +1570,7 @@ async fn entity_collection_cursor_with_tampered_mac_rejected() {
     let server = server_with_query().await;
 
     let first = server
-        .get("/datasets/social_registry/household?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=1")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -1577,7 +1583,9 @@ async fn entity_collection_cursor_with_tampered_mac_rejected() {
     // fail before any JSON parsing happens and return the same code as
     // a malformed cursor would.
     let tampered = flip_hex_nibble(&cursor, 0);
-    let url = format!("/datasets/social_registry/household?limit=1&cursor={tampered}");
+    let url = format!(
+        "/v1/datasets/social_registry/entities/household/records?limit=1&cursor={tampered}"
+    );
     let resp = server.get(&url).await;
     resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
@@ -1589,7 +1597,7 @@ async fn entity_collection_cursor_with_tampered_payload_rejected() {
     let server = server_with_query().await;
 
     let first = server
-        .get("/datasets/social_registry/household?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=1")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -1601,7 +1609,9 @@ async fn entity_collection_cursor_with_tampered_payload_rejected() {
     // Flip a nibble of the JSON payload (past the 16-byte MAC tag).
     // The HMAC must catch the mutation and reject the cursor.
     let tampered = flip_hex_nibble(&cursor, 16);
-    let url = format!("/datasets/social_registry/household?limit=1&cursor={tampered}");
+    let url = format!(
+        "/v1/datasets/social_registry/entities/household/records?limit=1&cursor={tampered}"
+    );
     let resp = server.get(&url).await;
     resp.assert_status(StatusCode::BAD_REQUEST);
     let body: Value = resp.json();
@@ -1613,7 +1623,7 @@ async fn entity_collection_unmutated_cursor_still_works() {
     let server = server_with_query().await;
 
     let first = server
-        .get("/datasets/social_registry/household?limit=1")
+        .get("/v1/datasets/social_registry/entities/household/records?limit=1")
         .await;
     first.assert_status(StatusCode::OK);
     let body: Value = first.json();
@@ -1622,7 +1632,8 @@ async fn entity_collection_unmutated_cursor_still_works() {
         .expect("first page has cursor")
         .to_string();
 
-    let url = format!("/datasets/social_registry/household?limit=1&cursor={cursor}");
+    let url =
+        format!("/v1/datasets/social_registry/entities/household/records?limit=1&cursor={cursor}");
     let resp = server.get(&url).await;
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
@@ -1653,7 +1664,7 @@ async fn entity_collection_too_many_filter_params_rejected() {
     // exercise the cap by sending 21 distinct filter *parameter names*
     // that are all syntactically valid (`field_NN=value`), then assert
     // the per-request cap fires before any allowed-filter check.
-    let mut url = String::from("/datasets/social_registry/household?");
+    let mut url = String::from("/v1/datasets/social_registry/entities/household/records?");
     for i in 0..21 {
         if i > 0 {
             url.push('&');

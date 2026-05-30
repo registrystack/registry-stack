@@ -213,32 +213,32 @@ Manual table reload:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
-  http://127.0.0.1:8081/admin/datasets/social_registry/tables/individuals_table/reload
+  http://127.0.0.1:8081/admin/v1/datasets/social_registry/tables/individuals_table/reload
 ```
 
 Manual registry reload:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
-  http://127.0.0.1:8081/admin/reload
+  http://127.0.0.1:8081/admin/v1/reload
 ```
 
-The reload-all response includes `status`, `counts`, and one result per resource. A failing resource is reported with `status: "failed"` and `error_code`; the handler continues attempting the remaining resources.
+The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. A non-zero failure count returns HTTP 500 with `status: "failed"`; inspect the audit and operational logs for the resource-level failure context.
 
 ## Readiness And Probes
 
 Use:
 
 ```text
-GET /health
+GET /healthz
 GET /ready
 ```
 
-`/health` is liveness only and does not check datasets. `/ready` returns 200 only when configured resources have ingested successfully once the readiness watch is installed. On ingest failures it returns `503 application/problem+json` with failed or not-ready resources.
+`/healthz` is liveness only and does not check datasets. `/ready` returns 200 only when configured resources have ingested successfully once the readiness watch is installed. On ingest failures it returns `503 application/problem+json` with failed or not-ready resources.
 
 In orchestrators:
 
-- Use `/health` for liveness.
+- Use `/healthz` for liveness.
 - Use `/ready` for readiness and traffic gating.
 - Give startup enough time for the largest XLSX/Parquet ingest.
 

@@ -294,7 +294,7 @@ async fn assert_problem(resp: axum_test::TestResponse, status: StatusCode, code:
 async fn health_remains_unauthenticated_on_admin_app() {
     let fixture = build_fixture();
 
-    let resp = fixture.server.get("/health").await;
+    let resp = fixture.server.get("/healthz").await;
 
     resp.assert_status(StatusCode::OK);
     assert_eq!(resp.json::<Value>(), serde_json::json!({"status": "ok"}));
@@ -306,7 +306,7 @@ async fn table_reload_without_credential_is_rejected() {
 
     let resp = fixture
         .server
-        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
         .await;
 
     assert_problem(resp, StatusCode::UNAUTHORIZED, "auth.missing_credential").await;
@@ -318,7 +318,7 @@ async fn table_reload_with_non_admin_key_is_rejected() {
 
     let resp = fixture
         .server
-        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
         .add_header("Authorization", format!("Bearer {NON_ADMIN_KEY}"))
         .await;
 
@@ -332,7 +332,7 @@ async fn table_reload_with_admin_key_reaches_registry_reload_path() {
 
     let resp = fixture
         .server
-        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await;
 
@@ -362,7 +362,7 @@ async fn table_reload_publishes_updated_readiness_snapshot() {
 
     fixture
         .server
-        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await
         .assert_status(StatusCode::OK);
@@ -381,7 +381,7 @@ async fn table_reload_publishes_updated_readiness_snapshot() {
 async fn reload_all_without_credential_is_rejected() {
     let fixture = build_fixture();
 
-    let resp = fixture.server.post("/admin/reload").await;
+    let resp = fixture.server.post("/admin/v1/reload").await;
 
     assert_problem(resp, StatusCode::UNAUTHORIZED, "auth.missing_credential").await;
 }
@@ -392,7 +392,7 @@ async fn reload_all_with_non_admin_key_is_rejected() {
 
     let resp = fixture
         .server
-        .post("/admin/reload")
+        .post("/admin/v1/reload")
         .add_header("Authorization", format!("Bearer {NON_ADMIN_KEY}"))
         .await;
 
@@ -406,7 +406,7 @@ async fn reload_all_with_admin_key_reloads_every_configured_resource() {
 
     let resp = fixture
         .server
-        .post("/admin/reload")
+        .post("/admin/v1/reload")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await;
 
@@ -430,7 +430,7 @@ async fn reload_all_publishes_ready_snapshot() {
 
     fixture
         .server
-        .post("/admin/reload")
+        .post("/admin/v1/reload")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await
         .assert_status(StatusCode::OK);
@@ -450,14 +450,14 @@ async fn table_reload_invalidates_public_entity_collection_etag_after_source_cha
 
     fixture
         .server
-        .post("/admin/reload")
+        .post("/admin/v1/reload")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await
         .assert_status(StatusCode::OK);
 
     let before = fixture
         .public_server
-        .get("/datasets/social_registry/beneficiary?limit=1000")
+        .get("/v1/datasets/social_registry/entities/beneficiary/records?limit=1000")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await;
     before.assert_status(StatusCode::OK);
@@ -473,14 +473,14 @@ beneficiary_id,household_size,municipality_code,program,amount_eur,joined_date,l
 
     fixture
         .server
-        .post("/admin/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await
         .assert_status(StatusCode::OK);
 
     let stale_revalidation = fixture
         .public_server
-        .get("/datasets/social_registry/beneficiary?limit=1000")
+        .get("/v1/datasets/social_registry/entities/beneficiary/records?limit=1000")
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .add_header("if-none-match", &before_etag)
         .await;

@@ -24,7 +24,7 @@ client also has no `data/` mount.
 
 ## First Run
 
-From `registry_relay`:
+From `registry-relay`:
 
 ```bash
 uv run demo/decentralized/scripts/generate-fixtures.py

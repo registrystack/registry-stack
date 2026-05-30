@@ -56,7 +56,7 @@ pub type AuthProviderRef = Arc<dyn AuthProvider>;
 /// ```ignore
 /// let provider: AuthProviderRef = Arc::new(ApiKeyAuth::new(entries));
 /// let app = auth_layer(
-///     Router::new().route("/datasets", get(list_datasets)),
+///     Router::new().route("/v1/datasets", get(list_datasets)),
 ///     provider,
 /// );
 /// ```

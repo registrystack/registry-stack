@@ -335,7 +335,7 @@ async fn record_item_respects_metadata_visibility() {
     assert!(body["properties"].get("publisher").is_none());
     assert_eq!(
         body["properties"]["entities"][0]["collection"],
-        "https://data.example.test/datasets/social_registry/household"
+        "https://data.example.test/v1/datasets/social_registry/entities/household/records"
     );
     assert!(body["links"]
         .as_array()

@@ -375,7 +375,8 @@ pub struct OidcConfig {
     pub allowed_clients: Vec<String>,
     /// Accepted `typ` JOSE header values. Defaults to `JWT` and
     /// `at+jwt` (RFC 9068). ID tokens (`id+jwt`) are not access tokens
-    /// and are rejected by default.
+    /// and are rejected by default. Tokens without `typ` are rejected by
+    /// the shared verifier.
     #[serde(default = "default_oidc_token_types")]
     pub token_types: Vec<String>,
 }

@@ -33,27 +33,27 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/datasets/{dataset_id}/aggregates", get(list_aggregates))
+        .route("/v1/datasets/{dataset_id}/aggregates", get(list_aggregates))
         .route(
-            "/datasets/{dataset_id}/aggregates/{aggregate_id}",
+            "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}",
             get(execute_aggregate),
         )
         .route(
-            "/datasets/{dataset_id}/aggregates/{aggregate_id}/query",
+            "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query",
             post(query_aggregate),
         )
         .route(
-            "/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata",
+            "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata",
             get(aggregate_metadata),
         )
-        .route("/datasets/{dataset_id}/indicators", get(list_indicators))
+        .route("/v1/datasets/{dataset_id}/indicators", get(list_indicators))
         .route(
-            "/datasets/{dataset_id}/indicators/{item_id}",
+            "/v1/datasets/{dataset_id}/indicators/{item_id}",
             get(get_indicator),
         )
-        .route("/datasets/{dataset_id}/dimensions", get(list_dimensions))
+        .route("/v1/datasets/{dataset_id}/dimensions", get(list_dimensions))
         .route(
-            "/datasets/{dataset_id}/dimensions/{item_id}",
+            "/v1/datasets/{dataset_id}/dimensions/{item_id}",
             get(get_dimension),
         )
 }
@@ -121,7 +121,7 @@ async fn list_aggregates(
         Ok(aggregates) => Json(json!({
             "data": aggregates.into_iter().map(aggregate_list_json).collect::<Vec<_>>(),
             "links": [
-                { "rel": "self", "href": format!("/datasets/{}/aggregates", path.dataset_id), "type": "application/json" }
+                { "rel": "self", "href": format!("/v1/datasets/{}/aggregates", path.dataset_id), "type": "application/json" }
             ]
         }))
         .into_response(),
@@ -175,7 +175,7 @@ async fn list_indicators(
         Ok(aggregates) => Json(json!({
             "data": indicator_discovery_items(&path.dataset_id, &aggregates),
             "links": [
-                { "rel": "self", "href": format!("/datasets/{}/indicators", path.dataset_id), "type": "application/json" }
+                { "rel": "self", "href": format!("/v1/datasets/{}/indicators", path.dataset_id), "type": "application/json" }
             ]
         }))
         .into_response(),
@@ -226,7 +226,7 @@ async fn list_dimensions(
         Ok(aggregates) => Json(json!({
             "data": dimension_discovery_items(&path.dataset_id, &aggregates),
             "links": [
-                { "rel": "self", "href": format!("/datasets/{}/dimensions", path.dataset_id), "type": "application/json" }
+                { "rel": "self", "href": format!("/v1/datasets/{}/dimensions", path.dataset_id), "type": "application/json" }
             ]
         }))
         .into_response(),
@@ -513,8 +513,8 @@ fn aggregate_result_json(result: &AggregateResult, as_of: Option<&str>) -> Value
         "disclosure_control": disclosure_json(&result.disclosure_control),
         "freshness": freshness,
         "links": [
-            { "rel": "self", "href": format!("/datasets/{}/aggregates/{}", result.dataset_id, result.aggregate_id), "type": "application/json" },
-            { "rel": "describedby", "href": format!("/datasets/{}/aggregates/{}/metadata", result.dataset_id, result.aggregate_id), "type": "application/json" }
+            { "rel": "self", "href": format!("/v1/datasets/{}/aggregates/{}", result.dataset_id, result.aggregate_id), "type": "application/json" },
+            { "rel": "describedby", "href": format!("/v1/datasets/{}/aggregates/{}/metadata", result.dataset_id, result.aggregate_id), "type": "application/json" }
         ]
     })
 }
@@ -735,7 +735,7 @@ impl IndicatorDiscovery {
             "queryable_via": self.queryable_via.into_iter().collect::<Vec<_>>(),
             "aggregates": self.aggregates,
             "links": [
-                { "rel": "self", "href": format!("/datasets/{dataset_id}/indicators/{}", self.id), "type": "application/json" }
+                { "rel": "self", "href": format!("/v1/datasets/{dataset_id}/indicators/{}", self.id), "type": "application/json" }
             ]
         })
     }
@@ -771,7 +771,7 @@ impl DimensionDiscovery {
             "queryable_via": self.queryable_via.into_iter().collect::<Vec<_>>(),
             "aggregates": self.aggregates,
             "links": [
-                { "rel": "self", "href": format!("/datasets/{dataset_id}/dimensions/{}", self.id), "type": "application/json" }
+                { "rel": "self", "href": format!("/v1/datasets/{dataset_id}/dimensions/{}", self.id), "type": "application/json" }
             ]
         })
     }
@@ -806,7 +806,7 @@ impl<'a> AggregateDiscoveryRef<'a> {
     fn as_json(&self) -> Value {
         let mut value = json!({
             "aggregate_id": self.aggregate_id,
-            "href": format!("/datasets/{}/aggregates/{}", self.dataset_id, self.aggregate_id),
+            "href": format!("/v1/datasets/{}/aggregates/{}", self.dataset_id, self.aggregate_id),
         });
         if let Some(collection_id) = self.collection_id {
             value["edr_collection_id"] = json!(collection_id);
@@ -866,7 +866,7 @@ fn csv_response(result: &AggregateResult, envelope: &Value) -> Response {
         }
     }
     let link = format!(
-        "</datasets/{}/aggregates/{}/metadata>; rel=\"describedby\"; type=\"application/json\"",
+        "</v1/datasets/{}/aggregates/{}/metadata>; rel=\"describedby\"; type=\"application/json\"",
         result.dataset_id, result.aggregate_id
     );
     if let Ok(value) = HeaderValue::from_str(&link) {

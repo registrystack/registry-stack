@@ -353,7 +353,7 @@ fn register_individuals(ctx: &SessionContext) {
 async fn lists_configured_dataset_aggregates() {
     let resp = server_with_aggregates()
         .await
-        .get("/datasets/social_registry/aggregates")
+        .get("/v1/datasets/social_registry/aggregates")
         .await;
 
     resp.assert_status_ok();
@@ -378,7 +378,7 @@ async fn lists_configured_dataset_aggregates() {
 async fn lists_dataset_indicator_and_dimension_discovery() {
     let server = server_with_aggregates().await;
 
-    let indicators = server.get("/datasets/social_registry/indicators").await;
+    let indicators = server.get("/v1/datasets/social_registry/indicators").await;
     indicators.assert_status_ok();
     let body: Value = indicators.json();
     let data = body["data"].as_array().expect("indicator data");
@@ -399,20 +399,20 @@ async fn lists_dataset_indicator_and_dimension_discovery() {
         .any(|value| value == "aggregates:by_municipality"));
 
     let indicator = server
-        .get("/datasets/social_registry/indicators/min_payment")
+        .get("/v1/datasets/social_registry/indicators/min_payment")
         .await;
     indicator.assert_status_ok();
     let body: Value = indicator.json();
     assert_eq!(body["id"], "min_payment");
     assert_eq!(body["unit_measure"], "currency");
 
-    let dimensions = server.get("/datasets/social_registry/dimensions").await;
+    let dimensions = server.get("/v1/datasets/social_registry/dimensions").await;
     dimensions.assert_status_ok();
     let body: Value = dimensions.json();
     assert_eq!(body["data"].as_array().expect("dimension data").len(), 2);
 
     let dimension = server
-        .get("/datasets/social_registry/dimensions/municipality_code")
+        .get("/v1/datasets/social_registry/dimensions/municipality_code")
         .await;
     dimension.assert_status_ok();
     let body: Value = dimension.json();
@@ -425,14 +425,14 @@ async fn required_filters_are_enforced_for_aggregate_queries() {
     let server = server_with_aggregates().await;
 
     let missing = server
-        .get("/datasets/social_registry/aggregates/by_required_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_required_municipality")
         .await;
     missing.assert_status_bad_request();
     let body: Value = missing.json();
     assert_eq!(body["code"], "aggregate.filter_required");
 
     let satisfied = server
-        .post("/datasets/social_registry/aggregates/by_required_municipality/query")
+        .post("/v1/datasets/social_registry/aggregates/by_required_municipality/query")
         .json(&json!({
             "filters": { "municipality_code": "mun-1" }
         }))
@@ -452,7 +452,7 @@ async fn required_filters_are_enforced_for_aggregate_queries() {
 async fn csv_response_carries_metadata_headers_and_status_columns() {
     let resp = server_with_aggregates()
         .await
-        .get("/datasets/social_registry/aggregates/by_municipality_masked?f=csv")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality_masked?f=csv")
         .await;
 
     resp.assert_status_ok();
@@ -480,7 +480,7 @@ async fn csv_response_carries_metadata_headers_and_status_columns() {
         .header("link")
         .to_str()
         .expect("link header")
-        .contains("</datasets/social_registry/aggregates/by_municipality_masked/metadata>; rel=\"describedby\""));
+        .contains("</v1/datasets/social_registry/aggregates/by_municipality_masked/metadata>; rel=\"describedby\""));
 
     let body = resp.text();
     assert_eq!(
@@ -495,7 +495,7 @@ async fn csv_response_carries_metadata_headers_and_status_columns() {
 async fn executes_single_entity_count_aggregate() {
     let resp = server_with_aggregates()
         .await
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .await;
 
     resp.assert_status_ok();
@@ -524,7 +524,7 @@ async fn executes_single_entity_count_aggregate() {
 async fn aggregate_detail_route_is_not_captured_by_entity_relationship() {
     let resp = protected_router_with_aggregates()
         .await
-        .get("/datasets/social_registry/aggregates/by_municipality")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality")
         .await;
 
     resp.assert_status_ok();
@@ -554,7 +554,7 @@ async fn aggregate_detail_route_is_not_captured_by_entity_relationship() {
 async fn post_query_applies_temporal_filter_when_configured() {
     let resp = server_with_aggregates()
         .await
-        .post("/datasets/social_registry/aggregates/by_municipality/query")
+        .post("/v1/datasets/social_registry/aggregates/by_municipality/query")
         .json(&json!({
             "indicators": ["individual_count"],
             "group_by": ["municipality_code"],
@@ -580,7 +580,7 @@ async fn post_query_applies_temporal_filter_when_configured() {
 async fn masks_measures_below_min_group_size_without_removing_group_keys() {
     let resp = server_with_aggregates()
         .await
-        .get("/datasets/social_registry/aggregates/by_municipality_masked")
+        .get("/v1/datasets/social_registry/aggregates/by_municipality_masked")
         .await;
 
     resp.assert_status_ok();
@@ -600,7 +600,7 @@ async fn masks_measures_below_min_group_size_without_removing_group_keys() {
 async fn executes_direct_relationship_group_by_with_min_group_size() {
     let resp = server_with_aggregates()
         .await
-        .get("/datasets/social_registry/aggregates/by_household_region")
+        .get("/v1/datasets/social_registry/aggregates/by_household_region")
         .await;
 
     resp.assert_status_ok();

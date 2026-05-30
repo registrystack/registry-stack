@@ -125,13 +125,22 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/datasets/{dataset_id}/{entity}/schema", get(entity_schema))
-        .route("/datasets/{dataset_id}/{entity}", get(entity_collection))
         .route(
-            "/datasets/{dataset_id}/{entity}/{id}/{relationship}",
+            "/v1/datasets/{dataset_id}/entities/{entity}/schema",
+            get(entity_schema),
+        )
+        .route(
+            "/v1/datasets/{dataset_id}/entities/{entity}/records",
+            get(entity_collection),
+        )
+        .route(
+            "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}",
             get(entity_relationship),
         )
-        .route("/datasets/{dataset_id}/{entity}/{id}", get(entity_record))
+        .route(
+            "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}",
+            get(entity_record),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -923,7 +932,10 @@ fn collection_next_link(
     cursor: &str,
 ) -> String {
     next_link_value(
-        &format!("/datasets/{}/{}", path.dataset_id, path.entity),
+        &format!(
+            "/v1/datasets/{}/entities/{}/records",
+            path.dataset_id, path.entity
+        ),
         params,
         cursor,
     )
@@ -936,7 +948,7 @@ fn relationship_next_link(
 ) -> String {
     next_link_value(
         &format!(
-            "/datasets/{}/{}/{}/{}",
+            "/v1/datasets/{}/entities/{}/records/{}/relationships/{}",
             path.dataset_id, path.entity, path.id, path.relationship
         ),
         params,

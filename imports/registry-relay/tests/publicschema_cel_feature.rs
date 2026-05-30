@@ -43,7 +43,8 @@ use ulid::Ulid;
 
 const PERSON_SCHEMA: &str = include_str!("fixtures/publicschema/person.schema.json");
 const PERSON_MAPPING: &str = include_str!("../mappings/individual-person.publicschema.yaml");
-const IND_1_SUBJECT_URI: &str = "https://gw.example/datasets/social_registry/individual/ind-1";
+const IND_1_SUBJECT_URI: &str =
+    "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1";
 
 fn person_schema_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/publicschema/person.schema.json")
@@ -669,7 +670,7 @@ async fn credential_profile_override_still_emits_provenance_audit_for_publicsche
     let server = TestServer::new(with_audit(router, sink_arc));
 
     let plain = server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .await;
     plain.assert_status_ok();
     let plain_body: Value = plain.json();
@@ -687,7 +688,7 @@ async fn credential_profile_override_still_emits_provenance_audit_for_publicsche
     assert_eq!(mapped_plain.credential_type, "Person");
 
     let resp = server
-        .get("/datasets/social_registry/individual/ind-1")
+        .get("/v1/datasets/social_registry/entities/individual/records/ind-1")
         .add_header("accept", "application/vc+jwt")
         .await;
     if resp.status_code() != StatusCode::OK {
@@ -716,12 +717,12 @@ async fn credential_profile_override_still_emits_provenance_audit_for_publicsche
     );
     assert_eq!(
         payload["sub"],
-        "https://gw.example/datasets/social_registry/individual/ind-1"
+        "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1"
     );
     assert_eq!(
         payload["credentialSubject"],
         json!({
-            "id": "https://gw.example/datasets/social_registry/individual/ind-1",
+            "id": "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1",
             "type": "Person",
             "given_name": "Amina",
             "family_name": "Diallo",
@@ -739,10 +740,13 @@ async fn credential_profile_override_still_emits_provenance_audit_for_publicsche
         panic!("mapped PublicSchema Person subject must validate: {messages:?}");
     }
 
-    let record = audit_record_for(&audit_sink, "/datasets/social_registry/individual/{id}");
+    let record = audit_record_for(
+        &audit_sink,
+        "/v1/datasets/social_registry/entities/individual/records/{id}",
+    );
     assert_eq!(record["provenance"]["claim_type"], "Person");
     assert_eq!(
         record["provenance"]["subject"],
-        "https://gw.example/datasets/social_registry/individual/ind-1"
+        "https://gw.example/v1/datasets/social_registry/entities/individual/records/ind-1"
     );
 }
