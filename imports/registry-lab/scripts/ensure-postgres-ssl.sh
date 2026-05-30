@@ -9,12 +9,6 @@ cert_path="${ssl_dir}/server.crt"
 
 mkdir -p "${ssl_dir}"
 
-if [[ -s "${key_path}" && -s "${cert_path}" ]]; then
-  chmod 644 "${key_path}"
-  chmod 644 "${cert_path}"
-  exit 0
-fi
-
 if ! command -v openssl >/dev/null 2>&1; then
   echo "openssl is required to generate Postgres demo TLS files" >&2
   exit 1
@@ -23,7 +17,7 @@ fi
 openssl req \
   -new \
   -x509 \
-  -days 3650 \
+  -days "${REGISTRY_LAB_POSTGRES_SSL_DAYS:-397}" \
   -nodes \
   -subj "/CN=localhost" \
   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
