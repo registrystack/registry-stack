@@ -2,7 +2,9 @@
 
 > **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
 
-Registry Manifest is a portable Rust workspace for modeling, validating, and rendering standards-facing registry metadata without running Registry Relay.
+Registry Manifest is the commons contract and schema kernel for registry
+metadata. It is a portable Rust workspace for modeling, validating, and
+rendering standards-facing registry metadata without running Registry Relay.
 
 It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, form JSON Schema, OGC API Records item bodies, policy documents, evidence-offering metadata, and public federation metadata for Registry Notary delegated evaluation.
 
@@ -78,6 +80,20 @@ Workspace build:
 
 ```sh
 cargo build --workspace --all-targets
+```
+
+Commons contract-kernel check:
+
+```sh
+scripts/check-contract-kernel.sh
+```
+
+Consumer manifests can be passed as arguments. Each file is validated and
+published into `target/contract-kernel/` so Relay, Notary, and Lab can exercise
+the same schema and renderer contract before a commons release:
+
+```sh
+scripts/check-contract-kernel.sh ../registry-lab/config/static-metadata/metadata.yaml
 ```
 
 ## Supported Render Formats
