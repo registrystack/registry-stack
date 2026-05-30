@@ -122,7 +122,6 @@ datasets:
         access:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
-          row_scope: social_registry:rows
         api:
           default_limit: 100
           max_limit: 1000
@@ -161,7 +160,6 @@ datasets:
         access:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
-          row_scope: social_registry:rows
         api:
           default_limit: 100
           max_limit: 1000

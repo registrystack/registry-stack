@@ -12,7 +12,7 @@
 //!    The keyring lives inside `ApiKeyAuth` and is immutable for the
 //!    lifetime of the process.
 //! 4. Build the configured audit sink: stdout, file, or syslog, with
-//!    platform tamper-evident envelopes.
+//!    platform audit envelopes.
 //! 5. Build ingest, readiness, entity registry, row-query, and aggregate
 //!    query state, then compose the public data-plane router.
 //! 6. Bind on `config.server.bind`, optionally bind the admin router on
@@ -49,6 +49,7 @@ use registry_relay::provenance::{
     ResolvedProvenanceConfig,
 };
 use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
+use registry_relay::serve::{serve_listener, ServeLimits};
 #[cfg(feature = "spdci-api-standards")]
 use registry_relay::spdci::build_spdci_response_mapper;
 use tokio::net::TcpListener;
@@ -228,11 +229,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None => None,
     };
 
-    let main_serve = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal());
+    let serve_limits = ServeLimits::from_config(&config.server);
+    let main_serve = serve_listener(listener, app, serve_limits, shutdown_signal());
 
     // Run both servers concurrently. `tokio::select!` is the natural
     // fit because either listener exiting (clean or not) tears down
@@ -248,11 +246,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Arc::clone(&ingest),
                 Arc::clone(&metrics),
             )?;
-            let admin_serve = axum::serve(
-                admin_listener,
-                admin_app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal());
+            let admin_serve =
+                serve_listener(admin_listener, admin_app, serve_limits, shutdown_signal());
             tokio::select! {
                 r = main_serve => r.map_err(Into::into),
                 r = admin_serve => r.map_err(Into::into),

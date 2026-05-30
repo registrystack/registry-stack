@@ -2,7 +2,7 @@
 //! Env-gated integration coverage for Postgres snapshot ingest.
 //!
 //! Run with:
-//! DATA_GATE_POSTGRES_TEST_URL='postgres://...' cargo test --test postgres_snapshot -- --ignored
+//! DATA_GATE_POSTGRES_TEST_URL='postgres://...?sslmode=require' cargo test --test postgres_snapshot -- --ignored
 
 use std::env;
 use std::sync::Arc;

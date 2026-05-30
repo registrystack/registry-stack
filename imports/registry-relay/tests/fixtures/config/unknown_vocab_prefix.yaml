@@ -43,7 +43,6 @@ datasets:
         access:
           metadata_scope: ds_one:metadata
           aggregate_scope: ds_one:aggregate
-          row_scope: ds_one:rows
         api:
           default_limit: 100
           max_limit: 1000

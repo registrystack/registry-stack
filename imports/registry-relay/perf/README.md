@@ -160,7 +160,7 @@ quick local comparison, use the same machine and dataset shape for all runs:
 1. Run the env-gated Postgres integration smoke to verify the live connector:
 
    ```bash
-   DATA_GATE_POSTGRES_TEST_URL='postgres://localhost:55432/postgres?sslmode=disable' \
+   DATA_GATE_POSTGRES_TEST_URL='postgres://localhost:55432/postgres?sslmode=require' \
      cargo test --test postgres_snapshot -- --ignored --nocapture
    ```
 

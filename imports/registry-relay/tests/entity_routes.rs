@@ -348,6 +348,7 @@ datasets:
             from: individual_id
           - name: household_id
           - name: given_name
+            sensitive: true
         relationships:
           - name: household
             kind: belongs_to
@@ -708,6 +709,24 @@ async fn entity_collection_route_parses_allowed_filter_ops() {
                 "has_more": false
             }
         })
+    );
+}
+
+#[tokio::test]
+async fn sensitive_fields_remain_in_authorized_projection() {
+    let resp = server_with_query()
+        .await
+        .get("/datasets/social_registry/individual?id=p-1")
+        .add_header("data-purpose", "casework")
+        .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert_eq!(
+        body["data"],
+        serde_json::json!([
+            {"id": "p-1", "household_id": "hh-1", "given_name": "Ada"}
+        ])
     );
 }
 

@@ -190,10 +190,31 @@ pub struct ServerConfig {
     pub cors: CorsConfig,
     #[serde(default = "default_request_timeout", with = "humantime_serde")]
     pub request_timeout: Duration,
+    #[serde(default = "default_request_body_timeout", with = "humantime_serde")]
+    pub request_body_timeout: Duration,
+    #[serde(
+        default = "default_http1_header_read_timeout",
+        with = "humantime_serde"
+    )]
+    pub http1_header_read_timeout: Duration,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
 }
 
 fn default_request_timeout() -> Duration {
     Duration::from_secs(30)
+}
+
+fn default_request_body_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_http1_header_read_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_max_connections() -> usize {
+    1024
 }
 
 fn default_cache_dir() -> PathBuf {
@@ -998,14 +1019,13 @@ pub enum FieldType {
     Timestamp,
 }
 
-/// Resource-level scope assignments. Each resource opts in to which
-/// scopes gate metadata / aggregate / row access.
+/// Resource-level scope assignments. Private tables are not exposed as row
+/// resources in beta; row access is configured on public entities.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceAccessConfig {
     pub metadata_scope: String,
     pub aggregate_scope: String,
-    pub row_scope: String,
 }
 
 /// Resource-level API knobs: per-field filter allowlist, limit caps,
@@ -1319,6 +1339,13 @@ mod tests {
     #[test]
     fn default_request_timeout_is_30s() {
         assert_eq!(default_request_timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn default_transport_limits_are_bounded() {
+        assert_eq!(default_request_body_timeout(), Duration::from_secs(10));
+        assert_eq!(default_http1_header_read_timeout(), Duration::from_secs(10));
+        assert_eq!(default_max_connections(), 1024);
     }
 
     #[test]

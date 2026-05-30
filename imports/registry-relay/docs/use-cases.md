@@ -30,8 +30,9 @@ Acceptance criteria:
   operations.
 - Row APIs support configured limits, field projection, allowed filters,
   required filters, pagination, and purpose-header requirements.
-- The gateway emits redacted, tamper-evident audit events and avoids logging raw
-  secrets, auth headers, request bodies, or row values.
+- The gateway emits redacted audit events with chained envelope hashes for
+  retained-log consistency checks, and avoids logging raw secrets, auth headers,
+  request bodies, or row values.
 - Health, readiness, refresh, and admin reload behavior let operators serve new
   extracts without changing public API contracts.
 

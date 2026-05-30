@@ -239,14 +239,46 @@ fn example_config_loads_and_validates() {
     // CORS is default-deny: empty allowlist.
     assert!(config.server.cors.allowed_origins.is_empty());
 
-    // request_timeout defaults to 30s.
+    // Server transport limits default to bounded values.
     assert_eq!(config.server.request_timeout.as_secs(), 30);
+    assert_eq!(config.server.request_body_timeout.as_secs(), 10);
+    assert_eq!(config.server.http1_header_read_timeout.as_secs(), 10);
+    assert_eq!(config.server.max_connections, 1024);
 }
 
 #[test]
 fn unknown_field_rejected() {
     let result = config::load(&fixture_path("unknown_field.yaml"));
     assert_config_code(result, "config.parse_error");
+}
+
+#[test]
+fn server_transport_limits_must_be_nonzero() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(
+        &tmp,
+        r#"
+server:
+  bind: 127.0.0.1:0
+  request_body_timeout: 0s
+  http1_header_read_timeout: 0s
+  max_connections: 0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    );
+
+    assert_config_code(config::load(&path), "config.validation_error");
 }
 
 #[test]
@@ -629,6 +661,44 @@ fn postgres_table_source_descriptor_loads_without_reading_secret() {
         }
         other => panic!("expected postgres source, got {other:?}"),
     }
+}
+
+#[test]
+fn resource_row_scope_is_not_accepted_for_beta() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        &minimal_config(
+            r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: records_table
+        source:
+          type: file
+          path: ./fixtures/social_registry.csv
+        primary_key: record_id
+        schema:
+          strict: true
+          fields:
+            - name: record_id
+              type: string
+              nullable: false
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          row_scope: social_registry:rows
+    entities: []
+"#,
+        ),
+    );
+
+    assert_config_code(config::load(&config_path), "config.parse_error");
 }
 
 #[test]

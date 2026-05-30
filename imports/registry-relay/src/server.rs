@@ -30,8 +30,10 @@
 //! 7. Internal error normalizer: maps timeout/body-limit responses into
 //!    RFC 7807 Problem Details before audit records them.
 //! 8. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
-//! 9. `TimeoutLayer`: built from `config.server.request_timeout`.
-//! 10. Auth middleware on a *sub-router* that mounts data-plane routes
+//! 9. `RequestBodyTimeoutLayer`: built from
+//!    `config.server.request_body_timeout`.
+//! 10. `TimeoutLayer`: built from `config.server.request_timeout`.
+//! 11. Auth middleware on a *sub-router* that mounts data-plane routes
 //!     only. The health sub-router is merged separately so `/health`
 //!     and `/ready` stay unauthenticated.
 //!
@@ -66,7 +68,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };
-use tower_http::timeout::TimeoutLayer;
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use ulid::Ulid;
@@ -433,6 +435,9 @@ fn apply_cross_cutting_layers_with_metrics(
             config.server.request_timeout,
         ))
         .layer(request_body_limit(REQUEST_BODY_LIMIT_BYTES))
+        .layer(RequestBodyTimeoutLayer::new(
+            config.server.request_body_timeout,
+        ))
         .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
         .layer(cors)
@@ -662,6 +667,8 @@ mod tests {
     use crate::audit::{AuditPipeline, InMemorySink};
     use axum::body::Body;
     use axum::routing::get;
+    use bytes::Bytes;
+    use futures::stream;
     use serde_json::Value;
     use tower::ServiceExt;
 
@@ -996,6 +1003,51 @@ mod tests {
         let record = captured_audit_record(&records[0]);
         assert_eq!(record["error_code"], "internal.payload_too_large");
         assert_eq!(record["status_code"], 413);
+    }
+
+    #[tokio::test]
+    async fn request_body_timeout_layer_bounds_slow_body_reads() {
+        let mut config = load_example_config();
+        config.server.request_body_timeout = Duration::from_millis(25);
+        let config = Arc::new(config);
+        let inmem = InMemorySink::new();
+        let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
+        let router = Router::new().route(
+            "/echo",
+            axum::routing::post(|_body: String| async { StatusCode::OK }),
+        );
+        let app = apply_cross_cutting_layers_with_metrics(
+            router,
+            &config,
+            sink,
+            RequestMetrics::shared(),
+        )
+        .expect("audit hash secret configured");
+        let slow_body = Body::from_stream(stream::unfold(false, |sent_first| async move {
+            if sent_first {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                None
+            } else {
+                Some((Ok::<Bytes, std::io::Error>(Bytes::from_static(b"x")), true))
+            }
+        }));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/echo")
+                    .body(slow_body)
+                    .expect("request builds"),
+            )
+            .await
+            .expect("service responds");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let records = inmem.snapshot();
+        assert_eq!(records.len(), 1);
+        let record = captured_audit_record(&records[0]);
+        assert_eq!(record["status_code"], 400);
     }
 
     #[tokio::test]

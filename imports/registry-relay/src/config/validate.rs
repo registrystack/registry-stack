@@ -993,6 +993,17 @@ fn is_valid_id(s: &str) -> bool {
 }
 
 fn validate_server(config: &Config) -> Result<(), ConfigError> {
+    if config.server.request_timeout.is_zero()
+        || config.server.request_body_timeout.is_zero()
+        || config.server.http1_header_read_timeout.is_zero()
+        || config.server.max_connections == 0
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            "server timeouts must be non-zero and max_connections must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     for cidr in &config.server.trust_proxy.trusted_proxies {
         if !is_trusted_proxy_spec(cidr) {
             tracing::error!(

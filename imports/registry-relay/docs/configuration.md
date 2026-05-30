@@ -34,6 +34,9 @@ server:
   max_source_file_bytes: 268435456
   xlsx_max_file_bytes: 268435456
   request_timeout: 30s
+  request_body_timeout: 10s
+  http1_header_read_timeout: 10s
+  max_connections: 1024
   cors:
     allowed_origins:
       - https://portal.example.gov
@@ -43,6 +46,10 @@ server:
 ```
 
 `bind` is the public data-plane listener. `admin_bind` is optional and should be private. `cache_dir` must be writable by the process. Source data should be mounted read-only.
+
+`request_timeout` bounds total request service time after HTTP headers are parsed. `request_body_timeout` bounds body reads for handlers that consume a request body. `http1_header_read_timeout` closes incomplete HTTP/1 headers before request work is admitted, and `max_connections` caps concurrent accepted sockets per listener. All timeouts must be non-zero and `max_connections` must be greater than zero.
+
+HTTP/2 connections use the same finite connection cap and keepalive timeout, but the beta socket-level slow-header regression test covers HTTP/1. If production terminates HTTP/2 at a reverse proxy, configure bounded proxy header/body read timeouts and per-client connection limits before forwarding to Registry Relay.
 
 The default CORS policy is deny by omission. Add explicit trusted origins only.
 
@@ -333,7 +340,7 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
-`hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak. Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained. Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
+`hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak. Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. In beta, those fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained. Audit records are separate from operational logs, which go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
 
 ## Datasets
 
@@ -389,7 +396,7 @@ source:
   change_token_sql: "select max(updated_at)::text from public.individuals"
 ```
 
-`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. Use read-only database credentials. Registry Relay also marks Postgres connector sessions as read-only, but credentials should enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
+`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. The connection string must set `sslmode=require`; missing `sslmode`, `sslmode=prefer`, and `sslmode=disable` are rejected when the connector reads the environment variable. The native TLS connector validates the server certificate and hostname against the system trust store. Use read-only database credentials. Registry Relay also marks Postgres connector sessions as read-only, but credentials should enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
 
 Snapshot ingest reads Postgres through `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`, then applies the same declared-schema coercion and validation as CSV files. The exported snapshot is bounded by `server.max_source_file_bytes`. For `table` sources, Registry Relay projects the declared schema fields from the table and casts them to CSV-friendly values. Extra database columns are ignored. For `query` sources, write a single `SELECT` or `WITH` statement without semicolons; public request input is never interpolated into SQL.
 
@@ -427,7 +434,7 @@ tables:
       live_max_connections: 8
 ```
 
-The connection string should point to a read-only database role that can `SELECT` only the configured table or view. Do not use `query` sources, `change_token_sql`, or `refresh.mode: mtime` with live materialization; those are snapshot-only controls. Declared schema fields are the exported contract, and extra database columns are ignored unless an entity query needs a full local scan to evaluate filters.
+The connection string should include `sslmode=require` and point to a read-only database role that can `SELECT` only the configured table or view. Do not use `query` sources, `change_token_sql`, or `refresh.mode: mtime` with live materialization; those are snapshot-only controls. Declared schema fields are the exported contract, and extra database columns are ignored unless an entity query needs a full local scan to evaluate filters.
 
 Minimal source-only form:
 
@@ -529,7 +536,7 @@ Field types:
 string, number, integer, boolean, date, timestamp
 ```
 
-Use `sensitive: true` on source or entity fields whose query values should be redacted in audit records.
+Use `sensitive: true` on source or entity fields whose query values should be redacted or deterministically hashed in audit records. This flag is audit-only in beta: it does not hide a field from API responses and does not grant or deny read access.
 
 ## Entities
 
@@ -575,7 +582,9 @@ entities:
       schema_validation_path: ../publicschema.org/dist/schemas/Person.schema.json
 ```
 
-When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list.
+When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list. Use entity `read_scope`, required filters, purpose-header requirements, and explicit field projection for exposure control; `sensitive: true` controls audit redaction only.
+
+Row-level authorization scopes are not available in beta. The former `row_scope` resource setting is rejected by config parsing; model row exposure with dataset/entity read scopes, required filters, purpose headers, and projected fields instead.
 
 Relationships are dataset-local in V1. Cross-dataset workflows should compose client-side with separate scoped calls and separate audit records.
 

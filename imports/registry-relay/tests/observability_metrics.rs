@@ -126,7 +126,6 @@ datasets:
         access:
           metadata_scope: social_registry:metadata
           aggregate_scope: social_registry:aggregate
-          row_scope: social_registry:rows
 
 audit:
   sink: stdout

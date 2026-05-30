@@ -3,7 +3,7 @@
 //!
 //! V1 keeps scopes as plain strings: a scope is whatever appears in
 //! `auth.api_keys[].scopes` in the config file and whatever appears in
-//! the per-resource `metadata_scope` / `aggregate_scope` / `row_scope`
+//! the per-resource `metadata_scope` / `aggregate_scope`
 //! fields. The gateway does not parse or namespace them; it only
 //! checks membership.
 

@@ -172,10 +172,11 @@ Audit records are JSON Lines and are separate from operational logs. Operational
 
 Current runtime behavior:
 
+- The public and admin listeners cap accepted sockets with `server.max_connections`, close incomplete HTTP/1 headers after `server.http1_header_read_timeout`, and bound request-body reads with `server.request_body_timeout`. Direct HTTP/2 serving uses the same finite connection cap and keepalive timeout, but production deployments that terminate HTTP/2 at a reverse proxy must set bounded proxy header/body read timeouts and per-client connection limits before forwarding to the relay.
 - `audit.sink: stdout` writes audit JSONL to stdout.
 - `audit.sink: file` writes audit JSONL to the configured path and rotates in-process by `rotate.max_size_mb` and `rotate.max_files`.
 - `audit.sink: syslog` ships audit JSONL to the local syslog Unix datagram socket.
-- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields for tamper evidence. `audit.chain` is retained for config compatibility.
+- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields. These fields detect ordering gaps and accidental corruption in retained logs, but the beta file/stdout/syslog sinks do not protect against a writer that can rewrite the sink. Use an append-only external log store or independent tail-hash anchoring when stronger integrity is required. `audit.chain` is retained for config compatibility.
 - HTTP request completion is logged at `info` with method, matched route template, request id, status, and latency. It does not log raw query strings, request bodies, auth headers, or row values.
 - `REGISTRY_RELAY_LOG_FORMAT=json` switches stderr operational logs from text to JSONL.
 
@@ -196,7 +197,7 @@ For container deployments, `stdout` is still the simplest default because the pl
 
 `audit.hash_secret_env` is required for runtime startup and must point to at least 32 bytes of deployment-specific random secret material. The relay fails closed when the setting is missing, empty, unset, or weak, so sensitive audit lookup hashes never silently downgrade to unkeyed SHA-256.
 
-Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely.
+Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely. The flag is audit-only in beta; it does not remove fields from authorized API responses.
 
 ## Dataset Refresh And Reload
 

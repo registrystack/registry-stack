@@ -18,6 +18,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import secrets
 import subprocess
 import sys
@@ -48,14 +49,6 @@ BRUNO_VAR_MAP = {
 # files via `{{process.env.NAME}}`. We mirror demo/.env.local's variable names
 # (PERSONA_RAW) here so one rotation seeds both consumers.
 BRUNO_ENV_PATH = Path("bruno/registry-relay-demo/.env")
-
-FALLBACK_REGISTRY_NOTARY_ISSUER_JWK = {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
-    "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
-    "alg": "EdDSA",
-}
 
 
 def generate_raw_key() -> str:
@@ -94,8 +87,8 @@ def generate_registry_notary_issuer_jwk() -> str:
                 "x": b64url(bytes.fromhex(public_hex)),
                 "alg": "EdDSA",
             }
-    except Exception:
-        jwk = FALLBACK_REGISTRY_NOTARY_ISSUER_JWK
+    except Exception as exc:
+        raise RuntimeError("openssl Ed25519 key generation failed") from exc
     return json.dumps(jwk, separators=(",", ":"))
 
 
@@ -182,6 +175,22 @@ def format_bruno_env_block(pairs: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_secret_file(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(contents)
+    finally:
+        if fd != -1:
+            os.close(fd)
+    if not hasattr(os, "fchmod"):
+        os.chmod(path, 0o600)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -223,15 +232,13 @@ def main() -> int:
 
     if args.env_file:
         dest = Path(args.env_file)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(export_block, encoding="utf-8")
+        write_secret_file(dest, export_block)
         print(
             f"wrote {len(pairs)} key pairs, audit hash secret, and Registry Notary issuer JWK to {dest}",
             file=sys.stderr,
         )
 
-        BRUNO_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BRUNO_ENV_PATH.write_text(bruno_env_block, encoding="utf-8")
+        write_secret_file(BRUNO_ENV_PATH, bruno_env_block)
         print(f"wrote {len(pairs)} key entries to {BRUNO_ENV_PATH}", file=sys.stderr)
     else:
         print(export_block, end="")

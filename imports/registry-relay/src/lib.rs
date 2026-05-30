@@ -28,6 +28,7 @@ pub mod metadata;
 pub mod observability;
 pub mod provenance;
 pub mod query;
+pub mod serve;
 pub mod server;
 pub mod source;
 #[cfg(feature = "spdci-api-standards")]

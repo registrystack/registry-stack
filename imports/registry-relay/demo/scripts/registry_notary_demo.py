@@ -55,27 +55,6 @@ CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 CCCEV_FORMAT = 'application/ld+json; profile="cccev"'
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 
-DEMO_ISSUER_JWK = {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
-    "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
-    "alg": "EdDSA",
-}
-
-DEMO_HOLDER_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEINpAgYVDwfGjJ/3AJ6IKwVqB8vpnxoX4E4RbnLSFarM+
------END PRIVATE KEY-----
-"""
-
-DEMO_HOLDER_PUBLIC_JWK = {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "x": "gpb08DSqiqOybeHIDCLRcPdnDbhGL1ypfkLEFd977d8",
-    "alg": "EdDSA",
-}
-
-
 @dataclass
 class HttpResult:
     status: int
@@ -139,10 +118,12 @@ def demo_env(env_file: Path) -> tuple[dict[str, str], str, str]:
     env["CASEWORK_SYSTEM_HASH"] = values.get(
         "CASEWORK_SYSTEM_HASH", raw_key_hash(casework_raw)
     )
-    env["REGISTRY_NOTARY_ISSUER_JWK"] = values.get(
-        "REGISTRY_NOTARY_ISSUER_JWK",
-        json.dumps(DEMO_ISSUER_JWK, separators=(",", ":")),
-    )
+    issuer_jwk = values.get("REGISTRY_NOTARY_ISSUER_JWK")
+    if not issuer_jwk:
+        raise DemoError(
+            f"{env_file} must define REGISTRY_NOTARY_ISSUER_JWK; run just demo-keys first"
+        )
+    env["REGISTRY_NOTARY_ISSUER_JWK"] = issuer_jwk
     env["REGISTRY_NOTARY_API_KEY"] = values.get(
         "REGISTRY_NOTARY_API_KEY", f"{verification_raw}-api"
     )
@@ -362,8 +343,49 @@ def stop_server(process: subprocess.Popen[str] | None) -> None:
         log.close()
 
 
-def holder_did() -> str:
-    encoded = b64url(json.dumps(DEMO_HOLDER_PUBLIC_JWK, separators=(",", ":")).encode())
+def parse_openssl_hex_block(text: str, label: str) -> str:
+    collecting = False
+    chunks: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == f"{label}:":
+            collecting = True
+            continue
+        if collecting and stripped.endswith(":") and not all(
+            part in "0123456789abcdefABCDEF" for part in stripped.replace(":", "")
+        ):
+            break
+        if collecting:
+            chunks.append(stripped.replace(":", "").replace(" ", ""))
+    value = "".join(chunks)
+    if len(value) != 64:
+        raise DemoError(f"unexpected Ed25519 {label} length from openssl")
+    return value
+
+
+def generate_holder_key(key_path: Path) -> dict[str, str]:
+    subprocess.run(
+        ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(key_path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    text = subprocess.check_output(
+        ["openssl", "pkey", "-in", str(key_path), "-text", "-noout"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+    public_hex = parse_openssl_hex_block(text, "pub")
+    return {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": b64url(bytes.fromhex(public_hex)),
+        "alg": "EdDSA",
+    }
+
+
+def holder_did(public_jwk: dict[str, str]) -> str:
+    encoded = b64url(json.dumps(public_jwk, separators=(",", ":")).encode())
     return f"did:jwk:{encoded}"
 
 
@@ -373,40 +395,41 @@ def sign_holder_proof(
     disclosure: str,
     claims: list[str],
 ) -> tuple[str, str]:
-    holder_id = holder_did()
-    now = int(time.time())
-    jti = b64url(
-        hashlib.sha256(f"{holder_id}:{evaluation_id}:{time.time_ns()}".encode()).digest()[:16]
-    )
-    header = b64url(
-        json.dumps(
-            {"alg": "EdDSA", "typ": "JWT", "kid": holder_id},
-            separators=(",", ":"),
-        ).encode()
-    )
-    payload = b64url(
-        json.dumps(
-            {
-                "sub": holder_id,
-                "aud": "evidence-server",
-                "exp": now + 300,
-                "iat": now,
-                "jti": jti,
-                "evaluation_id": evaluation_id,
-                "credential_profile": credential_profile,
-                "disclosure": disclosure,
-                "claims": claims,
-            },
-            separators=(",", ":"),
-        ).encode()
-    )
-    signing_input = f"{header}.{payload}".encode("ascii")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         key_path = tmp_path / "holder.pem"
         input_path = tmp_path / "input"
         sig_path = tmp_path / "signature"
-        key_path.write_text(DEMO_HOLDER_PRIVATE_KEY, encoding="utf-8")
+        holder_id = holder_did(generate_holder_key(key_path))
+        now = int(time.time())
+        jti = b64url(
+            hashlib.sha256(f"{holder_id}:{evaluation_id}:{time.time_ns()}".encode()).digest()[
+                :16
+            ]
+        )
+        header = b64url(
+            json.dumps(
+                {"alg": "EdDSA", "typ": "JWT", "kid": holder_id},
+                separators=(",", ":"),
+            ).encode()
+        )
+        payload = b64url(
+            json.dumps(
+                {
+                    "sub": holder_id,
+                    "aud": "evidence-server",
+                    "exp": now + 300,
+                    "iat": now,
+                    "jti": jti,
+                    "evaluation_id": evaluation_id,
+                    "credential_profile": credential_profile,
+                    "disclosure": disclosure,
+                    "claims": claims,
+                },
+                separators=(",", ":"),
+            ).encode()
+        )
+        signing_input = f"{header}.{payload}".encode("ascii")
         input_path.write_bytes(signing_input)
         subprocess.run(
             [

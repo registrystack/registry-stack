@@ -39,6 +39,7 @@ use registry_relay::auth::AuthProvider;
 use registry_relay::config::{Config, DatasetId, ResourceId};
 use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot, ReadyResource};
+use registry_relay::serve::{serve_listener, ServeLimits};
 use registry_relay::server::{build_admin_app, build_app, build_app_with_readiness};
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -461,6 +462,145 @@ async fn admin_bind_serves_health_on_second_listener() {
 }
 
 #[tokio::test]
+async fn public_and_admin_incomplete_headers_are_closed() {
+    let main_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind main");
+    let admin_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind admin");
+    let main_addr: SocketAddr = main_listener.local_addr().expect("main addr");
+    let admin_addr: SocketAddr = admin_listener.local_addr().expect("admin addr");
+
+    let mut cfg = load_example_config();
+    cfg.server.bind = main_addr;
+    cfg.server.admin_bind = Some(admin_addr);
+    cfg.server.http1_header_read_timeout = Duration::from_millis(200);
+    cfg.server.max_connections = 8;
+    cfg.datasets.clear();
+    let config = Arc::new(cfg);
+    let limits = ServeLimits::from_config(&config.server);
+
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let ingest = Arc::new(
+        IngestRegistry::from_config(
+            &config,
+            Arc::new(FormatRegistry::with_v1_defaults()),
+            Arc::from(config.server.cache_dir.as_path()),
+            Arc::new(SessionContext::new()),
+        )
+        .expect("empty ingest registry builds"),
+    );
+    let (readiness_tx, readiness_rx) = watch::channel(ingest.snapshot());
+    let main_app = build_app(Arc::clone(&config), Arc::clone(&auth), Arc::clone(&sink)).unwrap();
+    let admin_app = build_admin_app(
+        Arc::clone(&config),
+        Arc::clone(&auth),
+        Arc::clone(&sink),
+        readiness_rx,
+        readiness_tx,
+        ingest,
+    )
+    .expect("admin app builds");
+
+    let (main_shutdown_tx, main_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (admin_shutdown_tx, admin_shutdown_rx) = tokio::sync::oneshot::channel();
+    let main_handle = tokio::spawn(serve_listener(
+        main_listener,
+        main_app,
+        limits,
+        async move {
+            let _ = main_shutdown_rx.await;
+        },
+    ));
+    let admin_handle = tokio::spawn(serve_listener(
+        admin_listener,
+        admin_app,
+        limits,
+        async move {
+            let _ = admin_shutdown_rx.await;
+        },
+    ));
+
+    assert_incomplete_header_closes(main_addr).await;
+    assert_incomplete_header_closes(admin_addr).await;
+
+    let _ = main_shutdown_tx.send(());
+    let _ = admin_shutdown_tx.send(());
+    main_handle
+        .await
+        .expect("main task joins")
+        .expect("main serve");
+    admin_handle
+        .await
+        .expect("admin task joins")
+        .expect("admin serve");
+}
+
+#[tokio::test]
+async fn serve_listener_max_connections_holds_excess_request_work() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind main");
+    let addr: SocketAddr = listener.local_addr().expect("main addr");
+
+    let mut cfg = load_example_config();
+    cfg.server.bind = addr;
+    cfg.server.http1_header_read_timeout = Duration::from_secs(5);
+    cfg.server.max_connections = 1;
+    cfg.datasets.clear();
+    let config = Arc::new(cfg);
+    let limits = ServeLimits::from_config(&config.server);
+
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let app = build_app(Arc::clone(&config), auth, sink).expect("app builds");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(serve_listener(listener, app, limits, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    let mut held = TcpStream::connect(addr).await.expect("connect held");
+    held.write_all(format!("GET /health HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
+        .await
+        .expect("write held partial headers");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut queued = TcpStream::connect(addr).await.expect("connect queued");
+    queued
+        .write_all(
+            format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .expect("write queued request");
+
+    let mut first_byte = [0_u8; 1];
+    let early =
+        tokio::time::timeout(Duration::from_millis(200), queued.read(&mut first_byte)).await;
+    assert!(
+        early.is_err(),
+        "queued request received response bytes while connection cap was exhausted"
+    );
+
+    drop(held);
+    let mut rest = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), queued.read_to_end(&mut rest))
+        .await
+        .expect("queued request finishes after capacity frees")
+        .expect("queued response reads");
+    assert!(read > 0, "queued request received a response");
+    let response = String::from_utf8_lossy(&rest);
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "queued request should succeed after capacity frees, got: {response}"
+    );
+
+    let _ = shutdown_tx.send(());
+    handle
+        .await
+        .expect("serve task joins")
+        .expect("serve exits");
+}
+
+#[tokio::test]
 async fn trusted_proxy_forwarded_for_reaches_audit_on_real_listener() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -499,6 +639,26 @@ async fn trusted_proxy_forwarded_for_reaches_audit_on_real_listener() {
     assert_eq!(record["remote_addr"], "203.0.113.10");
 
     handle.abort();
+}
+
+async fn assert_incomplete_header_closes(addr: SocketAddr) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    stream
+        .write_all(format!("GET /health HTTP/1.1\r\nHost: {addr}\r\n").as_bytes())
+        .await
+        .expect("write partial headers");
+
+    let mut byte = [0_u8; 1];
+    let result = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut byte)).await;
+    match result {
+        Ok(Ok(0)) => {}
+        Ok(Err(_)) => {}
+        Ok(Ok(n)) => panic!("partial-header connection returned {n} bytes instead of closing"),
+        Err(_) => panic!("partial-header connection did not close before timeout"),
+    }
 }
 
 fn audit_record_from_platform_envelope(line: &str) -> Value {

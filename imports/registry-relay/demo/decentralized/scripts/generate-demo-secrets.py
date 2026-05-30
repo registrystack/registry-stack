@@ -20,6 +20,7 @@ from generate_demo_keys import (  # noqa: E402
     generate_audit_hash_secret,
     generate_registry_notary_issuer_jwk,
     generate_raw_key,
+    write_secret_file,
 )
 
 TOKEN_NAMES = [
@@ -92,7 +93,7 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
     ]
     for key in sorted(values):
         lines.append(env_line(key, values[key]))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_secret_file(path, "\n".join(lines) + "\n")
 
 
 def main() -> int:

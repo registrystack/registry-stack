@@ -26,19 +26,6 @@ CCCEV_FORMAT = 'application/ld+json; profile="cccev"'
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 CORRELATION_ID = os.environ.get("DEMO_CORRELATION_ID", "decentralized-demo-correlation-001")
 
-DEMO_HOLDER_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEINpAgYVDwfGjJ/3AJ6IKwVqB8vpnxoX4E4RbnLSFarM+
------END PRIVATE KEY-----
-"""
-
-DEMO_HOLDER_PUBLIC_JWK = {
-    "kty": "OKP",
-    "crv": "Ed25519",
-    "x": "gpb08DSqiqOybeHIDCLRcPdnDbhGL1ypfkLEFd977d8",
-    "alg": "EdDSA",
-}
-
-
 @dataclass(frozen=True)
 class Service:
     name: str
@@ -157,41 +144,81 @@ def b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
-def holder_did() -> str:
-    encoded = b64url(json.dumps(DEMO_HOLDER_PUBLIC_JWK, separators=(",", ":")).encode())
+def parse_openssl_hex_block(text: str, label: str) -> str:
+    collecting = False
+    chunks: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == f"{label}:":
+            collecting = True
+            continue
+        if collecting and stripped.endswith(":") and not all(
+            part in "0123456789abcdefABCDEF" for part in stripped.replace(":", "")
+        ):
+            break
+        if collecting:
+            chunks.append(stripped.replace(":", "").replace(" ", ""))
+    value = "".join(chunks)
+    if len(value) != 64:
+        raise DemoError(f"unexpected Ed25519 {label} length from openssl")
+    return value
+
+
+def generate_holder_key(key_path: Path) -> dict[str, str]:
+    subprocess.run(
+        ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(key_path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    text = subprocess.check_output(
+        ["openssl", "pkey", "-in", str(key_path), "-text", "-noout"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+    public_hex = parse_openssl_hex_block(text, "pub")
+    return {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": b64url(bytes.fromhex(public_hex)),
+        "alg": "EdDSA",
+    }
+
+
+def holder_did(public_jwk: dict[str, str]) -> str:
+    encoded = b64url(json.dumps(public_jwk, separators=(",", ":")).encode())
     return f"did:jwk:{encoded}"
 
 
 def sign_holder_proof(evaluation_id: str, credential_profile: str, claims: list[str]) -> tuple[str, str]:
     if shutil.which("openssl") is None:
         raise DemoError("openssl is required for the demo holder proof")
-    holder_id = holder_did()
-    now = int(time.time())
-    jti = b64url(hashlib.sha256(f"{holder_id}:{evaluation_id}:{time.time_ns()}".encode()).digest()[:16])
-    header = b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": holder_id}, separators=(",", ":")).encode())
-    payload = b64url(
-        json.dumps(
-            {
-                "sub": holder_id,
-                "aud": "evidence-server",
-                "exp": now + 300,
-                "iat": now,
-                "jti": jti,
-                "evaluation_id": evaluation_id,
-                "credential_profile": credential_profile,
-                "disclosure": "predicate",
-                "claims": claims,
-            },
-            separators=(",", ":"),
-        ).encode()
-    )
-    signing_input = f"{header}.{payload}".encode("ascii")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         key_path = tmp_path / "holder.pem"
         input_path = tmp_path / "input"
         sig_path = tmp_path / "signature"
-        key_path.write_text(DEMO_HOLDER_PRIVATE_KEY, encoding="utf-8")
+        holder_id = holder_did(generate_holder_key(key_path))
+        now = int(time.time())
+        jti = b64url(hashlib.sha256(f"{holder_id}:{evaluation_id}:{time.time_ns()}".encode()).digest()[:16])
+        header = b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": holder_id}, separators=(",", ":")).encode())
+        payload = b64url(
+            json.dumps(
+                {
+                    "sub": holder_id,
+                    "aud": "evidence-server",
+                    "exp": now + 300,
+                    "iat": now,
+                    "jti": jti,
+                    "evaluation_id": evaluation_id,
+                    "credential_profile": credential_profile,
+                    "disclosure": "predicate",
+                    "claims": claims,
+                },
+                separators=(",", ":"),
+            ).encode()
+        )
+        signing_input = f"{header}.{payload}".encode("ascii")
         input_path.write_bytes(signing_input)
         subprocess.run(
             ["openssl", "pkeyutl", "-sign", "-inkey", str(key_path), "-rawin", "-in", str(input_path), "-out", str(sig_path)],

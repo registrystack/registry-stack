@@ -386,7 +386,7 @@ These are not cosmetic; they need substantive rewrites, not deletion, to maintai
 
 - Per-caller rate limiting at the offering level, configurable burst and sustained rate.
 - Audit log capturing caller identity, offering ID, and timestamp per call (not just hashes), so anomaly detection is possible.
-- Audit log must be append-only and tamper-evident for PII-adjacent verification events.
+- Deployments that need stronger integrity for PII-adjacent verification events must send audit records to an append-only external store or independently anchor retained-log tail hashes.
 
 **Source:** SEC.
 

@@ -25,7 +25,8 @@ use futures::StreamExt as _;
 use postgres_native_tls::MakeTlsConnector;
 use time::OffsetDateTime;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio_postgres::Client;
+use tokio_postgres::config::SslMode;
+use tokio_postgres::{Client, Config as PostgresClientConfig};
 
 use crate::config::{FieldType, PostgresTableConfig};
 use crate::format::csv::CsvFormat;
@@ -273,17 +274,20 @@ impl PostgresConnector {
                 self.connection_env
             ))
         })?;
+        let client_config = postgres_config_require_tls(&url, &self.connection_env)?;
         let tls = native_tls::TlsConnector::builder()
             .build()
             .map_err(|_| ConnectorError::SourceUnreadable("postgres TLS setup failed".into()))?;
         let connector = MakeTlsConnector::new(tls);
-        let (client, connection) = tokio::time::timeout(
-            self.connect_timeout,
-            tokio_postgres::connect(&url, connector),
-        )
-        .await
-        .map_err(|_| ConnectorError::SourceUnreadable("postgres connection timed out".into()))?
-        .map_err(|_| ConnectorError::SourceUnreadable("postgres connection failed".into()))?;
+        let (client, connection) =
+            tokio::time::timeout(self.connect_timeout, client_config.connect(connector))
+                .await
+                .map_err(|_| {
+                    ConnectorError::SourceUnreadable("postgres connection timed out".into())
+                })?
+                .map_err(|_| {
+                    ConnectorError::SourceUnreadable("postgres connection failed".into())
+                })?;
 
         tokio::spawn(async move {
             if let Err(error) = connection.await {
@@ -477,6 +481,23 @@ impl PostgresConnector {
         })
         .await
     }
+}
+
+fn postgres_config_require_tls(
+    url: &str,
+    connection_env: &str,
+) -> Result<PostgresClientConfig, ConnectorError> {
+    let config = url.parse::<PostgresClientConfig>().map_err(|_| {
+        ConnectorError::SourceUnreadable(format!(
+            "postgres connection string in {connection_env} is invalid"
+        ))
+    })?;
+    if config.get_ssl_mode() != SslMode::Require {
+        return Err(ConnectorError::SourceUnreadable(format!(
+            "postgres connection string in {connection_env} must set sslmode=require"
+        )));
+    }
+    Ok(config)
 }
 
 impl TableConnector for PostgresConnector {
@@ -860,6 +881,67 @@ mod tests {
         assert!(!is_pushdown_safe_projection(&[]));
         assert!(!is_pushdown_safe_projection(&[0, 0]));
         assert!(is_pushdown_safe_projection(&[2, 0]));
+    }
+
+    #[test]
+    fn postgres_sslmode_rejects_default_prefer() {
+        let err = postgres_config_require_tls(
+            "host=localhost user=registry password=secret dbname=registry",
+            "TEST_DATABASE_URL",
+        )
+        .expect_err("missing sslmode defaults to prefer");
+
+        assert_eq!(
+            err.to_string(),
+            "source unreadable: postgres connection string in TEST_DATABASE_URL must set sslmode=require"
+        );
+    }
+
+    #[test]
+    fn postgres_sslmode_rejects_explicit_prefer() {
+        let err = postgres_config_require_tls(
+            "postgres://registry:secret@localhost/registry?sslmode=prefer",
+            "TEST_DATABASE_URL",
+        )
+        .expect_err("prefer is too weak");
+
+        assert!(err.to_string().contains("sslmode=require"));
+    }
+
+    #[test]
+    fn postgres_sslmode_rejects_disable() {
+        let err = postgres_config_require_tls(
+            "postgres://registry:secret@localhost/registry?sslmode=disable",
+            "TEST_DATABASE_URL",
+        )
+        .expect_err("disable is too weak");
+
+        assert!(err.to_string().contains("sslmode=require"));
+    }
+
+    #[test]
+    fn postgres_sslmode_accepts_require() {
+        let config = postgres_config_require_tls(
+            "postgres://registry:secret@localhost/registry?sslmode=require",
+            "TEST_DATABASE_URL",
+        )
+        .expect("require is accepted");
+
+        assert_eq!(config.get_ssl_mode(), SslMode::Require);
+    }
+
+    #[test]
+    fn postgres_sslmode_parse_error_does_not_leak_url() {
+        let err = postgres_config_require_tls(
+            "postgres://registry:super-secret@localhost:bad-port/registry?sslmode=require",
+            "TEST_DATABASE_URL",
+        )
+        .expect_err("invalid url is rejected");
+        let message = err.to_string();
+
+        assert!(message.contains("TEST_DATABASE_URL"));
+        assert!(!message.contains("super-secret"));
+        assert!(!message.contains("bad-port"));
     }
 
     #[test]

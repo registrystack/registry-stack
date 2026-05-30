@@ -2,7 +2,7 @@
 //! Audit core: record schema, platform audit pipeline, and helpers.
 //!
 //! V1 ships the `AuditRecord` struct, stdout/file/syslog platform
-//! sinks, tamper-evident envelopes, and the request-scoped middleware.
+//! sinks, chained envelopes, and the request-scoped middleware.
 //!
 //! Forward compatibility:
 //! - `FileSink` and `SyslogSink` are production audit destinations.
@@ -302,8 +302,8 @@ impl From<&ProvenanceIssuanceExt> for ProvenanceIssuanceRecord {
 /// the request path must not fail because of audit-write failures.
 pub type AuditError = registry_platform_audit::AuditError;
 
-/// A non-request operational event that still belongs in the tamper-evident
-/// audit chain.
+/// A non-request operational event that still belongs in the chained audit
+/// stream.
 #[derive(Debug, Clone)]
 pub struct OperationalAuditEvent {
     pub event: &'static str,

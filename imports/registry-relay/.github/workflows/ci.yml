@@ -207,9 +207,58 @@ jobs:
         run: |
           curl -LsSf https://get.nexte.st/0.9.136/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 
+      - name: Enable TLS for Postgres integration tests
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/postgres-tls
+          cd /tmp/postgres-tls
+          openssl req -new -x509 -days 1 -nodes \
+            -subj "/CN=registry-relay-ci-postgres-ca" \
+            -keyout ca.key \
+            -out ca.crt
+          cat > server.ext <<'EOF'
+          subjectAltName = DNS:localhost,IP:127.0.0.1
+          extendedKeyUsage = serverAuth
+          EOF
+          openssl req -new -nodes -newkey rsa:2048 \
+            -subj "/CN=localhost" \
+            -keyout server.key \
+            -out server.csr
+          openssl x509 -req -days 1 \
+            -in server.csr \
+            -CA ca.crt \
+            -CAkey ca.key \
+            -CAcreateserial \
+            -out server.crt \
+            -extfile server.ext
+          chmod 600 server.key
+
+          container="${{ job.services.postgres.id }}"
+          docker cp server.crt "$container:/var/lib/postgresql/server.crt"
+          docker cp server.key "$container:/var/lib/postgresql/server.key"
+          docker exec -u root "$container" chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key
+          docker exec -u root "$container" chmod 600 /var/lib/postgresql/server.key
+          docker exec -u root "$container" sh -c "cat >> /var/lib/postgresql/data/postgresql.conf <<'EOF'
+          ssl = on
+          ssl_cert_file = '/var/lib/postgresql/server.crt'
+          ssl_key_file = '/var/lib/postgresql/server.key'
+          EOF"
+          docker restart "$container"
+          for _ in {1..30}; do
+            if docker exec "$container" pg_isready -U postgres; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$container" pg_isready -U postgres
+
+          sudo cp ca.crt /usr/local/share/ca-certificates/registry-relay-ci-postgres-ca.crt
+          sudo update-ca-certificates
+
       - name: Run Postgres datasource integration tests
         env:
-          DATA_GATE_POSTGRES_TEST_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          DATA_GATE_POSTGRES_TEST_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=require
         run: cargo nextest run --test postgres_snapshot --run-ignored=ignored-only --no-capture
 
   # ── Container image build ────────────────────────────────────────────────

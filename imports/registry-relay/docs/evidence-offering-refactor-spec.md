@@ -655,8 +655,9 @@ agreements.
 
 Audit logs for verification events must capture caller identity, offering ID,
 timestamp, decision, purpose, and operational status without raw claims or raw
-evidence. The audit stream must be append-only and tamper-evident for
-PII-adjacent verification events.
+evidence. Deployments that need stronger integrity for PII-adjacent verification
+events must send audit records to an append-only external store or independently
+anchor retained-log tail hashes.
 
 ## Demo Requirements
 
