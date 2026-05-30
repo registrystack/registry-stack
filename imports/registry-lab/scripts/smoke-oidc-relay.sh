@@ -196,7 +196,7 @@ wait_http() {
   local start
   start="$(date +%s)"
   while (( $(date +%s) - start < deadline )); do
-    if curl -fsS "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -244,7 +244,7 @@ status="$(
   curl -sS -o "${output_dir}/smoke-oidc-relay-row.json" -w "%{http_code}" \
     -H "Authorization: Bearer ${token}" \
     -H "Data-Purpose: https://demo.example.gov/purpose/oidc-relay-demo" \
-    "http://127.0.0.1:${port}/datasets/social_protection_registry/household?limit=1"
+    "http://127.0.0.1:${port}/v1/datasets/social_protection_registry/entities/household/records?limit=1"
 )"
 
 case "${status}" in

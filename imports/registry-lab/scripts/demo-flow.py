@@ -158,7 +158,8 @@ def b64url(raw: bytes) -> str:
 
 
 def holder_did() -> str:
-    encoded = b64url(json.dumps(DEMO_HOLDER_PUBLIC_JWK, separators=(",", ":")).encode())
+    did_jwk = {key: DEMO_HOLDER_PUBLIC_JWK[key] for key in ("crv", "kty", "x")}
+    encoded = b64url(json.dumps(did_jwk, separators=(",", ":"), sort_keys=True).encode())
     return f"did:jwk:{encoded}"
 
 
@@ -317,7 +318,7 @@ def main() -> int:
         save(out, step, f"{relay.name}-metadata", body)
         step += 1
 
-        body = require(request("GET", relay.url, "/datasets", token), 200, f"{relay.name} datasets")
+        body = require(request("GET", relay.url, "/v1/datasets", token), 200, f"{relay.name} datasets")
         save(out, step, f"{relay.name}-datasets", body)
         step += 1
 
@@ -359,14 +360,14 @@ def main() -> int:
         openapi = require(request("GET", service.url, "/openapi.json", token), 200, f"{service.name} Evidence Server OpenAPI")
         save(out, step, f"{service.name}-evidence-openapi", openapi)
         step += 1
-        claims = require(request("GET", service.url, "/claims", token), 200, f"{service.name} claims")
+        claims = require(request("GET", service.url, "/v1/claims", token), 200, f"{service.name} claims")
         save(out, step, f"{service.name}-claims", claims)
         step += 1
 
     row_denial = request(
         "GET",
         relays[1].url,
-        "/datasets/social_protection_registry/household?limit=1",
+        "/v1/datasets/social_protection_registry/entities/household/records?limit=1",
         env("SOCIAL_EVIDENCE_ONLY_RAW"),
         headers={"Data-Purpose": PURPOSE},
     )
@@ -378,7 +379,7 @@ def main() -> int:
         request(
             "GET",
             relays[1].url,
-            "/datasets/social_protection_registry/household?limit=1",
+            "/v1/datasets/social_protection_registry/entities/household/records?limit=1",
             env("SOCIAL_ROW_READER_RAW"),
             headers={"Data-Purpose": PURPOSE},
         ),
@@ -392,7 +393,7 @@ def main() -> int:
         request(
             "GET",
             relays[1].url,
-            "/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
+            "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
             env("SOCIAL_AGGREGATE_READER_RAW"),
             headers={"Data-Purpose": PURPOSE},
         ),
@@ -405,7 +406,7 @@ def main() -> int:
     aggregate_denial = request(
         "GET",
         relays[1].url,
-        "/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
+        "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
         env("SOCIAL_ROW_READER_RAW"),
         headers={"Data-Purpose": PURPOSE},
     )
@@ -451,7 +452,7 @@ def main() -> int:
             request(
                 "POST",
                 service.url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 env(service.token_env),
                 evaluate_payload(subject, claims, disclosure, fmt),
                 {"Data-Purpose": PURPOSE, "Accept": fmt},
@@ -466,7 +467,7 @@ def main() -> int:
     missing = request(
         "POST",
         evidence[2].url,
-        "/claims/evaluate",
+        "/v1/evaluations",
         env(evidence[2].token_env),
         evaluate_payload("NID-9999", ["eligible-for-combined-support"]),
         {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -478,7 +479,7 @@ def main() -> int:
         request(
             "POST",
             evidence[2].url,
-            "/claims/batch-evaluate",
+            "/v1/batch-evaluations",
             env(evidence[2].token_env),
             {
                 "subjects": [{"id": "NID-1001"}, {"id": "NID-1002"}, {"id": "NID-9999"}],
@@ -498,7 +499,7 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/claims/evaluate",
+            "/v1/evaluations",
             env(evidence[0].token_env),
             evaluate_payload("NID-1001", ["person-is-alive"], "predicate", CCCEV_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": CCCEV_FORMAT},
@@ -513,9 +514,9 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/evidence/render",
+            f"/v1/evaluations/{evaluation_id}/render",
             env(evidence[0].token_env),
-            {"evaluation_id": evaluation_id, "claims": ["person-is-alive"], "disclosure": "predicate", "format": CCCEV_FORMAT},
+            {"claims": ["person-is-alive"], "disclosure": "predicate", "format": CCCEV_FORMAT},
         ),
         200,
         "CCCEV render",
@@ -527,7 +528,7 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/claims/evaluate",
+            "/v1/evaluations",
             env(evidence[0].token_env),
             evaluate_payload("NID-1001", ["person-is-alive"], "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
@@ -548,7 +549,7 @@ def main() -> int:
         request(
             "POST",
             evidence[0].url,
-            "/credentials/issue",
+            "/v1/credentials",
             env(evidence[0].token_env),
             {
                 "evaluation_id": first_result_id(credential_eval),

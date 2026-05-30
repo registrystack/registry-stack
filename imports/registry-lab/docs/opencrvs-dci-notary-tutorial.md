@@ -167,7 +167,7 @@ source ./.env.local
 Evaluate evidence:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:4352/claims/evaluate \
+curl -fsS -X POST http://127.0.0.1:4352/v1/evaluations \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-api-token}" \
   -H "content-type: application/json" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
@@ -192,7 +192,7 @@ First create an evaluation in SD-JWT VC format and capture its `evaluation_id`:
 
 ```bash
 EVAL_ID="$(
-  curl -fsS -X POST http://127.0.0.1:4352/claims/evaluate \
+  curl -fsS -X POST http://127.0.0.1:4352/v1/evaluations \
     -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-api-token}" \
     -H "content-type: application/json" \
     -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
@@ -215,7 +215,7 @@ echo "$EVAL_ID"
 Then issue the credential:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:4352/credentials/issue \
+curl -fsS -X POST http://127.0.0.1:4352/v1/credentials \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-api-token}" \
   -H "content-type: application/json" \
   -d "$(jq -nc --arg evaluation_id "$EVAL_ID" '{

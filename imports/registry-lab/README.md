@@ -167,11 +167,11 @@ The default agricultural smoke/client paths follow the NAgDI spec:
 - livestock subjects: `HERD-2001` eligible, `HERD-2002` vaccination denial,
   `HERD-2003` quarantine denial
 - default farmer row route:
-  `/datasets/agri_registry/farmer?limit=1`
+  `/v1/datasets/agri_registry/entities/farmer/records?limit=1`
 - default market-sizing aggregate:
-  `/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input`
+  `/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input`
 - default livestock herd aggregate:
-  `/datasets/agri_registry/aggregates/livestock_herds_by_species_district`
+  `/v1/datasets/agri_registry/aggregates/livestock_herds_by_species_district`
 
 Agricultural metadata discovery should distinguish the two evidence surfaces:
 voucher and livestock eligibility are Registry Notary offerings, while market
@@ -437,7 +437,7 @@ curl -fsS \
   -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
-  http://127.0.0.1:4324/claims/evaluate \
+  http://127.0.0.1:4324/v1/evaluations \
   --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}' | jq
 ```
 
@@ -682,7 +682,7 @@ buildable even though that older Relay source does not define `ogcapi-edr`.
 Set `REGISTRY_RELAY_FEATURES` explicitly when using a different Relay source.
 
 The social protection walkthrough uses the dataset-scoped aggregate endpoint at
-`/datasets/social_protection_registry/aggregates/households_by_eligibility_band`
+`/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band`
 and the EDR collection at
 `/ogc/edr/v1/collections/social_protection_households_by_district`.
 

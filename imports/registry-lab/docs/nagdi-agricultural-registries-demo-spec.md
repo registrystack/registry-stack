@@ -94,8 +94,8 @@ AGRI_MARKET_DATA_PURPOSE=https://demo.example.gov/purpose/nagdi/agricultural-mar
 AGRI_FARMER_DATASET=agri_registry
 AGRI_FARMER_ENTITY=farmer
 AGRI_INPUT_VOUCHER_CLAIM=eligible-for-climate-smart-input-voucher
-AGRI_MARKET_SIZING_PATH=/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input
-AGRI_SUPPRESSED_AGGREGATE_PATH=/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input?district_code=D-WEST
+AGRI_MARKET_SIZING_PATH=/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input
+AGRI_SUPPRESSED_AGGREGATE_PATH=/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input?district_code=D-WEST
 ```
 
 The scripts should consume only `AGRI_*` credentials from `.env` and must not

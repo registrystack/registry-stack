@@ -50,7 +50,7 @@ evidence:
       issuer: did:web:opencrvs-dci.demo.example.gov
       signing_key: opencrvs-dci-demo
       vct: https://demo.example.gov/credentials/opencrvs-birth-summary/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - opencrvs-birth-record-exists
         - opencrvs-date-of-birth

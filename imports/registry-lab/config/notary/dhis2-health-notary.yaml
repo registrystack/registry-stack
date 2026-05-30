@@ -44,7 +44,7 @@ evidence:
       issuer: did:web:dhis2-health-notary.demo.example.gov
       signing_key: dhis2-health-demo
       vct: https://demo.example.gov/credentials/dhis2/health-status/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - dhis2-child-program-active
         - dhis2-maternal-pnc-active

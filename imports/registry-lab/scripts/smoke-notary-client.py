@@ -81,7 +81,7 @@ def check(name: str, fn: Any) -> Any:
 def claim_ids(claims_response: dict[str, Any]) -> set[str]:
     data = claims_response.get("data")
     if not isinstance(data, list):
-        fail("/claims response did not contain data[]")
+        fail("/v1/claims response did not contain data[]")
     ids = {item.get("id") for item in data if isinstance(item, dict)}
     return {item for item in ids if isinstance(item, str)}
 

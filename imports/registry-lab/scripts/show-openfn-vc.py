@@ -101,7 +101,7 @@ def main() -> int:
     base_url = args.notary_url.rstrip("/")
 
     evaluation = post_json(
-        f"{base_url}/claims/evaluate",
+        f"{base_url}/v1/evaluations",
         token,
         {
             "subject": {"id": args.subject, "id_type": "national_id"},
@@ -114,7 +114,7 @@ def main() -> int:
     evaluation_id = evaluation["results"][0]["evaluation_id"]
 
     issued = post_json(
-        f"{base_url}/credentials/issue",
+        f"{base_url}/v1/credentials",
         token,
         {
             "evaluation_id": evaluation_id,

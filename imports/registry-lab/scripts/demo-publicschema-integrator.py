@@ -45,7 +45,7 @@ def fetch_entity(relay_url: str, token: str, entity: str, limit: int = 100) -> l
         request(
             "GET",
             relay_url,
-            f"/datasets/agri_registry/{entity}?limit={limit}",
+            f"/v1/datasets/agri_registry/entities/{entity}/records?limit={limit}",
             token,
             headers={"Data-Purpose": PURPOSE},
         ),

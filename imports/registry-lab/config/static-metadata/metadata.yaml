@@ -904,7 +904,7 @@ datasets:
         access:
           kind: registry-relay-aggregate
           conforms_to: registry_relay:aggregate-v1
-          endpoint_url: http://agri-registry-relay:8080/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input
+          endpoint_url: http://agri-registry-relay:8080/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input
           discovery_url: http://agri-registry-relay:8080/.well-known/api-catalog
           ruleset: voucher_opportunities_by_district_crop_risk_input
         policy:
@@ -932,7 +932,7 @@ datasets:
         access:
           kind: registry-relay-aggregate
           conforms_to: registry_relay:aggregate-v1
-          endpoint_url: http://agri-registry-relay:8080/datasets/agri_registry/aggregates/livestock_herds_by_species_district
+          endpoint_url: http://agri-registry-relay:8080/v1/datasets/agri_registry/aggregates/livestock_herds_by_species_district
           discovery_url: http://agri-registry-relay:8080/.well-known/api-catalog
           ruleset: livestock_herds_by_species_district
         policy:

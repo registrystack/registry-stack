@@ -100,7 +100,7 @@ evidence:
       issuer: did:web:civil-evidence.demo.example
       signing_key: civil-evidence-demo
       vct: https://demo.example/credentials/civil-status/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - date-of-birth
         - civil-status

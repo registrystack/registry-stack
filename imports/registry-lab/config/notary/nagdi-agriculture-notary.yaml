@@ -102,7 +102,7 @@ evidence:
       issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
       signing_key: nagdi-agriculture-evidence-demo
       vct: https://demo.example.gov/credentials/nagdi/climate-smart-input-voucher/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - farmer-registered
         - data-use-authorized-for-purpose
@@ -130,7 +130,7 @@ evidence:
       issuer: did:web:nagdi-agriculture-evidence.demo.example.gov
       signing_key: nagdi-agriculture-evidence-demo
       vct: https://demo.example.gov/credentials/nagdi/livestock-movement-permit/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - registered-livestock-holder
         - registered-herd

@@ -193,7 +193,7 @@ payload="$(
 )"
 
 curl -fsS \
-  -X POST "${notary_url}/claims/evaluate" \
+  -X POST "${notary_url}/v1/evaluations" \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
   -H "content-type: application/json" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
@@ -254,7 +254,7 @@ vc_payload="$(
   }'
 )"
 curl -fsS \
-  -X POST "${notary_url}/claims/evaluate" \
+  -X POST "${notary_url}/v1/evaluations" \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
   -H "content-type: application/json" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
@@ -278,7 +278,7 @@ issue_payload="$(
   }'
 )"
 curl -fsS \
-  -X POST "${notary_url}/credentials/issue" \
+  -X POST "${notary_url}/v1/credentials" \
   -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN}" \
   -H "content-type: application/json" \
   -H "x-request-id: ${correlation_id}-vc-issue" \

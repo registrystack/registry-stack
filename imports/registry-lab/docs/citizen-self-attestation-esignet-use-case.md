@@ -28,7 +28,7 @@ configured registry fact, and returns a bounded attestation result.
    In the eSignet default-style mode, the ID token supplies `auth_time`/`acr`
    and the signed UserInfo JWT supplies the subject-binding claim, for example
    `individual_id=NID-1001`.
-3. The wallet or portal calls `POST /claims/evaluate` on the optional
+3. The wallet or portal calls `POST /v1/evaluations` on the optional
    citizen-facing civil Notary.
 4. Registry Notary validates issuer, signature, audience, client, token
    lifetime, configured self-attestation scope, and any configured ID

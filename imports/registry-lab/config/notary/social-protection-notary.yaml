@@ -91,7 +91,7 @@ evidence:
       issuer: did:web:social-protection-evidence.demo.example
       signing_key: social-protection-evidence-demo
       vct: https://demo.example/credentials/program-enrollment/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - program-enrollment-status
         - household-eligibility-band

@@ -156,11 +156,11 @@ def main() -> int:
 
     market_path = env(
         "AGRI_MARKET_SIZING_PATH",
-        "/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input",
+        "/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input",
     )
     livestock_path = env(
         "AGRI_LIVESTOCK_AGGREGATE_PATH",
-        "/datasets/agri_registry/aggregates/livestock_herds_by_species_district",
+        "/v1/datasets/agri_registry/aggregates/livestock_herds_by_species_district",
     )
 
     market = require(
@@ -189,7 +189,7 @@ def main() -> int:
     planner_row = request(
         "GET",
         relay_url,
-        "/datasets/agri_registry/farmer?limit=1",
+        "/v1/datasets/agri_registry/entities/farmer/records?limit=1",
         aggregate_token,
         headers={"Data-Purpose": MARKET_PURPOSE},
     )

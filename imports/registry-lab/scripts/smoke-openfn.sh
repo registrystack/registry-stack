@@ -75,7 +75,7 @@ curl -fsS \
   -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
   -H "x-request-id: ${correlation_id}" \
   -o "${notary_body}" \
-  http://127.0.0.1:4324/claims/evaluate \
+  http://127.0.0.1:4324/v1/evaluations \
   --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}'
 
 python - "${notary_body}" <<'PY'

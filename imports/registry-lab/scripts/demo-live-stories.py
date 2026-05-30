@@ -557,7 +557,7 @@ def start_relay(config_path: Path, log_path: Path, port: int, env_updates: dict[
     def check_health() -> None:
         if proc.poll() is not None:
             raise StoryError(f"Relay on {port} exited during startup; see {log_path}")
-        require(request("GET", f"http://127.0.0.1:{port}", "/health"), 200, "relay health")
+        require(request("GET", f"http://127.0.0.1:{port}", "/healthz"), 200, "relay health")
 
     wait_for(f"Relay on {port}", check_health, timeout=180)
     return proc
@@ -1122,7 +1122,7 @@ def select_advertised_claim(evidence_iri: str, route: dict[str, Any], claims: di
             "claim": claim,
             "matched_by": "evidence_type_iri",
             "selection_note": (
-                "Selected by matching the CCCEV evidence type IRI advertised by live /claims "
+                "Selected by matching the CCCEV evidence type IRI advertised by live /v1/claims "
                 "against the evidence type selected from the service catalogue."
             ),
         }
@@ -1145,7 +1145,7 @@ def select_advertised_claim(evidence_iri: str, route: dict[str, Any], claims: di
             "matched_by": "fallback_candidate_claim_id",
             "selection_note": (
                 "Fallback selected by scenario claim candidate because this Notary did not "
-                "advertise evidence type IRIs. The selected claim still had to be present in live /claims."
+                "advertise evidence type IRIs. The selected claim still had to be present in live /v1/claims."
             ),
         }
     raise StoryError(
@@ -1318,8 +1318,8 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                 route["route_label"],
             ),
         )
-        show_query("GET", route["base_url"], "/claims")
-        claims = require(request("GET", route["base_url"], "/claims", route["token"]), 200, f"{route['route_label']} claims")
+        show_query("GET", route["base_url"], "/v1/claims")
+        claims = require(request("GET", route["base_url"], "/v1/claims", route["token"]), 200, f"{route['route_label']} claims")
         selected_claim = select_advertised_claim(evidence_iri, route, claims)
         route["claim"] = selected_claim["claim_id"]
         route["claim_metadata"] = selected_claim["claim"]
@@ -1387,12 +1387,12 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
             }
             explain(f"Call the discovered route for {route['route_label']} as part of the {group.get('strategy')} option.")
             explain(f"Discovered endpoint `{route['discovered_endpoint_url']}` is used through host URL `{route['base_url']}`.")
-            show_query("POST", route["base_url"], "/claims/evaluate", purpose=True, body=payload)
+            show_query("POST", route["base_url"], "/v1/evaluations", purpose=True, body=payload)
             response = require(
                 request(
                     "POST",
                     route["base_url"],
-                    "/claims/evaluate",
+                    "/v1/evaluations",
                     route["token"],
                     payload,
                     {"Data-Purpose": PURPOSE},
@@ -1528,9 +1528,9 @@ INSERT INTO demo_story.beneficiaries VALUES
         summarize_postgres_metadata(metadata)
         save(out, step, "postgres-live-metadata", metadata)
         step += 1
-        show_query("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", authenticated=True, purpose=True)
+        show_query("GET", base, "/v1/datasets/postgres_registry/entities/beneficiary/records?limit=10", authenticated=True, purpose=True)
         before = require(
-            request("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", token, headers={"Data-Purpose": PURPOSE}),
+            request("GET", base, "/v1/datasets/postgres_registry/entities/beneficiary/records?limit=10", token, headers={"Data-Purpose": PURPOSE}),
             200,
             "postgres live row read before insert",
         )
@@ -1540,9 +1540,9 @@ INSERT INTO demo_story.beneficiaries VALUES
         step += 1
         explain("Insert one operational row directly into Postgres, without restarting Relay or changing Relay config.")
         psql("INSERT INTO demo_story.beneficiaries VALUES (3, 'NID-1004', 'CHILD_SUPPORT', 110.00, 'active', '2026-01-12T00:00:00Z');")
-        show_query("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", authenticated=True, purpose=True)
+        show_query("GET", base, "/v1/datasets/postgres_registry/entities/beneficiary/records?limit=10", authenticated=True, purpose=True)
         after = require(
-            request("GET", base, "/datasets/postgres_registry/beneficiary?limit=10", token, headers={"Data-Purpose": PURPOSE}),
+            request("GET", base, "/v1/datasets/postgres_registry/entities/beneficiary/records?limit=10", token, headers={"Data-Purpose": PURPOSE}),
             200,
             "postgres live row read after insert",
         )
@@ -1618,14 +1618,14 @@ def story_oidc(out: Path, values: dict[str, str], step: int) -> int:
     )
     try:
         base = f"http://127.0.0.1:{port}"
-        show_query("GET", base, "/health")
-        health = require(request("GET", base, "/health"), 200, "oidc denied relay health")
+        show_query("GET", base, "/healthz")
+        health = require(request("GET", base, "/healthz"), 200, "oidc denied relay health")
         show_status(HttpResult(200, health, {}))
         explain("Denied scenario: Relay verifies the JWT, then looks for role claims that this machine token does not carry.")
         save(out, step, "oidc-relay-health", health)
         step += 1
-        show_query("GET", base, "/datasets/social_protection_registry/household?limit=1", purpose=True)
-        denied_row = request("GET", base, "/datasets/social_protection_registry/household?limit=1", token, headers={"Data-Purpose": PURPOSE})
+        show_query("GET", base, "/v1/datasets/social_protection_registry/entities/household/records?limit=1", purpose=True)
+        denied_row = request("GET", base, "/v1/datasets/social_protection_registry/entities/household/records?limit=1", token, headers={"Data-Purpose": PURPOSE})
         show_status(denied_row)
         if denied_row.status != 403:
             raise StoryError(f"OIDC denied scenario returned HTTP {denied_row.status}, expected 403: {denied_row.body}")
@@ -1656,14 +1656,14 @@ def story_oidc(out: Path, values: dict[str, str], step: int) -> int:
     )
     try:
         base = f"http://127.0.0.1:{authorized_port}"
-        show_query("GET", base, "/health")
-        authorized_health = require(request("GET", base, "/health"), 200, "oidc authorized relay health")
+        show_query("GET", base, "/healthz")
+        authorized_health = require(request("GET", base, "/healthz"), 200, "oidc authorized relay health")
         show_status(HttpResult(200, authorized_health, {}))
         explain("Authorized scenario: the demo policy maps the verified token audience claim to the Relay row scope.")
         save(out, step, "oidc-authorized-relay-health", authorized_health)
         step += 1
-        show_query("GET", base, "/datasets/social_protection_registry/household?limit=1", purpose=True)
-        authorized_row = request("GET", base, "/datasets/social_protection_registry/household?limit=1", token, headers={"Data-Purpose": PURPOSE})
+        show_query("GET", base, "/v1/datasets/social_protection_registry/entities/household/records?limit=1", purpose=True)
+        authorized_row = request("GET", base, "/v1/datasets/social_protection_registry/entities/household/records?limit=1", token, headers={"Data-Purpose": PURPOSE})
         show_status(authorized_row)
         if authorized_row.status != 200:
             raise StoryError(f"OIDC authorized scenario returned HTTP {authorized_row.status}, expected 200: {authorized_row.body}")
@@ -1728,8 +1728,8 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
     summarize_openfn_discovery(discovery)
     save(out, step, "openfn-notary-discovery", discovery)
     step += 1
-    show_query("GET", base, "/claims")
-    claims = require(request("GET", base, "/claims", token), 200, "openfn claims")
+    show_query("GET", base, "/v1/claims")
+    claims = require(request("GET", base, "/v1/claims", token), 200, "openfn claims")
     show_status(HttpResult(200, claims, {}))
     summarize_claims(claims)
     save(out, step, "openfn-notary-claims", claims)
@@ -1740,12 +1740,12 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
         "disclosure": "value",
         "format": "application/vnd.registry-notary.claim-result+json",
     }
-    show_query("POST", base, "/claims/evaluate", purpose=True, body=evaluation_payload)
+    show_query("POST", base, "/v1/evaluations", purpose=True, body=evaluation_payload)
     evaluation = require(
         request(
             "POST",
             base,
-            "/claims/evaluate",
+            "/v1/evaluations",
             token,
             evaluation_payload,
             {"Data-Purpose": PURPOSE},
@@ -1793,7 +1793,7 @@ def known_demo_shortcuts() -> list[dict[str, str]]:
         {
             "id": "lab_evidence_type_identifiers",
             "shortcut": "Notary claim selection uses lab-owned evidence type IRIs in the demo catalogue and Notary configs.",
-            "why_it_is_ok_for_demo": "The selected claim is now matched through live /claims CCCEV evidence metadata, but the identifiers are still demo namespace values.",
+            "why_it_is_ok_for_demo": "The selected claim is now matched through live /v1/claims CCCEV evidence metadata, but the identifiers are still demo namespace values.",
             "production_direction": "Use governed CCCEV/OOTS identifiers and vocabulary lifecycle rules for production evidence types.",
         },
         {
@@ -2544,10 +2544,10 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=6,
             title="Discover claims and evaluate evidence",
             hypothesis="The service context should lead to Notary claim discovery before evaluation.",
-            request_label="GET {host_access_url}/claims -> POST {host_access_url}/claims/evaluate",
+            request_label="GET {host_access_url}/v1/claims -> POST {host_access_url}/v1/evaluations",
             returns=[
                 chip("selected claim", first_claim_selection.get("selected_claim_id"), tone="green")
-                + " is selected only after it appears in /claims.",
+                + " is selected only after it appears in /v1/claims.",
                 chip("matched by", first_claim_selection.get("matched_by"), tone="green")
                 + " links the service evidence type to Notary claim metadata.",
                 chip("evaluations", service_eval_count, tone="green")
@@ -2611,7 +2611,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
                 + " defines the declared projection.",
             ],
             used_next=(
-                f"The next call composes <code>/datasets/{html_escape(dataset_id)}/{html_escape(entity_name)}</code> "
+                f"The next call composes <code>/v1/datasets/{html_escape(dataset_id)}/entities/{html_escape(entity_name)}/records</code> "
                 "from the discovered dataset and entity values."
             ),
             proof="The client is not hard-coding a database table. It is following Relay metadata.",
@@ -2627,7 +2627,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=9,
             title="Read the discovered live entity",
             hypothesis="The discovered dataset/entity path should return the live table projection.",
-            request_label=f"GET http://127.0.0.1:4315/datasets/{dataset_id}/{entity_name}?limit=10",
+            request_label=f"GET http://127.0.0.1:4315/v1/datasets/{dataset_id}/entities/{entity_name}/records?limit=10",
             returns=[
                 chip("rows before insert", before_count, tone="blue", value_id="value-before")
                 + " are returned through the Relay API.",
@@ -2648,7 +2648,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=10,
             title="Prove the source is live",
             hypothesis="If Relay reads a live Postgres projection, a new source row appears without restarting Relay.",
-            request_label=f"GET http://127.0.0.1:4315/datasets/{dataset_id}/{entity_name}?limit=10",
+            request_label=f"GET http://127.0.0.1:4315/v1/datasets/{dataset_id}/entities/{entity_name}/records?limit=10",
             returns=[
                 chip("rows after insert", after_count, tone="green", value_id="value-after")
                 + " are returned after inserting one operational row.",
@@ -2713,7 +2713,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=13,
             title="Verify token but deny missing scope",
             hypothesis="A valid JWT still needs local Relay scopes before data is released.",
-            request_label="GET http://127.0.0.1:4316/datasets/social_protection_registry/household?limit=1",
+            request_label="GET http://127.0.0.1:4316/v1/datasets/social_protection_registry/entities/household/records?limit=1",
             returns=[
                 chip("status", oidc_attempt.get("status"), tone="rose", value_id="value-oidc-status")
                 + " is returned by the protected Relay endpoint.",
@@ -2734,7 +2734,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=14,
             title="Verify token and authorize row read",
             hypothesis="The same issuer and token can read data when local Relay policy maps an emitted claim to the row scope.",
-            request_label="GET http://127.0.0.1:4318/datasets/social_protection_registry/household?limit=1",
+            request_label="GET http://127.0.0.1:4318/v1/datasets/social_protection_registry/entities/household/records?limit=1",
             returns=[
                 chip("status", oidc_authorized_attempt.get("status"), tone="green")
                 + " is returned by the authorized Relay endpoint.",
@@ -2778,7 +2778,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=16,
             title="Discover the claim to request",
             hypothesis="The client should request only claims the Notary advertises.",
-            request_label="GET http://127.0.0.1:4324/claims",
+            request_label="GET http://127.0.0.1:4324/v1/claims",
             returns=[
                 chip("claim id", openfn_claim, tone="green", value_id="value-claim")
                 + " is advertised by the Notary.",
@@ -2799,7 +2799,7 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
             index=17,
             title="Evaluate the discovered claim",
             hypothesis="Notary should use the private OpenFn sidecar to resolve the advertised claim value.",
-            request_label="POST http://127.0.0.1:4324/claims/evaluate",
+            request_label="POST http://127.0.0.1:4324/v1/evaluations",
             returns=[
                 chip("claim_id", openfn_result.get("claim_id"), tone="green")
                 + " matches the discovered claim.",

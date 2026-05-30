@@ -55,7 +55,7 @@ evidence:
       issuer: did:web:shared-eligibility-evidence.demo.example
       signing_key: shared-eligibility-evidence-demo
       vct: https://demo.example/credentials/combined-support-eligibility/v1
-      validity_seconds: 86400
+      validity_seconds: 600
       allowed_claims:
         - civil-record-present
         - social-program-active

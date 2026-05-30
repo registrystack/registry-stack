@@ -61,7 +61,7 @@ def main() -> int:
             request(
                 "POST",
                 notary_url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 notary_token,
                 evaluation_payload(subject, CLAIM),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -76,7 +76,7 @@ def main() -> int:
                 request(
                     "POST",
                     notary_url,
-                    "/claims/evaluate",
+                    "/v1/evaluations",
                     notary_token,
                     evaluation_payload(subject, REASON_CLAIM, "value"),
                     {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -100,7 +100,7 @@ def main() -> int:
     evidence_denial = request(
         "GET",
         relay_url,
-        "/datasets/agri_registry/farmer?limit=1",
+        "/v1/datasets/agri_registry/entities/farmer/records?limit=1",
         env("AGRI_EVIDENCE_ONLY_RAW"),
         headers={"Data-Purpose": PURPOSE},
     )
@@ -110,7 +110,7 @@ def main() -> int:
     missing_purpose = request(
         "GET",
         relay_url,
-        "/datasets/agri_registry/farmer?limit=1",
+        "/v1/datasets/agri_registry/entities/farmer/records?limit=1",
         env("AGRI_ROW_READER_RAW"),
     )
     require_denial(missing_purpose, "missing-purpose row read")

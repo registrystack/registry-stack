@@ -69,7 +69,7 @@ evaluate_claim() {
     -H "Data-Purpose: https://demo.example.gov/purpose/dhis2-openfn-health-evidence" \
     -H "x-request-id: ${correlation_id}" \
     -o "${output_file}" \
-    http://127.0.0.1:4326/claims/evaluate \
+    http://127.0.0.1:4326/v1/evaluations \
     --data "{\"subject\":{\"id\":\"${subject}\",\"id_type\":\"dhis2_tracked_entity\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${response_format}\"}"
 }
 
@@ -92,7 +92,7 @@ PY
     -H "Content-Type: application/json" \
     -H "x-request-id: ${correlation_id}-vc-issue" \
     -o "${output_file}" \
-    http://127.0.0.1:4326/credentials/issue \
+    http://127.0.0.1:4326/v1/credentials \
     --data "{\"evaluation_id\":\"${evaluation_id}\",\"credential_profile\":\"dhis2_health_status_sd_jwt\",\"format\":\"application/dc+sd-jwt\",\"claims\":[\"dhis2-child-program-active\"],\"disclosure\":\"predicate\"}"
 }
 

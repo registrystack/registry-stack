@@ -66,7 +66,7 @@ def main() -> int:
         request(
             "POST",
             notary_url,
-            "/claims/evaluate",
+            "/v1/evaluations",
             notary_token,
             evaluation_payload("FARMER-1001", CLAIM, "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
@@ -87,7 +87,7 @@ def main() -> int:
         request(
             "POST",
             notary_url,
-            "/credentials/issue",
+            "/v1/credentials",
             notary_token,
             {
                 "evaluation_id": first_result_id(eligible_eval),
@@ -109,7 +109,7 @@ def main() -> int:
             request(
                 "POST",
                 notary_url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 notary_token,
                 evaluation_payload(subject, CLAIM),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},

@@ -1347,7 +1347,7 @@ PY
 
 step 6 "Start civil Relay and citizen Notary" "Notary listens on http://127.0.0.1:${port}."
 docker compose -f "${compose_file}" up -d civil-registry-relay
-wait_http "civil relay health" "http://127.0.0.1:4311/health" "${CIVIL_METADATA_CLIENT_RAW}"
+wait_http "civil relay health" "http://127.0.0.1:4311/healthz" "${CIVIL_METADATA_CLIENT_RAW}"
 
 rm -f "${log_path}"
 (
@@ -1364,7 +1364,7 @@ curl_json GET "http://127.0.0.1:${port}/.well-known/evidence-service" "${discove
 print_discovery_status
 
 step 8 "Evaluate self claim" "Requesting person-is-alive for ${self_subject}."
-curl_json POST "http://127.0.0.1:${port}/claims/evaluate" "${self_eval_path}" 200 \
+curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${self_eval_path}" 200 \
   --data "{\"subject\":{\"id\":\"${self_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-notary.claim-result+json\"}"
 
 python3 - "${self_eval_path}" <<'PY'
@@ -1382,7 +1382,7 @@ PY
 print_self_evaluation_status
 
 step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before any source read."
-curl_json POST "http://127.0.0.1:${port}/claims/evaluate" "${other_eval_path}" 403 \
+curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${other_eval_path}" 403 \
   --data "{\"subject\":{\"id\":\"${other_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-notary.claim-result+json\"}"
 print_denial_status
 

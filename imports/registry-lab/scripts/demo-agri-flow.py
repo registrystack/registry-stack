@@ -280,7 +280,8 @@ def b64url(raw: bytes) -> str:
 
 
 def holder_did() -> str:
-    encoded = b64url(json.dumps(DEMO_HOLDER_PUBLIC_JWK, separators=(",", ":")).encode())
+    did_jwk = {key: DEMO_HOLDER_PUBLIC_JWK[key] for key in ("crv", "kty", "x")}
+    encoded = b64url(json.dumps(did_jwk, separators=(",", ":"), sort_keys=True).encode())
     return f"did:jwk:{encoded}"
 
 
@@ -558,16 +559,16 @@ def main() -> int:
     livestock_reason_claim = env("AGRI_LIVESTOCK_MOVEMENT_REASON_CLAIM", "livestock-movement-reason-code")
     aggregate_path = env(
         "AGRI_MARKET_SIZING_PATH",
-        "/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input",
+        "/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input",
     )
     suppressed_aggregate_path = env(
         "AGRI_SUPPRESSED_AGGREGATE_PATH",
-        "/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input",
+        "/v1/datasets/agri_registry/aggregates/voucher_opportunities_by_district_crop_risk_input",
     )
     suppressed_aggregate_filter = env("AGRI_SUPPRESSED_AGGREGATE_FILTER_DISTRICT", "D-WEST")
     livestock_aggregate_path = env(
         "AGRI_LIVESTOCK_AGGREGATE_PATH",
-        "/datasets/agri_registry/aggregates/livestock_herds_by_species_district",
+        "/v1/datasets/agri_registry/aggregates/livestock_herds_by_species_district",
     )
 
     transcript = [
@@ -633,7 +634,7 @@ def main() -> int:
     relay_metadata = require(request("GET", relay.url, "/metadata", relay_token), 200, "agricultural relay metadata")
     save(out, step, "relay-metadata", relay_metadata)
     step += 1
-    datasets = require(request("GET", relay.url, "/datasets", relay_token), 200, "agricultural datasets")
+    datasets = require(request("GET", relay.url, "/v1/datasets", relay_token), 200, "agricultural datasets")
     save(out, step, "relay-datasets", datasets)
     step += 1
     relay_offerings = require(request("GET", relay.url, "/metadata/evidence-offerings", relay_token), 200, "relay evidence offerings")
@@ -669,7 +670,7 @@ def main() -> int:
         "transport_override_env": "AGRI_WITNESS_URL",
     }
     step += 1
-    claims = require(request("GET", notary.url, "/claims", notary_token), 200, "Notary claims")
+    claims = require(request("GET", notary.url, "/v1/claims", notary_token), 200, "Notary claims")
     save(out, step, "notary-claims", claims)
     add_transcript(transcript, f"Selected `{claim}` from the agriculture Notary claim catalog.")
     step += 1
@@ -677,7 +678,7 @@ def main() -> int:
     step += 1
 
     print("\nProve evidence clients cannot read personal rows")
-    row_path = f"/datasets/{dataset}/{entity}?limit=1"
+    row_path = f"/v1/datasets/{dataset}/entities/{entity}/records?limit=1"
     evidence_row_denial = request(
         "GET",
         relay.url,
@@ -710,7 +711,7 @@ def main() -> int:
         denial = request(
             "GET",
             relay.url,
-            f"/datasets/{dataset}/{protected_entity}?limit=1",
+            f"/v1/datasets/{dataset}/entities/{protected_entity}/records?limit=1",
             env("AGRI_AGGREGATE_READER_RAW"),
             headers={"Data-Purpose": PURPOSE},
         )
@@ -758,7 +759,7 @@ def main() -> int:
             request(
                 "POST",
                 notary.url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 notary_token,
                 evaluation_payload(subject, claim),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -784,7 +785,7 @@ def main() -> int:
             request(
                 "POST",
                 notary.url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 notary_token,
                 evaluation_payload(subject, manual_review_claim, "value"),
                 {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -804,7 +805,7 @@ def main() -> int:
         request(
             "POST",
             notary.url,
-            "/claims/evaluate",
+            "/v1/evaluations",
             notary_token,
             evaluation_payload("FARMER-1001", claim, "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
@@ -825,7 +826,7 @@ def main() -> int:
         request(
             "POST",
             notary.url,
-            "/credentials/issue",
+            "/v1/credentials",
             notary_token,
             {
                 "evaluation_id": first_result_id(credential_eval),
@@ -846,7 +847,7 @@ def main() -> int:
     credential_without_holder = request(
         "POST",
         notary.url,
-        "/credentials/issue",
+        "/v1/credentials",
         notary_token,
         {
             "evaluation_id": first_result_id(credential_eval),
@@ -884,7 +885,7 @@ def main() -> int:
             request(
                 "POST",
                 notary.url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 notary_token,
                 evaluation_payload(subject, livestock_claim, id_type="herd_id"),
                 {"Data-Purpose": LIVESTOCK_PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
@@ -902,7 +903,7 @@ def main() -> int:
             request(
                 "POST",
                 notary.url,
-                "/claims/evaluate",
+                "/v1/evaluations",
                 notary_token,
                 evaluation_payload(subject, livestock_reason_claim, "value", id_type="herd_id"),
                 {"Data-Purpose": LIVESTOCK_PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
