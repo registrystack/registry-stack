@@ -68,7 +68,7 @@ export default function (ctx) {
       ? `?limit=${pageSize}&cursor=${encodeURIComponent(cursor)}`
       : `?limit=${pageSize}`;
 
-    const res = http.get(`${base}/datasets/${ds}/${ent}${qs}`, { headers });
+    const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records${qs}`, { headers });
 
     const ok = check(res, {
       [`page ${pageIndex + 1}: status is 200`]: (r) => r.status === 200,

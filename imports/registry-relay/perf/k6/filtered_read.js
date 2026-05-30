@@ -53,7 +53,7 @@ export function setup() {
 
 export default function (ctx) {
   // Plain field name -> eq filter. Encoded as ?region_code=R001.
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}?${filterField}=${encodeURIComponent(filterValue)}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records?${filterField}=${encodeURIComponent(filterValue)}`;
   const res = http.get(url, {
     headers: {
       'Authorization': `Bearer ${ctx.token}`,

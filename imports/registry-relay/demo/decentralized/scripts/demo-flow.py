@@ -387,7 +387,7 @@ def main() -> int:
     row_denial = request(
         "GET",
         relays[1].url,
-        "/datasets/social_protection_registry/household?limit=1",
+        "/v1/datasets/social_protection_registry/entities/household/records?limit=1",
         env("SOCIAL_EVIDENCE_ONLY_RAW"),
         headers={"Data-Purpose": PURPOSE},
     )
@@ -399,7 +399,7 @@ def main() -> int:
         request(
             "GET",
             relays[1].url,
-            "/datasets/social_protection_registry/household?limit=1",
+            "/v1/datasets/social_protection_registry/entities/household/records?limit=1",
             env("SOCIAL_ROW_READER_RAW"),
             headers={"Data-Purpose": PURPOSE},
         ),
@@ -413,7 +413,7 @@ def main() -> int:
         request(
             "GET",
             relays[1].url,
-            "/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band",
+            "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
             env("SOCIAL_AGGREGATE_READER_RAW"),
             headers={"Data-Purpose": PURPOSE},
         ),
@@ -426,7 +426,7 @@ def main() -> int:
     aggregate_denial = request(
         "GET",
         relays[1].url,
-        "/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band",
+        "/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band",
         env("SOCIAL_ROW_READER_RAW"),
         headers={"Data-Purpose": PURPOSE},
     )

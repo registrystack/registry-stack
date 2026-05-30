@@ -42,7 +42,7 @@ export function setup() {
     duration: options.duration,
   });
 
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records`;
   const res = http.get(url, { headers: headersForToken(token) });
 
   if (res.status !== 200) {
@@ -64,7 +64,7 @@ function headersForToken(token) {
 }
 
 export default function (ctx) {
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records`;
   const res = http.get(url, {
     headers: Object.assign({}, headersForToken(ctx.token), {
       'If-None-Match': ctx.etag,

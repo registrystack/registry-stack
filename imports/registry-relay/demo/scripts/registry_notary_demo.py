@@ -315,7 +315,7 @@ def wait_for_registry_server(
             result = request(
                 base_url,
                 "GET",
-                "/datasets/farmer_registry/farmer?limit=1&fields=id",
+                "/v1/datasets/farmer_registry/entities/farmer/records?limit=1&fields=id",
                 token,
                 extra_headers={"Data-Purpose": PURPOSE},
             )
@@ -768,7 +768,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
     raw_row = request(
         registry_base_url,
         "GET",
-        "/datasets/farmer_registry/farmer/FR-MEMBER-001",
+        "/v1/datasets/farmer_registry/entities/farmer/records/FR-MEMBER-001",
         token,
         extra_headers={"Data-Purpose": PURPOSE},
     )
@@ -779,7 +779,7 @@ def run_demo(base_url: str, registry_base_url: str, token: str, output_dir: Path
         step,
         "Prove the privacy boundary",
         actor="evidence client -> source registry",
-        request_line="GET /datasets/farmer_registry/farmer/FR-MEMBER-001",
+        request_line="GET /v1/datasets/farmer_registry/entities/farmer/records/FR-MEMBER-001",
         why=(
             "The relying party should not need broad row access to source "
             "registries. This call intentionally tries to bypass the Registry "

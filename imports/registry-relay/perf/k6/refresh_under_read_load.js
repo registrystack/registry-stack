@@ -2,8 +2,8 @@
 // Scenario: moderate read traffic with periodic admin reload trigger.
 //
 // Admin reload endpoint (from src/api/admin.rs):
-//   POST /admin/datasets/{dataset_id}/tables/{table_id}/reload
-//   POST /admin/reload
+//   POST /admin/v1/datasets/{dataset_id}/tables/{table_id}/reload
+//   POST /admin/v1/reload
 //
 // Auth requirement (require_admin_scope in admin.rs):
 //   scope: "admin"
@@ -11,7 +11,7 @@
 // GAP: The perf key generator (generate_perf_keys.py) emits five scopes:
 //   clinic_capacity:rows, clinic_capacity:metadata, clinic_capacity:aggregate,
 //   other:metadata (no-scope), and an invalid token.
-// None of these carry the "admin" scope required by POST /admin/reload.
+// None of these carry the "admin" scope required by POST /admin/v1/reload.
 //
 // This script expects an additional env var REGISTRY_RELAY_TOKEN_ADMIN carrying
 // a key with scope "admin". If it is absent, the reload trigger step is
@@ -22,7 +22,7 @@
 // Override via REGISTRY_RELAY_TABLE_ID.
 
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check } from 'k6';
 import {
   commonOptions,
   baseUrl,
@@ -68,7 +68,7 @@ export function setup() {
     console.log('refresh_under_read_load: admin token present: yes');
   }
 
-  console.log(`reload target: POST /admin/datasets/${dataset()}/tables/${tableId}/reload`);
+  console.log(`reload target: POST /admin/v1/datasets/${dataset()}/tables/${tableId}/reload`);
   console.log(`reload interval: ${reloadIntervalSec}s`);
   return { token };
 }
@@ -83,7 +83,7 @@ export default function (ctx) {
   const now = Date.now() / 1000;
 
   // Read traffic: GET the entity collection (primary workload).
-  const res = http.get(`${base}/datasets/${ds}/${ent}`, {
+  const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records`, {
     headers: {
       'Authorization': `Bearer ${ctx.token}`,
       'Accept': 'application/json',
@@ -95,13 +95,12 @@ export default function (ctx) {
   });
   trackResponse(res);
 
-  // Reload trigger: one VU per interval fires the admin reload. Because all
-  // VUs share the same outer loop, the first one past the interval boundary
-  // fires it. This is approximate but sufficient for soak-style testing.
-  if (adminToken && (now - lastReloadAt) >= reloadIntervalSec) {
+  // Reload trigger: k6 gives each VU its own JS isolate, so keep reloads
+  // on VU 1 to avoid every VU firing independently.
+  if (__VU === 1 && adminToken && (now - lastReloadAt) >= reloadIntervalSec) {
     lastReloadAt = now;
     const reloadRes = http.post(
-      `${base}/admin/datasets/${ds}/tables/${tableId}/reload`,
+      `${base}/admin/v1/datasets/${ds}/tables/${tableId}/reload`,
       null,
       {
         headers: {

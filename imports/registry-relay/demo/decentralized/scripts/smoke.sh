@@ -126,15 +126,15 @@ check "health relay evidence offerings" curl_json GET http://127.0.0.1:4313/meta
 check "static evidence offerings" curl_json GET http://127.0.0.1:4331/metadata/evidence-offerings.json "" "${output_dir}/smoke-static-offerings.json"
 check "static policy metadata" curl_json GET http://127.0.0.1:4331/metadata/policies.jsonld "" "${output_dir}/smoke-static-policies.json"
 
-status="$(curl_status GET http://127.0.0.1:4312/datasets/social_protection_registry/household?limit=1 "${SOCIAL_EVIDENCE_ONLY_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
+status="$(curl_status GET http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1 "${SOCIAL_EVIDENCE_ONLY_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
 [[ "${status}" == "403" ]] || fail "row denial with evidence-only credential expected 403, got ${status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-row-denial.json"
 check "row denial stable error code" json_path_equals "${output_dir}/smoke-row-denial.json" code auth.scope_denied
 
-check "positive row read" curl_json GET "http://127.0.0.1:4312/datasets/social_protection_registry/household?limit=1" "${SOCIAL_ROW_READER_RAW}" "${output_dir}/smoke-positive-row-read.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
-check "positive aggregate consultation" curl_json GET "http://127.0.0.1:4312/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band" "${SOCIAL_AGGREGATE_READER_RAW}" "${output_dir}/smoke-positive-aggregate.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
+check "positive row read" curl_json GET "http://127.0.0.1:4312/v1/datasets/social_protection_registry/entities/household/records?limit=1" "${SOCIAL_ROW_READER_RAW}" "${output_dir}/smoke-positive-row-read.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
+check "positive aggregate consultation" curl_json GET "http://127.0.0.1:4312/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band" "${SOCIAL_AGGREGATE_READER_RAW}" "${output_dir}/smoke-positive-aggregate.json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo"
 
-aggregate_status="$(curl_status GET http://127.0.0.1:4312/datasets/social_protection_registry/household/aggregates/households_by_eligibility_band "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
+aggregate_status="$(curl_status GET http://127.0.0.1:4312/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band "${SOCIAL_ROW_READER_RAW}" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo")"
 [[ "${aggregate_status}" == "403" ]] || fail "aggregate denial with row-reader credential expected 403, got ${aggregate_status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-aggregate-denial.json"
 check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke-aggregate-denial.json" code auth.scope_denied

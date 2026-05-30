@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Scenario: GET /datasets/<id>/<entity>/aggregates/<aggregate_id>
+// Scenario: GET /v1/datasets/<id>/aggregates/<aggregate_id>
 //
 // Aggregate id from perf config (medium.yaml): by_region
 //   group_by: [region_code]
@@ -14,7 +14,6 @@ import {
   commonOptions,
   baseUrl,
   dataset,
-  entity,
   aggregateId,
   aggregateToken,
   handleSummaryFor,
@@ -43,7 +42,7 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}/aggregates/${ctx.aggId}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/aggregates/${ctx.aggId}`;
   const res = http.get(url, {
     headers: {
       'Authorization': `Bearer ${ctx.token}`,

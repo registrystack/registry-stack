@@ -66,7 +66,7 @@ export function setup() {
   console.log(`audit sink: ${auditSink()}`);
 
   // Capture ETag for cached 304 path.
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records`;
   const res = http.get(url, {
     headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
   });
@@ -99,7 +99,7 @@ export default function (ctx) {
 
   if (roll < 0.55) {
     group('cached_304', () => {
-      const res = http.get(`${base}/datasets/${ds}/${ent}`, {
+      const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records`, {
         headers: Object.assign({}, authHdr, { 'If-None-Match': ctx.etag || '"missing"' }),
       });
       check(res, { 'soak 304: 304 or 200': (r) => r.status === 304 || r.status === 200 });
@@ -107,26 +107,26 @@ export default function (ctx) {
     });
   } else if (roll < 0.75) {
     group('hot_200', () => {
-      const res = http.get(`${base}/datasets/${ds}/${ent}`, { headers: authHdr });
+      const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records`, { headers: authHdr });
       check(res, { 'soak hot: 200': (r) => r.status === 200 });
       trackResponse(res);
     });
   } else if (roll < 0.85) {
     group('single_record', () => {
       const id = ctx.recordId || 'unknown';
-      const res = http.get(`${base}/datasets/${ds}/${ent}/${id}`, { headers: authHdr });
+      const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records/${id}`, { headers: authHdr });
       check(res, { 'soak record: 200 or 404': (r) => r.status === 200 || r.status === 404 });
       if (res.status >= 500) trackResponse(res);
     });
   } else if (roll < 0.90) {
     group('schema', () => {
-      const res = http.get(`${base}/datasets/${ds}/${ent}/schema`, { headers: metaAuthHdr });
+      const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/schema`, { headers: metaAuthHdr });
       check(res, { 'soak schema: 200': (r) => r.status === 200 });
       trackResponse(res);
     });
   } else if (roll < 0.95) {
     group('aggregate', () => {
-      const res = http.get(`${base}/datasets/${ds}/${ent}/aggregates/${aggregateId()}`, {
+      const res = http.get(`${base}/v1/datasets/${ds}/aggregates/${aggregateId()}`, {
         headers: aggAuthHdr,
       });
       check(res, { 'soak aggregate: 200': (r) => r.status === 200 });
@@ -134,21 +134,21 @@ export default function (ctx) {
     });
   } else if (roll < 0.98) {
     group('catalog', () => {
-      const res = http.get(`${base}/catalog`, { headers: metaAuthHdr });
+      const res = http.get(`${base}/metadata/catalog`, { headers: metaAuthHdr });
       check(res, { 'soak catalog: 200': (r) => r.status === 200 });
       trackResponse(res);
     });
   } else {
     group('auth_deny', () => {
       if (Math.random() < 0.5) {
-        const res = http.get(`${base}/datasets/${ds}/${ent}`, {
+        const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records`, {
           headers: { 'Authorization': `Bearer ${invalidToken()}`, 'Accept': 'application/json' },
           tags: { expected_status: '401' },
         });
         check(res, { 'soak deny: 401': (r) => r.status === 401 });
         trackExpectedDenyResponse(res, 401);
       } else {
-        const res = http.get(`${base}/datasets/${ds}/${ent}`, {
+        const res = http.get(`${base}/v1/datasets/${ds}/entities/${ent}/records`, {
           headers: { 'Authorization': `Bearer ${noScopeToken()}`, 'Accept': 'application/json' },
           tags: { expected_status: '403' },
         });

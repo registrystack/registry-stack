@@ -1,11 +1,11 @@
 # Registry Relay Client Integration Guide
 
-This guide is for application teams calling Registry Relay. It describes the
-client behavior that should remain true even while the exact REST route shape is
-still being finalized.
+This guide is for application teams calling Registry Relay. It describes client
+behavior for the V1 dataset-scoped REST API.
 
-For concrete paths, fetch the auth-gated runtime OpenAPI document from the
-deployment or use [api.md](api.md) once the route design is marked stable.
+For concrete deployment-specific paths and schemas, fetch the auth-gated
+runtime OpenAPI document from the deployment or use [api.md](api.md) as the
+general contract reference.
 
 ## Integration Checklist
 

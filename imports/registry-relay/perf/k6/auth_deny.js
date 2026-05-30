@@ -53,7 +53,7 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records`;
   const jsonAccept = { 'Accept': 'application/json' };
 
   // Case 1: missing token -> 401

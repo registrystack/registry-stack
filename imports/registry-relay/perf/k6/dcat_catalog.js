@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// Scenario: GET /catalog/dcat-ap.jsonld
+// Scenario: GET /metadata/dcat/bregdcat-ap
 //
-// Route confirmed in src/api/catalog.rs:
-//   .route("/catalog/dcat-ap.jsonld", get(dcat_ap))
+// Route confirmed in src/api/metadata.rs:
+//   .route("/metadata/dcat/{profile}", get(dcat_profile))
 // Response: Content-Type: application/ld+json, body is JSON-LD.
 // Requires a metadata-scoped token (clinic_capacity:metadata).
 
@@ -36,7 +36,7 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const url = `${baseUrl()}/catalog/dcat-ap.jsonld`;
+  const url = `${baseUrl()}/metadata/dcat/bregdcat-ap`;
   const res = http.get(url, {
     headers: {
       'Authorization': `Bearer ${ctx.token}`,

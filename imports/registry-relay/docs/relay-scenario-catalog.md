@@ -103,7 +103,7 @@ sequenceDiagram
 
 | # | Scenario | Pattern | Status | Main Gap |
 | --- | --- | --- | --- | --- |
-| 1 | Case system reads a household record with required filters | Protected consultation | Supported | REST route naming is still being finalized |
+| 1 | Case system reads a household record with required filters | Protected consultation | Supported | Clients must use the dataset-scoped V1 route shape |
 | 2 | Case system follows a dataset-local relationship | Protected consultation | Supported | Cross-dataset relationships remain client-composed |
 | 3 | Planning analyst runs district-level eligibility aggregates | Aggregate-only planning | Supported | Query budget persistence is not a V1 feature |
 | 4 | Operator publishes portable metadata separately from Relay runtime | Metadata publication | Supported | Static publication release process needs a policy |

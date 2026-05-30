@@ -57,7 +57,7 @@ export function setup() {
 
 export default function (ctx) {
   const expand = hasExpansion ? expandParam : 'nonexistent_rel';
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}?expand=${encodeURIComponent(expand)}`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records?expand=${encodeURIComponent(expand)}`;
   const res = http.get(url, {
     headers: {
       'Authorization': `Bearer ${ctx.token}`,

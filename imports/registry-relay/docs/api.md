@@ -2,7 +2,9 @@
 
 This guide describes the V1 HTTP contract from a client and operator point of view. It is the practical reference for calling a running gateway.
 
-Status note: the REST route shape is under active design. Use the behavioral sections here for current semantics around auth, filters, pagination, metadata, errors, standards adapters, and provenance. Refresh the route table and static OpenAPI artifact once the REST design stabilizes.
+The V1 route shape is dataset-scoped and entity-oriented. Storage table ids stay
+out of public URLs; callers use dataset ids, entity names, record ids,
+relationships, aggregate ids, and standards adapter roots.
 
 ## Listeners And Surfaces
 

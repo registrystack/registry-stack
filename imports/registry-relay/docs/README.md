@@ -8,7 +8,7 @@ This directory has three kinds of documents:
 
 ## Current References
 
-- [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards adapters, and provenance opt-in. The exact REST route table is under active design and should be refreshed after that work stabilizes.
+- [API guide](api.md): auth, scopes, filters, pagination, metadata caching, Problem Details, standards adapters, provenance opt-in, and the dataset-scoped V1 route table.
 - [Client integration guide](client-integration.md): caller behavior for auth, purpose headers, discovery, pagination, ETags, errors, retries, aggregates, provenance, and Registry Notary handoff.
 - [Configuration guide](configuration.md): YAML contract, auth, audit, source formats, Postgres, entities, OGC Features, SP DCI, PublicSchema, aggregates, and provenance.
 - [Deployment hardening](deployment-hardening.md): production checklist for network boundaries, auth, secrets, source data, audit, metadata, provenance, and readiness.

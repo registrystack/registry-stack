@@ -60,7 +60,7 @@ export default function (ctx) {
   // No pagination limit to force a large response. The server's default_limit
   // (100) applies unless overridden. For a genuine large-body test, use
   // max_limit (1000) via ?limit=1000, or remove the limit to get the default.
-  const url = `${baseUrl()}/datasets/${dataset()}/${entity()}?limit=1000`;
+  const url = `${baseUrl()}/v1/datasets/${dataset()}/entities/${entity()}/records?limit=1000`;
   const res = http.get(url, {
     headers: {
       'Authorization': `Bearer ${ctx.token}`,

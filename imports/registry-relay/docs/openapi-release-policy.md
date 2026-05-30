@@ -12,9 +12,10 @@ artifact is a release artifact, not a replacement for deployment discovery.
 
 ## Current Status
 
-The REST route shape is under active design. Do not treat the static OpenAPI
-file as final until the route design is stabilized and this policy has been run
-for that release.
+The V1 route shape has been refactored to the dataset-scoped REST surface
+documented in [api.md](api.md). Treat the checked-in static OpenAPI file as the
+release-review artifact for that abstract surface, and fetch runtime
+`/openapi.json` from a deployment for concrete dataset and entity operations.
 
 ## When To Refresh The Static Artifact
 
@@ -34,7 +35,7 @@ contract unchanged.
 
 ## Refresh Procedure
 
-1. Stabilize the route design and update [api.md](api.md).
+1. Update [api.md](api.md) for any public contract change.
 2. Start Relay with a representative release config.
 3. Fetch the runtime OpenAPI document with a principal that can see the intended
    release surface.
@@ -63,7 +64,7 @@ Review the static artifact for:
 - Problem Details responses on non-2xx operations;
 - correct media types for JSON, CSV, and VC-JWT responses;
 - tags and summaries that match the docs;
-- route families that match the stabilized API guide.
+- route families that match the API guide.
 
 ## Release Note Requirement
 
@@ -74,6 +75,6 @@ Every static OpenAPI refresh should mention one of:
 - breaking contract change;
 - route-design cleanup before the API is declared stable.
 
-Until the REST design stabilizes, release notes should call the artifact
-abstract and should direct deployments to fetch the runtime `/openapi.json`
-document for concrete route and dataset shape.
+Release notes should call the artifact abstract when it uses placeholder
+dataset/entity names and should direct deployments to fetch the runtime
+`/openapi.json` document for concrete route and dataset shape.
