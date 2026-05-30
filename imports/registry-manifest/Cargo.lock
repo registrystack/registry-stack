@@ -664,12 +664,14 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "unsafe-libyaml",
 ]
 
 [[package]]
 name = "registry-manifest-core"
 version = "0.1.2"
 dependencies = [
+ "oxiri",
  "serde",
  "serde_json",
  "serde_yaml_ng",

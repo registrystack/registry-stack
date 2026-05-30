@@ -2,8 +2,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_registry-manifest")
@@ -25,6 +26,46 @@ fn temp_dir(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("registry-manifest-{name}-{nonce}"));
     fs::create_dir_all(&path).expect("temp dir");
     path
+}
+
+fn write_minimal_manifest(path: &Path, body: &str) {
+    fs::write(
+        path,
+        format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+{body}
+"#
+        ),
+    )
+    .expect("write manifest");
+}
+
+fn output_with_timeout(command: &mut Command, timeout: Duration) -> Output {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn command");
+    let started = Instant::now();
+    loop {
+        if child.try_wait().expect("poll command").is_some() {
+            return child.wait_with_output().expect("collect output");
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let output = child.wait_with_output().expect("collect killed output");
+            panic!(
+                "command timed out after {timeout:?}; stdout: {}; stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -660,6 +701,41 @@ fn publish_with_site_root_writes_well_known_under_site_root_only() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn publish_rejects_preexisting_symlink_directories_under_out() {
+    use std::os::unix::fs::symlink;
+
+    let parent = temp_dir("publish-symlink-out");
+    let out = parent.join("metadata");
+    let outside = parent.join("outside");
+    fs::create_dir_all(&out).expect("out dir");
+    fs::create_dir_all(&outside).expect("outside dir");
+    symlink(&outside, out.join("schema")).expect("schema symlink");
+
+    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run cli");
+
+    assert!(!output.status.success(), "publish must reject symlink path");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("metadata.publish.path_escape"),
+        "stderr missing path escape error: {stderr}"
+    );
+    assert!(
+        collect_paths(&outside).is_empty(),
+        "publish wrote through pre-existing symlink"
+    );
+}
+
 #[test]
 fn publish_fails_closed_on_malformed_manifest() {
     let dir = temp_dir("publish-malformed");
@@ -713,6 +789,58 @@ fn publish_fails_closed_when_out_cannot_be_created() {
         !output.status.success(),
         "publish must exit non-zero when --out cannot be created"
     );
+}
+
+#[test]
+fn publish_rejects_profile_id_path_escapes_without_writing_outside_out() {
+    let dir = temp_dir("publish-profile-escape");
+    let out = dir.join("out");
+    let outside = dir.join("outside");
+    fs::create_dir_all(&outside).expect("outside dir");
+
+    let absolute_profile_id = outside
+        .join("absolute-escape")
+        .to_str()
+        .expect("utf8 path")
+        .to_string();
+    let cases = [
+        ("relative", "../../outside/relative-escape".to_string()),
+        ("absolute", absolute_profile_id),
+    ];
+
+    for (name, profile_id) in cases {
+        let manifest = dir.join(format!("{name}.yaml"));
+        write_minimal_manifest(
+            &manifest,
+            &format!(
+                r#"
+profiles:
+  - id: "{profile_id}"
+    version: "1"
+datasets: []
+"#
+            ),
+        );
+
+        let output = Command::new(bin())
+            .args([
+                "publish",
+                manifest.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ])
+            .output()
+            .expect("run cli");
+
+        assert!(
+            !output.status.success(),
+            "{name} profile id escape must fail closed"
+        );
+        assert!(
+            !outside.join(format!("{name}-escape.json")).exists(),
+            "{name} profile id escape wrote outside --out"
+        );
+    }
 }
 
 #[test]
@@ -852,6 +980,233 @@ fn validate_reports_yaml_parse_failure() {
 }
 
 #[test]
+fn validate_rejects_yaml_larger_than_64_kib_before_parse() {
+    let dir = temp_dir("validate-yaml-too-large");
+    let manifest = dir.join("oversize.yaml");
+    fs::write(&manifest, "[".repeat(64 * 1024 + 1)).expect("write oversized yaml");
+
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.too_large"));
+    assert!(
+        !stderr.contains("metadata.manifest.parse_failed"),
+        "oversized input must fail before YAML parse: {stderr}"
+    );
+}
+
+#[test]
+fn validate_rejects_nested_flow_yaml_larger_than_64_kib_before_parse() {
+    let dir = temp_dir("validate-nested-flow-too-large");
+    let manifest = dir.join("nested-flow-oversize.yaml");
+    let raw = format!("{}{}", "[".repeat(64 * 1024 + 1), "]".repeat(64 * 1024 + 1));
+    fs::write(&manifest, raw).expect("write oversized nested flow yaml");
+
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.too_large"));
+    assert!(
+        !stderr.contains("metadata.manifest.parse_failed"),
+        "oversized nested-flow input must fail before YAML parse: {stderr}"
+    );
+}
+
+#[test]
+fn validate_rejects_yaml_anchors_and_aliases_from_parser_tokens() {
+    let dir = temp_dir("validate-yaml-anchors");
+    let cases = [
+        (
+            "anchored-scalar",
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: &title Demo
+  publisher:
+    name: *title
+datasets: []
+"#,
+        ),
+        (
+            "anchored-sequence",
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+datasets: &datasets []
+"#,
+        ),
+        (
+            "anchored-mapping",
+            r#"
+schema_version: registry-manifest/v1
+catalog: &catalog
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+datasets: []
+"#,
+        ),
+        (
+            "flow-alias",
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+datasets: [&dataset {id: demo, title: Demo, entities: []}, *dataset]
+"#,
+        ),
+    ];
+
+    for (name, raw) in cases {
+        let manifest = dir.join(format!("{name}.yaml"));
+        fs::write(&manifest, raw).expect("write manifest");
+        let output = Command::new(bin())
+            .args(["validate", manifest.to_str().unwrap()])
+            .output()
+            .expect("run cli");
+
+        assert!(!output.status.success(), "{name} must fail closed");
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert!(
+            stderr.contains("metadata.manifest.aliases_unsupported"),
+            "{name} stderr missing alias error: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_nested_anchored_mapping_quickly() {
+    let dir = temp_dir("validate-nested-anchor");
+    let manifest = dir.join("metadata.yaml");
+    fs::write(
+        &manifest,
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: https://metadata.example.test
+  title: Demo
+  publisher:
+    name: Publisher
+datasets:
+  - id: demo
+    title: Demo
+    entities:
+      - name: amplified
+        fields:
+          - &field
+            name: a
+            type: string
+          - *field
+          - *field
+          - *field
+          - *field
+codelists: []
+"#,
+    )
+    .expect("write manifest");
+
+    let output = output_with_timeout(
+        Command::new(bin()).args(["validate", manifest.to_str().unwrap()]),
+        Duration::from_secs(5),
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("metadata.manifest.aliases_unsupported"),
+        "stderr missing alias error: {stderr}"
+    );
+}
+
+#[test]
+fn validate_allows_literal_ampersands_and_asterisks_in_yaml_content() {
+    let dir = temp_dir("validate-yaml-literals");
+    let manifest = dir.join("metadata.yaml");
+    fs::write(
+        &manifest,
+        r#"
+# A comment with &anchor-looking and *alias-looking text.
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: "https://metadata.example.test/catalog?left=a&right=*"
+  title: |
+    Demo title with & and * characters.
+  publisher:
+    name: "Publisher & Partner * Literal"
+datasets: []
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn validate_allows_anchor_like_tokens_inside_yaml_content() {
+    let dir = temp_dir("validate-yaml-anchor-like-literals");
+    let manifest = dir.join("metadata.yaml");
+    fs::write(
+        &manifest,
+        r#"
+# A comment with : *alias, [*alias, and { *alias } text.
+schema_version: registry-manifest/v1
+catalog:
+  id: demo
+  base_url: "https://metadata.example.test/catalog?op=: *literal&next=: &literal"
+  title: |
+    Block scalar with : *alias, : &anchor, [*alias, and { *alias } text.
+  publisher:
+    name: "Publisher with : *literal and : &literal"
+datasets: []
+"#,
+    )
+    .expect("write manifest");
+
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn unknown_subcommand_returns_usage() {
     let output = Command::new(bin())
         .arg("teleport")
@@ -880,6 +1235,87 @@ fn validate_profiles_reports_missing_directory_and_empty_root() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(stderr.contains("metadata.profile.descriptor_missing"));
+}
+
+#[test]
+fn validate_profiles_rejects_descriptor_yaml_anchors() {
+    let root = temp_dir("profile-descriptor-anchor");
+    let profile_dir = root.join("anchored");
+    fs::create_dir_all(&profile_dir).expect("profile dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile: &profile
+  id: anchored
+  version: "1"
+supported_input_artifacts:
+  - kind: metadata_manifest
+conformance_checks:
+  - id: anchored.check
+fixtures: []
+"#,
+    )
+    .expect("write profile");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.profile.aliases_unsupported"));
+}
+
+#[test]
+fn validate_profiles_rejects_fixture_yaml_anchors_before_typed_or_value_parse() {
+    let root = temp_dir("profile-fixture-anchor");
+    let profile_dir = root.join("anchored-fixture");
+    let fixtures_dir = profile_dir.join("fixtures");
+    fs::create_dir_all(&fixtures_dir).expect("fixtures dir");
+    fs::write(
+        profile_dir.join("profile.yaml"),
+        r#"
+schema_version: registry-manifest-profile/v1
+profile:
+  id: anchored-fixture
+  version: "1"
+supported_input_artifacts:
+  - kind: metadata_manifest
+conformance_checks:
+  - id: anchored-fixture.check
+fixtures:
+  - path: fixtures/metadata.yaml
+"#,
+    )
+    .expect("write profile");
+    fs::write(
+        fixtures_dir.join("metadata.yaml"),
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: anchored-fixture
+  base_url: https://metadata.example.test
+  title: &title Anchored Fixture
+  publisher:
+    name: *title
+profiles:
+  - id: anchored-fixture
+    version: "1"
+datasets: []
+"#,
+    )
+    .expect("write fixture");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", root.to_str().unwrap()])
+        .output()
+        .expect("run cli");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("metadata.manifest.aliases_unsupported"));
 }
 
 #[test]

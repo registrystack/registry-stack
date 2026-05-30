@@ -4,7 +4,8 @@ use registry_manifest_core::{
     compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog, render_cpsv_ap,
     render_dataset_policy_document, render_dcat_profile, render_entity_schema_draft_2020_12,
     render_entity_shacl, render_form_schema_draft_2020_12, render_ogc_records_items,
-    render_policy_collection, render_shacl, validate_manifest, MetadataError, MetadataManifest,
+    render_policy_collection, render_shacl, validate_manifest, CodelistConcept, CodelistManifest,
+    MetadataError, MetadataManifest, ProfileClaim,
 };
 use serde_json::{json, Value};
 
@@ -62,6 +63,702 @@ fn service_first_fixture() -> MetadataManifest {
 fn assert_matches_golden(label: &str, actual: &Value, expected: &str) {
     let expected: Value = serde_json::from_str(expected).expect("golden fixture parses");
     assert_eq!(actual, &expected, "{label} golden fixture mismatch");
+}
+
+fn minimal_manifest() -> MetadataManifest {
+    serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: validation-regression
+  base_url: https://registry.example.test
+  title: Validation Regression
+  publisher:
+    name: Publisher
+datasets: []
+codelists: []
+"#,
+    )
+    .expect("minimal manifest parses")
+}
+
+fn manifest_with_body(body: &str) -> MetadataManifest {
+    serde_yaml_ng::from_str(&format!(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: validation-regression
+  base_url: https://registry.example.test
+  title: Validation Regression
+  publisher:
+    name: Publisher
+{body}
+"#
+    ))
+    .expect("manifest parses")
+}
+
+fn yaml_items(count: usize, mut item: impl FnMut(usize) -> String) -> String {
+    (0..count).map(&mut item).collect::<Vec<_>>().join("")
+}
+
+fn yaml_uri_list(count: usize, indent: usize) -> String {
+    let spaces = " ".repeat(indent);
+    yaml_items(count, |index| {
+        format!("{spaces}- https://example.test/terms/{index}\n")
+    })
+}
+
+fn validation_errors(manifest: &MetadataManifest) -> Vec<registry_manifest_core::ValidationError> {
+    let err = validate_manifest(manifest).expect_err("manifest should fail validation");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    errors
+}
+
+fn assert_has_limit_error(manifest: &MetadataManifest, path: &str, limit: usize) {
+    let errors = validation_errors(manifest);
+    assert!(
+        errors.iter().any(|error| {
+            error.path == path && error.message.contains(&format!("at most {limit} items"))
+        }),
+        "expected limit error at {path}; got {errors:?}"
+    );
+}
+
+#[test]
+fn validation_rejects_collection_counts_above_security_limits() {
+    let mut manifest = fixture("example-civil-registration");
+    let profile = ProfileClaim {
+        id: "profile".to_string(),
+        version: "1".to_string(),
+    };
+    manifest.profiles = (0..65)
+        .map(|index| ProfileClaim {
+            id: format!("profile-{index}"),
+            ..profile.clone()
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "profiles", 64);
+
+    let mut manifest = fixture("example-civil-registration");
+    manifest.catalog.conforms_to = (0..65)
+        .map(|index| format!("https://example.test/profile/{index}"))
+        .collect();
+    assert_has_limit_error(&manifest, "catalog.conforms_to", 64);
+
+    let mut manifest = fixture("example-civil-registration");
+    manifest.catalog.application_profiles = (0..33)
+        .map(|index| registry_manifest_core::ApplicationProfile {
+            id: format!("unsupported-{index}"),
+            version: "1".to_string(),
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "catalog.application_profiles", 32);
+
+    let mut manifest = service_first_fixture();
+    let requirement = manifest.requirements[0].clone();
+    manifest.requirements = (0..257)
+        .map(|index| registry_manifest_core::RequirementManifest {
+            id: format!("requirement-{index}"),
+            ..requirement.clone()
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "requirements", 256);
+
+    let mut manifest = fixture("example-civil-registration");
+    let entity = manifest.datasets[0].entities[0].clone();
+    manifest.datasets[0].entities = (0..257)
+        .map(|index| registry_manifest_core::EntityManifest {
+            name: format!("entity_{index}"),
+            ..entity.clone()
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "datasets[0].entities", 256);
+
+    let mut manifest = fixture("example-civil-registration");
+    let field = manifest.datasets[0].entities[0].fields[0].clone();
+    manifest.datasets[0].entities[0].fields = (0..513)
+        .map(|index| registry_manifest_core::FieldManifest {
+            name: format!("field_{index}"),
+            ..field.clone()
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "datasets[0].entities[0].fields", 512);
+
+    let mut manifest = fixture("example-civil-registration");
+    let target_entity = manifest.datasets[0].entities[0].name.clone();
+    manifest.datasets[0].entities[0].relationships = (0..513)
+        .map(|index| registry_manifest_core::RelationshipManifest {
+            name: format!("relationship_{index}"),
+            target_entity: Some(target_entity.clone()),
+            target: None,
+            cardinality: Some("one".to_string()),
+            role: None,
+            concept_uri: None,
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "datasets[0].entities[0].relationships", 512);
+
+    let mut manifest = fixture("example-civil-registration");
+    let concept = manifest.codelists[0].concepts[0].clone();
+    manifest.codelists[0].concepts = (0..1025)
+        .map(|index| CodelistConcept {
+            code: format!("CODE_{index}"),
+            ..concept.clone()
+        })
+        .collect();
+    assert_has_limit_error(&manifest, "codelists[0].concepts", 1024);
+
+    let mut manifest = fixture("example-civil-registration");
+    manifest.datasets[0].applicable_legislation = (0..129)
+        .map(|index| format!("https://example.test/legislation/{index}"))
+        .collect();
+    assert_has_limit_error(&manifest, "datasets[0].applicable_legislation", 128);
+
+    let mut manifest = fixture("example-civil-registration");
+    manifest.datasets[0].entities[0].fields[0].concepts = (0..129)
+        .map(|index| format!("https://example.test/concepts/{index}"))
+        .collect();
+    assert_has_limit_error(&manifest, "datasets[0].entities[0].fields[0].concepts", 128);
+}
+
+#[test]
+fn validation_rejects_all_top_level_collection_counts_above_security_limits() {
+    let mut manifest = manifest_with_body(&format!(
+        "evaluation_profiles:\n{}",
+        yaml_items(257, |index| {
+            format!(
+            "  - id: evaluation-{index}\n    ruleset: ruleset-{index}\n    claim_id: claim\n    subject_id_type: subject\n"
+        )
+        })
+    ));
+    assert_has_limit_error(&manifest, "evaluation_profiles", 256);
+
+    manifest = manifest_with_body(&format!(
+        "evidence_types:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: evidence-{index}\n    title: Evidence {index}\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "evidence_types", 256);
+
+    manifest = manifest_with_body(&format!(
+        "authorities:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: authority-{index}\n    name: Authority {index}\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "authorities", 256);
+
+    manifest = manifest_with_body(&format!(
+        "public_services:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: service-{index}\n    title: Service {index}\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "public_services", 256);
+
+    manifest = manifest_with_body(&format!(
+        "data_services:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: data-service-{index}\n    title: Data Service {index}\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "data_services", 256);
+
+    manifest = manifest_with_body(&format!(
+        "forms:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: form-{index}\n    title: Form {index}\n    service: service\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "forms", 256);
+
+    manifest = manifest_with_body(&format!(
+        "datasets:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: dataset-{index}\n    title: Dataset {index}\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "datasets", 256);
+
+    manifest = manifest_with_body(&format!(
+        "codelists:\n{}",
+        yaml_items(257, |index| {
+            format!("  - id: codelist-{index}\n    scheme_iri: https://example.test/codelists/{index}\n")
+        })
+    ));
+    assert_has_limit_error(&manifest, "codelists", 256);
+}
+
+#[test]
+fn validation_rejects_all_uri_list_counts_above_security_limits() {
+    let mut manifest = manifest_with_body(&format!(
+        "requirements:\n  - id: requirement\n    title: Requirement\n    procedure_contexts:\n{}",
+        yaml_uri_list(129, 4)
+    ));
+    assert_has_limit_error(&manifest, "requirements[0].procedure_contexts", 128);
+
+    manifest = manifest_with_body(&format!(
+        "evidence_types:\n  - id: evidence\n    title: Evidence\n    information_concepts:\n{}",
+        yaml_uri_list(129, 4)
+    ));
+    assert_has_limit_error(&manifest, "evidence_types[0].information_concepts", 128);
+
+    manifest = manifest_with_body(&format!(
+        "datasets:\n  - id: dataset\n    title: Dataset\n    conforms_to:\n{}",
+        yaml_uri_list(129, 4)
+    ));
+    assert_has_limit_error(&manifest, "datasets[0].conforms_to", 128);
+
+    manifest = manifest_with_body(&format!(
+        "datasets:\n  - id: dataset\n    title: Dataset\n    policy:\n      profile:\n{}",
+        yaml_uri_list(129, 8)
+    ));
+    assert_has_limit_error(&manifest, "datasets[0].policy.profile", 128);
+
+    manifest = manifest_with_body(&format!(
+        "datasets:\n  - id: dataset\n    title: Dataset\n    evidence_offerings:\n      - id: offering\n        title: Offering\n        evidence_type: evidence\n        issuing_authority:\n          id: authority\n          name: Authority\n        entity: person\n        procedure_contexts:\n{}        access:\n          kind: partner-api\n          ruleset: exact\n",
+        yaml_uri_list(129, 10)
+    ));
+    assert_has_limit_error(
+        &manifest,
+        "datasets[0].evidence_offerings[0].procedure_contexts",
+        128,
+    );
+
+    manifest = manifest_with_body(&format!(
+        "datasets:\n  - id: dataset\n    title: Dataset\n    evidence_offerings:\n      - id: offering\n        title: Offering\n        evidence_type: evidence\n        issuing_authority:\n          id: authority\n          name: Authority\n        entity: person\n        access:\n          kind: partner-api\n          ruleset: exact\n        policy:\n          purpose:\n{}",
+        yaml_uri_list(129, 12)
+    ));
+    assert_has_limit_error(
+        &manifest,
+        "datasets[0].evidence_offerings[0].policy.purpose",
+        128,
+    );
+}
+
+#[test]
+fn validation_rejects_malformed_http_https_iris_with_real_parser() {
+    for namespace in [
+        "https://[not-a-host/ns#",
+        "https://example.org\\ns#",
+        "https://example.org/%zz",
+    ] {
+        let mut manifest = minimal_manifest();
+        manifest
+            .vocabularies
+            .insert("bad".to_string(), namespace.to_string());
+        assert!(
+            validation_errors(&manifest)
+                .iter()
+                .any(|error| error.path == "vocabularies.bad"),
+            "{namespace:?} should fail"
+        );
+    }
+
+    for service_id in [
+        "https://[not-a-host/service",
+        "https://example.org\\service",
+        "https://example.org/%zz",
+    ] {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: public-service-validation
+  base_url: https://registry.example.test
+  title: Public Service Validation
+  publisher:
+    name: Publisher
+datasets:
+  - id: dataset
+    title: Dataset
+    public_services:
+      - id: '{service_id}'
+        title: Broken
+codelists: []
+"#
+        );
+        let manifest: MetadataManifest = serde_yaml_ng::from_str(&raw).expect("manifest parses");
+        assert!(
+            validation_errors(&manifest)
+                .iter()
+                .any(|error| error.path == "datasets[0].public_services[0].id"),
+            "{service_id:?} should fail"
+        );
+    }
+}
+
+#[test]
+fn validation_rejects_malformed_curie_suffixes_after_expansion() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: malformed-curies
+  base_url: https://registry.example.test
+  title: Malformed CURIEs
+  publisher:
+    name: Publisher
+vocabularies:
+  example: https://example.test/ns/
+requirements:
+  - id: requirement
+    title: Requirement
+    rdf_type: cccev:%zz
+evidence_types:
+  - id: evidence
+    title: Evidence
+    information_concepts:
+      - skos:%zz
+datasets:
+  - id: dataset
+    title: Dataset
+    entities:
+      - name: person
+        fields:
+          - name: person_id
+            type: string
+            concepts:
+              - example:%zz
+codelists: []
+"#;
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let errors = validation_errors(&manifest);
+    for path in [
+        "requirements[0].rdf_type",
+        "evidence_types[0].information_concepts[0]",
+        "datasets[0].entities[0].fields[0].concepts[0]",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.path == path),
+            "{path} should fail; got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn manifest_profiles_are_validated_for_publish_safe_ids() {
+    let mut manifest = minimal_manifest();
+    manifest.profiles = vec![
+        ProfileClaim {
+            id: "../x".to_string(),
+            version: "1".to_string(),
+        },
+        ProfileClaim {
+            id: "/tmp/x".to_string(),
+            version: "1".to_string(),
+        },
+        ProfileClaim {
+            id: "blank-version".to_string(),
+            version: " ".to_string(),
+        },
+        ProfileClaim {
+            id: "duplicate".to_string(),
+            version: "1".to_string(),
+        },
+        ProfileClaim {
+            id: "duplicate".to_string(),
+            version: "2".to_string(),
+        },
+    ];
+
+    let errors = validation_errors(&manifest);
+    assert!(errors.iter().any(|error| error.path == "profiles[0].id"));
+    assert!(errors.iter().any(|error| error.path == "profiles[1].id"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "profiles[2].version"));
+    assert!(errors.iter().any(|error| error.path == "profiles[4].id"));
+}
+
+#[test]
+fn vocabularies_protect_builtins_and_validate_custom_namespaces() {
+    for protected in ["cccev", "dcat", "odrl"] {
+        let mut manifest = minimal_manifest();
+        manifest.vocabularies.insert(
+            protected.to_string(),
+            "https://attacker.example/ns#".to_string(),
+        );
+        assert!(
+            validation_errors(&manifest)
+                .iter()
+                .any(|error| error.path == format!("vocabularies.{protected}")),
+            "{protected} override should fail"
+        );
+    }
+
+    for prefix in [
+        "example.vocab",
+        "example/vocab",
+        "Example",
+        "example vocab",
+        "éxample",
+    ] {
+        let mut manifest = minimal_manifest();
+        manifest
+            .vocabularies
+            .insert(prefix.to_string(), "https://example.org/ns#".to_string());
+        assert!(
+            validation_errors(&manifest)
+                .iter()
+                .any(|error| error.path == format!("vocabularies.{prefix}")),
+            "{prefix} prefix should fail"
+        );
+    }
+
+    for value in [
+        "relative/ns#",
+        "urn:example:ns",
+        "did:web:example",
+        "",
+        "https://",
+    ] {
+        let mut manifest = minimal_manifest();
+        manifest
+            .vocabularies
+            .insert("example_vocab".to_string(), value.to_string());
+        assert!(
+            validation_errors(&manifest)
+                .iter()
+                .any(|error| error.path == "vocabularies.example_vocab"),
+            "{value:?} vocabulary value should fail"
+        );
+    }
+
+    let mut manifest = minimal_manifest();
+    manifest.vocabularies.insert(
+        "example_vocab".to_string(),
+        "https://example.org/ns#".to_string(),
+    );
+    manifest.vocabularies.insert(
+        "eli".to_string(),
+        "http://data.europa.eu/eli/ontology#".to_string(),
+    );
+    manifest.vocabularies.insert(
+        "registry_relay".to_string(),
+        "https://registry-relay.dev/".to_string(),
+    );
+    validate_manifest(&manifest)
+        .expect("safe custom vocabulary and identical protected values pass");
+}
+
+#[test]
+fn expanded_iris_are_sanity_checked_after_curie_expansion() {
+    for suffix in [
+        "Bad Suffix",
+        "Bad<Suffix",
+        "Bad>Suffix",
+        "Bad\"Suffix",
+        "Bad{Suffix",
+        "Bad}Suffix",
+        "Bad|Suffix",
+        "Bad^Suffix",
+        "Bad`Suffix",
+        "Bad\\u0001Suffix",
+    ] {
+        let iri = if suffix.contains("\\u") {
+            format!("example:{suffix}")
+        } else {
+            format!("example:{suffix}")
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        };
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: iri-sanity
+  base_url: https://registry.example.test
+  title: IRI Sanity
+  publisher:
+    name: Publisher
+vocabularies:
+  example: https://example.org/ns#
+requirements:
+  - id: eligibility
+    title: Eligibility
+    rdf_type: "{}"
+datasets: []
+codelists: []
+"#,
+            iri
+        );
+        let manifest: MetadataManifest = serde_yaml_ng::from_str(&raw).expect("manifest parses");
+        assert!(
+            validation_errors(&manifest)
+                .iter()
+                .any(|error| error.path == "requirements[0].rdf_type"),
+            "{suffix:?} suffix should fail"
+        );
+    }
+}
+
+#[test]
+fn builtin_curie_rendering_uses_canonical_namespace() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: builtin-rendering
+  base_url: https://registry.example.test
+  title: Builtin Rendering
+  publisher:
+    name: Publisher
+requirements:
+  - id: eligibility
+    title: Eligibility
+    rdf_type: cccev:Requirement
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let compiled = compile_manifest(&manifest).expect("manifest compiles");
+
+    assert_eq!(
+        compiled.requirement("eligibility").unwrap().rdf_type,
+        "http://data.europa.eu/m8g/Requirement"
+    );
+}
+
+#[test]
+fn dataset_public_service_ids_are_structural_identifiers() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: public-service-validation
+  base_url: https://registry.example.test
+  title: Public Service Validation
+  publisher:
+    name: Publisher
+datasets:
+  - id: dataset
+    title: Dataset
+    public_services:
+      - id: relative/path
+        title: Relative
+      - id: compact:Service
+        title: Compact
+      - id: urn:example:service
+        title: Urn
+      - id: did:web:example.gov
+        title: Did
+      - id: javascript:alert(1)
+        title: Javascript
+      - id: ../service
+        title: Traversal
+      - id: "https://example.org/service bad"
+        title: Whitespace
+      - id: "https://example.org/service<bad>"
+        title: Delimiter
+      - id: duplicate
+        title: Duplicate One
+      - id: duplicate
+        title: Duplicate Two
+codelists: []
+"#;
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let errors = validation_errors(&manifest);
+
+    for index in 0..8 {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == format!("datasets[0].public_services[{index}].id")),
+            "public service id {index} should fail"
+        );
+    }
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[0].public_services[9].id"));
+}
+
+#[test]
+fn codelist_concepts_are_validated_and_fallback_ids_are_percent_encoded() {
+    let mut manifest = minimal_manifest();
+    manifest
+        .vocabularies
+        .insert("example".to_string(), "https://example.org/ns#".to_string());
+    manifest.codelists.push(CodelistManifest {
+        id: "status".to_string(),
+        scheme_iri: "https://registry.example.test/codelists/status".to_string(),
+        external_ref: None,
+        concepts: vec![
+            CodelistConcept {
+                code: " ".to_string(),
+                iri: None,
+                label: None,
+            },
+            CodelistConcept {
+                code: "bad\u{1}".to_string(),
+                iri: None,
+                label: None,
+            },
+            CodelistConcept {
+                code: "DUPLICATE".to_string(),
+                iri: None,
+                label: None,
+            },
+            CodelistConcept {
+                code: "DUPLICATE".to_string(),
+                iri: None,
+                label: None,
+            },
+            CodelistConcept {
+                code: "BAD_IRI".to_string(),
+                iri: Some("example:Bad<Suffix".to_string()),
+                label: None,
+            },
+        ],
+    });
+
+    let errors = validation_errors(&manifest);
+    for path in [
+        "codelists[0].concepts[0].code",
+        "codelists[0].concepts[1].code",
+        "codelists[0].concepts[3].code",
+        "codelists[0].concepts[4].iri",
+    ] {
+        assert!(errors.iter().any(|error| error.path == path), "{path}");
+    }
+
+    let mut manifest = minimal_manifest();
+    manifest.codelists.push(CodelistManifest {
+        id: "codes".to_string(),
+        scheme_iri: "https://registry.example.test/codelists/codes".to_string(),
+        external_ref: None,
+        concepts: ["US", "USD", "ACTIVE", "01.02", "A/B C?x#y"]
+            .into_iter()
+            .map(|code| CodelistConcept {
+                code: code.to_string(),
+                iri: None,
+                label: None,
+            })
+            .collect(),
+    });
+    validate_manifest(&manifest).expect("real-world concept codes validate");
+    let compiled = compile_manifest(&manifest).expect("manifest compiles");
+    let shacl = render_shacl(&compiled);
+    let scheme = shacl["@graph"]
+        .as_array()
+        .expect("@graph")
+        .iter()
+        .find(|node| node["@id"] == "https://registry.example.test/codelists/codes")
+        .expect("codelist scheme");
+    let concept_ids = scheme["skos:hasTopConcept"]
+        .as_array()
+        .expect("concepts")
+        .iter()
+        .map(|concept| concept["@id"].as_str().expect("@id"))
+        .collect::<Vec<_>>();
+    assert!(concept_ids.contains(&"https://registry.example.test/codelists/codes/US"));
+    assert!(concept_ids.contains(&"https://registry.example.test/codelists/codes/USD"));
+    assert!(concept_ids.contains(&"https://registry.example.test/codelists/codes/ACTIVE"));
+    assert!(concept_ids.contains(&"https://registry.example.test/codelists/codes/01.02"));
+    assert!(
+        concept_ids.contains(&"https://registry.example.test/codelists/codes/A%2FB%20C%3Fx%23y")
+    );
 }
 
 #[test]
@@ -337,6 +1034,246 @@ fn validation_reports_manifest_errors() {
     assert!(errors
         .iter()
         .any(|error| error.path.ends_with("relationships[0].cardinality")));
+}
+
+#[test]
+fn validation_rejects_malicious_profile_claim_ids() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest
+        .profiles
+        .push(registry_manifest_core::ProfileClaim {
+            id: "../escape".to_string(),
+            version: "1".to_string(),
+        });
+    manifest
+        .profiles
+        .push(registry_manifest_core::ProfileClaim {
+            id: "/tmp/escape".to_string(),
+            version: "".to_string(),
+        });
+
+    let err = validate_manifest(&manifest).expect_err("bad profile claims rejected");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors.iter().any(|error| error.path == "profiles[1].id"));
+    assert!(errors.iter().any(|error| error.path == "profiles[2].id"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "profiles[2].version"));
+}
+
+#[test]
+fn validation_rejects_duplicate_profile_claim_ids() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.profiles.push(manifest.profiles[0].clone());
+
+    let err = validate_manifest(&manifest).expect_err("duplicate profile claim rejected");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "profiles[1].id" && error.message.contains("unique")));
+}
+
+#[test]
+fn validation_protects_builtin_vocabularies_and_expanded_iris() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.vocabularies.insert(
+        "cccev".to_string(),
+        "https://attacker.example/ns#".to_string(),
+    );
+    manifest.datasets[0].entities[0].fields[0]
+        .concepts
+        .push("person:Identifier> <https://attacker.example/evil".to_string());
+
+    let err = validate_manifest(&manifest).expect_err("vocabulary poisoning rejected");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "vocabularies.cccev"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path.ends_with("entities[0].fields[0].concepts[1]")));
+}
+
+#[test]
+fn validation_allows_byte_identical_builtin_vocabulary_redeclaration() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.vocabularies.insert(
+        "eli".to_string(),
+        "http://data.europa.eu/eli/ontology#".to_string(),
+    );
+
+    validate_manifest(&manifest).expect("byte-identical built-in redeclaration is accepted");
+}
+
+#[test]
+fn validation_rejects_unsafe_custom_vocabularies() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.vocabularies.insert(
+        "Bad.Prefix".to_string(),
+        "https://example.test/ns#".to_string(),
+    );
+    manifest
+        .vocabularies
+        .insert("ok_prefix".to_string(), "urn:example".to_string());
+
+    let err = validate_manifest(&manifest).expect_err("bad custom vocabularies rejected");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "vocabularies.Bad.Prefix"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "vocabularies.ok_prefix"));
+}
+
+#[test]
+fn validation_allows_safe_custom_vocabulary_expansion() {
+    let mut manifest = fixture("example-civil-registration");
+    manifest.vocabularies.insert(
+        "person".to_string(),
+        "https://attacker.example/person#".to_string(),
+    );
+
+    let compiled = compile_manifest(&manifest).expect("custom person prefix is accepted");
+    let entity = compiled
+        .dataset(&manifest.datasets[0].id)
+        .expect("dataset")
+        .entities
+        .get("person")
+        .expect("entity");
+    assert!(entity.fields["person_id"]
+        .concepts
+        .iter()
+        .any(|iri| iri == "https://attacker.example/person#Person.identifier"));
+}
+
+#[test]
+fn validation_accepts_cross_origin_dataset_public_service_iris() {
+    let manifest = service_first_fixture();
+    validate_manifest(&manifest).expect("service-first fixture stays valid");
+}
+
+#[test]
+fn validation_rejects_bad_dataset_public_service_ids() {
+    let mut manifest = service_first_fixture();
+    manifest.datasets[1].public_services[0].id = Some("javascript:alert(1)".to_string());
+    let duplicate = manifest.datasets[1].public_services[0].clone();
+    manifest.datasets[1].public_services.push(duplicate);
+
+    let err = validate_manifest(&manifest).expect_err("bad public service ids rejected");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[1].public_services[0].id"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "datasets[1].public_services[1].id"));
+}
+
+#[test]
+fn validation_checks_codelist_concepts_and_preserves_real_world_codes() {
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: codelist-codes
+  base_url: https://data.example.test
+  title: Codelist Codes
+  publisher:
+    name: Publisher
+datasets: []
+codelists:
+  - id: statuses
+    scheme_iri: https://data.example.test/codelists/statuses
+    concepts:
+      - code: US
+      - code: USD
+      - code: ACTIVE
+      - code: "01.02"
+"#,
+    )
+    .expect("manifest parses");
+    validate_manifest(&manifest).expect("real-world concept codes are accepted");
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let shacl = render_shacl(&compiled);
+    let raw = serde_json::to_string(&shacl).expect("json");
+    assert!(raw.contains("https://data.example.test/codelists/statuses/01.02"));
+}
+
+#[test]
+fn validation_rejects_invalid_codelist_concepts() {
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: bad-codelist
+  base_url: https://data.example.test
+  title: Bad Codelist
+  publisher:
+    name: Publisher
+datasets: []
+codelists:
+  - id: statuses
+    scheme_iri: https://data.example.test/codelists/statuses
+    concepts:
+      - code: ""
+      - code: duplicate
+      - code: duplicate
+      - code: bad-iri
+        iri: "skos:Concept> <https://attacker.example/evil"
+"#,
+    )
+    .expect("manifest parses");
+
+    let err = validate_manifest(&manifest).expect_err("bad codelist concepts rejected");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "codelists[0].concepts[0].code"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "codelists[0].concepts[2].code"));
+    assert!(errors
+        .iter()
+        .any(|error| error.path == "codelists[0].concepts[3].iri"));
+}
+
+#[test]
+fn codelist_fallback_ids_percent_encode_unsafe_code_bytes() {
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: encoded-codes
+  base_url: https://data.example.test
+  title: Encoded Codes
+  publisher:
+    name: Publisher
+datasets: []
+codelists:
+  - id: statuses
+    scheme_iri: https://data.example.test/codelists/statuses
+    concepts:
+      - code: "A/B value"
+"#,
+    )
+    .expect("manifest parses");
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let shacl = render_shacl(&compiled);
+    let raw = serde_json::to_string(&shacl).expect("json");
+    assert!(raw.contains("https://data.example.test/codelists/statuses/A%2FB%20value"));
 }
 
 #[test]
