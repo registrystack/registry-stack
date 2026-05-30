@@ -10,6 +10,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -26,6 +29,7 @@ const DEFAULT_MAX_FILES: u32 = 5;
 const MIN_AUDIT_SECRET_BYTES: usize = 32;
 const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
+const CHAIN_HMAC_CONTEXT: &[u8] = b"registry-platform-audit-chain-v1";
 
 /// One chained audit record.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -58,11 +62,25 @@ impl fmt::Debug for AuditEnvelope {
 }
 
 impl AuditEnvelope {
+    #[cfg(test)]
     fn new(record: Value, prev_hash: Option<[u8; 32]>) -> Result<Self, AuditError> {
+        Self::new_with_hasher(record, prev_hash, &AuditChainHasher::unkeyed_dev_only())
+    }
+
+    fn new_with_hasher(
+        record: Value,
+        prev_hash: Option<[u8; 32]>,
+        hasher: &AuditChainHasher,
+    ) -> Result<Self, AuditError> {
         let envelope_id = Ulid::new().to_string();
         let timestamp_unix_ms = now_unix_ms();
-        let record_hash =
-            record_hash(&envelope_id, timestamp_unix_ms, prev_hash.as_ref(), &record)?;
+        let record_hash = record_hash(
+            &envelope_id,
+            timestamp_unix_ms,
+            prev_hash.as_ref(),
+            &record,
+            hasher,
+        )?;
         Ok(Self {
             envelope_id,
             timestamp_unix_ms,
@@ -80,23 +98,62 @@ impl AuditEnvelope {
     }
 }
 
-/// Mutable tamper-evident chain state.
-#[derive(Debug, Default)]
+/// Mutable audit chain state.
+#[derive(Debug)]
 pub struct ChainState {
+    hasher: AuditChainHasher,
     last_hash: tokio::sync::Mutex<Option<[u8; 32]>>,
 }
 
 impl ChainState {
-    /// Start a fresh chain with no previous hash.
+    /// Start a fresh production chain using a keyed audit-chain hasher.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(hasher: AuditChainHasher) -> Self {
+        Self {
+            hasher,
+            last_hash: tokio::sync::Mutex::new(None),
+        }
     }
 
-    /// Bootstrap a chain from a sink's current tail hash.
-    pub async fn bootstrap(sink: &dyn AuditSink) -> Result<Self, AuditError> {
+    /// Start a fresh unkeyed chain for tests and local development.
+    #[must_use]
+    pub fn unkeyed_dev_only() -> Self {
+        Self::new(AuditChainHasher::unkeyed_dev_only())
+    }
+
+    /// Bootstrap a production chain from a tailable sink's current tail hash.
+    pub async fn bootstrap(
+        sink: &dyn AuditSink,
+        hasher: AuditChainHasher,
+    ) -> Result<Self, AuditError> {
+        let Some(tail_hash) = sink.tail_hash_with_hasher(&hasher).await? else {
+            return Err(AuditError::NonTailableSink);
+        };
         Ok(Self {
-            last_hash: tokio::sync::Mutex::new(sink.tail_hash().await?),
+            hasher,
+            last_hash: tokio::sync::Mutex::new(Some(tail_hash)),
+        })
+    }
+
+    /// Bootstrap from a sink that may be empty, using an explicit keyed hasher.
+    pub async fn bootstrap_or_start_empty(
+        sink: &dyn AuditSink,
+        hasher: AuditChainHasher,
+    ) -> Result<Self, AuditError> {
+        let last_hash = sink.tail_hash_with_hasher(&hasher).await?;
+        Ok(Self {
+            hasher,
+            last_hash: tokio::sync::Mutex::new(last_hash),
+        })
+    }
+
+    /// Bootstrap or restart from genesis for tests and local development.
+    pub async fn bootstrap_unkeyed_dev_only(sink: &dyn AuditSink) -> Result<Self, AuditError> {
+        let hasher = AuditChainHasher::unkeyed_dev_only();
+        let last_hash = sink.tail_hash_with_hasher(&hasher).await?;
+        Ok(Self {
+            hasher,
+            last_hash: tokio::sync::Mutex::new(last_hash),
         })
     }
 
@@ -116,7 +173,7 @@ impl ChainState {
     ) -> Result<AuditEnvelope, AuditError> {
         let record = serde_json::to_value(record).map_err(AuditError::Json)?;
         let mut last_hash = self.last_hash.lock().await;
-        let envelope = AuditEnvelope::new(record, *last_hash)?;
+        let envelope = AuditEnvelope::new_with_hasher(record, *last_hash, &self.hasher)?;
         sink.write(&envelope).await?;
         *last_hash = Some(envelope.record_hash);
         Ok(envelope)
@@ -127,6 +184,13 @@ impl ChainState {
 pub trait AuditSink: Send + Sync {
     async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError>;
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError>;
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        let _ = hasher;
+        self.tail_hash().await
+    }
 }
 
 #[derive(Debug, Error)]
@@ -150,6 +214,8 @@ pub enum AuditError {
     WeakSecret { name: String, min_bytes: usize },
     #[error("audit hash field {field} is not a valid lowercase sha256 hex string")]
     InvalidHashHex { field: &'static str },
+    #[error("audit sink cannot provide a tail hash; use bootstrap_or_start_empty with an external anchor or explicit dev-only restart mode")]
+    NonTailableSink,
     #[error("audit chain hash mismatch")]
     HashMismatch,
     #[error("audit chain verification failed: {0}")]
@@ -211,10 +277,27 @@ impl AuditSink for JsonlFileSink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        self.tail_hash_blocking(AuditChainHasher::unkeyed_dev_only())
+            .await
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        self.tail_hash_blocking(hasher.clone()).await
+    }
+}
+
+impl JsonlFileSink {
+    async fn tail_hash_blocking(
+        &self,
+        hasher: AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
         let _guard = self.inner.lock.lock().await;
         let inner = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || {
-            tail_hash_from_files(&inner.path, inner.max_size_bytes, inner.max_files)
+            tail_hash_from_files(&inner.path, inner.max_size_bytes, inner.max_files, &hasher)
         })
         .await
         .map_err(join_error_to_io)?
@@ -228,6 +311,7 @@ impl JsonlFileSinkInner {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
+            .audit_file_mode()
             .open(&self.path)
             .map_err(AuditError::Io)?;
         file.write_all(line.as_bytes()).map_err(AuditError::Io)?;
@@ -386,6 +470,52 @@ impl fmt::Debug for AuditHashSecret {
         f.debug_struct("AuditHashSecret")
             .field("secret", &"<redacted>")
             .finish()
+    }
+}
+
+/// Audit-chain record hasher.
+///
+/// Keyed mode protects the retained JSONL chain from a file writer that cannot
+/// read the deployment HMAC secret. Unkeyed mode is retained only for tests,
+/// fixtures, and migration checks of legacy pre-beta logs.
+#[derive(Clone, Debug)]
+pub enum AuditChainHasher {
+    Keyed(AuditHashSecret),
+    UnkeyedDevOnly,
+}
+
+impl AuditChainHasher {
+    #[must_use]
+    pub fn keyed(secret: AuditHashSecret) -> Self {
+        Self::Keyed(secret)
+    }
+
+    /// Load an HMAC chain secret from the named environment variable.
+    pub fn from_env(env_var_name: &str) -> Result<Self, AuditError> {
+        if env_var_name.trim().is_empty() {
+            return Err(AuditError::EmptyEnvVarName);
+        }
+        let value = env::var(env_var_name).map_err(|source| AuditError::EnvVar {
+            name: env_var_name.to_string(),
+            source,
+        })?;
+        Ok(Self::Keyed(AuditHashSecret::from_env_value(
+            env_var_name,
+            value,
+        )?))
+    }
+
+    /// Explicit unkeyed mode for tests, fixtures, and legacy pre-beta logs.
+    #[must_use]
+    pub fn unkeyed_dev_only() -> Self {
+        Self::UnkeyedDevOnly
+    }
+
+    fn hash_record(&self, bytes: &[u8]) -> [u8; 32] {
+        match self {
+            Self::Keyed(secret) => hmac_sha256_bytes(secret.as_bytes(), CHAIN_HMAC_CONTEXT, bytes),
+            Self::UnkeyedDevOnly => sha256_bytes(bytes),
+        }
     }
 }
 
@@ -625,17 +755,25 @@ pub enum ChainVerificationError {
     },
 }
 
+/// Verify a retained audit chain with the caller-selected hash mode.
+///
+/// This checks internal consistency over the provided records. Store external
+/// anchors off-host and use [`verify_chain_with_anchors`] when continuity across
+/// retained sets matters.
 pub fn verify_chain(
     envelopes: &[AuditEnvelope],
+    hasher: &AuditChainHasher,
 ) -> Result<ChainVerification, ChainVerificationError> {
-    verify_chain_expected_prev_hash(envelopes, None)
+    verify_chain_expected_prev_hash(envelopes, None, hasher)
 }
 
 pub fn verify_chain_with_anchors(
     envelopes: &[AuditEnvelope],
     anchors: ChainVerificationAnchors,
+    hasher: &AuditChainHasher,
 ) -> Result<ChainVerification, ChainVerificationError> {
-    let verification = verify_chain_expected_prev_hash(envelopes, anchors.trusted_start_prev_hash)?;
+    let verification =
+        verify_chain_expected_prev_hash(envelopes, anchors.trusted_start_prev_hash, hasher)?;
     if let Some(expected) = anchors.trusted_last_hash {
         if verification.last_hash != Some(expected) {
             return Err(ChainVerificationError::LastHashMismatch {
@@ -650,6 +788,7 @@ pub fn verify_chain_with_anchors(
 fn verify_chain_expected_prev_hash(
     envelopes: &[AuditEnvelope],
     expected_start_prev_hash: Option<[u8; 32]>,
+    hasher: &AuditChainHasher,
 ) -> Result<ChainVerification, ChainVerificationError> {
     let mut records = 0usize;
     let mut previous_hash = expected_start_prev_hash;
@@ -675,6 +814,7 @@ fn verify_chain_expected_prev_hash(
             envelope.timestamp_unix_ms,
             envelope.prev_hash.as_ref(),
             &envelope.record,
+            hasher,
         )
         .map_err(|_| ChainVerificationError::InvalidJson {
             line,
@@ -702,19 +842,32 @@ where
     S: AsRef<str>,
 {
     let envelopes = parse_jsonl_lines(lines)?;
-    verify_chain(&envelopes)
+    verify_chain(&envelopes, &AuditChainHasher::unkeyed_dev_only())
 }
 
-pub fn verify_jsonl_lines_with_anchors<I, S>(
+pub fn verify_jsonl_lines_with_hasher<I, S>(
     lines: I,
-    anchors: ChainVerificationAnchors,
+    hasher: &AuditChainHasher,
 ) -> Result<ChainVerification, ChainVerificationError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let envelopes = parse_jsonl_lines(lines)?;
-    verify_chain_with_anchors(&envelopes, anchors)
+    verify_chain(&envelopes, hasher)
+}
+
+pub fn verify_jsonl_lines_with_anchors<I, S>(
+    lines: I,
+    anchors: ChainVerificationAnchors,
+    hasher: &AuditChainHasher,
+) -> Result<ChainVerification, ChainVerificationError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let envelopes = parse_jsonl_lines(lines)?;
+    verify_chain_with_anchors(&envelopes, anchors, hasher)
 }
 
 fn parse_jsonl_lines<I, S>(lines: I) -> Result<Vec<AuditEnvelope>, ChainVerificationError>
@@ -745,6 +898,7 @@ fn tail_hash_from_files(
     path: &Path,
     max_size_bytes: u64,
     max_files: u32,
+    hasher: &AuditChainHasher,
 ) -> Result<Option<[u8; 32]>, AuditError> {
     let paths = existing_audit_paths(path, max_files);
     if paths.is_empty() {
@@ -768,9 +922,9 @@ fn tail_hash_from_files(
         && paths.len() == max_files as usize
         && envelopes[0].prev_hash.is_some();
     let verification = if retained_suffix {
-        verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash)
+        verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash, hasher)
     } else {
-        verify_chain(&envelopes)
+        verify_chain(&envelopes, hasher)
     }
     .map_err(AuditError::ChainVerification)?;
     Ok(verification.last_hash)
@@ -804,6 +958,7 @@ fn record_hash(
     timestamp_unix_ms: i64,
     prev_hash: Option<&[u8; 32]>,
     record: &Value,
+    hasher: &AuditChainHasher,
 ) -> Result<[u8; 32], AuditError> {
     #[derive(Serialize)]
     struct HashInput<'a> {
@@ -820,7 +975,7 @@ fn record_hash(
         record,
     };
     let bytes = serde_json::to_vec(&input).map_err(AuditError::Json)?;
-    Ok(sha256_bytes(&bytes))
+    Ok(hasher.hash_record(&bytes))
 }
 
 fn hashes_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
@@ -841,9 +996,48 @@ fn ensure_parent_dir(path: &Path) -> Result<(), AuditError> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent).map_err(AuditError::Io)?;
+        create_audit_dir_all(parent)?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+trait AuditFileMode {
+    fn audit_file_mode(&mut self) -> &mut Self;
+}
+
+#[cfg(unix)]
+impl AuditFileMode for OpenOptions {
+    fn audit_file_mode(&mut self) -> &mut Self {
+        self.mode(0o600)
+    }
+}
+
+#[cfg(not(unix))]
+trait AuditFileMode {
+    fn audit_file_mode(&mut self) -> &mut Self;
+}
+
+#[cfg(not(unix))]
+impl AuditFileMode for OpenOptions {
+    fn audit_file_mode(&mut self) -> &mut Self {
+        self
+    }
+}
+
+#[cfg(unix)]
+fn create_audit_dir_all(path: &Path) -> Result<(), AuditError> {
+    if path.exists() {
+        return Ok(());
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(path).map_err(AuditError::Io)
+}
+
+#[cfg(not(unix))]
+fn create_audit_dir_all(path: &Path) -> Result<(), AuditError> {
+    fs::create_dir_all(path).map_err(AuditError::Io)
 }
 
 fn remove_file_if_exists(path: &Path) -> Result<(), AuditError> {
@@ -882,11 +1076,24 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn hmac_sha256_hex(secret: &[u8], bytes: &[u8]) -> String {
+    format!(
+        "{KEYED_HASH_PREFIX}{}",
+        hex_lower(&hmac_sha256_bytes(secret, b"", bytes))
+    )
+}
+
+fn hmac_sha256_bytes(secret: &[u8], context: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(secret)
         .expect("HMAC-SHA256 accepts any key length");
+    if !context.is_empty() {
+        mac.update(context);
+        mac.update(&[0]);
+    }
     mac.update(bytes);
     let tag = mac.finalize().into_bytes();
-    format!("{KEYED_HASH_PREFIX}{}", hex_lower(&tag))
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&tag);
+    out
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -1062,7 +1269,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::new(&path);
-        let chain = ChainState::bootstrap(&sink).await.expect("bootstrap empty");
+        let chain = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("bootstrap empty");
 
         let first = chain
             .append(&sink, json!({ "event": "first" }))
@@ -1080,7 +1289,9 @@ mod tests {
             Some(second.record_hash)
         );
 
-        let bootstrapped = ChainState::bootstrap(&sink).await.expect("bootstrap tail");
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("bootstrap tail");
         let third = bootstrapped
             .append(&sink, json!({ "event": "third" }))
             .await
@@ -1094,9 +1305,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn keyed_chain_rejects_full_rewrite_without_secret() {
+        let sink = MemorySink::default();
+        let secret =
+            AuditHashSecret::new(b"this-is-a-32-byte-chain-secret-ok".to_vec()).expect("secret");
+        let hasher = AuditChainHasher::keyed(secret);
+        let chain = ChainState::new(hasher.clone());
+        let first = chain
+            .append(&sink, json!({ "event": "first" }))
+            .await
+            .expect("first append");
+        let second = chain
+            .append(&sink, json!({ "event": "second" }))
+            .await
+            .expect("second append");
+
+        verify_chain(&[first.clone(), second.clone()], &hasher).expect("keyed chain verifies");
+
+        let fake_first = AuditEnvelope::new(json!({ "event": "fake-first" }), None)
+            .expect("attacker can build legacy first");
+        let fake_second = AuditEnvelope::new(
+            json!({ "event": "fake-second" }),
+            Some(fake_first.record_hash),
+        )
+        .expect("attacker can build legacy second");
+
+        assert!(matches!(
+            verify_chain(&[fake_first, fake_second], &hasher),
+            Err(ChainVerificationError::RecordHashMismatch { line: 1 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn production_bootstrap_rejects_non_tailable_sink() {
+        let hasher = AuditChainHasher::keyed(
+            AuditHashSecret::new(b"this-is-a-32-byte-chain-secret-ok".to_vec()).expect("secret"),
+        );
+
+        assert!(matches!(
+            ChainState::bootstrap(&JsonlStdoutSink::new(), hasher).await,
+            Err(AuditError::NonTailableSink)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_sink_creates_private_file_and_directory_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let audit_dir = dir.path().join("private-audit");
+        let path = audit_dir.join("audit.jsonl");
+        let sink = JsonlFileSink::new(&path);
+        let chain = ChainState::unkeyed_dev_only();
+
+        chain
+            .append(&sink, json!({ "event": "first" }))
+            .await
+            .expect("append");
+
+        let file_mode = fs::metadata(&path)
+            .expect("file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let dir_mode = fs::metadata(&audit_dir)
+            .expect("dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600);
+        assert_eq!(dir_mode, 0o700);
+    }
+
+    #[tokio::test]
     async fn audit_chain_detects_inserted_envelope() {
         let sink = MemorySink::default();
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let first = chain
             .append(&sink, json!({ "event": "first" }))
             .await
@@ -1110,7 +1395,8 @@ mod tests {
             .await
             .expect("third append");
 
-        let err = verify_chain(&[first, third]).expect_err("gap detected");
+        let err = verify_chain(&[first, third], &AuditChainHasher::unkeyed_dev_only())
+            .expect_err("gap detected");
         assert!(matches!(
             err,
             ChainVerificationError::PrevHashMismatch { line: 2, .. }
@@ -1163,7 +1449,8 @@ mod tests {
             .expect("second");
         second.record["event"] = json!("changed");
 
-        let err = verify_chain(&[first, second]).expect_err("tamper detected");
+        let err = verify_chain(&[first, second], &AuditChainHasher::unkeyed_dev_only())
+            .expect_err("tamper detected");
         assert_eq!(err, ChainVerificationError::RecordHashMismatch { line: 2 });
     }
 
@@ -1172,7 +1459,8 @@ mod tests {
         let mut envelope = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
         envelope.timestamp_unix_ms += 1;
 
-        let err = verify_chain(&[envelope]).expect_err("tamper detected");
+        let err = verify_chain(&[envelope], &AuditChainHasher::unkeyed_dev_only())
+            .expect_err("tamper detected");
         assert_eq!(err, ChainVerificationError::RecordHashMismatch { line: 1 });
     }
 
@@ -1181,7 +1469,8 @@ mod tests {
         let mut envelope = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
         envelope.envelope_id = Ulid::new().to_string();
 
-        let err = verify_chain(&[envelope]).expect_err("tamper detected");
+        let err = verify_chain(&[envelope], &AuditChainHasher::unkeyed_dev_only())
+            .expect_err("tamper detected");
         assert_eq!(err, ChainVerificationError::RecordHashMismatch { line: 1 });
     }
 
@@ -1190,7 +1479,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::new(&path);
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let first = chain
             .append(&sink, json!({ "event": "first" }))
             .await
@@ -1221,7 +1510,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::new(&path);
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         chain
             .append(&sink, json!({ "event": "first" }))
             .await
@@ -1236,7 +1525,7 @@ mod tests {
         fs::write(&path, rewritten).expect("rewrite without first line");
 
         assert!(matches!(
-            ChainState::bootstrap(&sink).await,
+            ChainState::bootstrap_unkeyed_dev_only(&sink).await,
             Err(AuditError::ChainVerification(
                 ChainVerificationError::PrevHashMismatch {
                     line: 1,
@@ -1252,7 +1541,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::with_rotation(&path, 1, 2);
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let mut third_hash = None;
         for event in ["first", "second", "third"] {
             let envelope = chain
@@ -1263,7 +1552,9 @@ mod tests {
         }
 
         assert_eq!(sink.tail_hash().await.expect("tail"), third_hash);
-        let bootstrapped = ChainState::bootstrap(&sink).await.expect("bootstrap");
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("bootstrap");
         let fourth = bootstrapped
             .append(&sink, json!({ "event": "fourth" }))
             .await
@@ -1276,7 +1567,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::with_rotation(&path, 1, 2);
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         for event in ["first", "second", "third"] {
             chain
                 .append(&sink, json!({ "event": event }))
@@ -1327,6 +1618,7 @@ mod tests {
             &[second.clone(), third.clone()],
             ChainVerificationAnchors::from_trusted_start_prev_hash(Some(first.record_hash))
                 .with_trusted_last_hash(third.record_hash),
+            &AuditChainHasher::unkeyed_dev_only(),
         )
         .expect("anchored suffix verifies");
 
@@ -1349,11 +1641,12 @@ mod tests {
         .expect("fake second");
 
         let rewritten = [rewritten_first, rewritten_second];
-        assert!(verify_chain(&rewritten).is_ok());
+        assert!(verify_chain(&rewritten, &AuditChainHasher::unkeyed_dev_only()).is_ok());
 
         let err = verify_chain_with_anchors(
             &rewritten,
             ChainVerificationAnchors::from_trusted_last_hash(second.record_hash),
+            &AuditChainHasher::unkeyed_dev_only(),
         )
         .expect_err("trusted tail detects full rewrite");
 
@@ -1373,6 +1666,7 @@ mod tests {
         let verification = verify_jsonl_lines_with_anchors(
             lines.iter(),
             ChainVerificationAnchors::from_trusted_last_hash(second.record_hash),
+            &AuditChainHasher::unkeyed_dev_only(),
         )
         .expect("anchored JSONL verifies");
 
@@ -1382,6 +1676,7 @@ mod tests {
         let err = verify_jsonl_lines_with_anchors(
             lines.iter(),
             ChainVerificationAnchors::from_trusted_last_hash([42; 32]),
+            &AuditChainHasher::unkeyed_dev_only(),
         )
         .expect_err("wrong trusted tail rejected");
         assert!(matches!(
@@ -1395,7 +1690,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::with_rotation(&path, 1, 1);
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let first = chain
             .append(&sink, json!({ "event": "first" }))
             .await
@@ -1406,7 +1701,9 @@ mod tests {
             .expect("second append");
 
         assert_eq!(second.prev_hash, Some(first.record_hash));
-        let bootstrapped = ChainState::bootstrap(&sink).await.expect("bootstrap");
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("bootstrap");
         let third = bootstrapped
             .append(&sink, json!({ "event": "third" }))
             .await
@@ -1484,7 +1781,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::new(&path);
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let mut envelope = chain
             .append(&sink, json!({ "event": "first" }))
             .await

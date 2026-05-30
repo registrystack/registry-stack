@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Test fixtures and assertions for Registry Platform consumers.
 
+#[cfg(not(feature = "test-utils"))]
+compile_error!(
+    "registry-platform-testing is a test-only crate; enable feature \"test-utils\" from dev-dependencies"
+);
+
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -14,7 +19,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
-    verify_chain, verify_chain_with_anchors, AuditEnvelope, ChainVerificationAnchors,
+    verify_chain, verify_chain_with_anchors, AuditChainHasher, AuditEnvelope,
+    ChainVerificationAnchors,
 };
 use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider};
 use registry_platform_oid4vci::{CREDENTIAL_SIGNING_ALG_EDDSA, PROOF_JWT_TYPE};
@@ -496,14 +502,14 @@ pub type ChainAssertionError = registry_platform_audit::ChainVerificationError;
 pub type ChainAssertionAnchors = ChainVerificationAnchors;
 
 pub fn assert_chain_integrity(envelopes: &[AuditEnvelope]) -> Result<(), ChainAssertionError> {
-    verify_chain(envelopes).map(|_| ())
+    verify_chain(envelopes, &AuditChainHasher::unkeyed_dev_only()).map(|_| ())
 }
 
 pub fn assert_chain_integrity_with_anchors(
     envelopes: &[AuditEnvelope],
     anchors: ChainAssertionAnchors,
 ) -> Result<(), ChainAssertionError> {
-    verify_chain_with_anchors(envelopes, anchors).map(|_| ())
+    verify_chain_with_anchors(envelopes, anchors, &AuditChainHasher::unkeyed_dev_only()).map(|_| ())
 }
 
 #[derive(Debug, Error)]
@@ -544,6 +550,9 @@ pub fn oidc_verifier_config(
         audiences,
         allowed_algorithms: vec![Algorithm::EdDSA],
         allowed_typ: vec!["JWT".to_string()],
+        allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+        allowed_userinfo_typ: vec!["JWT".to_string()],
+        userinfo_requires_exp: true,
         scope_claim: "scope".to_string(),
         scope_separator: ' ',
         scope_map: None,
@@ -657,6 +666,9 @@ mod tests {
                 audiences: vec![audience.to_string()],
                 allowed_algorithms: vec![Algorithm::EdDSA],
                 allowed_typ: vec![FEDERATION_REQUEST_JWT_TYPE.to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
                 scope_claim: "scope".to_string(),
                 scope_separator: ' ',
                 scope_map: None,
@@ -766,7 +778,7 @@ mod tests {
     #[tokio::test]
     async fn chain_integrity_assertion_delegates_to_audit_verifier() {
         let sink = MemorySink::default();
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let first = chain
             .append(&sink, json!({ "event": "first" }))
             .await
@@ -784,7 +796,7 @@ mod tests {
     #[tokio::test]
     async fn anchored_chain_integrity_assertion_checks_trusted_tail() {
         let sink = MemorySink::default();
-        let chain = ChainState::new();
+        let chain = ChainState::unkeyed_dev_only();
         let first = chain
             .append(&sink, json!({ "event": "first" }))
             .await
@@ -794,7 +806,7 @@ mod tests {
             .await
             .expect("second append");
         let rewritten_sink = MemorySink::default();
-        let rewritten_chain = ChainState::new();
+        let rewritten_chain = ChainState::unkeyed_dev_only();
         let rewritten_first = rewritten_chain
             .append(&rewritten_sink, json!({ "event": "fake-first" }))
             .await

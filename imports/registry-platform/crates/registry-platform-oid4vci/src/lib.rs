@@ -4,6 +4,9 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_platform_crypto::{did_jwk_from_public_jwk, parse_did_jwk, verify, PublicJwk};
+use registry_platform_replay::{
+    require_consume_once, ConsumableNonceStore, ReplayKey, ReplayScope,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -207,6 +210,7 @@ pub struct ProofValidationPolicy<'a> {
     pub expected_nonce: Option<&'a str>,
     pub max_lifetime: Duration,
     pub future_skew: Duration,
+    pub forbidden_holder_keys: &'a [PublicJwk],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -261,6 +265,13 @@ pub fn validate_proof_jwt(
     let header = decode_json(header_b64).map_err(|_| ProofError::InvalidHeader)?;
     reject_header(&header)?;
     let holder_jwk = holder_jwk_from_header(&header)?;
+    if policy
+        .forbidden_holder_keys
+        .iter()
+        .any(|forbidden| same_public_key_material(forbidden, &holder_jwk))
+    {
+        return Err(ProofError::UnsupportedKeyReference);
+    }
     let signature = URL_SAFE_NO_PAD
         .decode(signature_b64)
         .map_err(|_| ProofError::MalformedJwt)?;
@@ -296,7 +307,7 @@ pub fn validate_proof_jwt(
         Some(kid) => {
             let did = strip_fragment(kid)?;
             let kid_jwk = parse_did_jwk(did).map_err(|_| ProofError::UnsupportedKeyReference)?;
-            if kid_jwk != holder_jwk {
+            if !same_public_key_material(&kid_jwk, &holder_jwk) {
                 return Err(ProofError::UnsupportedKeyReference);
             }
             did.to_string()
@@ -316,6 +327,32 @@ pub fn validate_proof_jwt(
         exp,
         raw_claims: claims,
     })
+}
+
+/// Validate a production credential-endpoint proof with a reserved, single-use
+/// challenge nonce.
+///
+/// The nonce must be present in `policy.expected_nonce`, the proof must carry
+/// exactly that nonce, and `nonce_store` must consume the nonce in `nonce_scope`
+/// exactly once. Missing, already-used, or store-failed nonces all fail closed
+/// as `ProofError::InvalidNonce`.
+pub async fn validate_challenged_proof_jwt(
+    proof_jwt: &str,
+    policy: &ProofValidationPolicy<'_>,
+    now: i64,
+    nonce_store: &dyn ConsumableNonceStore,
+    nonce_scope: &ReplayScope,
+) -> Result<ValidatedProof, ProofError> {
+    let expected_nonce = policy.expected_nonce.ok_or(ProofError::InvalidNonce)?;
+    let proof = validate_proof_jwt(proof_jwt, policy, now)?;
+    if proof.nonce.as_deref() != Some(expected_nonce) {
+        return Err(ProofError::InvalidNonce);
+    }
+    let nonce_key = ReplayKey::new(expected_nonce).map_err(|_| ProofError::InvalidNonce)?;
+    require_consume_once(nonce_store, nonce_scope, &nonce_key)
+        .await
+        .map_err(|_| ProofError::InvalidNonce)?;
+    Ok(proof)
 }
 
 fn reject_header(header: &Value) -> Result<(), ProofError> {
@@ -348,6 +385,15 @@ fn holder_jwk_from_header(header: &Value) -> Result<PublicJwk, ProofError> {
         return Err(ProofError::UnsupportedKeyReference);
     }
     parse_did_jwk(kid).map_err(|_| ProofError::UnsupportedKeyReference)
+}
+
+fn same_public_key_material(left: &PublicJwk, right: &PublicJwk) -> bool {
+    left.kty == right.kty
+        && left.crv == right.crv
+        && left.x == right.x
+        && left.y == right.y
+        && left.n == right.n
+        && left.e == right.e
 }
 
 fn strip_fragment(kid: &str) -> Result<&str, ProofError> {
@@ -417,7 +463,9 @@ fn decode_json(segment: &str) -> Result<Value, ProofError> {
 mod tests {
     use super::*;
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
+    use registry_platform_replay::{InMemoryConsumableNonceStore, ReplayKey, ReplayScope};
     use serde_json::json;
+    use time::OffsetDateTime;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
@@ -437,6 +485,7 @@ mod tests {
                 expected_nonce: Some("n-1"),
                 max_lifetime: Duration::from_secs(300),
                 future_skew: Duration::from_secs(30),
+                forbidden_holder_keys: &[],
             },
             1001,
         )
@@ -463,6 +512,7 @@ mod tests {
                 expected_nonce: None,
                 max_lifetime: Duration::from_secs(300),
                 future_skew: Duration::from_secs(30),
+                forbidden_holder_keys: &[],
             },
             1001,
         )
@@ -523,6 +573,35 @@ mod tests {
 
         assert_eq!(
             validate_proof_jwt(&proof, &policy(Some("n-1")), 1001),
+            Err(ProofError::UnsupportedKeyReference)
+        );
+    }
+
+    #[test]
+    fn rejects_forbidden_holder_key() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let mut p = policy(Some("n-1"));
+        let forbidden = [key.public()];
+        p.forbidden_holder_keys = &forbidden;
+
+        assert_eq!(
+            validate_proof_jwt(&valid_proof(&key, "n-1"), &p, 1001),
+            Err(ProofError::UnsupportedKeyReference)
+        );
+    }
+
+    #[test]
+    fn rejects_forbidden_holder_key_with_different_metadata() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let mut forbidden_key = key.public();
+        forbidden_key.alg = None;
+        forbidden_key.kid = Some("did:web:issuer.test#rotated".to_string());
+        let forbidden = [forbidden_key];
+        let mut p = policy(Some("n-1"));
+        p.forbidden_holder_keys = &forbidden;
+
+        assert_eq!(
+            validate_proof_jwt(&valid_proof(&key, "n-1"), &p, 1001),
             Err(ProofError::UnsupportedKeyReference)
         );
     }
@@ -610,6 +689,52 @@ mod tests {
         // the caller must record `ValidatedProof::nonce` and reject it if seen before.
     }
 
+    #[tokio::test]
+    async fn challenged_proof_consumes_reserved_nonce_once() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let store = InMemoryConsumableNonceStore::new();
+        let scope = ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("scope");
+        let nonce = ReplayKey::new("n-replay").expect("nonce key");
+        store
+            .reserve_nonce(
+                &scope,
+                &nonce,
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
+            )
+            .await
+            .expect("nonce reserves");
+        let proof = valid_proof(&key, "n-replay");
+        let p = policy(Some("n-replay"));
+
+        validate_challenged_proof_jwt(&proof, &p, 1001, &store, &scope)
+            .await
+            .expect("reserved nonce validates once");
+        assert_eq!(
+            validate_challenged_proof_jwt(&proof, &p, 1001, &store, &scope).await,
+            Err(ProofError::InvalidNonce)
+        );
+    }
+
+    #[tokio::test]
+    async fn challenged_proof_requires_expected_nonce() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let store = InMemoryConsumableNonceStore::new();
+        let scope = ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("scope");
+        let p = policy(None);
+
+        assert_eq!(
+            validate_challenged_proof_jwt(
+                &valid_proof(&key, "n-replay"),
+                &p,
+                1001,
+                &store,
+                &scope,
+            )
+            .await,
+            Err(ProofError::InvalidNonce)
+        );
+    }
+
     #[test]
     fn credential_configuration_metadata_sd_jwt_vc_serialises_to_spec_shape() {
         let metadata = CredentialConfigurationMetadata::sd_jwt_vc(
@@ -679,6 +804,7 @@ mod tests {
             expected_nonce,
             max_lifetime: Duration::from_secs(300),
             future_skew: Duration::from_secs(30),
+            forbidden_holder_keys: &[],
         }
     }
 

@@ -2,6 +2,9 @@
 
 Shared fixtures and assertions for registry-platform consumers.
 
+This crate is test-only. It fails to compile unless callers enable the
+`test-utils` feature, and it should appear only in `[dev-dependencies]`.
+
 ## What It Provides
 
 - `MockIdp`, an in-process OIDC issuer with discovery, JWKS, token minting, and
@@ -135,7 +138,7 @@ have to re-implement the claim layout.
 ## Testing
 
 ```sh
-cargo test -p registry-platform-testing
+cargo test -p registry-platform-testing --features test-utils
 ```
 
 The crate also owns a cross-crate integration test that exercises middleware,

@@ -7,11 +7,14 @@ use thiserror::Error;
 
 /// Default timeout for requests built from [`ValidatedFetchUrl`].
 pub const DEFAULT_VALIDATED_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Builder for outbound HTTP clients used by platform fetchers.
 #[derive(Debug, Clone)]
 pub struct OutboundClientBuilder {
     timeout: Duration,
+    connect_timeout: Duration,
     user_agent: Option<String>,
 }
 
@@ -28,6 +31,7 @@ impl OutboundClientBuilder {
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(30),
+            connect_timeout: DEFAULT_OUTBOUND_CONNECT_TIMEOUT,
             user_agent: None,
         }
     }
@@ -36,6 +40,13 @@ impl OutboundClientBuilder {
     #[must_use]
     pub fn timeout(mut self, d: Duration) -> Self {
         self.timeout = d;
+        self
+    }
+
+    /// Set the TCP/TLS connection timeout.
+    #[must_use]
+    pub fn connect_timeout(mut self, d: Duration) -> Self {
+        self.connect_timeout = d;
         self
     }
 
@@ -54,6 +65,7 @@ impl OutboundClientBuilder {
     pub fn build(self) -> reqwest::Client {
         let mut builder = reqwest::Client::builder()
             .timeout(self.timeout)
+            .connect_timeout(self.connect_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy();
         if let Some(user_agent) = self.user_agent {
@@ -208,8 +220,12 @@ impl FetchUrlPolicy {
     /// it must not be used as the sole guard for a later outbound request. Use
     /// [`Self::validate_for_immediate_fetch`] and
     /// [`ValidatedFetchUrl::immediate_get`] for SSRF-sensitive fetches.
+    #[deprecated(
+        note = "use validate_dns_pinned_for_immediate_fetch and send from the returned ValidatedFetchUrl"
+    )]
     pub fn validate(&self, url: &reqwest::Url) -> Result<(), FetchUrlError> {
-        self.validate_for_immediate_fetch(url).map(|_| ())
+        self.validate_dns_pinned_for_immediate_fetch(url)
+            .map(|_| ())
     }
 
     /// Validate an outbound URL and return the DNS evidence from validation.
@@ -219,6 +235,18 @@ impl FetchUrlPolicy {
     /// and send the request immediately from this value and should log or audit
     /// `resolved_ips()` when investigating outbound fetch behavior.
     pub fn validate_for_immediate_fetch(
+        &self,
+        url: &reqwest::Url,
+    ) -> Result<ValidatedFetchUrl, FetchUrlError> {
+        self.validate_dns_pinned_for_immediate_fetch(url)
+    }
+
+    /// Validate an outbound URL and return DNS evidence for a pinned request.
+    ///
+    /// Callers should send a request from the returned [`ValidatedFetchUrl`]
+    /// immediately. This method name is intentionally explicit because the
+    /// security guarantee depends on using the pinned request builder.
+    pub fn validate_dns_pinned_for_immediate_fetch(
         &self,
         url: &reqwest::Url,
     ) -> Result<ValidatedFetchUrl, FetchUrlError> {
@@ -294,11 +322,22 @@ impl FetchUrlPolicy {
         url: &reqwest::Url,
         timeout: Duration,
     ) -> Result<ValidatedFetchUrl, FetchUrlError> {
+        self.validate_dns_pinned_for_immediate_fetch_with_timeout(url, timeout)
+            .await
+    }
+
+    pub async fn validate_dns_pinned_for_immediate_fetch_with_timeout(
+        &self,
+        url: &reqwest::Url,
+        timeout: Duration,
+    ) -> Result<ValidatedFetchUrl, FetchUrlError> {
         let policy = self.clone();
         let url = url.clone();
         tokio::time::timeout(
             timeout,
-            tokio::task::spawn_blocking(move || policy.validate_for_immediate_fetch(&url)),
+            tokio::task::spawn_blocking(move || {
+                policy.validate_dns_pinned_for_immediate_fetch(&url)
+            }),
         )
         .await
         .map_err(|_| FetchUrlError::ValidationTimeout { timeout })?
@@ -370,6 +409,7 @@ impl ValidatedFetchUrl {
             .to_string();
         let client = reqwest::Client::builder()
             .timeout(timeout)
+            .connect_timeout(timeout.min(DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .resolve_to_addrs(&host, &self.resolved_addrs)
@@ -526,6 +566,8 @@ fn is_ipv6_unicast_link_local(ip: Ipv6Addr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use axum::{
         body::Body,
@@ -672,7 +714,7 @@ mod tests {
     fn validated_fetch_url_carries_resolved_ip_evidence() {
         let url = reqwest::Url::parse("https://93.184.216.34/jwks").expect("url parses");
         let validated = FetchUrlPolicy::strict()
-            .validate_for_immediate_fetch(&url)
+            .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("public HTTPS IP accepted");
 
         assert_eq!(validated.url(), &url);
@@ -682,6 +724,16 @@ mod tests {
         );
         assert_eq!(validated.resolved_addrs()[0].port(), 443);
         assert!(validated.validated_at() <= SystemTime::now());
+    }
+
+    #[test]
+    fn legacy_validate_keeps_binary_policy_only() {
+        let url = reqwest::Url::parse("https://93.184.216.34/jwks").expect("url parses");
+
+        #[allow(deprecated)]
+        FetchUrlPolicy::strict()
+            .validate(&url)
+            .expect("legacy policy helper still validates");
     }
 
     #[test]

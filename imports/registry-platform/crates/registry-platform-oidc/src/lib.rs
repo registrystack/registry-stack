@@ -520,7 +520,14 @@ pub struct TokenVerifierConfig {
     pub issuer: String,
     pub audiences: Vec<String>,
     pub allowed_algorithms: Vec<Algorithm>,
+    /// Allowed access-token `typ` header values. Empty means deny all access
+    /// tokens because the token type policy is not configured.
     pub allowed_typ: Vec<String>,
+    /// Allowed ID-token `typ` header values. Empty means deny all ID tokens.
+    pub allowed_id_typ: Vec<String>,
+    /// Allowed UserInfo JWT `typ` header values. Empty means deny all UserInfo JWTs.
+    pub allowed_userinfo_typ: Vec<String>,
+    pub userinfo_requires_exp: bool,
     pub scope_claim: String,
     pub scope_separator: char,
     pub scope_map: Option<HashMap<String, Vec<String>>>,
@@ -569,7 +576,9 @@ pub struct TokenVerifier {
     config: TokenVerifierConfig,
     fetcher: Arc<JwksFetcher>,
     allowed_clients: HashSet<String>,
-    allowed_typ: HashSet<String>,
+    allowed_access_typ: HashSet<String>,
+    allowed_id_typ: HashSet<String>,
+    allowed_userinfo_typ: HashSet<String>,
 }
 
 impl TokenVerifier {
@@ -577,16 +586,16 @@ impl TokenVerifier {
     pub fn new(config: TokenVerifierConfig, fetcher: Arc<JwksFetcher>) -> Self {
         assert_algorithm_family_is_not_mixed(&config.allowed_algorithms);
         let allowed_clients = config.allowed_clients.iter().cloned().collect();
-        let allowed_typ = config
-            .allowed_typ
-            .iter()
-            .map(|typ| typ.to_ascii_lowercase())
-            .collect();
+        let allowed_access_typ = normalize_typ_set(&config.allowed_typ);
+        let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
+        let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
         Self {
             config,
             fetcher,
             allowed_clients,
-            allowed_typ,
+            allowed_access_typ,
+            allowed_id_typ,
+            allowed_userinfo_typ,
         }
     }
 
@@ -607,15 +616,7 @@ impl TokenVerifier {
         if !self.config.allowed_algorithms.contains(&header.alg) {
             return Err(OidcError::AlgorithmNotAllowed);
         }
-        if !self.allowed_typ.is_empty() {
-            let typ = header
-                .typ
-                .as_deref()
-                .ok_or(OidcError::TokenTypeNotAllowed)?;
-            if !self.allowed_typ.contains(&typ.to_ascii_lowercase()) {
-                return Err(OidcError::TokenTypeNotAllowed);
-            }
-        }
+        enforce_typ(header.typ.as_deref(), &self.allowed_access_typ)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
         let key = self
             .fetcher
@@ -651,12 +652,7 @@ impl TokenVerifier {
         if !self.config.allowed_algorithms.contains(&header.alg) {
             return Err(OidcError::AlgorithmNotAllowed);
         }
-        if let Some(typ) = header.typ.as_deref() {
-            let typ = typ.to_ascii_lowercase();
-            if typ != "jwt" && typ != "id_token" {
-                return Err(OidcError::TokenTypeNotAllowed);
-            }
-        }
+        enforce_typ(header.typ.as_deref(), &self.allowed_id_typ)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
         let key = self
             .fetcher
@@ -711,12 +707,7 @@ impl TokenVerifier {
         if !self.config.allowed_algorithms.contains(&header.alg) {
             return Err(OidcError::AlgorithmNotAllowed);
         }
-        if let Some(typ) = header.typ.as_deref() {
-            if !self.allowed_typ.is_empty() && !self.allowed_typ.contains(&typ.to_ascii_lowercase())
-            {
-                return Err(OidcError::TokenTypeNotAllowed);
-            }
-        }
+        enforce_typ(header.typ.as_deref(), &self.allowed_userinfo_typ)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
         let key = self
             .fetcher
@@ -727,7 +718,11 @@ impl TokenVerifier {
         validation.leeway = self.config.leeway.as_secs();
         validation.validate_nbf = true;
         validation.validate_aud = false;
-        validation.required_spec_claims.clear();
+        if self.config.userinfo_requires_exp {
+            validation.required_spec_claims = ["exp"].iter().map(|s| (*s).to_string()).collect();
+        } else {
+            validation.required_spec_claims.clear();
+        }
         let data = decode::<Claims>(userinfo_jwt, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, userinfo_jwt))?;
         let issuer = data
@@ -890,6 +885,22 @@ fn audience_intersects(audience: &Audience, accepted: &[String]) -> bool {
         Audience::Many(values) => values
             .iter()
             .any(|value| accepted.iter().any(|candidate| candidate == value)),
+    }
+}
+
+fn normalize_typ_set(values: &[String]) -> HashSet<String> {
+    values.iter().map(|typ| typ.to_ascii_lowercase()).collect()
+}
+
+fn enforce_typ(typ: Option<&str>, allowed: &HashSet<String>) -> Result<(), OidcError> {
+    if allowed.is_empty() {
+        return Err(OidcError::TokenTypeNotAllowed);
+    }
+    let typ = typ.ok_or(OidcError::TokenTypeNotAllowed)?;
+    if allowed.contains(&typ.to_ascii_lowercase()) {
+        Ok(())
+    } else {
+        Err(OidcError::TokenTypeNotAllowed)
     }
 }
 
@@ -1091,6 +1102,25 @@ mod tests {
         kid: &str,
         secret: &[u8],
     ) -> TokenVerifier {
+        hs256_test_verifier_with_userinfo_exp_policy(
+            issuer,
+            audiences,
+            allowed_clients,
+            kid,
+            secret,
+            true,
+        )
+        .await
+    }
+
+    async fn hs256_test_verifier_with_userinfo_exp_policy(
+        issuer: &str,
+        audiences: Vec<String>,
+        allowed_clients: Vec<String>,
+        kid: &str,
+        secret: &[u8],
+        userinfo_requires_exp: bool,
+    ) -> TokenVerifier {
         let document = Arc::new(RwLock::new(jwks_with_oct_key(kid, secret)));
         let jwks_uri = serve_jwks(document, Arc::new(AtomicUsize::new(0))).await;
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
@@ -1103,7 +1133,10 @@ mod tests {
                 issuer: issuer.to_string(),
                 audiences,
                 allowed_algorithms: vec![Algorithm::HS256],
-                allowed_typ: Vec::new(),
+                allowed_typ: vec!["at+jwt".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp,
                 scope_claim: "scope".to_string(),
                 scope_separator: ' ',
                 scope_map: None,
@@ -1206,6 +1239,9 @@ mod tests {
                 audiences: vec!["registry-api".to_string()],
                 allowed_algorithms: vec![Algorithm::EdDSA],
                 allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
                 scope_claim: "scope".to_string(),
                 scope_separator: ' ',
                 scope_map: None,
@@ -1228,6 +1264,9 @@ mod tests {
                 audiences: vec!["aud".to_string()],
                 allowed_algorithms: vec![Algorithm::EdDSA],
                 allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
                 scope_claim: "scope".to_string(),
                 scope_separator: ' ',
                 scope_map: None,
@@ -1291,6 +1330,9 @@ mod tests {
                 audiences: vec!["aud".to_string()],
                 allowed_algorithms: vec![Algorithm::EdDSA],
                 allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
                 scope_claim: "client_id".to_string(),
                 scope_separator: ' ',
                 scope_map: Some(HashMap::from([(
@@ -1331,6 +1373,9 @@ mod tests {
                 audiences: vec!["registry-lab-api".to_string()],
                 allowed_algorithms: vec![Algorithm::EdDSA],
                 allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
                 scope_claim: "aud".to_string(),
                 scope_separator: ' ',
                 scope_map: Some(HashMap::from([(
@@ -1384,6 +1429,20 @@ mod tests {
         let verifier = verifier_for_header_tests();
         let token = unsigned_token(
             json!({ "alg": "EdDSA", "typ": "at+jwt", "kid": "kid" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+
+        assert!(matches!(
+            verifier.verify(&token).await,
+            Err(OidcError::TokenTypeNotAllowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_rejects_missing_access_typ_before_jwks_lookup() {
+        let verifier = verifier_for_header_tests();
+        let token = unsigned_token(
+            json!({ "alg": "EdDSA", "kid": "kid" }),
             json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
         );
 
@@ -1452,7 +1511,7 @@ mod tests {
                 Some("subject-1"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         verifier
             .verify_userinfo_jwt_with_claims_policy(
@@ -1464,11 +1523,52 @@ mod tests {
             .await
             .expect("valid signed UserInfo verifies");
 
+        let missing_typ = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example/userinfo"),
+                Some("citizen-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            None,
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &missing_typ,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::TokenTypeNotAllowed)
+        ));
+
+        let mut missing_exp_claims = test_claims(
+            Some("https://issuer.example/userinfo"),
+            Some("citizen-client"),
+            Some("subject-1"),
+        );
+        missing_exp_claims.exp = None;
+        let missing_exp = signed_hs256_token("kid", missing_exp_claims, secret, Some("JWT"));
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &missing_exp,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::InvalidToken)
+        ));
+
         let missing_issuer = signed_hs256_token(
             "kid",
             test_claims(None, Some("citizen-client"), Some("subject-1")),
             secret,
-            None,
+            Some("JWT"),
         );
         assert!(matches!(
             verifier
@@ -1490,7 +1590,7 @@ mod tests {
                 Some("subject-1"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         assert!(matches!(
             verifier
@@ -1512,7 +1612,7 @@ mod tests {
                 Some("subject-1"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         assert!(matches!(
             verifier
@@ -1534,7 +1634,7 @@ mod tests {
                 Some("subject-1"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         assert!(matches!(
             verifier
@@ -1556,7 +1656,7 @@ mod tests {
                 Some("subject-2"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         assert!(matches!(
             verifier
@@ -1568,6 +1668,67 @@ mod tests {
                 )
                 .await,
             Err(OidcError::InvalidToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_userinfo_optional_exp_still_rejects_expired_claim_when_present() {
+        let secret = b"registry-platform-oidc-test-secret";
+        let verifier = hs256_test_verifier_with_userinfo_exp_policy(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec!["citizen-client".to_string()],
+            "kid",
+            secret,
+            false,
+        )
+        .await;
+        let access = VerifiedToken {
+            claims: test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("subject-1"),
+            ),
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: Vec::new(),
+        };
+        let accepted_issuers = ["https://issuer.example/userinfo"];
+        let accepted_audiences = vec!["citizen-client".to_string()];
+
+        let mut missing_exp_claims = test_claims(
+            Some("https://issuer.example/userinfo"),
+            Some("citizen-client"),
+            Some("subject-1"),
+        );
+        missing_exp_claims.exp = None;
+        let missing_exp = signed_hs256_token("kid", missing_exp_claims, secret, Some("JWT"));
+        verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &missing_exp,
+                &access,
+                &accepted_issuers,
+                &accepted_audiences,
+            )
+            .await
+            .expect("optional exp policy accepts missing exp");
+
+        let mut expired_claims = test_claims(
+            Some("https://issuer.example/userinfo"),
+            Some("citizen-client"),
+            Some("subject-1"),
+        );
+        expired_claims.exp = Some(1);
+        let expired = signed_hs256_token("kid", expired_claims, secret, Some("JWT"));
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt_with_claims_policy(
+                    &expired,
+                    &access,
+                    &accepted_issuers,
+                    &accepted_audiences,
+                )
+                .await,
+            Err(OidcError::TokenExpired)
         ));
     }
 
@@ -1591,7 +1752,7 @@ mod tests {
                 Some("subject-1"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         verifier
             .verify_related_token(&id_token)
@@ -1621,7 +1782,7 @@ mod tests {
                 Some("subject-1"),
             ),
             secret,
-            None,
+            Some("JWT"),
         );
         assert!(matches!(
             verifier.verify_related_token(&resource_audience).await,
@@ -1650,21 +1811,21 @@ mod tests {
             "other-audience".to_string(),
         ]));
         claims.azp = None;
-        let missing_azp = signed_hs256_token("kid", claims.clone(), secret, None);
+        let missing_azp = signed_hs256_token("kid", claims.clone(), secret, Some("JWT"));
         assert!(matches!(
             verifier.verify_related_token(&missing_azp).await,
             Err(OidcError::ClientNotAllowed)
         ));
 
         claims.azp = Some("other-audience".to_string());
-        let wrong_azp = signed_hs256_token("kid", claims.clone(), secret, None);
+        let wrong_azp = signed_hs256_token("kid", claims.clone(), secret, Some("JWT"));
         assert!(matches!(
             verifier.verify_related_token(&wrong_azp).await,
             Err(OidcError::ClientNotAllowed)
         ));
 
         claims.azp = Some("citizen-client".to_string());
-        let valid = signed_hs256_token("kid", claims, secret, None);
+        let valid = signed_hs256_token("kid", claims, secret, Some("JWT"));
         verifier
             .verify_related_token(&valid)
             .await

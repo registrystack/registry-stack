@@ -156,7 +156,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
 
     let dir = tempfile::tempdir().expect("tempdir creates");
     let sink = JsonlFileSink::with_rotation(dir.path().join("audit.jsonl"), 0, 1);
-    let chain = ChainState::bootstrap(&sink)
+    let chain = ChainState::bootstrap_unkeyed_dev_only(&sink)
         .await
         .expect("empty sink bootstraps");
     let first = chain

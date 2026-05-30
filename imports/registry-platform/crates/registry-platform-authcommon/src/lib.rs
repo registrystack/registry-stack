@@ -132,11 +132,19 @@ pub enum EntropyError {
     /// Raw keys must contain at least [`MIN_API_KEY_ENTROPY_BYTES`] bytes.
     #[error("API key must contain at least {min} bytes of random material; got {actual}")]
     TooShort { actual: usize, min: usize },
+    /// Operators must supply generated ASCII key material so byte length and
+    /// displayed length are identical during provisioning.
+    #[error("API key material must be ASCII")]
+    NonAscii,
 }
 
 /// Enforce the raw-key size floor before operators fingerprint and deploy a
-/// key.
+/// key. Generated keys must be ASCII so byte-length entropy checks match the
+/// operator-visible key length.
 pub fn validate_api_key_entropy(plaintext: &str) -> Result<(), EntropyError> {
+    if !plaintext.is_ascii() {
+        return Err(EntropyError::NonAscii);
+    }
     let actual = plaintext.len();
     if actual < MIN_API_KEY_ENTROPY_BYTES {
         return Err(EntropyError::TooShort {
@@ -271,6 +279,12 @@ mod tests {
             })
         );
         assert!(validate_api_key_entropy(SAMPLE_KEY).is_ok());
+    }
+
+    #[test]
+    fn validate_api_key_entropy_rejects_non_ascii_material() {
+        let key = format!("{}é", "a".repeat(MIN_API_KEY_ENTROPY_BYTES));
+        assert_eq!(validate_api_key_entropy(&key), Err(EntropyError::NonAscii));
     }
 
     proptest! {

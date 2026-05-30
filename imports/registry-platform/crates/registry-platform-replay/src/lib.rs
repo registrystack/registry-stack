@@ -346,10 +346,17 @@ pub struct InMemoryReplayStore {
     replay: CacheReplayStore,
 }
 
+pub const DEFAULT_IN_MEMORY_REPLAY_MAX_ENTRIES: usize = 4096;
+
 impl InMemoryReplayStore {
     #[must_use]
     pub fn new() -> Self {
-        let cache = InMemoryCacheStore::new();
+        Self::with_max_entries(DEFAULT_IN_MEMORY_REPLAY_MAX_ENTRIES)
+    }
+
+    #[must_use]
+    pub fn with_max_entries(max_entries: usize) -> Self {
+        let cache = InMemoryCacheStore::with_max_entries(max_entries);
         let replay = CacheReplayStore::new(Arc::new(cache.clone()), "registry-platform-replay");
         Self { cache, replay }
     }
@@ -544,6 +551,23 @@ pub async fn require_insert_once(
     expires_at: OffsetDateTime,
 ) -> Result<(), RequiredReplayError> {
     match store.insert_once(scope, key, expires_at).await {
+        Ok(ReplayInsertOutcome::Inserted) => Ok(()),
+        Ok(ReplayInsertOutcome::AlreadySeen) => Err(RequiredReplayError::AlreadySeen),
+        Err(source) => Err(RequiredReplayError::Store { source }),
+    }
+}
+
+/// Consume a pre-reserved nonce when replay protection is required.
+///
+/// This helper is intentionally fail closed: store errors and missing or
+/// already-consumed nonces are both returned as errors so callers can deny the
+/// request.
+pub async fn require_consume_once(
+    store: &dyn ConsumableNonceStore,
+    scope: &ReplayScope,
+    key: &ReplayKey,
+) -> Result<(), RequiredReplayError> {
+    match store.consume_nonce(scope, key).await {
         Ok(ReplayInsertOutcome::Inserted) => Ok(()),
         Ok(ReplayInsertOutcome::AlreadySeen) => Err(RequiredReplayError::AlreadySeen),
         Err(source) => Err(RequiredReplayError::Store { source }),
@@ -812,6 +836,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_replay_store_enforces_capacity() {
+        let store = InMemoryReplayStore::with_max_entries(1);
+        let scope = scope("openid4vci");
+
+        store
+            .insert_once(&scope, &key("nonce-1"), future())
+            .await
+            .expect("first replay key stores");
+        let err = store
+            .insert_once(&scope, &key("nonce-2"), future())
+            .await
+            .expect_err("capacity failure is surfaced");
+        assert!(err.to_string().contains("in-memory cache store is full"));
+    }
+
+    #[tokio::test]
+    async fn in_memory_replay_capacity_purges_expired_records() {
+        let store = InMemoryReplayStore::with_max_entries(1);
+        let scope = scope("openid4vci");
+
+        store
+            .insert_once(
+                &scope,
+                &key("nonce-1"),
+                OffsetDateTime::now_utc() + Duration::from_millis(10),
+            )
+            .await
+            .expect("first replay key stores");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        store
+            .insert_once(&scope, &key("nonce-2"), future())
+            .await
+            .expect("expired record is purged before capacity is enforced");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[tokio::test]
     async fn required_helper_fails_closed_on_duplicates() {
         let store = InMemoryReplayStore::new();
         let scope = scope("openid4vci");
@@ -822,6 +883,31 @@ mod tests {
             .expect("first insert succeeds");
         assert!(matches!(
             require_insert_once(&store, &scope, &key, future()).await,
+            Err(RequiredReplayError::AlreadySeen)
+        ));
+    }
+
+    #[tokio::test]
+    async fn required_consume_helper_fails_closed_on_missing_or_duplicate_nonce() {
+        let store = InMemoryConsumableNonceStore::new();
+        let scope =
+            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
+        let key = key("nonce-1");
+
+        assert!(matches!(
+            require_consume_once(&store, &scope, &key).await,
+            Err(RequiredReplayError::AlreadySeen)
+        ));
+
+        store
+            .reserve_nonce(&scope, &key, future())
+            .await
+            .expect("nonce reserves");
+        require_consume_once(&store, &scope, &key)
+            .await
+            .expect("reserved nonce consumes once");
+        assert!(matches!(
+            require_consume_once(&store, &scope, &key).await,
             Err(RequiredReplayError::AlreadySeen)
         ));
     }

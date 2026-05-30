@@ -19,6 +19,8 @@ use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 
+pub const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Default)]
 pub struct CorsPolicy {
     pub allowed_origins: Vec<String>,
@@ -57,6 +59,15 @@ impl CorsPolicy {
     pub fn layer(&self) -> CorsLayer {
         self.validate()
             .expect("invalid CORS policy must not be converted into a layer");
+        self.layer_unchecked()
+    }
+
+    pub fn try_layer(&self) -> Result<CorsLayer, CorsValidationError> {
+        self.validate()?;
+        Ok(self.layer_unchecked())
+    }
+
+    fn layer_unchecked(&self) -> CorsLayer {
         if self.allowed_origins.is_empty() {
             return CorsLayer::new();
         }
@@ -270,6 +281,57 @@ pub fn request_body_limit(max_bytes: usize) -> RequestBodyLimitLayer {
     RequestBodyLimitLayer::new(max_bytes)
 }
 
+pub fn request_body_limit_default() -> RequestBodyLimitLayer {
+    request_body_limit(DEFAULT_REQUEST_BODY_LIMIT_BYTES)
+}
+
+pub fn hsts_header(max_age: u64, include_subdomains: bool, preload: bool) -> HeaderValue {
+    let mut value = format!("max-age={max_age}");
+    if include_subdomains {
+        value.push_str("; includeSubDomains");
+    }
+    if preload {
+        value.push_str("; preload");
+    }
+    HeaderValue::from_str(&value).expect("HSTS directives are valid header bytes")
+}
+
+pub fn apply_hsts<B>(response: &mut Response<B>, value: HeaderValue) {
+    insert_if_missing(
+        response,
+        HeaderName::from_static("strict-transport-security"),
+        value,
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossOriginIsolation {
+    Disabled,
+    RequireCorp,
+    Credentialless,
+}
+
+pub fn apply_cross_origin_isolation<B>(response: &mut Response<B>, mode: CrossOriginIsolation) {
+    if mode == CrossOriginIsolation::Disabled {
+        return;
+    }
+    insert_if_missing(
+        response,
+        HeaderName::from_static("cross-origin-opener-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    let coep = match mode {
+        CrossOriginIsolation::RequireCorp => "require-corp",
+        CrossOriginIsolation::Credentialless => "credentialless",
+        CrossOriginIsolation::Disabled => return,
+    };
+    insert_if_missing(
+        response,
+        HeaderName::from_static("cross-origin-embedder-policy"),
+        HeaderValue::from_static(coep),
+    );
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Problem {
     #[serde(rename = "type")]
@@ -299,6 +361,10 @@ impl Problem {
     }
 
     #[must_use]
+    /// Set public response detail.
+    ///
+    /// Pass only client-safe text. Server causes, upstream messages, secrets,
+    /// and raw validation internals belong in service logs, not this field.
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
@@ -452,6 +518,64 @@ mod tests {
             allow_credentials: true,
         }
         .layer();
+    }
+
+    #[test]
+    fn cors_try_layer_returns_validation_error_instead_of_panicking() {
+        let err = CorsPolicy {
+            allowed_origins: vec!["*".to_string()],
+            allowed_methods: Vec::new(),
+            allowed_headers: Vec::new(),
+            allow_credentials: false,
+        }
+        .try_layer()
+        .expect_err("wildcard origin rejects");
+        assert!(matches!(err, CorsValidationError::WildcardOrigin));
+    }
+
+    #[test]
+    fn hsts_and_cross_origin_isolation_helpers_set_headers_without_overwriting() {
+        let mut response = Response::new(());
+        apply_hsts(&mut response, hsts_header(31_536_000, true, true));
+        apply_cross_origin_isolation(&mut response, CrossOriginIsolation::RequireCorp);
+
+        assert_eq!(
+            response.headers().get("strict-transport-security").unwrap(),
+            "max-age=31536000; includeSubDomains; preload"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("cross-origin-opener-policy")
+                .unwrap(),
+            "same-origin"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("cross-origin-embedder-policy")
+                .unwrap(),
+            "require-corp"
+        );
+
+        response.headers_mut().insert(
+            "cross-origin-embedder-policy",
+            HeaderValue::from_static("credentialless"),
+        );
+        apply_cross_origin_isolation(&mut response, CrossOriginIsolation::RequireCorp);
+        assert_eq!(
+            response
+                .headers()
+                .get("cross-origin-embedder-policy")
+                .unwrap(),
+            "credentialless"
+        );
+    }
+
+    #[test]
+    fn request_body_limit_default_is_one_mebibyte() {
+        assert_eq!(DEFAULT_REQUEST_BODY_LIMIT_BYTES, 1024 * 1024);
+        let _layer = request_body_limit_default();
     }
 
     #[test]

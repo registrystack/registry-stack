@@ -9,6 +9,7 @@ use registry_platform_crypto::{
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -142,12 +143,29 @@ impl SdJwtIssuanceInput {
         {
             return Err(SdJwtError::InvalidInput);
         }
+        let mut names = BTreeSet::new();
+        for disclosure in &self.disclosures {
+            if invalid_disclosure_name(&disclosure.name) || !names.insert(disclosure.name.as_str())
+            {
+                return Err(SdJwtError::InvalidInput);
+            }
+        }
         Ok(())
     }
 }
 
 fn invalid_credential_id(value: &str) -> bool {
     value.trim().is_empty() || value.chars().any(|ch| ch.is_ascii_control())
+}
+
+fn invalid_disclosure_name(value: &str) -> bool {
+    const PROTECTED_NAMES: [&str; 13] = [
+        "iss", "sub", "aud", "iat", "nbf", "exp", "vct", "id", "jti", "_sd", "_sd_alg", "cnf",
+        "status",
+    ];
+    value.trim().is_empty()
+        || value.chars().any(|ch| ch.is_ascii_control())
+        || PROTECTED_NAMES.contains(&value)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -254,6 +272,38 @@ pub fn validate_holder_proof(
     })
 }
 
+/// Validate a holder proof against the holder confirmation embedded in the
+/// issuer-signed credential.
+///
+/// This is the preferred verifier entry point for SD-JWT VC presentations. It
+/// prevents callers from accidentally trusting a holder key that did not come
+/// from the credential's `cnf.jwk`, and when `cnf.kid` is present it requires
+/// the holder proof header to carry that exact `kid`.
+pub fn validate_holder_proof_for_confirmation(
+    proof_jwt: &str,
+    confirmation: &HolderConfirmation,
+    bindings: &HolderProofBindings<'_>,
+    policy: &HolderProofPolicy,
+    now: i64,
+) -> Result<HolderProofClaims, SdJwtError> {
+    if let Some(expected_kid) = confirmation.kid.as_deref() {
+        let actual_kid = holder_proof_header_kid(proof_jwt)?;
+        if actual_kid.as_deref() != Some(expected_kid) {
+            return Err(SdJwtError::HolderProofInvalid);
+        }
+    }
+    validate_holder_proof(proof_jwt, &confirmation.jwk, bindings, policy, now)
+}
+
+/// Compute the platform-owned disclosure binding hash for a presentation.
+#[must_use]
+pub fn presentation_disclosure_hash(presentation: &str) -> [u8; 32] {
+    let digest = Sha256::digest(presentation.as_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SdJwtError {
@@ -346,6 +396,15 @@ fn decode_json(segment: &str) -> Result<Value, SdJwtError> {
         .decode(segment)
         .map_err(|_| SdJwtError::HolderProofInvalid)?;
     serde_json::from_slice(&bytes).map_err(|_| SdJwtError::HolderProofInvalid)
+}
+
+fn holder_proof_header_kid(proof_jwt: &str) -> Result<Option<String>, SdJwtError> {
+    let (header_b64, _, _) = split_compact_jwt(proof_jwt)?;
+    let header = decode_json(header_b64)?;
+    Ok(header
+        .get("kid")
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, SdJwtError> {
@@ -498,6 +557,44 @@ mod tests {
             .expect_err("blank credential id rejects");
 
         assert!(matches!(err, SdJwtError::InvalidInput));
+    }
+
+    #[tokio::test]
+    async fn sd_jwt_issuance_rejects_protected_or_duplicate_disclosure_names() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+
+        for name in ["iss", "aud", "nbf", "status"] {
+            let protected = issuer
+                .issue(SdJwtIssuanceInput {
+                    disclosures: vec![Disclosure {
+                        name: name.to_string(),
+                        value: json!("attacker"),
+                    }],
+                    ..issue_input(None)
+                })
+                .await
+                .expect_err("protected disclosure name rejects");
+            assert!(matches!(protected, SdJwtError::InvalidInput));
+        }
+
+        let duplicate = issuer
+            .issue(SdJwtIssuanceInput {
+                disclosures: vec![
+                    Disclosure {
+                        name: "claim-a".to_string(),
+                        value: json!(1),
+                    },
+                    Disclosure {
+                        name: "claim-a".to_string(),
+                        value: json!(2),
+                    },
+                ],
+                ..issue_input(None)
+            })
+            .await
+            .expect_err("duplicate disclosure name rejects");
+        assert!(matches!(duplicate, SdJwtError::InvalidInput));
     }
 
     #[tokio::test]
@@ -697,6 +794,61 @@ mod tests {
             now,
         )
         .expect_err("binding mismatch rejects");
+    }
+
+    #[test]
+    fn holder_proof_for_confirmation_enforces_cnf_jwk_and_kid() {
+        let holder = PrivateJwk::parse(HOLDER_JWK).expect("holder");
+        let other_holder = PrivateJwk::parse(
+            r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"did:jwk:other#key-1"}"#,
+        )
+        .expect("other holder");
+        let now = 1_700_000_000;
+        let claim_set = claim_set();
+        let bindings = bindings(&claim_set);
+        let proof = sign_holder_proof(&holder, proof_payload(now, "proof-jti-confirmed"));
+        let confirmation = HolderConfirmation {
+            jwk: holder.public(),
+            kid: Some("did:jwk:holder#key-1".to_string()),
+        };
+
+        validate_holder_proof_for_confirmation(&proof, &confirmation, &bindings, &policy(), now)
+            .expect("cnf-bound proof validates");
+
+        let wrong_confirmation = HolderConfirmation {
+            jwk: other_holder.public(),
+            kid: Some("did:jwk:holder#key-1".to_string()),
+        };
+        validate_holder_proof_for_confirmation(
+            &proof,
+            &wrong_confirmation,
+            &bindings,
+            &policy(),
+            now,
+        )
+        .expect_err("wrong cnf.jwk rejects");
+
+        let wrong_kid_confirmation = HolderConfirmation {
+            jwk: holder.public(),
+            kid: Some("did:jwk:holder#other".to_string()),
+        };
+        validate_holder_proof_for_confirmation(
+            &proof,
+            &wrong_kid_confirmation,
+            &bindings,
+            &policy(),
+            now,
+        )
+        .expect_err("wrong cnf.kid rejects");
+    }
+
+    #[test]
+    fn presentation_disclosure_hash_is_platform_computed() {
+        let hash = presentation_disclosure_hash("issuer.jwt~disclosure~holder.jwt");
+        let manual = Sha256::digest(b"issuer.jwt~disclosure~holder.jwt");
+
+        assert_eq!(hash.as_slice(), manual.as_slice());
+        assert_ne!(hash, [0u8; 32]);
     }
 
     #[test]

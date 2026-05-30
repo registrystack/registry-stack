@@ -25,7 +25,7 @@ use serde_json::json;
 
 async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> {
 let sink = JsonlFileSink::new("audit.jsonl");
-let chain = ChainState::bootstrap(&sink).await?;
+let chain = ChainState::bootstrap_unkeyed_dev_only(&sink).await?;
 
 let envelope = chain
     .append(&sink, json!({
