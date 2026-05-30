@@ -124,12 +124,6 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     let site_root = option_value(args, "--site-root")
         .map(PathBuf::from)
         .map(|site_root| {
-            if site_root.exists() && !site_root.is_dir() {
-                return Err(format!(
-                    "metadata.publish.site_root_not_directory: {}",
-                    site_root.display()
-                ));
-            }
             prepare_publish_root(&site_root, "metadata.publish.site_root_not_directory")
         })
         .transpose()?;

@@ -5793,10 +5793,10 @@ fn validate_codelist_concept(
             "codelist concept code must not be empty",
         ));
     }
-    if concept.code.chars().any(is_c0_control) {
+    if concept.code.chars().any(char::is_control) {
         errors.push(ValidationError::new(
             format!("{path}.code"),
-            "codelist concept code must not contain C0 controls",
+            "codelist concept code must not contain control characters",
         ));
     }
     if !concept_codes.insert(concept.code.clone()) {
@@ -5907,13 +5907,9 @@ fn is_sane_expanded_iri(value: &str) -> bool {
     !value.is_empty()
         && !value.chars().any(|ch| {
             ch.is_ascii_whitespace()
-                || is_c0_control(ch)
+                || ch.is_control()
                 || matches!(ch, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`')
         })
-}
-
-fn is_c0_control(ch: char) -> bool {
-    matches!(ch, '\u{0}'..='\u{1f}')
 }
 
 fn normalized_base_url(base_url: &str) -> String {
