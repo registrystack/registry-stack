@@ -54,7 +54,7 @@ use crate::{
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-const ADMIN_SCOPE: &str = "registry_notary:admin";
+pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 
 pub use crate::federation::federation_router;

@@ -28,9 +28,9 @@ struct MetricsState {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct HttpKey {
-    method: String,
+    method: &'static str,
     route: String,
-    status_class: String,
+    status_class: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,7 +76,7 @@ impl AppMetrics {
         duration_ms: u64,
     ) {
         let key = HttpKey {
-            method: method.to_string(),
+            method: normalize_method(method),
             route: route.to_string(),
             status_class: status_class(status),
         };
@@ -147,16 +147,16 @@ impl AppMetrics {
         for (key, value) in &metrics.http {
             body.push_str(&format!(
                 "registry_notary_http_requests_total{{method=\"{}\",route=\"{}\",status_class=\"{}\"}} {}\n",
-                escape_metric_label(&key.method),
+                escape_metric_label(key.method),
                 escape_metric_label(&key.route),
-                escape_metric_label(&key.status_class),
+                escape_metric_label(key.status_class),
                 value.count
             ));
             body.push_str(&format!(
                 "registry_notary_http_request_duration_ms_total{{method=\"{}\",route=\"{}\",status_class=\"{}\"}} {}\n",
-                escape_metric_label(&key.method),
+                escape_metric_label(key.method),
                 escape_metric_label(&key.route),
-                escape_metric_label(&key.status_class),
+                escape_metric_label(key.status_class),
                 value.duration_ms_total
             ));
         }
@@ -225,7 +225,7 @@ pub(crate) async fn metrics_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let method = request.method().as_str().to_string();
+    let method = normalize_method(request.method().as_str());
     let route = request
         .extensions()
         .get::<MatchedPath>()
@@ -234,7 +234,7 @@ pub(crate) async fn metrics_middleware(
     let started_at = Instant::now();
     let response = next.run(request).await;
     metrics.record_http(
-        &method,
+        method,
         &route,
         response.status(),
         started_at.elapsed().as_millis() as u64,
@@ -242,8 +242,34 @@ pub(crate) async fn metrics_middleware(
     response
 }
 
-fn status_class(status: StatusCode) -> String {
-    format!("{}xx", status.as_u16() / 100)
+fn status_class(status: StatusCode) -> &'static str {
+    match status.as_u16() / 100 {
+        1 => "1xx",
+        2 => "2xx",
+        3 => "3xx",
+        4 => "4xx",
+        5 => "5xx",
+        6 => "6xx",
+        7 => "7xx",
+        8 => "8xx",
+        9 => "9xx",
+        _ => "other",
+    }
+}
+
+fn normalize_method(method: &str) -> &'static str {
+    match method {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "PATCH" => "PATCH",
+        "DELETE" => "DELETE",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        "TRACE" => "TRACE",
+        "CONNECT" => "CONNECT",
+        _ => "OTHER",
+    }
 }
 
 fn escape_metric_label(value: &str) -> String {
@@ -260,5 +286,27 @@ mod tests {
     #[test]
     fn metric_labels_escape_prometheus_special_characters() {
         assert_eq!(escape_metric_label("a\\b\n\"c"), "a\\\\b\\n\\\"c");
+    }
+
+    #[test]
+    fn http_method_labels_collapse_unknown_methods() {
+        let metrics = AppMetrics::default();
+
+        metrics.record_http("BREW1", "/healthz", StatusCode::METHOD_NOT_ALLOWED, 1);
+        metrics.record_http("BREW2", "/healthz", StatusCode::METHOD_NOT_ALLOWED, 2);
+        metrics.record_http("GET", "/healthz", StatusCode::OK, 3);
+
+        let rendered = metrics.render();
+        assert!(rendered.contains(
+            "registry_notary_http_requests_total{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\"} 2"
+        ));
+        assert!(rendered.contains(
+            "registry_notary_http_request_duration_ms_total{method=\"OTHER\",route=\"/healthz\",status_class=\"4xx\"} 3"
+        ));
+        assert!(rendered.contains(
+            "registry_notary_http_requests_total{method=\"GET\",route=\"/healthz\",status_class=\"2xx\"} 1"
+        ));
+        assert!(!rendered.contains("BREW1"));
+        assert!(!rendered.contains("BREW2"));
     }
 }

@@ -53,6 +53,7 @@ use ulid::Ulid;
 use zeroize::Zeroizing;
 
 use crate::{
+    api::ADMIN_SCOPE,
     credential_status::{CredentialStatusBuildError, CredentialStatusStore},
     metrics::{metrics_handler, metrics_middleware, AppMetrics},
     replay::{ReplayBuildError, ReplayStores},
@@ -155,7 +156,7 @@ pub fn standalone_router(
     }
     routes = routes.route(
         "/metrics",
-        get(metrics_handler).with_state(Arc::clone(&metrics)),
+        get(admin_metrics_handler).with_state(Arc::clone(&metrics)),
     );
 
     Ok(routes
@@ -1977,11 +1978,25 @@ fn is_public_probe_path(path: &str) -> bool {
         "/healthz"
             | "/ready"
             | "/.well-known/openid-credential-issuer"
-            | "/metrics"
             | "/oid4vci/credential-offer"
             | "/oid4vci/nonce"
             | "/federation/v1/evaluations"
     ) || path.starts_with("/credentials/status/")
+}
+
+async fn admin_metrics_handler(
+    State(metrics): State<Arc<AppMetrics>>,
+    principal: Option<axum::Extension<EvidencePrincipal>>,
+) -> Response {
+    let Some(axum::Extension(principal)) = principal else {
+        return crate::api::evidence_error_response(EvidenceError::MissingCredential);
+    };
+    if !principal.has_scope(ADMIN_SCOPE) {
+        return crate::api::evidence_error_response(EvidenceError::ScopeDenied {
+            required: ADMIN_SCOPE.to_string(),
+        });
+    }
+    metrics_handler(State(metrics)).await
 }
 
 fn build_audit_event(

@@ -165,9 +165,28 @@ The Prometheus metrics surface is `/metrics`. Metrics are intended to be safe to
 scrape and must use low-cardinality labels only, such as route, method, outcome,
 status class, profile, and source id. Labels must not contain subject ids,
 principal ids, holder material, tokens, source rows, request ids, correlation
-ids, SD-JWT disclosures, or raw error details. Keep the endpoint behind the
-deployment's normal network and scrape controls even though the metric content
-is designed to avoid secrets and personal data.
+ids, SD-JWT disclosures, or raw error details. The endpoint requires an
+authenticated principal with the `registry_notary:admin` scope; configure
+Prometheus scrape jobs to send an admin credential. Static-auth deployments can
+use an admin bearer token or an admin API key in `x-api-key`; OIDC deployments
+can use a token whose mapped scopes include `registry_notary:admin`. An
+internal-only listener/proxy is defense in depth only and must still forward or
+inject a valid admin credential. Keep the endpoint behind the deployment's
+normal network and scrape controls even though the metric content is designed
+to avoid secrets and personal data.
+
+Example Prometheus scrape shape:
+
+```yaml
+scrape_configs:
+  - job_name: registry-notary
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/registry-notary-metrics-token
+    static_configs:
+      - targets: ["registry-notary:4325"]
+```
 
 ## Local Run
 

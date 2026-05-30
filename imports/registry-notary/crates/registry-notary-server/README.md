@@ -112,8 +112,26 @@ and labels must be safe for operational scraping: use bounded labels such as
 route, method, outcome, status class, profile, and source id. Do not label or
 emit subject ids, principal ids, holder keys, access tokens, source rows,
 request or correlation ids, SD-JWT disclosures, or raw error details. The
-endpoint should still be exposed only through the deployment's normal network
-and scrape controls.
+endpoint requires an authenticated principal with the `registry_notary:admin`
+scope, so Prometheus scrape jobs must send an admin credential. Static-auth
+deployments can use an admin bearer token or an admin API key in `x-api-key`;
+OIDC deployments can use a token whose mapped scopes include
+`registry_notary:admin`. An internal-only listener/proxy is defense in depth
+only and must still forward or inject a valid admin credential. It should still
+be exposed only through the deployment's normal network and scrape controls.
+
+Example Prometheus scrape shape:
+
+```yaml
+scrape_configs:
+  - job_name: registry-notary
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/registry-notary-metrics-token
+    static_configs:
+      - targets: ["registry-notary:4325"]
+```
 
 ## Audit Configuration
 
