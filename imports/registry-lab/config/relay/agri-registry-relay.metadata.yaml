@@ -14,6 +14,24 @@ catalog:
   application_profiles:
     - id: bregdcat-ap
       version: '3.0'
+federation:
+  node_id: did:web:nagdi-agricultural-registries.demo.example.gov
+  issuer: https://nagdi-agricultural-registries.demo.example.gov
+  jwks_uri: https://nagdi-agricultural-registries.demo.example.gov/.well-known/jwks.json
+  federation_api: https://nagdi-agricultural-registries.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: eligible-for-input-voucher-v1
+    ruleset: eligible-for-input-voucher-v1
+    claim_id: eligible_for_input_voucher
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: eligible-for-livestock-movement-v1
+    ruleset: eligible-for-livestock-movement-v1
+    claim_id: eligible_for_livestock_movement
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
 requirements:
   - id: farmer_registration_requirement
     iri: https://demo.example.gov/requirements/nagdi/farmer-registration
@@ -93,10 +111,10 @@ datasets:
           - id
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
-          endpoint_url: http://nagdi-agriculture-notary:8080
-          discovery_url: http://nagdi-agriculture-notary:8080/.well-known/evidence-service
-          ruleset: climate-smart-input-voucher-v1
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          ruleset: eligible-for-input-voucher-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
@@ -119,10 +137,10 @@ datasets:
           - herd_id
         access:
           kind: registry-notary
-          conforms_to: registry_relay:registry-notary-v1
-          endpoint_url: http://nagdi-agriculture-notary:8080
-          discovery_url: http://nagdi-agriculture-notary:8080/.well-known/evidence-service
-          ruleset: livestock-movement-permit-v1
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          ruleset: eligible-for-livestock-movement-v1
         policy:
           purpose:
             - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review

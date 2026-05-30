@@ -79,6 +79,20 @@ For a single command that generates, builds, starts, and runs the core checks:
 just quick
 ```
 
+For commons release validation across sibling source checkouts:
+
+```bash
+REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
+REGISTRY_MANIFEST_REPO=../registry-manifest \
+REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
+REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
+just commons-check
+```
+
+`commons-check` intentionally uses source dirs instead of `vendor/` pins. Update
+Lab vendor or submodule pins only after Platform, Manifest, Relay, and Notary
+source changes are committed.
+
 ## Demo Commands
 
 List available recipes:

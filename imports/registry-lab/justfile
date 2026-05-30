@@ -91,6 +91,10 @@ relay-zitadel:
 notary-redis:
     scripts/check-notary-redis.sh
 
+# Run cross-repository commons release checks against sibling source dirs.
+commons-check:
+    scripts/commons-check.sh
+
 # Run the OIDC Relay smoke with a lab-managed Zitadel token.
 oidc-relay:
     scripts/smoke-oidc-relay.sh
