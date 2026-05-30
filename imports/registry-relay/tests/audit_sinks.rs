@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use registry_platform_audit::{
-    verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
+    verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainProfile,
 };
 use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, FileSink, SyslogSink};
 use serde_json::Value;
@@ -139,19 +139,21 @@ async fn file_sink_bootstraps_keyed_chain_from_existing_tail() {
     let path = dir.path().join("audit.jsonl");
     let env_name = "REGISTRY_RELAY_TEST_FILE_AUDIT_CHAIN_SECRET";
     std::env::set_var(env_name, "0123456789abcdef0123456789abcdef");
-    let hasher = AuditChainHasher::from_env(env_name).expect("test audit chain secret loads");
-    let first_sink = AuditPipeline::new_with_chain_hasher(
+    let profile = AuditChainProfile::registry_relay_from_env(env_name)
+        .expect("test audit chain secret loads");
+    std::env::remove_var(env_name);
+    let first_sink = AuditPipeline::new_with_chain_profile(
         std::sync::Arc::new(FileSink::new(&path, 100, 14).expect("first sink")),
-        hasher.clone(),
+        profile.clone(),
     );
     first_sink
         .write_record(sample_record("/first"))
         .await
         .expect("first write");
 
-    let restarted_sink = AuditPipeline::new_with_chain_hasher(
+    let restarted_sink = AuditPipeline::new_with_chain_profile(
         std::sync::Arc::new(FileSink::new(&path, 100, 14).expect("restarted sink")),
-        hasher.clone(),
+        profile.clone(),
     );
     restarted_sink
         .write_record(sample_record("/second"))
@@ -163,7 +165,8 @@ async fn file_sink_bootstraps_keyed_chain_from_existing_tail() {
         verify_jsonl_lines(contents.lines()).is_err(),
         "keyed audit chain must not verify with the dev-only unkeyed hasher"
     );
-    verify_jsonl_lines_with_hasher(contents.lines(), &hasher).expect("keyed audit chain verifies");
+    verify_jsonl_lines_with_hasher(contents.lines(), &profile.hasher())
+        .expect("keyed audit chain verifies");
 }
 
 #[tokio::test]

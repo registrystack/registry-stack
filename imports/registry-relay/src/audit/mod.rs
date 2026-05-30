@@ -386,7 +386,7 @@ impl OperationalAuditEvent {
 pub struct AuditPipeline {
     sink: Arc<dyn registry_platform_audit::AuditSink>,
     chain: Arc<OnceCell<registry_platform_audit::ChainState>>,
-    chain_hasher: registry_platform_audit::AuditChainHasher,
+    profile: registry_platform_audit::AuditChainProfile,
 }
 
 impl std::fmt::Debug for AuditPipeline {
@@ -398,21 +398,21 @@ impl std::fmt::Debug for AuditPipeline {
 impl AuditPipeline {
     #[must_use]
     pub fn new(sink: Arc<dyn registry_platform_audit::AuditSink>) -> Self {
-        Self::new_with_chain_hasher(
+        Self::new_with_chain_profile(
             sink,
-            registry_platform_audit::AuditChainHasher::unkeyed_dev_only(),
+            registry_platform_audit::AuditChainProfile::dev_unkeyed(),
         )
     }
 
     #[must_use]
-    pub fn new_with_chain_hasher(
+    pub fn new_with_chain_profile(
         sink: Arc<dyn registry_platform_audit::AuditSink>,
-        chain_hasher: registry_platform_audit::AuditChainHasher,
+        profile: registry_platform_audit::AuditChainProfile,
     ) -> Self {
         Self {
             sink,
             chain: Arc::new(OnceCell::new()),
-            chain_hasher,
+            profile,
         }
     }
 
@@ -428,11 +428,9 @@ impl AuditPipeline {
         let chain = self
             .chain
             .get_or_try_init(|| async {
-                registry_platform_audit::ChainState::bootstrap_or_start_empty(
-                    self.sink.as_ref(),
-                    self.chain_hasher.clone(),
-                )
-                .await
+                self.profile
+                    .bootstrap_or_start_empty(self.sink.as_ref())
+                    .await
             })
             .await?;
         chain.append(self.sink.as_ref(), record).await?;

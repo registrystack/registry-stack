@@ -33,6 +33,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
+use registry_platform_audit::AuditChainProfile;
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::middleware::AuthProviderRef;
@@ -460,20 +461,17 @@ fn build_audit_sink(config: &Config) -> Result<Arc<AuditPipeline>, Error> {
             "audit.chain is accepted for config compatibility; platform audit envelopes are always chained"
         );
     }
-    let chain_hasher = config
+    let hash_secret_env = config
         .audit
         .hash_secret_env
         .as_deref()
-        .map(registry_platform_audit::AuditChainHasher::from_env)
-        .transpose()
-        .map_err(|err| {
-            error!(error = %err, "audit chain secret failed validation");
-            Error::from(ConfigError::ValidationError)
-        })?
-        .unwrap_or_else(registry_platform_audit::AuditChainHasher::unkeyed_dev_only);
-    Ok(Arc::new(AuditPipeline::new_with_chain_hasher(
-        sink,
-        chain_hasher,
+        .ok_or(ConfigError::ValidationError)?;
+    let profile = AuditChainProfile::registry_relay_from_env(hash_secret_env).map_err(|err| {
+        error!(error = %err, "audit chain secret failed validation");
+        ConfigError::ValidationError
+    })?;
+    Ok(Arc::new(AuditPipeline::new_with_chain_profile(
+        sink, profile,
     )))
 }
 

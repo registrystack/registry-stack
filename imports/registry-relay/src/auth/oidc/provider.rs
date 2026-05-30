@@ -104,20 +104,16 @@ impl OidcAuth {
             .map(|t| t.to_ascii_lowercase())
             .collect();
         let verifier = TokenVerifier::new(
-            TokenVerifierConfig {
-                issuer: config.issuer.clone(),
-                audiences: config.audience.clone(),
-                allowed_algorithms: algorithms.clone(),
-                allowed_typ: config.token_types.clone(),
-                allowed_id_typ: Vec::new(),
-                allowed_userinfo_typ: Vec::new(),
-                userinfo_requires_exp: true,
-                scope_claim: config.scope_claim.clone(),
-                scope_separator: ' ',
-                scope_map: None,
-                allowed_clients: config.allowed_clients.clone(),
-                leeway: config.leeway,
-            },
+            TokenVerifierConfig::registry_relay_access_profile(
+                config.issuer.clone(),
+                config.audience.clone(),
+                algorithms.clone(),
+                config.token_types.clone(),
+            )
+            .with_related_token_typ(config.token_types.clone(), config.token_types.clone())
+            .with_scope_claim(config.scope_claim.clone())
+            .with_allowed_clients(config.allowed_clients.clone())
+            .with_leeway(config.leeway),
             cache.platform_fetcher(),
         );
         Self {
@@ -159,13 +155,11 @@ impl OidcAuth {
                 }
             }
             None => {
-                if !self.token_types.contains("jwt") {
-                    tracing::debug!(
-                        target: "registry_relay::auth",
-                        "oidc: token missing typ and JWT not allowed",
-                    );
-                    return Err(AuthError::MalformedCredential);
-                }
+                tracing::debug!(
+                    target: "registry_relay::auth",
+                    "oidc: token missing typ",
+                );
+                return Err(AuthError::MalformedCredential);
             }
         }
 
