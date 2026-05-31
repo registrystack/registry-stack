@@ -512,6 +512,53 @@ pub fn assert_chain_integrity_with_anchors(
     verify_chain_with_anchors(envelopes, anchors, &AuditChainHasher::unkeyed_dev_only()).map(|_| ())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("audit JSON contains forbidden raw value: {needle}")]
+pub struct AuditJsonLeakError {
+    needle: String,
+}
+
+impl AuditJsonLeakError {
+    #[must_use]
+    pub fn needle(&self) -> &str {
+        &self.needle
+    }
+}
+
+pub fn assert_json_absent_strings<I, S>(
+    value: &Value,
+    forbidden: I,
+) -> Result<(), AuditJsonLeakError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    for needle in forbidden {
+        let needle = needle.as_ref();
+        if !needle.is_empty() && json_value_contains(value, needle) {
+            return Err(AuditJsonLeakError {
+                needle: needle.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn json_value_contains(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => (if *value { "true" } else { "false" }).contains(needle),
+        Value::Number(value) => value.to_string().contains(needle),
+        Value::String(value) => value.contains(needle),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| json_value_contains(value, needle)),
+        Value::Object(map) => map
+            .iter()
+            .any(|(key, value)| key.contains(needle) || json_value_contains(value, needle)),
+    }
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ReplayAssertionError {
@@ -791,6 +838,38 @@ mod tests {
         assert_chain_integrity(&[first.clone(), second.clone()]).expect("chain is valid");
         second.record["event"] = json!("changed");
         assert!(assert_chain_integrity(&[first, second]).is_err());
+    }
+
+    #[test]
+    fn audit_json_leak_assertion_reports_raw_values() {
+        let record = json!({
+            "event": "evaluation",
+            "target_ref_hash": "hmac-sha256:abc",
+            "safe": ["no raw subject here"],
+        });
+
+        assert_json_absent_strings(&record, ["Amina", "1984-02-10"]).expect("no leak");
+        let err = assert_json_absent_strings(&record, ["raw subject"])
+            .expect_err("raw substring is reported");
+        assert_eq!(err.needle(), "raw subject");
+
+        let escaped = json!({
+            "A\nB": "safe wrapper",
+            "nested": { "value": "subject \"quoted\" value" },
+        });
+        let err = assert_json_absent_strings(&escaped, ["A\nB"])
+            .expect_err("escaped object-key leak is reported");
+        assert_eq!(err.needle(), "A\nB");
+        let err = assert_json_absent_strings(&escaped, ["subject \"quoted\""])
+            .expect_err("escaped string-value leak is reported");
+        assert_eq!(err.needle(), "subject \"quoted\"");
+
+        let boolean = json!({
+            "contains_bool": true,
+        });
+        let err =
+            assert_json_absent_strings(&boolean, ["true"]).expect_err("boolean leak is reported");
+        assert_eq!(err.needle(), "true");
     }
 
     #[tokio::test]

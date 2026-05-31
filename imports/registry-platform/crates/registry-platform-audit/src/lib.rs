@@ -30,6 +30,7 @@ const MIN_AUDIT_SECRET_BYTES: usize = 32;
 const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
 const CHAIN_HMAC_CONTEXT: &[u8] = b"registry-platform-audit-chain-v1";
+const AUDIT_REFERENCE_HASH_CONTEXT: &str = "registry-platform:audit-reference:v1";
 
 /// One chained audit record.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -320,6 +321,15 @@ pub enum AuditError {
     HashMismatch,
     #[error("audit chain verification failed: {0}")]
     ChainVerification(#[source] ChainVerificationError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum AuditReferenceHashError {
+    #[error("audit reference class is empty")]
+    EmptyClass,
+    #[error("audit reference canonical input is empty")]
+    EmptyCanonicalInput,
 }
 
 /// JSONL sink with in-process size rotation.
@@ -659,6 +669,50 @@ impl AuditKeyHasher {
             Self::UnkeyedDevOnly => sha256_hex(raw.as_bytes()),
         }
     }
+
+    /// Hash a service-owned canonical audit reference under a versioned class
+    /// and scope.
+    ///
+    /// `class` separates reference families such as matched subjects, table ids,
+    /// or primary keys. `scope` may be empty when the service has no narrower
+    /// purpose or tenant boundary. `canonical_input` is owned by the caller and
+    /// must already be stable and privacy-reviewed for that product surface.
+    pub fn audit_reference_hash(
+        &self,
+        class: &str,
+        scope: &str,
+        canonical_input: &str,
+    ) -> Result<String, AuditReferenceHashError> {
+        if class.is_empty() {
+            return Err(AuditReferenceHashError::EmptyClass);
+        }
+        if canonical_input.is_empty() {
+            return Err(AuditReferenceHashError::EmptyCanonicalInput);
+        }
+        let input = audit_reference_hash_input(class, scope, canonical_input);
+        Ok(self.hash(&input))
+    }
+
+    /// Hash a sensitive audit lookup value under a field-bound platform class.
+    ///
+    /// This is appropriate for generic redaction surfaces such as URL query
+    /// parameters. Services that need product-specific pseudonym classes should
+    /// call [`Self::audit_reference_hash`] with their own canonical input.
+    #[must_use]
+    pub fn sensitive_value_hash(&self, field: &str, value: &str) -> String {
+        let canonical_input = format!("value\0{}\0{value}", value.len());
+        self.audit_reference_hash("sensitive-value-v1", field, &canonical_input)
+            .expect("platform sensitive-value class and canonical input are non-empty")
+    }
+}
+
+fn audit_reference_hash_input(class: &str, scope: &str, canonical_input: &str) -> String {
+    format!(
+        "{AUDIT_REFERENCE_HASH_CONTEXT}\0{}\0{class}\0{}\0{scope}\0{}\0{canonical_input}",
+        class.len(),
+        scope.len(),
+        canonical_input.len()
+    )
 }
 
 pub mod redact {
@@ -763,7 +817,7 @@ pub mod redact {
                     match &self.hasher {
                         Some(hasher) => json!({
                             "op": op,
-                            "value_hash": hasher.hash(&format!("{field}\0{value}")),
+                            "value_hash": hasher.sensitive_value_hash(field, &value),
                         }),
                         None => json!({ "op": "redacted" }),
                     }
@@ -1879,6 +1933,72 @@ mod tests {
         assert!(profile
             .key_hasher()
             .hash("subject-123")
+            .starts_with(UNKEYED_HASH_PREFIX));
+    }
+
+    #[test]
+    fn audit_reference_hash_is_domain_class_and_scope_separated() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+
+        let base = hasher
+            .audit_reference_hash(
+                "matched-reference-v1",
+                "purpose-a",
+                r#"{"role":"target","handle":"abc"}"#,
+            )
+            .expect("reference hash");
+        let other_class = hasher
+            .audit_reference_hash(
+                "matching-attempt-v1",
+                "purpose-a",
+                r#"{"role":"target","handle":"abc"}"#,
+            )
+            .expect("reference hash");
+        let other_scope = hasher
+            .audit_reference_hash(
+                "matched-reference-v1",
+                "purpose-b",
+                r#"{"role":"target","handle":"abc"}"#,
+            )
+            .expect("reference hash");
+
+        assert!(base.starts_with(UNKEYED_HASH_PREFIX));
+        assert_ne!(base, hasher.hash(r#"{"role":"target","handle":"abc"}"#));
+        assert_ne!(base, other_class);
+        assert_ne!(base, other_scope);
+    }
+
+    #[test]
+    fn audit_reference_hash_rejects_empty_class_or_input_but_allows_empty_scope() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+
+        assert!(matches!(
+            hasher.audit_reference_hash("", "scope", "canonical"),
+            Err(AuditReferenceHashError::EmptyClass)
+        ));
+        assert!(matches!(
+            hasher.audit_reference_hash("class", "scope", ""),
+            Err(AuditReferenceHashError::EmptyCanonicalInput)
+        ));
+        assert!(hasher
+            .audit_reference_hash("class", "", "canonical")
+            .expect("empty scope is explicit")
+            .starts_with(UNKEYED_HASH_PREFIX));
+    }
+
+    #[test]
+    fn sensitive_value_hash_is_field_bound_and_reference_domain_separated() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+
+        let first = hasher.sensitive_value_hash("person_id", "IND-001");
+        let second = hasher.sensitive_value_hash("person_id", "IND-001");
+        let other_field = hasher.sensitive_value_hash("household_id", "IND-001");
+
+        assert_eq!(first, second);
+        assert_ne!(first, other_field);
+        assert_ne!(first, hasher.hash("person_id\0IND-001"));
+        assert!(hasher
+            .sensitive_value_hash("empty", "")
             .starts_with(UNKEYED_HASH_PREFIX));
     }
 

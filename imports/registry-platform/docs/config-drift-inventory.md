@@ -19,7 +19,7 @@ Notary has breaking config changes:
 | Auth mode | Add `auth.mode = "oidc"` or `auth.mode = "api_key"`. |
 | Audit | Add `audit.hash_secret_env`; fail closed when the env var is absent outside explicit dev fixtures. |
 | Admin | Add the admin reload block and scopes needed by `POST /admin/reload`. |
-| HTTP security | Adopt CORS, CSP, CORP, body-limit, and RFC 7807 settings where exposed by config. |
+| HTTP security | Adopt CORS, CSP, CORP, body-limit, and RFC 9457 Problem Details settings where exposed by config. |
 | Fixtures | Update demo config, perf config, and server test fixtures atomically. |
 
 Current expected Notary roots:

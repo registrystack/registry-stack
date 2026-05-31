@@ -2,6 +2,11 @@
 
 - **Date:** 2026-05-30
 - **Target:** first BETA tag line of `registry-platform` (`v0.1.2`; never been stable). A **shared security/operational library** (11 crates, ~10.5k LOC of Rust, each crate a single `lib.rs`) consumed by **Registry Relay** and **Registry Notary** by pinned git tag. It centralizes crypto primitives, audit chaining, OIDC verification, SD-JWT issuance, OID4VCI proof validation, replay/nonce stores, browser-facing HTTP security, and an outbound-HTTP/SSRF policy.
+- **Status:** archived point-in-time review. Some findings below were fixed after
+  this audit was written. In particular, M1's keyed-chain gap is
+  superseded by `AuditChainHasher::Keyed` and the keyed production bootstrap in
+  `registry-platform-audit`; keep this document as historical review input, not
+  as the current security state.
 - **Scope:** the 11 `registry-platform-*` crates (`audit, authcommon, cache, crypto, httpsec, httputil, oid4vci, oidc, replay, sdjwt, testing`), `deny.toml`, `Cargo.toml`/`Cargo.lock`, and supply-chain posture. HEAD at audit time: `v0.1.2-13-gc549768`.
 - **Threat model (library, not a server):** there is **no shipped server config** to audit. Every finding is judged by what a consumer gets from the public API, and classified by exposure:
   - **UNSAFE DEFAULT** — a consumer gets the insecure behavior just by using the public API with defaults (weighted heavily).
@@ -24,7 +29,7 @@ The blockers are **not** auth bypass, key disclosure, or forgery on defaults; th
 
 | # | Sev | Crate | Title | Exposure | Roots a consumer finding? |
 |---|-----|-------|-------|----------|---------------------------|
-| **M1** | **Med** | audit | Chain integrity is **unkeyed SHA-256**; the deployment HMAC secret never protects the chain, and **no keyed-chain mode exists** (only opt-in external anchors) | **UNSAFE DEFAULT** | **relay-H4 / notary-M4 root** |
+| **M1** | **Med** | audit | **Superseded after audit:** chain integrity was unkeyed SHA-256 at the audited revision, before keyed-chain mode landed | **UNSAFE DEFAULT** | **relay-H4 / notary-M4 root** |
 | **M2** | **Med** | replay/cache | Default `InMemoryReplayStore` one-time (`insert_once`) store is **unbounded, no cap, no background eviction** → memory-exhaustion DoS | **UNSAFE DEFAULT** | notary-M3 sibling |
 | **M3** | **Med** | replay | In-memory replay store is the ergonomic zero-arg default and **`redis` is an opt-in cargo feature** (`default = []`), so a consumer's default build can only get non-durable, single-process one-time-use | **FOOTGUN** | **notary-H2 enabler** |
 | **M4** | **Med** | oid4vci | `expected_nonce: None` silently disables the server-challenge/freshness check; `exp` is optional → captured proof re-mints within the window | **FOOTGUN** | notary-M2 root |
@@ -65,7 +70,13 @@ No finding was outright refuted; three finder claims rated **High** (M1, M3, M4)
 
 ## Medium findings (detail)
 
-### M1 — Audit chain is unkeyed SHA-256; no keyed-chain mode (UNSAFE DEFAULT, platform root of relay-H4 / notary-M4)
+### M1 — Superseded: audit chain was unkeyed SHA-256 at audit time (UNSAFE DEFAULT, platform root of relay-H4 / notary-M4)
+
+**Superseded after audit:** this finding described the state at the audited
+revision. The current audit crate has keyed chain hashing through
+`AuditChainHasher::Keyed`; production profiles bootstrap keyed chains from the
+configured audit secret. The historical details remain below for traceability.
+
 **`crates/registry-platform-audit/src/lib.rs:64-65, 802-824, 873-878, 426-431, 628-697`** · CWE-345 / CWE-353
 
 `record_hash` (`:802-824`) is `serde_json::to_vec(HashInput)` → `sha256_bytes` (`:873-878`) — a **plain keyless SHA-256** over `{envelope_id, timestamp_unix_ms, prev_hash, record}`. No secret is an input. The per-deployment `AuditHashSecret`/`AuditKeyHasher` is consumed **only** at `:426-431` for `redact::QueryRedactor` ID/value pseudonymization, never by the chain. `verify_chain`/`verify_jsonl_lines` (`:628-705`) recompute the identical unkeyed hash. The crate's own test `verify_chain_with_trusted_tail_rejects_full_rewrite` (`:1338-1364`) asserts `verify_chain(&rewritten).is_ok()` for a fully fabricated chain.

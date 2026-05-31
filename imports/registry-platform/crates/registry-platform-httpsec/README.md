@@ -10,7 +10,7 @@ Axum and Tower helpers for browser-facing HTTP security.
   protections.
 - Conditional Cross-Origin-Resource-Policy handling.
 - Request body limit layer construction.
-- RFC 7807-style `Problem` responses with `application/problem+json`.
+- RFC 9457 Problem Details responses with `application/problem+json`.
 - A standard body-limit problem response.
 
 ## Typical Use

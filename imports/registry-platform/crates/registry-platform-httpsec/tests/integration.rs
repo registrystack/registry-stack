@@ -8,7 +8,7 @@ use tower::ServiceExt;
 
 /// F-P4-1: a router wired with the 1 MiB limit and `body_limit_problem_response`
 /// as the error handler must reject a body of 1 MiB + 1 byte with a fully-formed
-/// RFC 7807 Problem response: status 413, Content-Type application/problem+json,
+/// RFC 9457 Problem Details response: status 413, Content-Type application/problem+json,
 /// and the expected type/title/status/detail fields.
 ///
 /// `RequestBodyLimitLayer` wraps the body stream; when the handler reads past
@@ -16,7 +16,7 @@ use tower::ServiceExt;
 /// Problem response via `body_limit_problem_response`. This exercises the
 /// intended wiring pattern.
 #[tokio::test]
-async fn body_limit_wired_with_problem_response_returns_rfc7807_on_oversized_body() {
+async fn body_limit_wired_with_problem_response_returns_rfc9457_on_oversized_body() {
     let app = Router::new()
         .route(
             "/",

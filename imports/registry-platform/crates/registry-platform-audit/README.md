@@ -17,6 +17,10 @@ helpers for registry services.
   JSONL logs.
 - `AuditChainProfile`, `AuditProfile`, `AuditKeyHasher`, and `redact` helpers
   for production keyed chains and privacy-safe audit fields.
+- `AuditKeyHasher::audit_reference_hash` for versioned, scoped audit reference
+  handles whose service-owned canonical input stays outside the platform domain.
+- `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
+  values used by redaction helpers.
 
 ## Typical Use
 
@@ -89,6 +93,9 @@ fn verify_against_stored_tail(
 - Use `AuditProfile::registry_relay_from_env` or
   `AuditProfile::registry_notary_from_env` in production. `unkeyed_dev_only` is
   for tests and local development.
+- Use `AuditKeyHasher::audit_reference_hash` for durable audit references
+  instead of concatenating ad hoc hash inputs in each service. Keep service
+  semantics and canonicalization in the consuming service.
 - Redaction helpers intentionally avoid preserving email local parts, phone
   digits, or sensitive query values.
 

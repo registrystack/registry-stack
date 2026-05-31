@@ -12,6 +12,8 @@ This crate is test-only. It fails to compile unless callers enable the
 - `MockHttpUpstream`, a WireMock-backed upstream with request-size tracking.
 - Ed25519 JWK fixtures for signing and verification tests.
 - `assert_chain_integrity` for internally consistent audit envelope assertions.
+- `assert_json_absent_strings` for focused audit non-leak checks over JSON
+  records.
 - `assert_chain_integrity_with_anchors` for retained chains or checks that must
   be bound to a trusted start or tail hash.
 - `assert_replay_duplicate_rejected` for reusable replay-store duplicate checks.

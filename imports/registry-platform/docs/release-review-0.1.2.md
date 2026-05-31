@@ -37,7 +37,7 @@ Scope: pre-release review of the 9-crate workspace.
 > | F-sdjwt-1 | Deferred | Not in scope for this pass |
 > | F-httpsec-6 | Deferred | Not in scope for this pass |
 >
-> **Staff-engineer post-implementation review (Opus, 2026-05-27):** One P2 was found. The original F-P4-1 tests checked the 413 status and the RFC 7807 Problem JSON shape in isolation: the layer rejected the body and the helper produced the JSON, but they were never connected in a single request path. Fixed: both integration tests (`httpsec/tests/integration.rs` and `testing/tests/cross_crate_integration.rs`) now wire `body_limit_problem_response` in the handler error branch and assert the full end-to-end response (status, `Content-Type: application/problem+json`, type/title/status/detail) from a single oversized request. All other items were cleared with no findings.
+> **Staff-engineer post-implementation review (Opus, 2026-05-27):** One P2 was found. The original F-P4-1 tests checked the 413 status and the RFC 9457 Problem Details JSON shape in isolation: the layer rejected the body and the helper produced the JSON, but they were never connected in a single request path. Fixed: both integration tests (`httpsec/tests/integration.rs` and `testing/tests/cross_crate_integration.rs`) now wire `body_limit_problem_response` in the handler error branch and assert the full end-to-end response (status, `Content-Type: application/problem+json`, type/title/status/detail) from a single oversized request. All other items were cleared with no findings.
 
 Five expert subagents reviewed independently:
 
@@ -402,7 +402,7 @@ Workspace `[workspace.package]` cannot inherit `description`/`keywords`/`categor
 | audit | "Tamper-evident HMAC-chained audit envelopes and JSONL sinks" | audit, hmac, jsonl, tamper-evident | cryptography, web-programming |
 | authcommon | "Bearer token parsing and API-key fingerprinting helpers" | bearer, api-key, authentication, jwt | authentication, web-programming |
 | crypto | "Ed25519 JWK signing, DID validation, and JSON canonicalization" | ed25519, jwk, did, eddsa, jcs | cryptography, authentication |
-| httpsec | "Axum/Tower HTTP security middleware and RFC 7807 problem responses" | cors, csp, axum, http-security | web-programming, authentication |
+| httpsec | "Axum/Tower HTTP security middleware and RFC 9457 Problem Details responses" | cors, csp, axum, http-security | web-programming, authentication |
 | httputil | "SSRF-resistant outbound HTTP client and bounded response reads" | ssrf, reqwest, http, fetch | web-programming, network-programming |
 | oid4vci | "OpenID4VCI protocol types and proof validation helpers" | oid4vci, openid, verifiable-credentials, sd-jwt | authentication, cryptography |
 | oidc | "OIDC discovery, JWKS caching, and JWT token verification" | oidc, jwt, jwks, openid-connect | authentication, web-programming |
