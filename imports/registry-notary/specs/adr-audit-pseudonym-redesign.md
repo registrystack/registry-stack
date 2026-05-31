@@ -1,5 +1,10 @@
 # ADR: Audit Pseudonym Redesign
 
+> **Status: Archived (2026-05-31).** Kept as a design record. The load-bearing
+> config and format details below have been reconciled to the shipped code; for
+> current behavior see the code and docs/. Do not treat the broader design
+> narrative as current.
+
 ## Status
 
 Accepted for the audit pseudonym follow-up design freeze.
@@ -13,8 +18,9 @@ subject model also introduces non-person targets, self-attestation, provider
 matching, and federation pairwise subject hashes, so audit pseudonyms need an
 explicit domain model before implementation changes land.
 
-This ADR defines only design artifacts. It does not change Rust code, tests, API
-schemas, or runtime configuration.
+This ADR originated as a design artifact. The design has since been implemented
+in shipped Rust (audit pseudonym hashing, tests, and the related API and runtime
+paths), so it no longer stands apart from the code.
 
 ## Decision
 
@@ -61,29 +67,26 @@ current domain.
 ### Canonical Identifier Input
 
 The HMAC input is the UTF-8 bytes of a JSON Canonicalization Scheme object.
-For each entity being pseudonymized, the canonical object is:
+
+The durable matched-reference pseudonym hashes the matched `handle` string
+returned by the matching step, not a raw-identifier array. For the matched
+entity being pseudonymized, the canonical object is:
 
 ```json
 {
-  "pseudonym_version": 1,
-  "hash_domain_id": "matched-reference-v1",
+  "class": "matched-reference-v1",
+  "version": 1,
   "role": "target",
   "entity_type": "person",
   "purpose_scope": "https://purpose.example.gov/social-protection/service-delivery",
-  "identifiers": [
-    {
-      "role": "target",
-      "entity_type": "person",
-      "scheme": "national_id",
-      "issuer": "",
-      "country": "",
-      "value": "NID-1001",
-      "purpose_scope": "https://purpose.example.gov/social-protection/service-delivery",
-      "pseudonym_version": 1
-    }
-  ]
+  "handle": "ref-1001"
 }
 ```
+
+The raw-identifier-array path is the `matching-attempt-v1` class. It is used
+only for optional repeat-probe detection and produces no durable pseudonym: the
+matching-attempt hasher derives the canonical input but returns no pseudonym
+value, so no long-lived handle is emitted from raw target attributes.
 
 Canonicalization rules:
 
@@ -95,20 +98,11 @@ Canonicalization rules:
   available. Non-evaluation audit paths that cannot recover the original
   purpose use the explicit empty string as an `unspecified` scope and should be
   migrated to a concrete purpose when stored evaluation metadata carries it.
-- Each identifier includes `role`, `entity_type`, `scheme`, `issuer`,
-  `country`, `value`, `purpose_scope`, and `pseudonym_version`.
-- Missing `issuer` and `country` are canonicalized to explicit empty strings,
-  not omitted or represented as null.
-- `scheme`, `issuer`, `country`, `value`, `role`, `entity_type`, and
-  `purpose_scope` are normalized by the same profile-specific matching rules
-  that produced the matched reference. If a profile cannot define stable
-  normalization for a field, that field must not be used as a durable
-  pseudonym input.
-- `identifiers` are sorted lexicographically by this tuple:
-  `role`, `entity_type`, `scheme`, `issuer`, `country`, `value`,
-  `purpose_scope`, `pseudonym_version`.
-- Duplicate identifier objects are removed after normalization and before
-  sorting.
+- `handle` is the stable matched-reference handle produced by the matching
+  step. It is normalized by the same profile-specific matching rules that
+  produced the matched reference. If a profile cannot define stable
+  normalization for the handle, it must not be used as a durable pseudonym
+  input.
 - Raw names, dates of birth, animal ear tags, parcel ids, and national
   identifiers must never appear in serialized audit events or logs. They may
   appear only inside the in-memory HMAC input during pseudonym generation.

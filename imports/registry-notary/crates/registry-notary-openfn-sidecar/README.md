@@ -10,7 +10,7 @@ Registry Notary should connect to this sidecar with its existing
 `registry_data_api` connector:
 
 ```text
-GET /datasets/{dataset}/{entity}?{lookup_field}={lookup_value}&fields=a,b&limit=2
+GET /v1/datasets/{dataset}/entities/{entity}/records?{lookup_field}={lookup_value}&fields=a,b&limit=2
 Authorization: Bearer <notary-to-sidecar-token>
 Data-Purpose: <purpose>
 ```
@@ -153,13 +153,13 @@ counts and truncation state, not captured content.
 
 ```bash
 export OPENCRVS_READER_CREDENTIAL_JSON='{"baseUrl":"https://example.test","apiToken":"dev"}'
-export DEV_SIDECAR_TOKEN_HASH='sha256:a61cb2a28977890d2e95d2eb9f5355b184d48dc2aec23252bdeb08eca7f42544'
+export DEV_SIDECAR_TOKEN_HASH='sha256:<sha256-hex-of-your-sidecar-token>'
 REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG=/path/to/sidecar.yaml \
   cargo run -p registry-notary-openfn-sidecar -- --config /path/to/sidecar.yaml
 ```
 
-The example hash above is the SHA-256 fingerprint for the demo bearer
-`dev-sidecar-token`. For a new local token:
+Compute the hash from your sidecar bearer token. The demo uses
+`dev-sidecar-token`:
 
 ```bash
 python3 - <<'PY'
@@ -177,7 +177,7 @@ crates/registry-notary-openfn-sidecar/scripts/run-openfn-http-demo.sh start
 curl -sS \
   -H "Authorization: Bearer dev-sidecar-token" \
   -H "Data-Purpose: demo" \
-  "http://127.0.0.1:19191/datasets/civil_registry/civil_person?national_id=person-123&fields=national_id,birth_date&limit=2" | jq
+  "http://127.0.0.1:19191/v1/datasets/civil_registry/entities/civil_person/records?national_id=person-123&fields=national_id,birth_date&limit=2" | jq
 
 crates/registry-notary-openfn-sidecar/scripts/run-openfn-http-demo.sh stop
 ```
@@ -189,7 +189,7 @@ policy or an internal Docker network. `allowed_base_urls` validates configured
 credential targets at startup, but it is not a general JavaScript egress
 sandbox. The sidecar provides:
 
-- `/datasets/{dataset}/{entity}` for synchronous RDA lookups.
+- `/v1/datasets/{dataset}/entities/{entity}/records` for synchronous RDA lookups.
 - `/ready` for startup readiness after manifest, credential, version, worker,
   and smoke checks.
 - `/healthz` for process liveness while requests are arriving.

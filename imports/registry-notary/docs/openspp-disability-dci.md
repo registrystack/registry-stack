@@ -1,5 +1,7 @@
 # OpenSPP Disability DCI Demo
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** operator
+
 This note documents the local Registry Notary demo config for using the
 OpenSPP Disability Registry DCI API as an evidence source.
 
@@ -11,7 +13,7 @@ The demo config is:
 
 It targets:
 
-`https://openspp-dci-demo-dr.genete.acn.fr/dci_api/v1/disability/registry/sync/search`
+`https://openspp-dci.example.org/dci_api/v1/disability/registry/sync/search`
 
 The tested query shape is DCI `idtype-value` with `query.type = NATIONAL_ID`.
 The OpenSPP Disability test endpoint rejected `expression` and `predicate`
@@ -22,8 +24,8 @@ queries during integration testing.
 Set these environment variables before starting Registry Notary:
 
 ```bash
-export REGISTRY_NOTARY_API_KEY_HASH='sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51'
-export REGISTRY_NOTARY_AUDIT_HASH_SECRET='dev-registry-notary-audit-hash-secret'
+export REGISTRY_NOTARY_API_KEY_HASH='sha256:<sha256-hex-of-your-demo-api-key>'
+export REGISTRY_NOTARY_AUDIT_HASH_SECRET='<stable-random-audit-hash-secret>'
 export OPENSPP_DCI_TOKEN='<OpenSPP bearer token>'
 export REGISTRY_NOTARY_ISSUER_JWK='<Ed25519 issuer private JWK for demo VC issuance>'
 ```
@@ -35,7 +37,9 @@ cargo run -p registry-notary-bin -- \
   --config demo/config/openspp-disability-registry-notary.yaml
 ```
 
-The API key hash above is for local key `api-token`.
+Set `REGISTRY_NOTARY_API_KEY_HASH` to the SHA-256 of your demo API key. The
+bundled demo config expects key `api-token`, e.g.
+`sha256:$(printf %s 'api-token' | shasum -a 256 | cut -d' ' -f1)`.
 
 ## Claims
 

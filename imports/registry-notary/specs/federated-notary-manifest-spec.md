@@ -1,5 +1,16 @@
 # Federated Notary Manifest Spec
 
+> **Status: Archived (2026-05-31).** This is a historical design record and is not
+> the source of truth. Parts of it diverge from the shipped code (see the
+> divergence note below); do not implement from this document. For current
+> behavior see the code and docs/.
+
+## Divergence from shipped code (2026-05-31)
+
+- The `FederationManifest` struct in code (registry-manifest-core/src/lib.rs:122-131) has only: node_id, issuer, jwks_uri, federation_api, supported_protocol_versions. The spec's `discovery_url`, `trust_bundles`, `credential_profiles`, top-level `trust:` block, `status`, and `audit_checkpoints_url` do not exist; what the spec calls `protocol_versions` is `supported_protocol_versions` in code. Manifests use `deny_unknown_fields`, so a manifest written from this spec fails to parse.
+- Only one federation route exists: `POST /federation/v1/evaluations` (federation/mod.rs:43). The other routes documented here (the well-known node doc, /federation/v1/node, /capabilities, /trust-bundle, /audit/checkpoints/latest, GET evaluation by id, /credentials, /credential-offers, POST audit checkpoints) do not exist.
+- The signing-algorithm allowlist is EdDSA-only in code (federation/mod.rs:122), not ES256/ES384/EdDSA as this spec states.
+
 For the first implementation slice, see
 [`federated-evaluation-mvp-spec.md`](federated-evaluation-mvp-spec.md). This
 document is the broader protocol and roadmap spec.

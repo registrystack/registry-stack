@@ -1,5 +1,9 @@
 # Synchronous Adaptor Source Sidecar Spec
 
+> **Status: Archived (2026-05-31).** The OpenFn sidecar source described here has shipped; the sidecar crate is fully built and tested. This file is kept as a
+> design record and is not the source of truth. For current behavior see the code
+> and crates/registry-notary-openfn-sidecar/README.md.
+
 ## Goal
 
 Provide a small synchronous source sidecar that lets Registry Notary evaluate a
@@ -207,7 +211,7 @@ Done means all items below are satisfied in one reviewed change set:
 - A final reviewer pass confirms every DoD bullet with linked test, command, or
   code evidence before the work is called complete.
 
-## Implementation Plan
+## Implementation Plan (historical)
 
 Wave 0: Design Freeze And Review
 

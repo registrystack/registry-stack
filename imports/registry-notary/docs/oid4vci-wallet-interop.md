@@ -1,5 +1,7 @@
 # OID4VCI Wallet Interop Guide
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** integrator
+
 This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
 and test. It does not try to freeze the broader REST API design.
@@ -25,130 +27,17 @@ Registry Notary's current SD-JWT VC issuance path.
 
 ## Prerequisites
 
-OID4VCI requires all of these pieces:
+The wallet facade requires server-side OID4VCI and self-attestation
+configuration before any wallet can request a credential. Self-attestation is
+the policy gate that prevents a wallet from using any valid token to request
+another person's credential. The operator who runs Notary owns these settings;
+this guide assumes they are already in place.
 
-- `auth.mode: oidc`.
-- `self_attestation.enabled: true`.
-- A reviewed subject-binding token claim.
-- At least one claim in `self_attestation.allowed_claims`.
-- At least one credential profile in `self_attestation.credential_profiles`.
-- A credential profile with `holder_binding.mode: did`,
-  `proof_of_possession: required`, and `allowed_did_methods: [did:jwk]`.
-- `oid4vci.enabled: true`.
-- A public HTTPS `credential_issuer` and endpoint URLs.
-- A replay store appropriate for the deployment. Use Redis for multi-instance
-  or public wallet traffic.
-
-Self-attestation is the policy gate that prevents a wallet from using any valid
-token to request another person's credential.
-
-## Configuration Example
-
-```yaml
-auth:
-  mode: oidc
-  oidc:
-    issuer: https://idp.example.gov
-    jwks_uri: https://idp.example.gov/.well-known/jwks.json
-    audiences:
-      - registry-notary-wallet
-    allowed_clients:
-      - citizen-wallet
-    scope_map:
-      openid:
-        - registry_notary:self_attest
-
-self_attestation:
-  enabled: true
-  requires_auth_mode: oidc
-  subject_binding:
-    token_claim: civil_id
-    claim_source: access_token
-    request_field: subject_id
-    id_type: UIN
-    normalize: exact
-  citizen_clients:
-    allowed_client_ids:
-      - citizen-wallet
-    allowed_audiences:
-      - registry-notary-wallet
-  token_policy:
-    required_acr_values:
-      - urn:example:loa:substantial
-    assurance_claim_source: access_token
-    max_auth_age_seconds: 600
-    max_access_token_lifetime_seconds: 900
-    max_evaluation_age_seconds: 300
-    max_credential_validity_seconds: 600
-    max_clock_leeway_seconds: 60
-  allowed_operations:
-    evaluate: true
-    render: false
-    issue_credential: true
-    batch_evaluate: false
-  allowed_purposes:
-    - wallet_credential_issuance
-  allowed_claims:
-    - birth-record-exists
-  allowed_formats:
-    - application/dc+sd-jwt
-  allowed_disclosures:
-    - value
-    - redacted
-  scope_policy: required
-  required_scopes:
-    - registry_notary:self_attest
-  allowed_wallet_origins:
-    - https://wallet.example.gov
-  credential_profiles:
-    - birth_record_sd_jwt
-  rate_limits:
-    mode: in_process
-    invalid_token_per_client_address_per_minute: 20
-    per_principal_per_minute: 30
-    subject_mismatch_per_principal_per_hour: 5
-    per_holder_per_hour: 20
-    credential_issuance_per_principal_per_hour: 10
-
-oid4vci:
-  enabled: true
-  credential_issuer: https://notary.example.gov
-  authorization_servers:
-    - https://idp.example.gov
-  accepted_token_audiences:
-    - registry-notary-wallet
-  credential_endpoint: https://notary.example.gov/oid4vci/credential
-  offer_endpoint: https://notary.example.gov/oid4vci/credential-offer
-  nonce_endpoint: https://notary.example.gov/oid4vci/nonce
-  nonce:
-    enabled: true
-    ttl_seconds: 300
-  authorization:
-    require_pkce_method: S256
-  proof:
-    max_age_seconds: 300
-    max_clock_skew_seconds: 60
-  credential_configurations:
-    birth_record_sd_jwt:
-      claim_id: birth-record-exists
-      credential_profile: birth_record_sd_jwt
-      format: dc+sd-jwt
-      scope: birth_record
-      vct: https://notary.example.gov/credentials/birth-record/v1
-      display_name: Birth record attestation
-```
-
-The `credential_configurations` entry must be consistent with both the claim and
-the credential profile:
-
-- `claim_id` exists in `evidence.claims`.
-- `claim_id` is allowed by `self_attestation.allowed_claims`.
-- `credential_profile` exists in `evidence.credential_profiles`.
-- `credential_profile` is allowed by `self_attestation.credential_profiles`.
-- The claim references the credential profile.
-- The profile allows the claim.
-- `format` is `dc+sd-jwt`.
-- `vct` matches the credential profile `vct`.
+For the full configuration, including the `auth.oidc`, `self_attestation`, and
+`oid4vci` blocks and their constraints, see the
+[operator configuration reference](operator-config-reference.md). For the policy
+gate that binds a request to the token subject, see the
+[self-attestation operator guide](self-attestation-operator-guide.md).
 
 ## Wallet Flow
 

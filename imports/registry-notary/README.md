@@ -39,46 +39,9 @@ support.
   dictionary-friendly Python wrapper.
 - [`bindings/node`](bindings/node): `@registry-notary/client` Promise client
   with TypeScript declarations.
-- [`docs/client-sdk-guide.md`](docs/client-sdk-guide.md): Rust, Python, and
-  Node.js SDK usage guide.
-- [`docs/operator-config-reference.md`](docs/operator-config-reference.md):
-  adopter-facing configuration reference for auth, evidence, sources, replay,
-  status, self-attestation, OID4VCI, and federation.
-- [`docs/source-claim-modeling-guide.md`](docs/source-claim-modeling-guide.md):
-  source connector, claim modeling, disclosure, batch, and OpenFn sidecar
-  guidance for implementation teams.
-- [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md):
-  production-readiness checklist for network boundaries, secrets, Redis,
-  audit, metrics, source access, signing keys, and rollback.
-- [`docs/credential-lifecycle-status.md`](docs/credential-lifecycle-status.md):
-  short-lived credential lifecycle, optional live status, retention,
-  suspension, revocation, and verifier caveats.
-- [`docs/self-attestation-operator-guide.md`](docs/self-attestation-operator-guide.md):
-  citizen OIDC subject binding, token policy, allow-lists, rate limits, and
-  rollout guidance.
-- [`docs/oid4vci-wallet-interop.md`](docs/oid4vci-wallet-interop.md):
-  practical OpenID4VCI wallet facade setup and compatibility checklist.
-- `demo/config/registry-notary.yaml`: split demo config used by
-  `registry-relay`'s narrated Registry Notary walkthrough.
-- [`docs/openspp-disability-dci.md`](docs/openspp-disability-dci.md):
-  OpenSPP Disability Registry DCI demo backend setup, known interop boundaries,
-  and demo SD-JWT VC caveats.
-- [`docs/opencrvs-dci.md`](docs/opencrvs-dci.md):
-  OpenCRVS DCI demo setup notes and current interop boundaries.
-- [`docs/opencrvs-dci-standalone-tutorial.md`](docs/opencrvs-dci-standalone-tutorial.md):
-  standalone quickstart for `init dci`, the explicit OpenCRVS DCI config edits,
-  `doctor`, `explain-config`, `--env-file`, source OAuth, and demo SD-JWT VC
-  issuance.
-- [`docs/signing-key-provider.md`](docs/signing-key-provider.md):
-  SD-JWT VC signing-key provider configuration, rotation, PKCS#11 setup, and
-  verification checklist.
-- [`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md):
-  minimal static-peer setup, env vars, replay limitation, and verification
-  checklist for the MVP.
-- [`docs/notary-scenario-catalog.md`](docs/notary-scenario-catalog.md):
-  scenario catalog for where Notary helps, who is involved, current support
-  status, and the gaps surfaced by local evaluation, federation, proof, issuance,
-  and audit workflows.
+- [`docs/`](docs/README.md): guides, tutorials, and references for integrators,
+  operators, and maintainers, sorted by reader. Demo configs live in
+  `demo/config/`.
 - [`specs/`](specs/README.md): design specifications and implementation traces for
   self-attestation, static-peer federation, manifest-backed federation,
   the `/v1` REST route cleanup, OpenID4VCI wallet facade, OpenFn sidecar source
@@ -212,16 +175,16 @@ scrape_configs:
       type: Bearer
       credentials_file: /run/secrets/registry-notary-metrics-token
     static_configs:
-      - targets: ["registry-notary:4325"]
+      - targets: ["registry-notary:8081"]
 ```
 
 ## Local Run
 
 ```bash
-export REGISTRY_NOTARY_API_KEY_HASH=sha256:ca2b7917b5d2bdc05d445ce8d50c3adad19ac355d6d40ede18b1f341d7c6e546
-export REGISTRY_NOTARY_BEARER_TOKEN_HASH=sha256:f2721a9dae064d1fdbc74cae1fb1baf26fac01b8aac160ae5acab97c35667d7f
-export REGISTRY_NOTARY_AUDIT_HASH_SECRET=dev-registry-notary-audit-hash-secret
-export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN=dev-source-token
+export REGISTRY_NOTARY_API_KEY_HASH='sha256:<sha256-hex-of-your-api-key>'
+export REGISTRY_NOTARY_BEARER_TOKEN_HASH='sha256:<sha256-hex-of-your-bearer-token>'
+export REGISTRY_NOTARY_AUDIT_HASH_SECRET='<stable-random-audit-hash-secret>'
+export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN='<registry-relay-source-token>'
 export REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
 cargo run -p registry-notary-bin -- --config demo/config/registry-notary.yaml
 ```

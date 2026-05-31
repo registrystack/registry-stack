@@ -1,5 +1,7 @@
 # Federated Evaluation MVP Operator Guide
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** federation · **Audience:** operator
+
 This guide shows the minimum static-peer setup for the delegated evaluation MVP.
 It is intentionally narrower than the broader federation roadmap.
 
@@ -137,17 +139,8 @@ replay:
 
 Do not run active-active federation with this store. Multiple serving Notary
 instances need a shared replay store before privileged federation traffic is
-enabled:
-
-```yaml
-replay:
-  storage: redis
-  redis:
-    url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
-    key_prefix: registry-notary
-    connect_timeout_ms: 1000
-    operation_timeout_ms: 500
-```
+enabled. For the full Redis replay configuration block, see the
+[Replay Store section of the configuration reference](operator-config-reference.md).
 
 `federation.replay.storage` is retained only for legacy configuration shape. If
 it is set to `redis`, startup validation requires top-level
@@ -155,15 +148,7 @@ it is set to `redis`, startup validation requires top-level
 
 ## Verification Checklist
 
-Before rollout, run:
-
-```bash
-cargo fmt --check
-cargo test -p registry-notary-server federation -- --nocapture
-REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}' \
-  cargo test -p registry-notary-core -p registry-notary-server -- --test-threads=1
-cargo clippy -p registry-notary-core -p registry-notary-server --all-targets -- -D warnings
-```
+To run the test suite, see [Verification in the workspace README](../README.md#verification).
 
 Also confirm:
 

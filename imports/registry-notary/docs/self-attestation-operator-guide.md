@@ -1,5 +1,7 @@
 # Self-Attestation Operator Guide
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
+
 Self-attestation lets a citizen use their own OIDC token to evaluate, render, or
 issue only the claims that policy allows for the subject bound to that token.
 This guide is for operators configuring that flow with an identity provider,

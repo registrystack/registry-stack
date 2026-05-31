@@ -1,5 +1,7 @@
 # Signing Key Provider Configuration
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
+
 Registry Notary signs SD-JWT VC credentials and federation response JWTs through
 named signing keys under `evidence.signing_keys`. Credential profiles and
 federation config reference those keys by id. This keeps profile policy,
@@ -154,18 +156,18 @@ checks CKM_EDDSA support, finds exactly one private key by `key_label` and
 `key_id_hex`, then signs and verifies a self-test payload against
 `public_jwk_env`.
 
-The implementation uses blocking PKCS#11 calls on a blocking task with a
-five-second signing timeout and permits only one in-flight PKCS#11 sign call per
-provider. Startup opens a read-only session, logs in, finds the private key, and
-reuses that session for signatures. If a sign call fails, the next attempt
-reopens the session, logs in again, refinds the private key, and retries once.
+Each provider enforces a five-second signing timeout and allows only one
+in-flight sign call at a time. These limits affect capacity planning: a slow or
+stuck HSM call blocks subsequent signing requests for that provider until the
+timeout elapses. Startup opens a session, authenticates, and locates the private
+key; that session is reused for subsequent signatures. If a sign call fails, the
+provider reopens the session and retries once before returning an error.
 PIN values are read from the environment and are not logged.
 
-PKCS#11 calls are C ABI calls and cannot be force-cancelled by Rust once the
-module is executing. Production HSM deployments must configure vendor driver
-network, session, and request timeouts below the service-level signing timeout,
-so a stuck module call returns to the process instead of occupying the single
-per-provider signing slot indefinitely.
+PKCS#11 module calls cannot be cancelled once the module is executing.
+Production HSM deployments must configure vendor driver network, session, and
+request timeouts below the five-second service-level signing timeout, so a stuck
+module call releases the single per-provider signing slot before that deadline.
 
 ### SoftHSM Smoke Setup
 
@@ -228,22 +230,10 @@ only to reserve the provider name until a real, tested implementation exists.
 
 ## Verification Checklist
 
-Run these checks after changing signing configuration or provider code:
+After changing signing configuration or provider code, run the test suite as described in
+[Verification in the workspace README](../README.md#verification).
 
-```sh
-cargo test -p registry-notary-core
-cargo test -p registry-notary-bin
-cargo test -p registry-notary-server
-cargo test -p registry-notary-server --no-default-features --features pkcs11 --lib
-REGISTRY_NOTARY_REQUIRE_SOFTHSM=1 cargo test -p registry-notary-server \
-  --no-default-features --features pkcs11 \
-  pkcs11_signing_key_signs_with_softhsm_when_available -- --nocapture
-cargo clippy --workspace --all-targets
-cargo clippy -p registry-notary-server --no-default-features --features pkcs11 --all-targets
-```
-
-`cargo test -p registry-notary-server` may need to run outside strict sandboxes
-because some existing tests bind local sockets.
+Note: some server tests bind local sockets and may need to run outside strict network sandboxes.
 
 ## Current Limits
 

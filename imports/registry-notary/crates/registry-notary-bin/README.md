@@ -12,6 +12,18 @@ The crate builds the `registry-notary` binary.
 - Axum listener startup and graceful shutdown.
 - OpenAPI document printing through `registry-notary openapi`.
 
+## Subcommands
+
+| Subcommand | Purpose |
+|---|---|
+| `openapi` | Print the OpenAPI document as JSON. |
+| `doctor` | Validate config, env-backed secrets, source auth, and VC wiring. |
+| `explain-config` | Print resolved config and required env vars. |
+| `init dci` | Generate a generic DCI source starter skeleton. |
+| `hash-api-key` | Generate or hash a Registry Notary API key. |
+| `demo-issuer-key` | Generate a demo Ed25519 issuer JWK for local VC smoke tests. |
+| `schema` | Print a lightweight JSON schema for top-level config discovery. |
+
 ## Typical Use
 
 Run the service:

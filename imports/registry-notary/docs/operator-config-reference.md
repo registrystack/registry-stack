@@ -1,5 +1,7 @@
 # Operator Configuration Reference
 
+> **Page type:** Reference · **Product:** Registry Notary · **Layer:** all · **Audience:** operator
+
 This guide explains how to assemble a deployable Registry Notary configuration.
 It is written for teams adopting the service, not for contributors changing the
 implementation.
@@ -75,7 +77,7 @@ from one DCI source and can later issue a credential from that claim.
 
 ```yaml
 server:
-  bind: 127.0.0.1:4255
+  bind: 127.0.0.1:8081
 
 auth:
   mode: api_key
@@ -217,12 +219,18 @@ For DCI sources, check these fields carefully:
 - `search_path`: path appended to `base_url`.
 - `sender_id`, `receiver_id`, `registry_type`, `registry_event_type`, and
   `record_type`: envelope values expected by the upstream DCI implementation.
-- `query_type`: currently the common value is `idtype-value`.
+- `query_type`: `idtype-value` for one identifier lookup, or `expression` when
+  the upstream supports fielded query expressions.
 - `records_path`: JSON Pointer to the records array in a single response.
 - `field_paths`: JSON Pointers for fields that the claim rule reads.
 - `bulk_mode`: leave `none` until the source contract has been tested. Use
   `dci_batched_search` or `rda_in_filter` only when the upstream supports that
   access pattern.
+
+For any source binding, `query_fields` can replace the single-field `lookup`
+wire query when the source supports multi-field lookup. `registry_data_api`
+sends them as query parameters, and DCI `expression` sends them inside the DCI
+query envelope. Leave `query_fields` empty for the legacy single-field lookup.
 
 For production, leave `allow_insecure_localhost` and
 `allow_insecure_private_network` false unless the deployment review explicitly
@@ -371,6 +379,11 @@ oid4vci:
   nonce:
     enabled: true
     ttl_seconds: 300
+  authorization:
+    require_pkce_method: S256
+  proof:
+    max_age_seconds: 300
+    max_clock_skew_seconds: 60
   credential_configurations:
     birth_record_sd_jwt:
       claim_id: birth-record-exists
@@ -383,6 +396,23 @@ oid4vci:
 
 Public URLs must use HTTPS except for loopback development. Endpoint URLs must
 live under `credential_issuer`, include a path, and have no query string.
+
+`authorization.require_pkce_method` pins the PKCE challenge method wallets must
+use. `proof.max_age_seconds` bounds how fresh a holder proof JWT must be, and
+`proof.max_clock_skew_seconds` is the only clock difference tolerated when
+checking that freshness.
+
+Each `credential_configurations` entry must be consistent with both the claim
+and the credential profile it references:
+
+- `claim_id` exists in `evidence.claims`.
+- `claim_id` is allowed by `self_attestation.allowed_claims`.
+- `credential_profile` exists in `evidence.credential_profiles`.
+- `credential_profile` is allowed by `self_attestation.credential_profiles`.
+- The claim references the credential profile.
+- The profile allows the claim.
+- `format` is `dc+sd-jwt`.
+- `vct` matches the credential profile `vct`.
 
 See [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) for wallet flow
 and compatibility notes.

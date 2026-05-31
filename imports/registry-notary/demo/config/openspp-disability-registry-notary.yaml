@@ -54,7 +54,7 @@ evidence:
           - value
   source_connections:
     openspp_disability:
-      base_url: https://openspp-dci-demo-dr.genete.acn.fr
+      base_url: https://openspp-dci.example.org
       token_env: OPENSPP_DCI_TOKEN
       bulk_mode: none
       dci:

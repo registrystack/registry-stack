@@ -1,5 +1,7 @@
 # Source And Claim Modeling Guide
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** operator
+
 This guide helps adopter teams design the source connections and claims that
 Registry Notary will evaluate. It complements the config reference by focusing
 on modeling choices: what belongs in an upstream source, what belongs in a
@@ -23,7 +25,7 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | Connector | Use when | Config value |
 | --- | --- | --- |
 | DCI | The upstream speaks a DCI-style search envelope | `connector: dci` |
-| Registry Data API | The upstream or sidecar exposes `/datasets/{dataset}/{entity}` lookups | `connector: registry_data_api` |
+| Registry Data API | The upstream or sidecar exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
 | OpenFn sidecar | An adaptor or workflow must normalize a system into the Registry Data API shape | Configure Notary with `registry_data_api` pointing at the sidecar |
 
 Prefer the simplest direct source. Add an OpenFn sidecar when the target system
@@ -91,7 +93,7 @@ encoding. The config default is form; the OpenCRVS demo uses
 Registry Data API sources expose lookup-style reads:
 
 ```text
-GET /datasets/{dataset}/{entity}?{lookup_field}={lookup_value}&fields=a,b&limit=2
+GET /v1/datasets/{dataset}/entities/{entity}/records?{lookup_field}={lookup_value}&fields=a,b&limit=2
 Authorization: Bearer <source-token>
 Data-Purpose: <purpose>
 ```
@@ -180,6 +182,10 @@ source_bindings:
       field: UIN
       op: eq
       cardinality: one
+    query_fields:
+      - input: target.identifiers.national_id
+        field: UIN
+        op: eq
     fields:
       birth_date:
         field: birth_date
@@ -197,6 +203,9 @@ Important choices:
   `relationship.attributes.<name>`.
 - `lookup.field`: upstream identifier field.
 - `lookup.cardinality`: use `one` when the claim needs exactly one record.
+- `query_fields`: optional multi-field lookup override. Use it when the source
+  supports querying by more than one request path, such as first name, last
+  name, and date of birth. Leave it empty for single-field lookup.
 - `fields`: only fields needed by the rule.
 
 Use separate bindings when a claim needs data from multiple registries. Use

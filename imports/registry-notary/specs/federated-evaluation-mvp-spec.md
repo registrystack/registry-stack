@@ -1,5 +1,9 @@
 # Federated Evaluation MVP Spec
 
+> **Status: Archived (2026-05-31).** This static-peer delegated evaluation MVP has shipped. This file is kept as a
+> design record and is not the source of truth. For current behavior see the code
+> and docs/federated-evaluation-operator-guide.md.
+
 ## Purpose
 
 Define the first practical Registry Notary federation slice: one trusted
@@ -415,7 +419,7 @@ claims may be logged only after redacting subject identifiers and token ids.
 
 ## Request Processing Order
 
-The serving Notary must process requests in this order:
+The serving Notary must process requests in this order. The federation evaluation endpoint requires `Content-Type: application/jwt` and returns HTTP 415 otherwise.
 
 1. Enforce the `inbound_body_limit_bytes` limit before buffering the full body.
 2. Parse compact JWS without logging token material.

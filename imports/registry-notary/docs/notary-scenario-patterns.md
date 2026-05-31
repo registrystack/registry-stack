@@ -1,50 +1,11 @@
-# Registry Notary Scenario Catalog
+# Registry Notary Scenario Patterns
 
-This catalog describes practical places where Registry Notary can help. It is
-not a protocol spec. It is a product and demo guide for deciding which flows are
-already supported, which are demo-only, and which need more runtime work.
+> **Page type:** Concept · **Product:** Registry Notary · **Layer:** consultation, evaluation, credential, federation · **Audience:** integrator
 
-The scenarios use five status labels:
-
-| Status | Meaning |
-| --- | --- |
-| Supported | Works in Registry Notary runtime and has focused tests or existing product coverage |
-| Lab-supported | Can be shown with demo scripts or config, but is not a complete runtime feature |
-| Partial | Important pieces exist, but named product gaps remain |
-| Planned | Captured in specs or roadmap, not implemented yet |
-| Out of scope | Not a Registry Notary responsibility |
-
-## Personas
-
-Scenario stories use the same small cast so examples stay easy to follow:
-Alice is usually the citizen, resident, farmer, household representative, or
-holder; Bob is the case worker or service operator; Carol is the registry
-steward; Dave is the auditor or security operator; Erin is the program
-administrator; Charlie is a child or dependent person Alice may be authorized
-to represent; the Rivera household is a collective subject Alice may represent.
-
-| Persona | What They Need | Examples |
-| --- | --- | --- |
-| Citizen or resident | Share only the proof needed to access a service | Parent applying for child support, farmer applying for a voucher |
-| Case worker | Make an evidence-backed decision without seeing unnecessary registry data | Benefits officer, enrollment officer |
-| Program administrator | Define eligibility policy, evidence requirements, and acceptable issuers | Social protection ministry, agriculture program team |
-| Registry steward | Protect source registry data while answering authorized evidence questions | Civil registry, farmer registry, health facility registry |
-| Auditor or oversight body | Verify decisions and data exchanges were lawful, minimized, and replay-protected | Internal audit, data protection authority |
-| Wallet or client app operator | Help users present proofs or receive credentials | Mobile wallet, service portal, case-management app |
-
-## Systems
-
-| System | Role |
-| --- | --- |
-| Source registry | Operational system of record. It is not exposed directly to consumers |
-| Registry Relay | Read-only gateway and metadata publisher for source registry data |
-| Registry Notary | Evaluates claims, signs results, issues credentials, enforces evidence policy, and emits audit |
-| Registry Manifest | Public metadata and discovery artifact for capabilities, profiles, and evidence offerings |
-| Registry Platform | Shared crypto, HTTP, OIDC, SD-JWT, DID/JWK, replay, and audit primitives |
-| Service portal or case system | Starts a service workflow and consumes evidence or decisions |
-| Holder wallet or client app | Stores credentials, presents proofs, and receives issued credentials |
-| Trust bundle or trust registry | Later-stage signed trust metadata. It is not an MVP allowlist |
-| Audit store | Local audit trail for evaluations, issuance, denials, and federation exchanges |
+This page collects the reusable interaction patterns and the full set of scenario
+stories, each with its sequence or flow diagram and what is supported today. The
+status-labeled scenario matrix lives in `notary-capability-matrix.md`; the
+per-scenario gap bullets and the rollup live in `../specs/notary-capability-gaps.md`.
 
 ## Reusable Patterns
 
@@ -132,33 +93,6 @@ sequenceDiagram
   Notary-->>Holder: SD-JWT VC credential
 ```
 
-## Scenario Matrix
-
-| # | Scenario | Pattern | Status | Main Gap |
-| --- | --- | --- | --- | --- |
-| 1 | Civil alive predicate | Local evaluation | Supported | None for configured local sources |
-| 2 | Age or date-of-birth evidence | Local evaluation | Supported | None for configured local sources |
-| 3 | Program enrollment active | Local evaluation | Supported | None for configured local sources |
-| 4 | Health facility service available | Local evaluation | Supported | None for configured local sources |
-| 5 | Agriculture voucher eligibility | Local evaluation | Supported | None for configured local sources |
-| 6 | Livestock movement permit eligibility | Local evaluation | Supported | None for configured local sources |
-| 7 | Benefits agency asks Civil Notary for alive predicate | Delegated evaluation | Partial | Product can serve inbound, but has no outbound Notary connector |
-| 8 | Benefits agency asks Social Notary for active beneficiary predicate | Delegated evaluation | Partial | Product can serve inbound, but has no outbound Notary connector |
-| 9 | Health-linked child support across civil, social, and health | Outbound composition | Planned | Needs outbound connector and runtime composition |
-| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Partial | Needs demo/client wiring and metadata publication |
-| 11 | Citizen presents civil-status proof to a benefits service | User-presented proof | Planned | Needs proof profiles and verifier runtime |
-| 12 | Farmer presents landholding or farmer-registration proof | User-presented proof | Planned | Needs proof profiles and status/freshness policy |
-| 13 | Health worker presents professional credential for service eligibility | User-presented proof | Planned | Needs proof profiles and issuer trust policy |
-| 14 | Parent or guardian requests a service for a child or dependent | Representation plus proof | Planned | Needs actor/subject separation and representation authority policy |
-| 15 | Household or group representative requests a service | Representation plus proof | Planned | Needs collective subject model and representative authority policy |
-| 16 | Civil Notary issues date-of-birth or alive credential | Credential issuance | Supported | Local wallet ceremony is still demo-grade |
-| 17 | Agriculture Notary issues voucher eligibility credential | Credential issuance | Supported | Local wallet ceremony is still demo-grade |
-| 18 | Shared Eligibility Notary issues combined-support credential | Credential issuance plus composition | Partial | Credential issuance exists, but peer-result composition is missing |
-| 19 | Consuming service helps holder obtain credential from remote Notary | Federated credential issuance | Planned | Needs holder-binding ceremony, nonce ownership, and relay rules |
-| 20 | Replay and emergency peer/key denial | Governance | Supported | Shared replay store is still needed for active-active production |
-| 21 | Auditor verifies minimized decision evidence | Governance | Partial | Signed results and audit exist, checkpoints are planned |
-| 22 | Peer audit checkpoint monitoring | Governance | Planned | Needs checkpoint publisher, Merkle builder, and peer monitor |
-
 ## Scenarios
 
 ### 1. Civil Alive Predicate
@@ -193,10 +127,6 @@ Supported today:
 - Predicate disclosure.
 - Redacted audit event.
 
-Missing:
-
-- No product gap for configured local sources.
-
 ### 2. Age Or Date-Of-Birth Evidence
 
 Pattern: Local evaluation  
@@ -229,10 +159,6 @@ Supported today:
 - Value and predicate disclosure modes.
 - SD-JWT VC issuance for configured credential profiles.
 
-Missing:
-
-- No product gap for configured local sources.
-
 ### 3. Program Enrollment Active
 
 Pattern: Local evaluation  
@@ -264,10 +190,6 @@ Supported today:
 - Local claim dependencies and CEL rules.
 - Predicate or value result formats.
 
-Missing:
-
-- No product gap for configured local sources.
-
 ### 4. Health Facility Service Available
 
 Pattern: Local evaluation  
@@ -298,10 +220,6 @@ Supported today:
 
 - Multi-field source bindings.
 - CEL rules over filtered source facts.
-
-Missing:
-
-- No product gap for configured local sources.
 
 ### 5. Agriculture Voucher Eligibility
 
@@ -335,10 +253,6 @@ Supported today:
 - Reason-code style companion claims can explain denials.
 - Local SD-JWT VC issuance can represent successful eligibility.
 
-Missing:
-
-- No product gap for configured local sources.
-
 ### 6. Livestock Movement Permit Eligibility
 
 Pattern: Local evaluation  
@@ -368,10 +282,6 @@ Supported today:
 
 - Local multi-claim evaluation.
 - Predicate results and reason-code claims.
-
-Missing:
-
-- No product gap for configured local sources.
 
 ### 7. Benefits Agency Asks Civil Notary For Alive Predicate
 
@@ -405,11 +315,6 @@ Supported today:
 - Inbound `POST /federation/v1/evaluations`.
 - Static peer policy, request verification, replay rejection, signed response.
 
-Missing:
-
-- Product outbound Notary-to-Notary connector.
-- Lab client scenario that signs and verifies the full flow end to end.
-
 ### 8. Benefits Agency Asks Social Notary For Active Beneficiary
 
 Pattern: Delegated evaluation  
@@ -441,11 +346,6 @@ Supported today:
 
 - Serving Notary side of delegated evaluation.
 - Purpose and profile policy checks.
-
-Missing:
-
-- Product requester/runtime connector.
-- Demo fixture wiring for social federation profile metadata.
 
 ### 9. Health-Linked Child Support Across Three Authorities
 
@@ -482,12 +382,6 @@ Supported today:
 - Each domain claim can be evaluated locally.
 - Inbound delegated evaluation exists.
 
-Missing:
-
-- `registry_notary_federation` source connector.
-- Runtime mapping of signed peer responses into CEL inputs.
-- Deterministic failure mapping for peer denial, stale source, and timeout.
-
 ### 10. Municipality Verifies Residency With A National Steward
 
 Pattern: Delegated evaluation  
@@ -516,12 +410,6 @@ Supported today:
 
 - Inbound serving pattern is supported.
 - Static peer policy can restrict profile and purpose.
-
-Missing:
-
-- Residency profile fixtures.
-- Outbound requester support in Registry Notary if the municipal service is
-  itself a Notary workflow.
 
 ### 11. Citizen Presents Civil-Status Proof To Benefits Service
 
@@ -556,12 +444,6 @@ Supported today:
 
 - SD-JWT VC issuance primitives exist.
 
-Missing:
-
-- User-presented proof verifier profile.
-- Mapping verified disclosures into local rule inputs.
-- Presentation replay and status policy.
-
 ### 12. Farmer Presents Landholding Or Registration Proof
 
 Pattern: User-presented proof  
@@ -592,11 +474,6 @@ sequenceDiagram
 Supported today:
 
 - Local agriculture eligibility can be evaluated against Relay sources.
-
-Missing:
-
-- Proof profile for accepted landholding or farmer-registration credentials.
-- Freshness and revocation policy for agricultural proofs.
 
 ### 13. Health Worker Presents Professional Credential
 
@@ -629,11 +506,6 @@ Supported today:
 
 - Credential issuance and verification primitives exist in platform-adjacent
   crates.
-
-Missing:
-
-- Notary runtime proof intake.
-- Issuer trust policy and status policy for professional credentials.
 
 ### 14. Parent Or Guardian Requests A Service For A Child Or Dependent
 
@@ -673,16 +545,6 @@ Supported today:
 - Local and delegated claim evaluation can represent some child-related facts.
 - User-presented proof is planned as the mechanism for representation evidence.
 
-Missing:
-
-- Actor and subject separation in request and audit models.
-- Representation proof profiles for parentage, guardianship, power of attorney,
-  case delegation, or social-worker assignment.
-- Policy rules for whether Alice may request, receive, or hold evidence about
-  Charlie.
-- Redacted audit fields that record "Alice acted for Charlie" without exposing
-  raw identifiers.
-
 ### 15. Household Or Group Representative Requests A Service
 
 Pattern: Representation plus proof  
@@ -721,17 +583,6 @@ Supported today:
 - Local claim evaluation can target non-person entities when configured.
 - Delegated evaluation can request predicates about configured subject types.
 
-Missing:
-
-- Collective `subject_ref` model for households, groups, cooperatives, farms,
-  and legal entities.
-- Representation proof profiles for household head, group officer,
-  cooperative representative, business officer, or delegated agent.
-- Policy rules for whether the actor may request, receive, or hold evidence
-  about the collective subject and its members.
-- Audit fields that distinguish actor, collective subject, represented members
-  when relevant, and representation proof without logging raw identifiers.
-
 ### 16. Civil Notary Issues Date-Of-Birth Or Alive Credential
 
 Pattern: Credential issuance  
@@ -763,10 +614,6 @@ Supported today:
 - Local SD-JWT VC issuance for configured credential profiles.
 - Holder binding with `did:jwk`.
 
-Missing:
-
-- Production wallet interoperability hardening is outside this catalog.
-
 ### 17. Agriculture Notary Issues Voucher Eligibility Credential
 
 Pattern: Credential issuance  
@@ -797,10 +644,6 @@ Supported today:
 
 - Lab agriculture flow can produce a demo credential after successful evaluation.
 - Runtime credential profiles support SD-JWT VC issuance.
-
-Missing:
-
-- Full production wallet ceremony and status profile.
 
 ### 18. Shared Eligibility Notary Issues Combined-Support Credential
 
@@ -836,11 +679,6 @@ Supported today:
 - Local credential issuance exists.
 - Local composed claims can depend on local claim results.
 
-Missing:
-
-- Peer-result composition inside Notary runtime.
-- Audit links from issued credential to remote evaluation response ids.
-
 ### 19. Service Helps Holder Obtain Credential From Remote Notary
 
 Pattern: Federated credential issuance  
@@ -872,11 +710,6 @@ Supported today:
 
 - Local issuance exists.
 - Broader spec defines discovery/handoff and transparent byte relay constraints.
-
-Missing:
-
-- Holder-binding ceremony for federated issuance.
-- Nonce ownership, transparent relay rules, substitution defenses, and tests.
 
 ### 20. Replay And Emergency Peer Or Key Denial
 
@@ -915,10 +748,6 @@ Supported today:
 - Replay protection for request ids.
 - Emergency denylist configuration for peers and keys.
 
-Missing:
-
-- Shared replay store for active-active production deployments.
-
 ### 21. Auditor Verifies Minimized Decision Evidence
 
 Pattern: Governance  
@@ -953,11 +782,6 @@ Supported today:
 - Redacted local audit events.
 - Predicate disclosure avoids raw source rows by default.
 
-Missing:
-
-- Signed audit checkpoints and inclusion proofs.
-- Standard audit report shape for cross-organization review.
-
 ### 22. Peer Audit Checkpoint Monitoring
 
 Pattern: Governance  
@@ -987,22 +811,3 @@ sequenceDiagram
 Supported today:
 
 - Audit fields and spec direction exist.
-
-Missing:
-
-- Merkle checkpoint builder.
-- Checkpoint publisher.
-- Peer monitor and historical checkpoint semantics.
-
-## Capability Gaps Surfaced
-
-- Outbound `registry_notary_federation` source connector.
-- Mapping verified peer responses into local claim rule inputs.
-- User-presented proof verifier profiles.
-- Representation authority profiles, actor/subject separation, and collective
-  subject support.
-- Credential status and freshness policy for remote proofs.
-- Federated credential issuance holder-binding ceremony.
-- Shared replay store for active-active deployments.
-- Signed audit checkpoints and peer monitoring.
-- Registry Lab federation scenario scripts and fixture metadata.

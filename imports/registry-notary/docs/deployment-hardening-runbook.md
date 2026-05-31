@@ -1,5 +1,7 @@
 # Deployment Hardening Runbook
 
+> **Page type:** Runbook · **Product:** Registry Notary · **Layer:** operations · **Audience:** operator
+
 This runbook is for teams moving Registry Notary from a demo into a shared test,
 pilot, or production-like environment. It focuses on implemented operational
 controls and deployment choices. Route names may still evolve while the REST API
@@ -35,7 +37,11 @@ Recommended controls:
 - Set `evidence.api_base_url`, `credential_status.base_url`, and OID4VCI public
   URLs to the externally reachable HTTPS issuer origin.
 - Keep `/metrics` and admin actions behind normal network controls and require
-  `registry_notary:admin`.
+  `registry_notary:admin`. The application provides no separate admin listener:
+  `/metrics` and `/admin/v1/*` are served on the same listener as all other
+  traffic, so isolating them from the public data plane is entirely the
+  operator's responsibility (ingress rules, reverse-proxy routing, or firewall).
+  The only built-in gate is the `registry_notary:admin` scope check.
 - Use proxy limits for body size, header size, connection count, idle timeout,
   and request rate.
 - Do not expose demo source services, sidecar worker endpoints, local Redis, or
@@ -104,26 +110,12 @@ Replay protection applies to:
 - OID4VCI nonces.
 - Holder proof JWT ids.
 
+For full `replay` config options (`in_memory` vs. `redis`, URL env, key prefix,
+and timeout fields), see the
+[Replay Store section of the configuration reference](operator-config-reference.md#replay-store).
 Use `in_memory` only when one process handles all relevant traffic and losing
-replay state on restart is acceptable:
-
-```yaml
-replay:
-  storage: in_memory
-```
-
-Use Redis for active-active, rolling deploys that overlap traffic, public wallet
-flows, or federation:
-
-```yaml
-replay:
-  storage: redis
-  redis:
-    url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
-    key_prefix: registry-notary
-    connect_timeout_ms: 1000
-    operation_timeout_ms: 500
-```
+replay state on restart is acceptable. Use Redis for active-active, rolling
+deploys that overlap traffic, public wallet flows, or federation.
 
 Operational expectations:
 
@@ -139,18 +131,10 @@ Operational expectations:
 If status is disabled, verifiers rely on credential expiry and issuer trust.
 That is the default beta posture.
 
-If status is enabled, prefer Redis outside lab deployments:
-
-```yaml
-credential_status:
-  enabled: true
-  base_url: https://notary.example.gov
-  storage: redis
-  retention_seconds: 86400
-  redis:
-    url_env: REGISTRY_NOTARY_STATUS_REDIS_URL
-    key_prefix: registry-notary
-```
+If status is enabled, prefer Redis outside lab deployments. For the full
+`credential_status` config block (storage options, `base_url`, `retention_seconds`,
+and Redis fields), see the
+[Credential Status section of the configuration reference](operator-config-reference.md#credential-status).
 
 Hardening expectations:
 
@@ -203,7 +187,7 @@ scrape_configs:
       type: Bearer
       credentials_file: /run/secrets/registry-notary-metrics-token
     static_configs:
-      - targets: ["registry-notary:4325"]
+      - targets: ["registry-notary:8081"]
 ```
 
 Do not add labels containing subject ids, principal ids, holder material,
@@ -312,23 +296,106 @@ Rollback plan:
 
 ## Incident Notes
 
-For an auth or token incident:
+### Auth or Token Incident
 
-- Revoke or rotate the affected caller credential or OIDC client.
-- Keep audit HMAC secret stable so investigators can correlate records.
-- Search audit by hashed principal, caller id, claim id, credential profile,
-  source id, and outcome, not by raw personal data.
+**Symptom:** Unauthorized requests succeed, an API key or bearer token is
+suspected compromised, or an OIDC client secret is known or believed leaked.
+Auth denials may spike as the attacker probes, or may be absent if the
+credential is valid and in active misuse.
 
-For a signing-key incident:
+**Steps:**
 
-- Mark the compromised key `disabled`.
-- Promote or create a new `active` key.
-- Keep unaffected old keys `publish_only` when verifiers still need their public
-  keys.
-- Decide whether status-enabled credentials need suspension or revocation.
+1. Identify the affected caller id or OIDC client by searching audit records
+   using hashed principal, caller id, and outcome fields. Do not use raw
+   personal data in your search.
+2. Revoke or rotate the affected credential: remove the old hash from
+   `auth.api_keys` or `auth.bearer_tokens` (for static keys), or rotate the
+   OIDC client secret at the identity provider.
+3. Deploy the updated config or rotate the secret in the deployment secret
+   store, depending on how secrets are injected.
+4. Keep the audit HMAC secret stable throughout. Rotating it breaks
+   correlation of records issued before the rotation.
+5. If the incident involves an OIDC client, confirm with the identity provider
+   that the old client secret is invalidated and that no other clients share
+   the compromised material.
 
-For a source-data incident:
+**Verification:**
 
-- Disable affected claims or remove the source connection.
-- Rotate source credentials if they may have leaked.
-- Reissue credentials only after source owners confirm data quality.
+- Confirm `/ready` passes after the config change.
+- Confirm that new requests using the revoked credential are denied (auth
+  denial in metrics and audit).
+- Confirm that legitimate callers using their current credentials still
+  succeed.
+
+---
+
+### Signing-Key Incident
+
+**Symptom:** A signing key private material is known or suspected leaked, a
+PKCS#11 PIN is compromised, or an HSM slot is suspected tampered. Credentials
+signed with the affected key may have been issued or could be issued by an
+attacker with a copy of the key.
+
+**Steps:**
+
+1. Mark the compromised key `status: disabled` in config. A disabled key
+   cannot sign and its public material is no longer published.
+2. Deploy the updated config so the change takes effect.
+3. Promote an existing key to `status: active`, or generate and configure a
+   new active key. See [`signing-key-provider.md`](signing-key-provider.md)
+   for key generation and PKCS#11 setup.
+4. For keys that were `active` before the incident, set them to `publish_only`
+   (not `disabled`) only if verifiers still hold credentials that reference
+   their key id and need the public key to verify signatures on already-issued
+   material. Once all such credentials have expired and verifier caches have
+   refreshed, set them to `disabled`.
+5. Decide whether status-enabled credentials signed by the compromised key
+   need suspension or revocation. If so, use the status mutation endpoint
+   (requires `registry_notary:admin`) to update each affected credential's
+   status. Confirm that the status store reflects the changes.
+
+**Verification:**
+
+- Confirm `/ready` passes after the config change.
+- Confirm new credential issuances use the new active key (check `kid` in a
+  test-issued credential).
+- Confirm the disabled key's public material is no longer served.
+- If credentials were suspended or revoked, confirm their status URLs return
+  the updated state.
+
+---
+
+### Source-Data Incident
+
+**Symptom:** A source registry returns incorrect, stale, or corrupted data;
+a source credential (token or OAuth client secret) is suspected leaked; or
+source data quality is called into question by a downstream report or audit.
+Credentials already issued may contain incorrect claims.
+
+**Steps:**
+
+1. Disable the affected claims or remove the source connection from config to
+   stop new issuances that rely on the suspect data.
+2. Deploy the updated config so no further reads go to the affected source.
+3. If source credentials may have leaked, rotate them: remove the old secret
+   from the deployment secret store and update `token_env` or the OAuth client
+   secret at the source identity provider. Coordinate the rotation with the
+   source owner.
+4. Work with the source owner to confirm data quality is restored and that
+   the root cause is understood.
+5. Assess which credentials issued during the affected window contain incorrect
+   claims. If status is enabled, suspend or revoke those credentials via the
+   status mutation endpoint (requires `registry_notary:admin`). If status is
+   not enabled, notify relying parties and coordinate re-issuance.
+6. Re-enable the source connection or claims only after the source owner
+   confirms data quality.
+7. Reissue credentials for affected subjects after re-enabling.
+
+**Verification:**
+
+- Confirm `/ready` passes after config changes.
+- Confirm source reads succeed with the new credentials (check source read
+  metrics and audit records for the source id).
+- Confirm no evaluation or issuance errors related to the affected source.
+- If credentials were suspended, confirm their status URLs return the updated
+  state before communicating recovery to relying parties.

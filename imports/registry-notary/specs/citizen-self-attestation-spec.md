@@ -1,5 +1,10 @@
 # Citizen Self-Attestation Spec
 
+> **Status: Archived (2026-05-31).** Kept as a design record. The load-bearing
+> config and format details below have been reconciled to the shipped code; for
+> current behavior see the code and docs/. Do not treat the broader design
+> narrative as current.
+
 Current status: implemented for evaluation, render, credential issuance, batch
 denial, rate-limit guard, and OpenID4VCI facade integration in 0.3.0. External
 wallet and lab smoke coverage remains separate from the in-repo implementation
@@ -144,8 +149,8 @@ self_attestation:
   requires_auth_mode: oidc
   subject_binding:
     token_claim: "https://id.example.gov/claims/national_id"
-    request_field: TargetIdentifier
-    identifier_scheme: national_id
+    request_field: SubjectId
+    id_type: national_id
     normalize: exact
     allow_sub_as_civil_id: false
   citizen_clients:
@@ -357,7 +362,7 @@ derived target identifier:
 
 ```text
 principal.verified_claims[token_claim] == derived.target.identifiers[configured_scheme].value
-derived.target.identifiers[configured_scheme].scheme == subject_binding.identifier_scheme
+derived.target.identifiers[configured_scheme].scheme == subject_binding.id_type
 ```
 
 The token claim should be:
@@ -384,7 +389,7 @@ The request must fail closed when:
 - the token claim is not a string;
 - the configured target identifier value is empty;
 - the configured target identifier scheme does not match
-  `subject_binding.identifier_scheme`;
+  `subject_binding.id_type`;
 - normalization is unsupported;
 - the normalized values do not match.
 
@@ -513,9 +518,9 @@ bounded operational details:
 {
   "self_attestation": {
     "enabled": true,
-    "claims": ["person-is-alive"],
-    "formats": ["application/vnd.registry-notary.claim-result+json", "application/dc+sd-jwt"],
-    "credential_profiles": ["civil_status_sd_jwt"]
+    "allowed_claim_ids": ["person-is-alive"],
+    "allowed_formats": ["application/vnd.registry-notary.claim-result+json", "application/dc+sd-jwt"],
+    "credential_profile_ids": ["civil_status_sd_jwt"]
   }
 }
 ```
@@ -1131,9 +1136,9 @@ Definition of Done:
 
 - Self-attestation lives in top-level `self_attestation`.
 - The target identifier scheme is mandatory and must match configured
-  `subject_binding.identifier_scheme`.
+  `subject_binding.id_type`.
 - `subject_binding.request_field` is an enum, and v1 accepts only
-  `TargetIdentifier`.
+  `SubjectId`.
 - The registry-lab demo uses a namespaced custom subject-binding claim, not
   `sub`.
 - `token_claim: sub` requires `allow_sub_as_civil_id = true`; otherwise config
@@ -1186,7 +1191,7 @@ The feature is done only when all of the following are true:
 - Self-attestation is disabled by default and existing static-credential and
   machine-client OIDC behavior remain unchanged in tests.
 - Enabling `self_attestation` requires OIDC, a top-level config block, a
-  namespaced subject-binding claim, `TargetIdentifier` request-field enum,
+  namespaced subject-binding claim, `SubjectId` request-field enum,
   mandatory target identifier scheme, allowed citizen client or audience, and
   self-attestation scope.
 - `EvidencePrincipal` carries typed `BoundedVerifiedClaims`; raw JWTs, raw

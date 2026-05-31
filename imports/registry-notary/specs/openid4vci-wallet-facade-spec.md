@@ -1,5 +1,11 @@
 # OpenID4VCI Wallet Facade Spec
 
+> **Status: Archived (2026-05-31).** The OpenID4VCI wallet facade described here has shipped; the four facade endpoints are implemented. This file is kept as a
+> design record and is not the source of truth. For current behavior see the code
+> and docs/oid4vci-wallet-interop.md and docs/sd-jwt-vc-conformance-profile.md.
+
+Adoption mode: profiled (OID4VCI Draft 13 subset).
+
 ## Goal
 
 Add an optional OpenID4VCI issuer facade for Registry Notary so citizen

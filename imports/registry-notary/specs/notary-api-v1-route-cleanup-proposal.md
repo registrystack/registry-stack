@@ -6,6 +6,13 @@ Status: implemented in the current route surface. This document remains as the
 design record for the breaking route cleanup and intentionally names legacy
 routes in the comparison tables below.
 
+The notary route surface is implemented and clean of legacy routes. Cross-repo
+cleanup of the registry-lab vendored relay demo and smoke scripts remains
+outstanding: those scripts still call removed routes (`/claims/evaluate`,
+`/claims/batch-evaluate`, `/evidence/render`, `/credentials/issue`) and must
+be updated before the Definition of Done test-run items below can be marked
+complete.
+
 Registry Notary is still pre-real-adoption, so we should take the opportunity to
 make the HTTP API more consistent before external clients depend on it. The
 current API is understandable, but several routes are action-oriented or

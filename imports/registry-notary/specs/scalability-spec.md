@@ -1,5 +1,9 @@
 # Registry Notary Scalability Spec
 
+> **Status: Archived (2026-05-31).** Stages 0 through 3 described here have shipped and are tested; the code line-references throughout this document are stale. Do not rely on the line numbers in this document. This file is kept as a
+> design record and is not the source of truth. For current behavior see the code
+> and the perf/ directory and the runtime code.
+
 ## Purpose
 
 Define the work needed to make `registry-notary` serve both synchronous credential issuance and batch backfills against third-party registries without the current single-threaded fan-out becoming the bottleneck. The fan-out diagnosis is provisional, to be confirmed by the Stage 0 load harness before Stage 1 ships.

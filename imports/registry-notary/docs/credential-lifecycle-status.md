@@ -1,5 +1,7 @@
 # Credential Lifecycle And Status
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
+
 Registry Notary issues short-lived SD-JWT VC credentials. Live credential status
 is optional. This guide explains the default lifecycle, when to enable status,
 what status means, and how operators should run it.
@@ -106,8 +108,8 @@ Status records intentionally contain lifecycle metadata only:
 - Credential id.
 - Issuer or service metadata needed by Notary.
 - Credential profile id.
-- Source id or class where needed for operations.
 - Issued-at and expires-at timestamps.
+- Last-updated timestamp.
 - Current lifecycle status.
 
 Status records must not contain:
@@ -134,7 +136,9 @@ documentation or partner contracts around route names until that design is
 stabilized. For adopter testing, use the SDK methods where possible:
 
 - Rust: `credential_status(...)` and `update_credential_status(...)`.
-- Node.js and Python wrappers expose the same lifecycle operations.
+- Node.js and Python wrappers expose only the read-only status lookup
+  (`credentialStatus` / `credential_status`); the admin status mutation is
+  available via Rust or HTTP only.
 
 Admin mutation accepts a new status value of `valid`, `suspended`, or
 `revoked`.

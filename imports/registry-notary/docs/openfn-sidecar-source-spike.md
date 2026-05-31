@@ -1,9 +1,11 @@
 # OpenFn Sidecar Source Spike
 
-> Historical note: this file records the initial sidecar spike and decision
-> trail. For adopter-facing setup, use
+> Historical note (2026-05-31): this file records the initial sidecar spike
+> and decision trail. The decisions recorded here are settled and the work has
+> shipped. For adopter-facing setup, use
 > [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) and
-> [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md).
+> [`../crates/registry-notary-openfn-sidecar/README.md`](../crates/registry-notary-openfn-sidecar/README.md),
+> which are the current references.
 
 This spike explores using an OpenFn-powered sidecar as a one-record source for
 Registry Notary claim evaluation. The starting point is intentionally narrow:

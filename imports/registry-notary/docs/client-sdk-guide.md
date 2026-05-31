@@ -1,5 +1,7 @@
 # Registry Notary Client SDK Guide
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** consultation, evaluation, credential · **Audience:** integrator
+
 Registry Notary ships a typed Rust client plus Python and Node.js wrappers. Use
 these clients instead of hand-written HTTP calls when application code needs the
 Notary wire contract, purpose handling, bounded response reads, route-aware
@@ -109,47 +111,16 @@ Problem Details `detail`.
 The Rust `portable()` error envelope is intended for language bindings and FFI.
 It intentionally excludes sensitive detail strings.
 
-The following application problem `code` values are part of the stable client
-contract for policy mapping:
-
-- `request.invalid`
-- `purpose.not_allowed`
-- `profile.unsupported`
-- `evidence.not_available`
-- `requester.reauthentication_required`
-- `requester.matching_policy_rejected`
-- `requester.not_found`
-- `requester.match_ambiguous`
-- `requester.identifier_missing`
-- `requester.attributes_insufficient`
-- `target.not_found`
-- `target.match_ambiguous`
-- `target.identifier_missing`
-- `target.match_low_confidence`
-- `target.attributes_insufficient`
-- `target.not_in_valid_state`
-- `target.matching_policy_rejected`
-- `relationship.not_established`
-- `relationship.match_ambiguous`
-- `relationship.attributes_insufficient`
-- `relationship.policy_rejected`
-- `source.unavailable`
-- `claim.not_found`
-- `claim.version_not_found`
-- `claim.format_not_supported`
-- `auth.purpose_required`
-- `auth.missing_credential`
-- `idempotency.conflict`
-- `batch.too_large`
-
-Profiles may collapse granular matching outcomes to public
-`evidence.not_available` when revealing cardinality, state, or relationship
-policy would create an oracle. Operators can still inspect the granular audit
-code in the server audit trail.
+The stable application problem `code` values for policy mapping live in the
+[problem code registry in the API reference](api-reference.md#problem-code-registry).
 
 ## Rust
 
 ### Install
+
+> Note: the `path = "crates/..."` dependencies below assume you are building
+> inside the Registry Notary workspace checkout. An external integrator without
+> that checkout should depend on the published crate versions instead.
 
 ```toml
 [dependencies]
@@ -211,6 +182,11 @@ if let Some(result) = response.body.result_for("person-is-alive") {
 
 ### Raw Request Evaluation
 
+> Note: the raw-DTO examples construct `registry-notary-core` types directly and
+> assume building inside the workspace checkout. Integrators who only consume the
+> client over HTTP can use the high-level builder or JSON facade shown elsewhere
+> in this guide.
+
 ```rust
 use registry_notary_client::RequestOptions;
 use registry_notary_core::{
@@ -219,18 +195,19 @@ use registry_notary_core::{
 
 let request = EvaluateRequest {
     requester: None,
-    target: EvidenceEntity {
+    target: Some(EvidenceEntity {
         entity_type: "Person".to_string(),
         id: None,
         identifiers: vec![EvidenceIdentifier {
             scheme: "national_id".to_string(),
             value: "person-1".to_string(),
             issuer: Some("civil_registry".to_string()),
+            country: None,
         }],
         attributes: Default::default(),
         assurance: None,
         profile: None,
-    },
+    }),
     relationship: Some(EvidenceRelationship {
         relationship_type: "self".to_string(),
         attributes: Default::default(),
@@ -284,6 +261,7 @@ let request = BatchEvaluateRequest {
                 scheme: "national_id".to_string(),
                 value: "person-1".to_string(),
                 issuer: Some("civil_registry".to_string()),
+                country: None,
             }],
             attributes: Default::default(),
             assurance: None,
@@ -754,29 +732,8 @@ try {
 
 ## API Method Matrix
 
-| Route | Rust | Python | Node |
-| --- | --- | --- | --- |
-| `GET /healthz` | `health` | not exposed | not exposed |
-| `GET /ready` | `ready` | not exposed | not exposed |
-| `POST /admin/v1/reload` | `admin_reload` | not exposed | not exposed |
-| `GET /openapi.json` | `openapi_json` | not exposed | not exposed |
-| `GET /.well-known/evidence-service` | `service_document` | `service_document` | `serviceDocument` |
-| `GET /.well-known/evidence/jwks.json` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuerJwks`, `refreshJwks`, `rawIssuerJwks` |
-| `GET /metrics` | `metrics` | not exposed | not exposed |
-| `GET /v1/claims` | `list_claims` | `list_claims` | `listClaims` |
-| `GET /v1/claims/{id}` | `get_claim` | `get_claim` | `getClaim` |
-| `GET /v1/formats` | `list_formats` | not exposed | not exposed |
-| `POST /v1/evaluations` | `evaluate`, `evaluate_request` | `evaluate`, `evaluate_request`, `aevaluate`, `aevaluate_request` | `evaluate`, `evaluateRequest` |
-| `POST /v1/batch-evaluations` | `batch_evaluate_request` | `batch_evaluate_request`, `abatch_evaluate_request` | `batchEvaluate`, `batchEvaluateRequest` |
-| `POST /v1/evaluations/{evaluation_id}/render` | `render_request` | `render_request`, `arender_request` | `renderRequest` |
-| `POST /v1/credentials` | `issue_credential_request` | `issue_credential_request`, `aissue_credential_request` | `issueCredentialRequest` |
-| `GET /v1/credentials/{id}/status` | `credential_status` | `credential_status` | `credentialStatus` |
-| `POST /admin/v1/credentials/{id}/status` | `update_credential_status` | not exposed | not exposed |
-| `GET /.well-known/openid-credential-issuer` | `oid4vci_issuer_metadata` | `oid4vci_issuer_metadata` | `oid4vciIssuerMetadata` |
-| `GET /oid4vci/credential-offer` | `oid4vci_credential_offer` | `oid4vci_credential_offer` | `oid4vciCredentialOffer` |
-| `POST /oid4vci/nonce` | `oid4vci_nonce` | `oid4vci_nonce` | `oid4vciNonce` |
-| `POST /oid4vci/credential` | `oid4vci_credential` | `oid4vci_credential` | `oid4vciCredential` |
-| `POST /federation/v1/evaluations` | `federation_evaluate_jws` | `federation_evaluate_jws` | `federationEvaluateJws` |
+The route to client method mapping for each runtime lives in the
+[route to client method matrix in the API reference](api-reference.md#route-to-client-method-matrix).
 
 ## Verification Commands
 
