@@ -355,6 +355,7 @@ fn claim(
                     op: "eq".to_string(),
                     cardinality: "one".to_string(),
                 },
+                query_fields: Vec::new(),
                 fields: BTreeMap::from([(
                     field.to_string(),
                     SourceFieldConfig {
@@ -637,6 +638,7 @@ async fn default_context_batch_read_runs_concurrently_and_preserves_order() {
             op: "eq".to_string(),
             cardinality: "one".to_string(),
         },
+        query_fields: Vec::new(),
         fields: BTreeMap::new(),
         matching: SourceMatchingConfig::default(),
     };

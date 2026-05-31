@@ -79,6 +79,7 @@ fn evaluate_claim() -> ClaimDefinition {
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 SourceFieldConfig {

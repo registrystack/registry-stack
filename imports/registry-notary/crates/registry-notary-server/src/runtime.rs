@@ -219,15 +219,15 @@ use crosswalk_core::{
     MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneEvalError, StandaloneExpressionInput,
 };
 use registry_notary_core::{
-    AccessMode, BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
-    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
-    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimProvenance, ClaimRef,
-    ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
-    EvaluateRequest, EvidenceConfig, EvidenceEntity, EvidenceEntityRef, EvidenceError,
-    EvidenceFormat, EvidencePrincipal, EvidenceRequestContext, MatchingMetadata, RenderRequest,
-    RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode, SourceBindingConfig,
-    SourceCapability, StoredSelfAttestationMetadata, SubjectRequest, TargetRefView,
-    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    missing_context_error, AccessMode, BatchClaimResultView, BatchEvaluateRequest,
+    BatchEvaluateResponse, BatchItemError, BatchItemResponse, BatchItemStatus, BatchStatus,
+    BatchSummary, BoundedClaimId, BoundedCorrelationId, BulkMode, CelBindingsConfig,
+    ClaimDefinition, ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig,
+    DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
+    MatchingMetadata, RenderRequest, RuleConfig, SelfAttestationConfig, SelfAttestationDenialCode,
+    SourceBindingConfig, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
+    TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
     SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
     SD_JWT_VC_SIGNING_ALG,
 };
@@ -2704,20 +2704,6 @@ fn collapse_matching_error(
     }
 }
 
-fn missing_context_error(path: &str) -> EvidenceError {
-    if path.starts_with("target.identifiers.") {
-        EvidenceError::TargetIdentifierMissing
-    } else if path.starts_with("requester.identifiers.") {
-        EvidenceError::RequesterIdentifierMissing
-    } else if path.starts_with("requester.attributes.") {
-        EvidenceError::RequesterAttributesInsufficient
-    } else if path.starts_with("relationship.attributes.") {
-        EvidenceError::RelationshipAttributesInsufficient
-    } else {
-        EvidenceError::TargetAttributesInsufficient
-    }
-}
-
 fn present_entity_paths(prefix: &str, entity: &EvidenceEntity) -> Vec<String> {
     let mut paths = Vec::new();
     if entity.id.is_some() {
@@ -3275,6 +3261,7 @@ mod tests {
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 registry_notary_core::SourceFieldConfig {

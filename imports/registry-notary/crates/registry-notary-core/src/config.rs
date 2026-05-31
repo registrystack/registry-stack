@@ -101,6 +101,8 @@ impl StandaloneRegistryNotaryConfig {
         // never observes a misconfigured combination. rda_in_filter requires
         // operator attestation + cardinality=one on every binding pointing
         // at this connection. dci_batched_search requires the dci connector.
+        // Bindings with query_fields are excluded from bulk paths until those
+        // implementations understand multi-field grouping.
         for (connection_id, connection) in &self.evidence.source_connections {
             match connection.bulk_mode {
                 BulkMode::None => {}
@@ -114,6 +116,16 @@ impl StandaloneRegistryNotaryConfig {
                         for (binding_id, binding) in &claim.source_bindings {
                             if binding.connection.as_deref() != Some(connection_id.as_str()) {
                                 continue;
+                            }
+                            if !binding.query_fields.is_empty() {
+                                return Err(
+                                    EvidenceConfigError::QueryFieldsIncompatibleWithBulkMode {
+                                        connection: connection_id.clone(),
+                                        claim: claim.id.clone(),
+                                        binding: binding_id.clone(),
+                                        bulk_mode: "rda_in_filter".to_string(),
+                                    },
+                                );
                             }
                             if binding.lookup.cardinality != "one" {
                                 return Err(EvidenceConfigError::BulkModeRequiresCardinalityOne {
@@ -130,6 +142,16 @@ impl StandaloneRegistryNotaryConfig {
                         for (binding_id, binding) in &claim.source_bindings {
                             if binding.connection.as_deref() != Some(connection_id.as_str()) {
                                 continue;
+                            }
+                            if !binding.query_fields.is_empty() {
+                                return Err(
+                                    EvidenceConfigError::QueryFieldsIncompatibleWithBulkMode {
+                                        connection: connection_id.clone(),
+                                        claim: claim.id.clone(),
+                                        binding: binding_id.clone(),
+                                        bulk_mode: "dci_batched_search".to_string(),
+                                    },
+                                );
                             }
                             if binding.connector != SourceConnectorKind::Dci {
                                 return Err(EvidenceConfigError::BulkModeRequiresDciConnector {
@@ -157,6 +179,23 @@ impl StandaloneRegistryNotaryConfig {
                     .contains_key(binding.connection.as_deref().unwrap_or_default())
                 {
                     return Err(EvidenceConfigError::MissingSourceConnection);
+                }
+                let connection = self
+                    .evidence
+                    .source_connections
+                    .get(binding.connection.as_deref().unwrap_or_default())
+                    .expect("source connection exists after contains_key check");
+                if !binding.query_fields.is_empty()
+                    && binding.connector == SourceConnectorKind::Dci
+                    && connection.dci.query_type == "idtype-value"
+                {
+                    return Err(
+                        EvidenceConfigError::QueryFieldsIncompatibleWithDciIdTypeValue {
+                            connection: binding.connection.clone().unwrap_or_default(),
+                            claim: claim.id.clone(),
+                            binding: binding_id.clone(),
+                        },
+                    );
                 }
                 validate_source_matching_config(&claim.id, binding_id, &binding.matching)?;
             }
@@ -2614,6 +2653,27 @@ pub enum EvidenceConfigError {
         claim: String,
         binding: String,
     },
+    #[error(
+        "source_connection '{connection}': bulk_mode = {bulk_mode} cannot be used with \
+         query_fields (binding '{binding}' in claim '{claim}'); bulk reads currently support \
+         lookup only"
+    )]
+    QueryFieldsIncompatibleWithBulkMode {
+        connection: String,
+        claim: String,
+        binding: String,
+        bulk_mode: String,
+    },
+    #[error(
+        "claim '{claim}' binding '{binding}' uses query_fields with DCI query_type = idtype-value \
+         on source_connection '{connection}'; use lookup for idtype-value or set DCI \
+         query_type to expression or predicate"
+    )]
+    QueryFieldsIncompatibleWithDciIdTypeValue {
+        connection: String,
+        claim: String,
+        binding: String,
+    },
 }
 
 /// Registry Notary configuration. Disabled by default so existing
@@ -2858,9 +2918,20 @@ pub struct SourceBindingConfig {
     pub entity: String,
     pub lookup: SourceLookupConfig,
     #[serde(default)]
+    pub query_fields: Vec<SourceQueryFieldConfig>,
+    #[serde(default)]
     pub fields: BTreeMap<String, SourceFieldConfig>,
     #[serde(default)]
     pub matching: SourceMatchingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceQueryFieldConfig {
+    pub input: String,
+    pub field: String,
+    #[serde(default = "default_lookup_op")]
+    pub op: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -5242,6 +5313,7 @@ source_auth:
                 op: "eq".to_string(),
                 cardinality: cardinality.to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::new(),
             matching: SourceMatchingConfig::default(),
         }
@@ -5260,9 +5332,25 @@ source_auth:
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::new(),
             matching: SourceMatchingConfig::default(),
         }
+    }
+
+    fn add_query_fields(binding: &mut SourceBindingConfig) {
+        binding.query_fields = vec![
+            SourceQueryFieldConfig {
+                input: "target.attributes.given_name".to_string(),
+                field: "given_name".to_string(),
+                op: "eq".to_string(),
+            },
+            SourceQueryFieldConfig {
+                input: "target.attributes.family_name".to_string(),
+                field: "surname".to_string(),
+                op: "eq".to_string(),
+            },
+        ];
     }
 
     #[test]
@@ -5440,6 +5528,170 @@ bulk_mode: unsupported_mode
             .source_bindings
             .insert("record".to_string(), dci_binding("registry"));
         config.evidence.claims = vec![claim];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn query_fields_with_rda_bulk_mode_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::RdaInFilter,
+                bulk_mode_lookup_unique: true,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = rda_binding("farmer_registry", "one");
+        add_query_fields(&mut binding);
+        let mut claim = minimal_claim("a-claim");
+        claim.source_bindings.insert("farmer".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("query_fields cannot use rda_in_filter bulk mode");
+        match &err {
+            EvidenceConfigError::QueryFieldsIncompatibleWithBulkMode {
+                connection,
+                claim,
+                binding,
+                bulk_mode,
+            } => {
+                assert_eq!(connection, "farmer_registry");
+                assert_eq!(claim, "a-claim");
+                assert_eq!(binding, "farmer");
+                assert_eq!(bulk_mode, "rda_in_filter");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn query_fields_with_dci_bulk_mode_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::DciBatchedSearch,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = dci_binding("registry");
+        add_query_fields(&mut binding);
+        let mut claim = minimal_claim("a-claim");
+        claim.source_bindings.insert("record".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("query_fields cannot use dci_batched_search bulk mode");
+        match &err {
+            EvidenceConfigError::QueryFieldsIncompatibleWithBulkMode {
+                connection,
+                claim,
+                binding,
+                bulk_mode,
+            } => {
+                assert_eq!(connection, "registry");
+                assert_eq!(claim, "a-claim");
+                assert_eq!(binding, "record");
+                assert_eq!(bulk_mode, "dci_batched_search");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn query_fields_with_dci_idtype_value_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig {
+                    query_type: "idtype-value".to_string(),
+                    ..DciSourceConnectionConfig::default()
+                },
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = dci_binding("registry");
+        add_query_fields(&mut binding);
+        let mut claim = minimal_claim("a-claim");
+        claim.source_bindings.insert("record".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("query_fields cannot use idtype-value DCI");
+        match &err {
+            EvidenceConfigError::QueryFieldsIncompatibleWithDciIdTypeValue {
+                connection,
+                claim,
+                binding,
+            } => {
+                assert_eq!(connection, "registry");
+                assert_eq!(claim, "a-claim");
+                assert_eq!(binding, "record");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn query_fields_with_dci_expression_validates() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                dci: DciSourceConnectionConfig {
+                    query_type: "expression".to_string(),
+                    ..DciSourceConnectionConfig::default()
+                },
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut binding = dci_binding("registry");
+        add_query_fields(&mut binding);
+        let mut claim = minimal_claim("a-claim");
+        claim.source_bindings.insert("record".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
         assert!(config.validate().is_ok());
     }
 

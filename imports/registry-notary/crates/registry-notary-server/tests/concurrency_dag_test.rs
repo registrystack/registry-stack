@@ -161,6 +161,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
                     op: "eq".to_string(),
                     cardinality: "one".to_string(),
                 },
+                query_fields: Vec::new(),
                 fields: BTreeMap::from([(
                     "value".to_string(),
                     SourceFieldConfig {
@@ -221,6 +222,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 SourceFieldConfig {

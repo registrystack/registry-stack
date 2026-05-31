@@ -839,6 +839,9 @@ fn dci_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (connection_id, connection) in &config.evidence.source_connections {
+        let Some(binding) = first_dci_binding_for_connection(config, connection_id) else {
+            continue;
+        };
         if connection.dci.search_path.trim().is_empty() {
             continue;
         }
@@ -859,10 +862,7 @@ fn dci_diagnostics(
             ));
         } else {
             let lookup_field = subject_id_type
-                .or_else(|| {
-                    first_dci_binding_for_connection(config, connection_id)
-                        .map(|binding| binding.lookup.field.as_str())
-                })
+                .or(Some(binding.lookup.field.as_str()))
                 .unwrap_or("configured lookup field");
             diagnostics.push(Diagnostic::ok(format!(
                 "{connection_id} DCI request can be constructed for lookup field {lookup_field}"
@@ -2051,6 +2051,20 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
             .as_deref()
             .expect("warning has next action")
             .contains("off-host"));
+    }
+
+    #[test]
+    fn dci_diagnostics_skip_registry_data_api_bindings() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        let binding = config.evidence.claims[0]
+            .source_bindings
+            .get_mut("record")
+            .expect("source binding exists");
+        binding.connector = registry_notary_core::SourceConnectorKind::RegistryDataApi;
+
+        let diagnostics = dci_diagnostics(&config, None);
+
+        assert!(diagnostics.is_empty());
     }
 
     fn test_dci_options(demo_issuer: bool) -> InitDciOptions {

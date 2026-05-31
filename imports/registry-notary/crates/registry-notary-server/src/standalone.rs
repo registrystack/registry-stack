@@ -2742,6 +2742,17 @@ async fn read_remote_registry_data_api_one_for_context(
     context: &EvidenceRequestContext,
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
+    if !binding.query_fields.is_empty() {
+        let query_values = source_query_values_for_context(binding, context)?;
+        return read_remote_registry_data_api_one_query_values(
+            sources,
+            connection,
+            binding,
+            query_values,
+            purpose,
+        )
+        .await;
+    }
     let lookup_value = lookup_value_for_context(binding, context)?;
     read_remote_registry_data_api_one_lookup(sources, connection, binding, lookup_value, purpose)
         .await
@@ -2794,6 +2805,54 @@ async fn read_remote_registry_data_api_one_lookup(
     }
 }
 
+async fn read_remote_registry_data_api_one_query_values(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    query_values: Vec<SourceQueryValue>,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    let fields = projected_source_fields_with_query_values(binding, &query_values);
+    let url = registry_data_api_url(&connection.base_url, binding)?;
+    let mut query_pairs = vec![
+        ("limit".to_string(), "2".to_string()),
+        ("fields".to_string(), fields.join(",")),
+    ];
+    for query_value in &query_values {
+        query_pairs.push(registry_data_api_query_pair(query_value)?);
+    }
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "rda",
+        &url,
+        reqwest::Method::GET,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .query(&query_pairs)
+        },
+    )
+    .await?;
+    let rows = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or(EvidenceError::SourceUnavailable)?;
+    match rows.len() {
+        0 => Err(EvidenceError::SourceNotFound),
+        1 => rows
+            .first()
+            .cloned()
+            .ok_or(EvidenceError::SourceUnavailable),
+        _ => Err(EvidenceError::SourceAmbiguous),
+    }
+}
+
 async fn read_external_dci_http_one(
     sources: &HttpEvidenceSources,
     connection: &ResolvedEvidenceSourceConnection,
@@ -2812,8 +2871,20 @@ async fn read_external_dci_http_one_for_context(
     context: &EvidenceRequestContext,
     purpose: &str,
 ) -> Result<Value, EvidenceError> {
-    let lookup_value = lookup_value_for_context(binding, context)?;
-    read_external_dci_http_one_lookup(sources, connection, binding, lookup_value, purpose).await
+    if binding.query_fields.is_empty() {
+        let lookup_value = lookup_value_for_context(binding, context)?;
+        return read_external_dci_http_one_lookup(
+            sources,
+            connection,
+            binding,
+            lookup_value,
+            purpose,
+        )
+        .await;
+    }
+    let lookup_values = source_query_values_for_context(binding, context)?;
+    read_external_dci_http_one_query_values(sources, connection, binding, lookup_values, purpose)
+        .await
 }
 
 async fn read_external_dci_http_one_lookup(
@@ -2852,6 +2923,47 @@ async fn read_external_dci_http_one_lookup(
     match rows.len() {
         0 => Err(EvidenceError::SourceNotFound),
         1 => project_dci_record(connection, binding, &lookup_value, &rows[0]),
+        _ => Err(EvidenceError::SourceAmbiguous),
+    }
+}
+
+async fn read_external_dci_http_one_query_values(
+    sources: &HttpEvidenceSources,
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    lookup_values: Vec<SourceQueryValue>,
+    purpose: &str,
+) -> Result<Value, EvidenceError> {
+    let url = source_url(&connection.base_url, &connection.dci.search_path)?;
+    let request_body =
+        dci_search_request_body_for_values(&connection.dci, binding, &lookup_values)?;
+    let body = send_request_with_retry(
+        sources,
+        connection,
+        "dci",
+        &url,
+        reqwest::Method::POST,
+        sources.request_timeout,
+        move |request, token| {
+            add_correlation_header(
+                request
+                    .bearer_auth(token)
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .header("data-purpose", purpose),
+            )
+            .json(&request_body)
+        },
+    )
+    .await?;
+    let rows = match get_json_path(&body, &connection.dci.records_path).and_then(Value::as_array) {
+        Some(rows) => rows,
+        None if dci_search_response_not_found(&body) => return Err(EvidenceError::SourceNotFound),
+        None => return Err(EvidenceError::SourceUnavailable),
+    };
+    match rows.len() {
+        0 => Err(EvidenceError::SourceNotFound),
+        1 => project_dci_record_for_values(connection, binding, &lookup_values, &rows[0]),
         _ => Err(EvidenceError::SourceAmbiguous),
     }
 }
@@ -3187,23 +3299,76 @@ fn dci_search_criteria(
     lookup_value: &Value,
     batch_size: usize,
 ) -> Result<Value, EvidenceError> {
+    let query_value = SourceQueryValue {
+        field: binding.lookup.field.clone(),
+        op: binding.lookup.op.clone(),
+        value: lookup_value.clone(),
+    };
+    dci_search_criteria_for_values(dci, binding, &[query_value], batch_size)
+}
+
+fn dci_search_criteria_for_values(
+    dci: &DciSourceConnectionConfig,
+    binding: &SourceBindingConfig,
+    lookup_values: &[SourceQueryValue],
+    batch_size: usize,
+) -> Result<Value, EvidenceError> {
     let query = match dci.query_type.as_str() {
-        "idtype-value" => json!({
-            "type": binding.lookup.field,
-            "value": lookup_value,
-        }),
-        "expression" => json!({
-            binding.lookup.field.clone(): {
-                binding.lookup.op.clone(): lookup_value,
-            },
-        }),
-        "predicate" => json!([{
-            "expression1": {
-                "attribute_name": binding.lookup.field,
-                "operator": binding.lookup.op,
-                "attribute_value": lookup_value,
-            },
-        }]),
+        "idtype-value" => {
+            let Some(value) = lookup_values.first() else {
+                return Err(EvidenceError::InvalidRequest);
+            };
+            if lookup_values.len() != 1 {
+                return Err(EvidenceError::InvalidRequest);
+            }
+            json!({
+                "type": value.field,
+                "value": value.value,
+            })
+        }
+        "expression" if binding.query_fields.is_empty() => {
+            let Some(value) = lookup_values.first() else {
+                return Err(EvidenceError::InvalidRequest);
+            };
+            if lookup_values.len() != 1 {
+                return Err(EvidenceError::InvalidRequest);
+            }
+            json!({
+                value.field.clone(): {
+                    value.op.clone(): value.value.clone(),
+                },
+            })
+        }
+        "expression" => {
+            let mut query = Map::new();
+            for value in lookup_values {
+                query.insert(value.field.clone(), dci_expression_filter(value)?);
+            }
+            json!({
+                "type": "ns:org:QueryType:expression",
+                "value": {
+                    "expression": {
+                        "query": Value::Object(query),
+                    },
+                },
+            })
+        }
+        "predicate" => Value::Array(
+            lookup_values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let expression_key = format!("expression{}", index + 1);
+                    json!({
+                        expression_key: {
+                            "attribute_name": value.field,
+                            "operator": value.op,
+                            "attribute_value": value.value,
+                        },
+                    })
+                })
+                .collect(),
+        ),
         _ => return Err(EvidenceError::InvalidRequest),
     };
     let mut search_criteria = Map::from_iter([
@@ -3233,6 +3398,23 @@ fn dci_search_criteria(
         );
     }
     Ok(Value::Object(search_criteria))
+}
+
+fn dci_expression_filter(query_value: &SourceQueryValue) -> Result<Value, EvidenceError> {
+    let value = match &query_value.value {
+        Value::String(value) => Value::String(value.clone()),
+        Value::Number(value) => Value::String(value.to_string()),
+        Value::Bool(value) => Value::String(value.to_string()),
+        _ => return Err(EvidenceError::InvalidRequest),
+    };
+    match query_value.op.as_str() {
+        "eq" => Ok(json!({ "type": "exact", "term": value })),
+        "ge" | "gte" => Ok(json!({ "type": "range", "gte": value })),
+        "le" | "lte" => Ok(json!({ "type": "range", "lte": value })),
+        "gt" => Ok(json!({ "type": "range", "gt": value })),
+        "lt" => Ok(json!({ "type": "range", "lt": value })),
+        _ => Err(EvidenceError::InvalidRequest),
+    }
 }
 
 /// Send an outbound HTTP request to a `source_connection`, holding the
@@ -3466,55 +3648,24 @@ fn dci_search_request_body(
     binding: &SourceBindingConfig,
     lookup_value: &Value,
 ) -> Result<Value, EvidenceError> {
+    let query_value = SourceQueryValue {
+        field: binding.lookup.field.clone(),
+        op: binding.lookup.op.clone(),
+        value: lookup_value.clone(),
+    };
+    dci_search_request_body_for_values(dci, binding, &[query_value])
+}
+
+fn dci_search_request_body_for_values(
+    dci: &DciSourceConnectionConfig,
+    binding: &SourceBindingConfig,
+    lookup_values: &[SourceQueryValue],
+) -> Result<Value, EvidenceError> {
     let message_id = Ulid::new().to_string();
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|_| EvidenceError::SourceUnavailable)?;
-    let query = match dci.query_type.as_str() {
-        "idtype-value" => json!({
-            "type": binding.lookup.field,
-            "value": lookup_value,
-        }),
-        "expression" => json!({
-            binding.lookup.field.clone(): {
-                binding.lookup.op.clone(): lookup_value,
-            },
-        }),
-        "predicate" => json!([{
-            "expression1": {
-                "attribute_name": binding.lookup.field,
-                "operator": binding.lookup.op,
-                "attribute_value": lookup_value,
-            },
-        }]),
-        _ => return Err(EvidenceError::InvalidRequest),
-    };
-    let mut search_criteria = Map::from_iter([
-        (
-            "query_type".to_string(),
-            Value::String(dci.query_type.clone()),
-        ),
-        ("query".to_string(), query),
-        (
-            "pagination".to_string(),
-            json!({ "page_size": dci.max_results.max(2), "page_number": 1 }),
-        ),
-    ]);
-    if let Some(registry_type) = &dci.registry_type {
-        search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
-    }
-    if let Some(registry_event_type) = &dci.registry_event_type {
-        search_criteria.insert(
-            "reg_event_type".to_string(),
-            Value::String(registry_event_type.clone()),
-        );
-    }
-    if let Some(record_type) = &dci.record_type {
-        search_criteria.insert(
-            "reg_record_type".to_string(),
-            Value::String(record_type.clone()),
-        );
-    }
+    let search_criteria = dci_search_criteria_for_values(dci, binding, lookup_values, 2)?;
     let mut body = json!({
         "header": {
             "message_id": message_id,
@@ -3529,12 +3680,46 @@ fn dci_search_request_body(
             "search_request": [{
                 "reference_id": message_id,
                 "timestamp": timestamp,
-                "search_criteria": Value::Object(search_criteria),
+                "search_criteria": search_criteria,
             }],
         },
     });
     add_dci_envelope_options(dci, &mut body);
     Ok(body)
+}
+
+#[derive(Debug, Clone)]
+struct SourceQueryValue {
+    field: String,
+    op: String,
+    value: Value,
+}
+
+fn source_query_values_for_context(
+    binding: &SourceBindingConfig,
+    context: &EvidenceRequestContext,
+) -> Result<Vec<SourceQueryValue>, EvidenceError> {
+    if binding.query_fields.is_empty() {
+        return Ok(vec![SourceQueryValue {
+            field: binding.lookup.field.clone(),
+            op: binding.lookup.op.clone(),
+            value: lookup_value_for_context(binding, context)?,
+        }]);
+    }
+    binding
+        .query_fields
+        .iter()
+        .map(|field| {
+            let value = context
+                .lookup_value(field.input.as_str())
+                .ok_or_else(|| registry_notary_core::missing_context_error(field.input.as_str()))?;
+            Ok(SourceQueryValue {
+                field: field.field.clone(),
+                op: field.op.clone(),
+                value,
+            })
+        })
+        .collect()
 }
 
 fn add_dci_envelope_options(dci: &DciSourceConnectionConfig, body: &mut Value) {
@@ -3579,8 +3764,24 @@ fn project_dci_record(
     lookup_value: &Value,
     record: &Value,
 ) -> Result<Value, EvidenceError> {
+    let lookup_values = [SourceQueryValue {
+        field: binding.lookup.field.clone(),
+        op: binding.lookup.op.clone(),
+        value: lookup_value.clone(),
+    }];
+    project_dci_record_for_values(connection, binding, &lookup_values, record)
+}
+
+fn project_dci_record_for_values(
+    connection: &ResolvedEvidenceSourceConnection,
+    binding: &SourceBindingConfig,
+    lookup_values: &[SourceQueryValue],
+    record: &Value,
+) -> Result<Value, EvidenceError> {
     let mut row = Map::new();
-    insert_row_path(&mut row, &binding.lookup.field, lookup_value.clone());
+    for lookup_value in lookup_values {
+        insert_row_path(&mut row, &lookup_value.field, lookup_value.value.clone());
+    }
     for (alias, field) in &binding.fields {
         let path = connection
             .dci
@@ -3651,6 +3852,39 @@ fn value_query_string(value: &Value) -> Result<String, EvidenceError> {
     }
 }
 
+fn registry_data_api_query_pair(
+    query_value: &SourceQueryValue,
+) -> Result<(String, String), EvidenceError> {
+    let name = match query_value.op.as_str() {
+        "eq" => query_value.field.clone(),
+        "in" => format!("{}.in", query_value.field),
+        "ge" | "gte" => format!("{}.gte", query_value.field),
+        "le" | "lte" => format!("{}.lte", query_value.field),
+        "between" => format!("{}.between", query_value.field),
+        _ => return Err(EvidenceError::InvalidRequest),
+    };
+    let value = match query_value.op.as_str() {
+        "in" | "between" => value_query_csv(&query_value.value)?,
+        _ => value_query_string(&query_value.value)?,
+    };
+    Ok((name, value))
+}
+
+fn value_query_csv(value: &Value) -> Result<String, EvidenceError> {
+    let values = match value {
+        Value::Array(values) => values,
+        _ => return value_query_string(value),
+    };
+    if values.is_empty() {
+        return Err(EvidenceError::InvalidRequest);
+    }
+    let parts = values
+        .iter()
+        .map(value_query_string)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(parts.join(","))
+}
+
 fn lookup_value(
     binding: &SourceBindingConfig,
     subject: &SubjectRequest,
@@ -3679,7 +3913,9 @@ fn lookup_value_for_context(
     }
     match context.lookup_value(binding.lookup.input.as_str()) {
         Some(value) => Ok(value),
-        None => Err(missing_context_lookup_error(binding.lookup.input.as_str())),
+        None => Err(registry_notary_core::missing_context_error(
+            binding.lookup.input.as_str(),
+        )),
     }
 }
 
@@ -3705,20 +3941,6 @@ fn canonical_subject_bindings(
         subject_bindings.push((binding.clone(), subject));
     }
     Some(subject_bindings)
-}
-
-fn missing_context_lookup_error(path: &str) -> EvidenceError {
-    if path.starts_with("target.identifiers.") {
-        EvidenceError::TargetIdentifierMissing
-    } else if path.starts_with("requester.identifiers.") {
-        EvidenceError::RequesterIdentifierMissing
-    } else if path.starts_with("requester.attributes.") {
-        EvidenceError::RequesterAttributesInsufficient
-    } else if path.starts_with("relationship.attributes.") {
-        EvidenceError::RelationshipAttributesInsufficient
-    } else {
-        EvidenceError::TargetAttributesInsufficient
-    }
 }
 
 fn collect_claim_required_scopes(
@@ -3753,6 +3975,22 @@ fn projected_source_fields_with_lookup(
     fields
 }
 
+fn projected_source_fields_with_query_values(
+    binding: &SourceBindingConfig,
+    query_values: &[SourceQueryValue],
+) -> Vec<String> {
+    let mut fields = query_values
+        .iter()
+        .map(|value| value.field.clone())
+        .collect::<Vec<_>>();
+    for field in binding.fields.values() {
+        fields.push(field.field.clone());
+    }
+    fields.sort();
+    fields.dedup();
+    fields
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3766,7 +4004,8 @@ mod tests {
     use base64::Engine;
     use registry_notary_core::{
         EvaluateRequest, SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
-        SourceConnectionConfig, SourceLookupConfig, FORMAT_CLAIM_RESULT_JSON,
+        SourceConnectionConfig, SourceLookupConfig, SourceQueryFieldConfig,
+        FORMAT_CLAIM_RESULT_JSON,
     };
     use registry_notary_openfn_sidecar::{sidecar_router, SidecarConfig};
 
@@ -4409,6 +4648,7 @@ credential_profiles:
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
+            query_fields: Vec::new(),
             fields: BTreeMap::new(),
             matching: registry_notary_core::SourceMatchingConfig::default(),
         }
@@ -5394,6 +5634,154 @@ sources:
                 .code(),
             "requester.identifier_missing"
         );
+    }
+
+    #[test]
+    fn dci_query_fields_build_opencrvs_expression_query_from_target_attributes() {
+        let mut binding = test_binding("civil_registry", "birth_registration");
+        binding.query_fields = vec![
+            SourceQueryFieldConfig {
+                input: "target.attributes.given_name".to_string(),
+                field: "given_name".to_string(),
+                op: "eq".to_string(),
+            },
+            SourceQueryFieldConfig {
+                input: "target.attributes.family_name".to_string(),
+                field: "surname".to_string(),
+                op: "eq".to_string(),
+            },
+            SourceQueryFieldConfig {
+                input: "target.attributes.birthdate".to_string(),
+                field: "birth_date".to_string(),
+                op: "eq".to_string(),
+            },
+        ];
+        let dci = DciSourceConnectionConfig {
+            query_type: "expression".to_string(),
+            registry_type: Some("ns:org:RegistryType:Civil".to_string()),
+            registry_event_type: Some("birth".to_string()),
+            ..DciSourceConnectionConfig::default()
+        };
+        let mut target = registry_notary_core::EvidenceEntity::new("Person");
+        target
+            .attributes
+            .insert("given_name".to_string(), json!("Amina"));
+        target
+            .attributes
+            .insert("family_name".to_string(), json!("Diallo"));
+        target
+            .attributes
+            .insert("birthdate".to_string(), json!("2020-01-02"));
+        let context = EvidenceRequestContext {
+            requester: None,
+            target,
+            relationship: None,
+            on_behalf_of: None,
+        };
+
+        let values = source_query_values_for_context(&binding, &context)
+            .expect("query values resolve from target attributes");
+        let criteria =
+            dci_search_criteria_for_values(&dci, &binding, &values, 2).expect("criteria builds");
+
+        assert_eq!(criteria["query_type"], json!("expression"));
+        assert_eq!(
+            criteria["query"],
+            json!({
+                "type": "ns:org:QueryType:expression",
+                "value": {
+                    "expression": {
+                        "query": {
+                            "given_name": { "type": "exact", "term": "Amina" },
+                            "surname": { "type": "exact", "term": "Diallo" },
+                            "birth_date": { "type": "exact", "term": "2020-01-02" }
+                        }
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn rda_query_fields_build_registry_relay_query_params_from_target_attributes() {
+        let mut binding = test_binding("civil_registry", "civil_person");
+        binding.query_fields = vec![
+            SourceQueryFieldConfig {
+                input: "target.attributes.given_name".to_string(),
+                field: "given_name".to_string(),
+                op: "eq".to_string(),
+            },
+            SourceQueryFieldConfig {
+                input: "target.attributes.family_name".to_string(),
+                field: "surname".to_string(),
+                op: "eq".to_string(),
+            },
+            SourceQueryFieldConfig {
+                input: "target.attributes.birthdate".to_string(),
+                field: "birth_date".to_string(),
+                op: "eq".to_string(),
+            },
+        ];
+        let mut target = registry_notary_core::EvidenceEntity::new("Person");
+        target
+            .attributes
+            .insert("given_name".to_string(), json!("Amina"));
+        target
+            .attributes
+            .insert("family_name".to_string(), json!("Diallo"));
+        target
+            .attributes
+            .insert("birthdate".to_string(), json!("2020-01-02"));
+        let context = EvidenceRequestContext {
+            requester: None,
+            target,
+            relationship: None,
+            on_behalf_of: None,
+        };
+
+        let values = source_query_values_for_context(&binding, &context)
+            .expect("query values resolve from target attributes");
+        let pairs = values
+            .iter()
+            .map(registry_data_api_query_pair)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("RDA query pairs build");
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("given_name".to_string(), "Amina".to_string()),
+                ("surname".to_string(), "Diallo".to_string()),
+                ("birth_date".to_string(), "2020-01-02".to_string()),
+            ]
+        );
+        assert_eq!(
+            projected_source_fields_with_query_values(&binding, &values),
+            vec![
+                "birth_date".to_string(),
+                "given_name".to_string(),
+                "surname".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dci_expression_filter_accepts_gte_lte_aliases() {
+        let gte = dci_expression_filter(&SourceQueryValue {
+            field: "birth_date".to_string(),
+            op: "gte".to_string(),
+            value: json!("2020-01-01"),
+        })
+        .expect("gte maps to range filter");
+        let lte = dci_expression_filter(&SourceQueryValue {
+            field: "birth_date".to_string(),
+            op: "lte".to_string(),
+            value: json!("2020-12-31"),
+        })
+        .expect("lte maps to range filter");
+
+        assert_eq!(gte, json!({ "type": "range", "gte": "2020-01-01" }));
+        assert_eq!(lte, json!({ "type": "range", "lte": "2020-12-31" }));
     }
 
     #[test]

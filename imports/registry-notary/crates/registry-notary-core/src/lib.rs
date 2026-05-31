@@ -7,5 +7,5 @@ pub mod model;
 pub mod sd_jwt;
 
 pub use config::*;
-pub use error::EvidenceError;
+pub use error::{missing_context_error, EvidenceError};
 pub use model::*;

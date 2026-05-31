@@ -55,7 +55,7 @@ evidence:
           dataset: civil_registry
           entity: birth_registration
           lookup:
-            input: subject_id
+            input: target.identifiers.UIN
             field: UIN
             op: eq
             cardinality: one

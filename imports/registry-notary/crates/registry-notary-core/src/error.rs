@@ -171,6 +171,21 @@ impl EvidenceError {
     }
 }
 
+#[must_use]
+pub fn missing_context_error(path: &str) -> EvidenceError {
+    if path.starts_with("target.identifiers.") {
+        EvidenceError::TargetIdentifierMissing
+    } else if path.starts_with("requester.identifiers.") {
+        EvidenceError::RequesterIdentifierMissing
+    } else if path.starts_with("requester.attributes.") {
+        EvidenceError::RequesterAttributesInsufficient
+    } else if path.starts_with("relationship.attributes.") {
+        EvidenceError::RelationshipAttributesInsufficient
+    } else {
+        EvidenceError::TargetAttributesInsufficient
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
