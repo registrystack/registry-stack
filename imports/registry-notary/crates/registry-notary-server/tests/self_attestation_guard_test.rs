@@ -32,6 +32,15 @@ const ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLf
 const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
 const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
 
+fn self_attestation_target() -> Value {
+    json!({
+        "type": "Person",
+        "identifiers": [
+            { "scheme": "national_id", "value": SUBJECT_ID }
+        ],
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct TestRuntimeConfig {
     evidence: EvidenceConfig,
@@ -166,7 +175,7 @@ evidence:
           dataset: people
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: id
             op: eq
             cardinality: one
@@ -280,7 +289,7 @@ evidence:
           dataset: people
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: id
             op: eq
             cardinality: one
@@ -507,10 +516,7 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "subject": {
-                "id": SUBJECT_ID,
-                "id_type": "national_id"
-            },
+            "target": self_attestation_target(),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": FORMAT_CLAIM_RESULT_JSON
@@ -566,10 +572,7 @@ async fn self_attestation_render_rejects_same_evaluation_for_different_principal
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "subject": {
-                "id": SUBJECT_ID,
-                "id_type": "national_id"
-            },
+            "target": self_attestation_target(),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": FORMAT_CLAIM_RESULT_JSON
@@ -612,10 +615,7 @@ async fn self_attestation_credential_issuance_hides_other_principal_evaluation_i
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "subject": {
-                "id": SUBJECT_ID,
-                "id_type": "national_id"
-            },
+            "target": self_attestation_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
             "format": FORMAT_SD_JWT_VC
@@ -662,10 +662,7 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "subject": {
-                "id": SUBJECT_ID,
-                "id_type": "national_id"
-            },
+            "target": self_attestation_target(),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": FORMAT_CLAIM_RESULT_JSON
@@ -714,10 +711,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "subject": {
-                "id": SUBJECT_ID,
-                "id_type": "national_id"
-            },
+            "target": self_attestation_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
             "format": FORMAT_SD_JWT_VC
@@ -827,10 +821,7 @@ async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "subject": {
-                "id": SUBJECT_ID,
-                "id_type": "national_id"
-            },
+            "target": self_attestation_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
             "format": FORMAT_SD_JWT_VC

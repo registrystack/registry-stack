@@ -19,6 +19,7 @@ import {
   apiKeyHeaders,
   invalidToken,
   noScopeToken,
+  targetForSubjectId,
   handleResultsFor,
   trackExpectedDenyResponse,
   logScenarioStart,
@@ -47,7 +48,7 @@ export default function (ctx) {
   const claimsUrl = `${baseUrl()}/v1/claims`;
   const evaluateUrl = `${baseUrl()}/v1/evaluations`;
   const evaluatePayload = JSON.stringify({
-    subject: { id: 'subj-0000000', id_type: 'NATIONAL_ID' },
+    target: targetForSubjectId('subj-0000000'),
     claims: ['date-of-birth'],
   });
 

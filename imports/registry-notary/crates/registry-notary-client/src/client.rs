@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Typed Registry Notary HTTP client.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use registry_notary_core::{
-    BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest,
-    RenderEvaluationRequest, RenderRequest, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
+    BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest, EvidenceEntity,
+    EvidenceIdentifier, EvidenceRelationship, RenderEvaluationRequest, RenderRequest,
+    FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{Method, StatusCode, Url};
@@ -419,13 +421,15 @@ impl RegistryNotaryClient {
             .await
     }
 
-    /// Start the ergonomic evaluation builder for one subject id.
+    /// Start the ergonomic evaluation builder for one target entity.
     #[must_use]
-    pub fn evaluate(&self, subject_id: impl Into<String>) -> EvaluateBuilder<'_> {
+    pub fn evaluate_target(&self, target_type: impl Into<String>) -> EvaluateBuilder<'_> {
         EvaluateBuilder {
             client: self,
-            subject_id: subject_id.into(),
-            id_type: None,
+            target: EvidenceEntity::new(target_type),
+            requester: None,
+            relationship: None,
+            on_behalf_of: None,
             claims: Vec::new(),
             disclosure: None,
             format: None,
@@ -433,6 +437,16 @@ impl RegistryNotaryClient {
             request_id: None,
             traceparent: None,
         }
+    }
+
+    /// Start the ergonomic evaluation builder for a Person target id.
+    ///
+    /// This convenience helper maps to the v1 `target` request model. Prefer
+    /// [`Self::evaluate_target`] when the caller needs identifiers, attributes,
+    /// requester context, or non-person targets.
+    #[must_use]
+    pub fn evaluate(&self, subject_id: impl Into<String>) -> EvaluateBuilder<'_> {
+        self.evaluate_target("Person").target_id(subject_id)
     }
 
     /// Submit a raw typed [`EvaluateRequest`].
@@ -449,7 +463,9 @@ impl RegistryNotaryClient {
         options.accept = options
             .accept
             .or_else(|| Some(FORMAT_CLAIM_RESULT_JSON.to_string()));
-        request.purpose = options.purpose.clone();
+        if request.purpose.is_none() {
+            request.purpose = options.purpose.clone();
+        }
         let mut request = request;
         if request.format.is_none() {
             request.format = Some(FORMAT_CLAIM_RESULT_JSON.to_string());
@@ -479,7 +495,9 @@ impl RegistryNotaryClient {
         options.accept = options
             .accept
             .or_else(|| Some(FORMAT_CLAIM_RESULT_JSON.to_string()));
-        request.purpose = options.purpose.clone();
+        if request.purpose.is_none() {
+            request.purpose = options.purpose.clone();
+        }
         if request.format.is_none() {
             request.format = Some(FORMAT_CLAIM_RESULT_JSON.to_string());
         }
@@ -863,7 +881,10 @@ impl RegistryNotaryClient {
         body_purpose: Option<&str>,
     ) -> Result<RequestOptions, NotaryClientBuildError> {
         if options.purpose.is_none() {
-            options.purpose = self.default_purpose.clone();
+            options.purpose = self
+                .default_purpose
+                .clone()
+                .or_else(|| body_purpose.map(ToOwned::to_owned));
         }
         if let (Some(header), Some(body)) = (options.purpose.as_deref(), body_purpose) {
             if header != body {
@@ -1090,8 +1111,10 @@ fn encode_query_value(value: &str) -> String {
 /// Fluent builder for one high-level evaluation request.
 pub struct EvaluateBuilder<'a> {
     client: &'a RegistryNotaryClient,
-    subject_id: String,
-    id_type: Option<String>,
+    target: EvidenceEntity,
+    requester: Option<EvidenceEntity>,
+    relationship: Option<EvidenceRelationship>,
+    on_behalf_of: Option<serde_json::Value>,
     claims: Vec<ClaimRef>,
     disclosure: Option<String>,
     format: Option<String>,
@@ -1101,10 +1124,124 @@ pub struct EvaluateBuilder<'a> {
 }
 
 impl<'a> EvaluateBuilder<'a> {
-    /// Set the subject id type.
+    /// Set the target entity id.
+    #[must_use]
+    pub fn target_id(mut self, id: impl Into<String>) -> Self {
+        self.target.id = Some(id.into());
+        self
+    }
+
+    /// Add a target identifier.
+    #[must_use]
+    pub fn target_identifier(
+        mut self,
+        scheme: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.target.identifiers.push(EvidenceIdentifier {
+            scheme: scheme.into(),
+            value: value.into(),
+            issuer: None,
+            country: None,
+        });
+        self
+    }
+
+    /// Set the issuer on the most recently added target identifier.
+    #[must_use]
+    pub fn target_identifier_issuer(mut self, issuer: impl Into<String>) -> Self {
+        if let Some(identifier) = self.target.identifiers.last_mut() {
+            identifier.issuer = Some(issuer.into());
+        }
+        self
+    }
+
+    /// Set the country on the most recently added target identifier.
+    #[must_use]
+    pub fn target_identifier_country(mut self, country: impl Into<String>) -> Self {
+        if let Some(identifier) = self.target.identifiers.last_mut() {
+            identifier.country = Some(country.into());
+        }
+        self
+    }
+
+    /// Add a target matching attribute.
+    #[must_use]
+    pub fn target_attribute(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.target.attributes.insert(name.into(), value.into());
+        self
+    }
+
+    /// Set a pre-built target entity.
+    #[must_use]
+    pub fn target(mut self, target: EvidenceEntity) -> Self {
+        self.target = target;
+        self
+    }
+
+    /// Set the requester entity.
+    #[must_use]
+    pub fn requester(mut self, requester: EvidenceEntity) -> Self {
+        self.requester = Some(requester);
+        self
+    }
+
+    /// Set the relationship type between requester and target.
+    #[must_use]
+    pub fn relationship(mut self, relationship_type: impl Into<String>) -> Self {
+        self.relationship = Some(EvidenceRelationship {
+            relationship_type: relationship_type.into(),
+            attributes: BTreeMap::new(),
+        });
+        self
+    }
+
+    /// Add an attribute to the requester-target relationship.
+    #[must_use]
+    pub fn relationship_attribute(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        let relationship = self
+            .relationship
+            .get_or_insert_with(|| EvidenceRelationship {
+                relationship_type: "unspecified".to_string(),
+                attributes: BTreeMap::new(),
+            });
+        relationship.attributes.insert(name.into(), value.into());
+        self
+    }
+
+    /// Set currently unsupported delegated/on-behalf-of context explicitly.
+    ///
+    /// The server fails closed with `profile.unsupported` until an on-behalf-of
+    /// profile is implemented.
+    #[must_use]
+    pub fn on_behalf_of(mut self, on_behalf_of: serde_json::Value) -> Self {
+        self.on_behalf_of = Some(on_behalf_of);
+        self
+    }
+
+    /// Set the identifier type for the first target identifier.
+    ///
+    /// Prefer [`Self::target_identifier`] for new code.
     #[must_use]
     pub fn id_type(mut self, id_type: impl Into<String>) -> Self {
-        self.id_type = Some(id_type.into());
+        let subject_id = self.target.id.take().unwrap_or_default();
+        self.target.identifiers.insert(
+            0,
+            EvidenceIdentifier {
+                scheme: id_type.into(),
+                value: subject_id,
+                issuer: None,
+                country: None,
+            },
+        );
         self
     }
 
@@ -1165,10 +1302,10 @@ impl<'a> EvaluateBuilder<'a> {
     /// Send the evaluation request.
     pub async fn send(self) -> Result<NotaryResponse<Evaluation>, NotaryClientError> {
         let request = EvaluateRequest {
-            subject: SubjectRequest {
-                id: self.subject_id,
-                id_type: self.id_type,
-            },
+            requester: self.requester,
+            target: Some(self.target),
+            relationship: self.relationship,
+            on_behalf_of: self.on_behalf_of,
             claims: self.claims,
             disclosure: self.disclosure,
             format: self.format,

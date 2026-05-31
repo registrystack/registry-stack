@@ -28,7 +28,10 @@ async fn facade_accepts_canonical_snake_case_json() {
     let response = handle
         .evaluate_json(
             json!({
-                "subject": { "id": "subject-1", "id_type": "NATIONAL_ID" },
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{ "scheme": "NATIONAL_ID", "value": "subject-1" }]
+                },
                 "claims": ["claim-a"]
             }),
             json!({}),
@@ -70,7 +73,12 @@ async fn facade_core_methods_share_typed_validation_and_wire_shape() {
     let batch = handle
         .batch_evaluate_json(
             json!({
-                "subjects": [{ "id": "subject-1", "id_type": "NATIONAL_ID" }],
+                "items": [{
+                    "target": {
+                        "type": "Person",
+                        "identifiers": [{ "scheme": "NATIONAL_ID", "value": "subject-1" }]
+                    }
+                }],
                 "claims": ["claim-a"]
             }),
             json!({ "idempotency_key": "batch-key" }),
@@ -126,8 +134,8 @@ async fn facade_error_excludes_detail() {
 
     assert_eq!(error.kind, PortableErrorKind::Problem);
     assert_eq!(error.status, Some(404));
-    assert_eq!(error.code.as_deref(), Some("source.not_found"));
-    assert_eq!(error.title, "Source missing");
+    assert_eq!(error.code.as_deref(), Some("target.not_found"));
+    assert_eq!(error.title, "Target not found");
     let rendered = serde_json::to_value(&error).expect("portable error serializes");
     assert!(rendered.get("detail").is_none());
 }
@@ -198,11 +206,11 @@ async fn problem_handler() -> Response {
         StatusCode::NOT_FOUND,
         [("content-type", "application/problem+json")],
         Json(json!({
-            "type": "https://docs.registry-notary.dev/problems/source/not-found",
-            "title": "Source missing",
+            "type": "https://docs.registry-notary.dev/problems/target/not-found",
+            "title": "Target not found",
             "status": 404,
-            "detail": "subject id subj-sensitive was not found",
-            "code": "source.not_found"
+            "detail": "target identifier subj-sensitive was not found",
+            "code": "target.not_found"
         })),
     )
         .into_response()

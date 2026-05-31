@@ -9,7 +9,8 @@ and downstream tooling.
 ## What It Provides
 
 - Standalone Registry Notary configuration types and validation.
-- Claim, subject, source binding, disclosure, and evaluation models.
+- Claim, requester/target evidence, source binding, disclosure, and evaluation
+  models.
 - Static-peer federation config models, validation constants, and audit fields
   for delegated evaluation.
 - Error types used across the workspace.

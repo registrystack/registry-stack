@@ -107,18 +107,22 @@ class RegistryNotaryClient:
     def evaluate(
         self,
         *,
-        subject_id: str,
-        id_type: str,
+        target_id: str,
+        identifier_scheme: str,
         claims: Iterable[str | Mapping[str, Any]],
+        target_type: str = "Person",
         purpose: str | None = None,
         request_id: str | None = None,
         traceparent: str | None = None,
         accept: str | None = None,
     ) -> dict[str, Any]:
-        """Evaluate claims for one subject using Pythonic argument names."""
+        """Evaluate claims for one identifier target using Pythonic argument names."""
 
         request = {
-            "subject": {"id": subject_id, "id_type": id_type},
+            "target": {
+                "type": target_type,
+                "identifiers": [{"scheme": identifier_scheme, "value": target_id}],
+            },
             "claims": _claim_list(claims),
         }
         return self.evaluate_request(
@@ -132,9 +136,10 @@ class RegistryNotaryClient:
     async def aevaluate(
         self,
         *,
-        subject_id: str,
-        id_type: str,
+        target_id: str,
+        identifier_scheme: str,
         claims: Iterable[str | Mapping[str, Any]],
+        target_type: str = "Person",
         purpose: str | None = None,
         request_id: str | None = None,
         traceparent: str | None = None,
@@ -143,7 +148,10 @@ class RegistryNotaryClient:
         """Async counterpart to :meth:`evaluate`."""
 
         request = {
-            "subject": {"id": subject_id, "id_type": id_type},
+            "target": {
+                "type": target_type,
+                "identifiers": [{"scheme": identifier_scheme, "value": target_id}],
+            },
             "claims": _claim_list(claims),
         }
         return await self.aevaluate_request(

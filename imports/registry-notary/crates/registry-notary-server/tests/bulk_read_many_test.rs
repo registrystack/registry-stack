@@ -23,6 +23,13 @@ use tempfile::TempDir;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
+fn person_target(id: &str) -> Value {
+    json!({
+        "type": "Person",
+        "id": id,
+    })
+}
+
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
 }
@@ -300,7 +307,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -380,7 +387,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id_type
             op: eq
             cardinality: one
@@ -416,7 +423,7 @@ fn setup_env() {
 
 fn build_subjects(n: usize) -> Vec<Value> {
     (0..n)
-        .map(|i| json!({ "id": format!("person-{i:03}") }))
+        .map(|i| person_target(&format!("person-{i:03}")))
         .collect()
 }
 
@@ -451,7 +458,7 @@ async fn rda_bulk_collapses_100_subjects_into_one_in_filter_request() {
     let subjects = build_subjects(100);
     let body = json!({
         "claims": ["farmed-land-size"],
-        "subjects": subjects,
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -512,7 +519,7 @@ async fn rda_bulk_falls_back_to_per_subject_on_collision() {
     let subjects = build_subjects(4);
     let body = json!({
         "claims": ["farmed-land-size"],
-        "subjects": subjects,
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -560,7 +567,7 @@ async fn dci_bulk_collapses_100_subjects_into_one_search_post() {
     let subjects = build_subjects(100);
     let body = json!({
         "claims": ["dci-claim"],
-        "subjects": subjects,
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -640,7 +647,7 @@ async fn dci_bulk_missing_response_entry_surfaces_source_not_found_for_that_subj
     let subjects = build_subjects(3);
     let body = json!({
         "claims": ["dci-claim"],
-        "subjects": subjects,
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
     let response = server
@@ -661,7 +668,7 @@ async fn dci_bulk_missing_response_entry_surfaces_source_not_found_for_that_subj
     );
 
     // The response body should contain 3 items in input order: subject 0
-    // is failed with source.not_found, 1 and 2 succeed.
+    // is failed with target.not_found, 1 and 2 succeed.
     let body: Value = response.json();
     let items = body["items"].as_array().expect("items array");
     assert_eq!(items.len(), 3, "expected 3 batch items");
@@ -677,17 +684,17 @@ async fn dci_bulk_missing_response_entry_surfaces_source_not_found_for_that_subj
         .iter()
         .filter_map(|e| e["code"].as_str().map(|s| s.to_string()))
         .collect();
-    // The bulk path surfaces `source.not_found` for the missing reference_id.
+    // The bulk path surfaces `target.not_found` for the missing reference_id.
     // The per-subject retry then hits the same partial handler (which still
     // drops index 0 of a 1-entry request, producing an empty search_response)
     // and re-runs through the per-subject parser; depending on which retry
-    // wins last, either `source.not_found` or `source.unavailable` is fine
+    // wins last, either `target.not_found` or `source.unavailable` is fine
     // since both correctly signal "subject 0 has no record".
     assert!(
         codes
             .iter()
-            .any(|c| c == "source.not_found" || c == "source.unavailable"),
-        "subject 0 expected source.not_found or source.unavailable; got {codes:?}",
+            .any(|c| c == "target.not_found" || c == "source.unavailable"),
+        "subject 0 expected target.not_found or source.unavailable; got {codes:?}",
     );
     // Subjects 1 and 2 must succeed.
     for (idx, item) in items.iter().enumerate().take(3).skip(1) {
@@ -737,7 +744,7 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size"],
-            "subjects": subjects,
+            "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
             "disclosure": "value",
         }))
         .await;
@@ -779,7 +786,7 @@ async fn bulk_mode_none_falls_back_to_per_subject_reads() {
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
-                "subject": subject,
+                "target": subject,
                 "claims": ["farmed-land-size"],
                 "disclosure": "value",
             }))

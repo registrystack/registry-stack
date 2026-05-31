@@ -29,6 +29,7 @@ import {
   CLAIM_RESULT_ACCEPT,
   extractClaim,
   nextSubjectId,
+  targetForSubjectId,
   handleResultsFor,
   logScenarioStart,
 } from './lib/common.js';
@@ -56,15 +57,14 @@ export const options = {
   },
 };
 
-function buildSubjects(vuId, iter) {
-  const subjects = new Array(CONCURRENT_BATCH_SIZE);
+function buildItems(vuId, iter) {
+  const items = new Array(CONCURRENT_BATCH_SIZE);
   for (let i = 0; i < CONCURRENT_BATCH_SIZE; i++) {
-    subjects[i] = {
-      id: nextSubjectId(vuId, iter * CONCURRENT_BATCH_SIZE + i),
-      id_type: 'NATIONAL_ID',
+    items[i] = {
+      target: targetForSubjectId(nextSubjectId(vuId, iter * CONCURRENT_BATCH_SIZE + i)),
     };
   }
-  return subjects;
+  return items;
 }
 
 export function setup() {
@@ -85,8 +85,8 @@ export function setup() {
 export default function (ctx) {
   // Each VU fires one batch_evaluate. Because VUs run in parallel, two
   // concurrent batches hit the stub at the same time.
-  const subjects = buildSubjects(__VU, __ITER);
-  const payload = JSON.stringify({ subjects, claims: [ctx.claim] });
+  const items = buildItems(__VU, __ITER);
+  const payload = JSON.stringify({ items, claims: [ctx.claim] });
 
   const res = http.post(`${baseUrl()}/v1/batch-evaluations`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),

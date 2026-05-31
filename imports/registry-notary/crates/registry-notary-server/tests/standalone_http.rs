@@ -46,6 +46,22 @@ const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
 
+fn person_target(id: &str) -> Value {
+    json!({
+        "type": "Person",
+        "id": id,
+    })
+}
+
+fn person_identifier_target(scheme: &str, value: &str) -> Value {
+    json!({
+        "type": "Person",
+        "identifiers": [
+            { "scheme": scheme, "value": value }
+        ],
+    })
+}
+
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
 }
@@ -293,7 +309,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -346,6 +362,34 @@ fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneRegis
     )
 }
 
+fn registry_data_api_target_identifier_config(
+    base_url: &str,
+    audit_path: &str,
+) -> StandaloneRegistryNotaryConfig {
+    let mut config = registry_data_api_config(base_url, audit_path);
+    let claim = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists");
+    claim.operations.batch_evaluate.enabled = true;
+    let binding = claim
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer source binding exists");
+    binding.lookup.input = "target.identifiers.national_id".to_string();
+    binding.matching.policy_id = Some("http-target-identifier-v1".to_string());
+    binding.matching.method = Some("exact_identifier".to_string());
+    binding.matching.target_type = Some("Person".to_string());
+    binding.matching.allowed_purposes =
+        vec!["https://purpose.example.test/eligibility".to_string()];
+    binding.matching.sufficient_target_inputs =
+        vec![vec!["target.identifiers.national_id".to_string()]];
+    binding.matching.allowed_target_inputs = vec!["target.identifiers.national_id".to_string()];
+    config
+}
+
 fn set_federation_env() {
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -386,6 +430,17 @@ fn federation_config_for(
     peer_jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
     let mut config = registry_data_api_config(base_url, audit_path);
+    config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists")
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer binding exists")
+        .lookup
+        .input = "target.identifiers.national_id".to_string();
     config.evidence.signing_keys.insert(
         "federation-key".to_string(),
         SigningKeyConfig {
@@ -658,7 +713,7 @@ evidence:
           dataset: people
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: id
             op: eq
             cardinality: one
@@ -812,7 +867,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -1818,10 +1873,6 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         .add_header("authorization", authorization.clone())
         .add_header("x-request-id", "req-self-attest-1")
         .json(&json!({
-            "subject": {
-                "id": "person-1",
-                "id_type": "national_id"
-            },
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": "application/vnd.registry-notary.claim-result+json"
@@ -2367,6 +2418,10 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         credential_audit["credential_profile"],
         json!("civil_status_sd_jwt")
     );
+    assert_eq!(credential_audit["target_type"], json!("Person"));
+    assert!(credential_audit["target_ref_hash"].as_str().is_some());
+    assert_eq!(credential_audit["requester_type"], json!("Person"));
+    assert!(credential_audit["requester_ref_hash"].as_str().is_some());
 
     idp.stop().await;
 }
@@ -2512,10 +2567,7 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
         .post("/v1/evaluations")
         .add_header("authorization", authorization.clone())
         .json(&json!({
-            "subject": {
-                "id": "person-1",
-                "id_type": "national_id"
-            },
+            "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": "application/dc+sd-jwt"
@@ -2641,10 +2693,7 @@ async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
         .post("/v1/evaluations")
         .add_header("authorization", authorization.clone())
         .json(&json!({
-            "subject": {
-                "id": "person-1",
-                "id_type": "national_id"
-            },
+            "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": "application/dc+sd-jwt"
@@ -2759,7 +2808,7 @@ async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
         .json(&json!({
             "format": "dc+sd-jwt",
             "credential_configuration_id": "person_is_alive_sd_jwt",
-            "subject": {"id": "person-2"},
+            "target": person_target("person-2"),
             "proof": {
                 "proof_type": "jwt",
                 "jwt": "not-a-compact-jwt"
@@ -2808,10 +2857,7 @@ async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
         .add_header("authorization", format!("Bearer {token}"))
         .add_header("x-request-id", "bad value")
         .json(&json!({
-            "subject": {
-                "id": "person-2",
-                "id_type": "national_id"
-            },
+            "target": person_identifier_target("national_id", "person-2"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": "application/vnd.registry-notary.claim-result+json"
@@ -2901,7 +2947,7 @@ async fn request_body_limit_returns_413_above_threshold() {
 }
 
 #[tokio::test]
-async fn error_responses_match_rfc_7807_shape() {
+async fn error_responses_match_rfc_9457_problem_details_shape() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -2918,9 +2964,19 @@ async fn error_responses_match_rfc_7807_shape() {
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
-    let response = server.get("/v1/claims").await;
+    let response = server
+        .get("/v1/claims")
+        .add_header("x-request-id", "req-auth-1")
+        .await;
 
     response.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("req-auth-1")
+    );
     let content_type = response
         .headers()
         .get("content-type")
@@ -2929,6 +2985,7 @@ async fn error_responses_match_rfc_7807_shape() {
         .expect("content-type is valid");
     assert!(content_type.starts_with("application/problem+json"));
     let body: Value = response.json();
+    assert_eq!(body["request_id"], json!("req-auth-1"));
     assert_eq!(body["status"], json!(401));
     assert_eq!(body["title"], json!("Missing credential"));
     assert_eq!(body["code"], json!("auth.missing_credential"));
@@ -2936,6 +2993,103 @@ async fn error_responses_match_rfc_7807_shape() {
         .as_str()
         .is_some_and(|value| value.starts_with("https://docs.registry-notary.dev/problems/")));
     assert!(body["detail"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_details() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let old_shape = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("x-request-id", "req-problem-1")
+        .add_header("content-type", "application/json")
+        .bytes(Bytes::from_static(
+            br#"{"subject":{"id":"person-1","id_type":"national_id"},"claims":["farmed-land-size"]}"#,
+        ))
+        .await;
+    assert_eq!(
+        old_shape
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("req-problem-1")
+    );
+    let old_shape_body: Value = old_shape.json();
+    assert_eq!(old_shape_body["request_id"], json!("req-problem-1"));
+    assert_eq!(old_shape_body["code"], json!("request.invalid"));
+
+    let old_shape = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("content-type", "application/json")
+        .bytes(Bytes::from_static(
+            br#"{"subject":{"id":"person-1","id_type":"national_id"},"claims":["farmed-land-size"]}"#,
+        ))
+        .await;
+    assert_request_invalid_problem(old_shape);
+
+    let malformed_json = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("content-type", "application/json")
+        .text("{")
+        .await;
+    assert_request_invalid_problem(malformed_json);
+
+    let wrong_content_type = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("content-type", "text/plain")
+        .text("{}")
+        .await;
+    assert_request_invalid_problem(wrong_content_type);
+
+    for route in [
+        "/v1/evaluations",
+        "/v1/evaluations/eval-1/render",
+        "/v1/credentials",
+    ] {
+        let response = server
+            .post(route)
+            .add_header("x-api-key", "api-token")
+            .add_header("idempotency-key", "unsupported-key")
+            .add_header("content-type", "application/json")
+            .text("{}")
+            .await;
+        assert_request_invalid_problem(response);
+    }
+}
+
+fn assert_request_invalid_problem(response: axum_test::TestResponse) {
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .expect("content-type header")
+        .to_str()
+        .expect("content-type is valid");
+    assert!(content_type.starts_with("application/problem+json"));
+    let body: Value = response.json();
+    assert_eq!(body["status"], json!(400));
+    assert_eq!(body["code"], json!("request.invalid"));
+    assert!(body["type"]
+        .as_str()
+        .is_some_and(|value| value.ends_with("/request/invalid")));
 }
 
 #[tokio::test]
@@ -3151,7 +3305,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value"
         }))
@@ -3168,7 +3322,7 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
-                "subject": { "id": "person-1" },
+                "target": person_target("person-1"),
                 "claims": ["farmer-under-4ha"],
                 "disclosure": "predicate"
             }))
@@ -3218,6 +3372,91 @@ async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted
     assert!(!metrics_body.contains("farmer-under-4ha"));
     assert!(!metrics_body.contains("purpose.example.test"));
     assert!(!metrics_body.contains(base_url.trim_end_matches('/')));
+}
+
+#[tokio::test]
+async fn batch_evaluation_audit_records_per_item_target_model_context() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+
+    let app = standalone_router(registry_data_api_target_identifier_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "items": [
+                { "target": person_identifier_target("national_id", "person-1") },
+                { "target": person_identifier_target("national_id", "person-404") }
+            ],
+            "claims": ["farmed-land-size"],
+            "disclosure": "value"
+        }))
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["summary"]["succeeded"], json!(1));
+    assert_eq!(body["summary"]["failed"], json!(1));
+    assert_eq!(
+        body["items"][1]["errors"][0]["code"],
+        json!("evidence.not_available")
+    );
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    assert!(!audit.contains("person-1"));
+    assert!(!audit.contains("person-404"));
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    let batch_audit = records
+        .iter()
+        .find(|record| {
+            record["path"] == json!("/v1/batch-evaluations")
+                && record["decision"] == json!("batch_evaluate")
+                && record["status"] == json!(200)
+        })
+        .expect("batch evaluation audit record exists");
+    let items = batch_audit["batch_items"]
+        .as_array()
+        .expect("batch audit includes per-item metadata");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["input_index"], json!(0));
+    assert_eq!(items[0]["target_type"], json!("Person"));
+    assert!(items[0]["target_ref_hash"].as_str().is_some());
+    assert_eq!(items[0]["matching_outcome"], json!("matched"));
+    assert_eq!(
+        items[0]["matching_policy_id"],
+        json!("http-target-identifier-v1")
+    );
+    assert_eq!(items[0]["matching_method"], json!("exact_identifier"));
+    assert_eq!(items[1]["input_index"], json!(1));
+    assert_eq!(items[1]["matching_outcome"], json!("error"));
+    assert_eq!(items[1]["matching_error_code"], json!("target.not_found"));
+    assert!(items[1].get("target_ref_hash").is_none());
 }
 
 #[tokio::test]
@@ -3345,7 +3584,7 @@ async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmer-under-4ha"],
             "disclosure": "predicate"
         }))
@@ -3420,15 +3659,15 @@ async fn standalone_server_maps_dci_register_not_found_to_source_not_found() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "openspp-missing" },
+            "target": person_target("openspp-missing"),
             "claims": ["farmer-under-4ha"],
             "disclosure": "predicate"
         }))
         .await;
 
-    response.assert_status(StatusCode::NOT_FOUND);
+    response.assert_status(StatusCode::CONFLICT);
     let body: Value = response.json();
-    assert_eq!(body["code"], json!("source.not_found"));
+    assert_eq!(body["code"], json!("evidence.not_available"));
 }
 
 #[tokio::test]
@@ -3465,7 +3704,7 @@ async fn standalone_server_extract_claim_works_without_default_features() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value"
         }))
@@ -3510,7 +3749,7 @@ async fn standalone_server_rejects_cel_claim_without_cel_feature() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmer-under-4ha"],
             "disclosure": "predicate"
         }))

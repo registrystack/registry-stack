@@ -2,8 +2,7 @@
 //! Registry Notary OpenAPI document generation.
 
 use registry_notary_core::model::{
-    BatchEvaluateRequest, BatchSubjectRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest,
-    HolderRequest, RenderEvaluationRequest, SubjectRequest, FORMAT_SD_JWT_VC,
+    ClaimRef, CredentialIssueRequest, HolderRequest, RenderEvaluationRequest, FORMAT_SD_JWT_VC,
     SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
     SD_JWT_VC_SIGNING_ALG,
 };
@@ -131,7 +130,7 @@ fn build_openapi_document() -> OpenApi {
                 "get": {
                     "summary": "Create an OpenID4VCI credential offer",
                     "operationId": "getOid4vciCredentialOffer",
-                    "description": "Returns an authorization-code credential offer. Error responses use the OpenID4VCI error envelope, not RFC 7807 Problem Details.",
+                    "description": "Returns an authorization-code credential offer. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [],
                     "parameters": [
                         {
@@ -174,7 +173,7 @@ fn build_openapi_document() -> OpenApi {
                 "post": {
                     "summary": "Create an OpenID4VCI credential nonce",
                     "operationId": "createOid4vciNonce",
-                    "description": "Returns a c_nonce for proof-of-possession. Error responses use the OpenID4VCI error envelope, not RFC 7807 Problem Details.",
+                    "description": "Returns a c_nonce for proof-of-possession. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [],
                     "requestBody": {
                         "required": false,
@@ -225,7 +224,7 @@ fn build_openapi_document() -> OpenApi {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 7807 Problem Details.",
+                    "description": "Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -330,7 +329,7 @@ fn build_openapi_document() -> OpenApi {
             },
             "/v1/evaluations": {
                 "post": {
-                    "summary": "Evaluate claims for one subject",
+                    "summary": "Evaluate claims for one target",
                     "operationId": "evaluateClaims",
                     "requestBody": {
                         "required": true,
@@ -383,7 +382,7 @@ fn build_openapi_document() -> OpenApi {
                         },
                         "400": { "description": "Invalid federation request" },
                         "401": { "description": "Invalid federation token" },
-                        "403": { "description": "Peer, profile, purpose, or subject id type is not allowed" },
+                        "403": { "description": "Peer, profile, purpose, or requester/target identity path is not allowed" },
                         "409": { "description": "Request replay detected" },
                         "413": { "description": "Request body is too large" },
                         "415": { "description": "Content type is not application/jwt" },
@@ -393,7 +392,7 @@ fn build_openapi_document() -> OpenApi {
             },
             "/v1/batch-evaluations": {
                 "post": {
-                    "summary": "Evaluate claims for multiple subjects inline",
+                    "summary": "Evaluate claims for multiple request items inline",
                     "operationId": "batchEvaluateClaims",
                     "parameters": [
                         {
@@ -412,7 +411,7 @@ fn build_openapi_document() -> OpenApi {
                         }
                     },
                     "responses": {
-                        "200": { "description": "Per-subject claim evaluation results" },
+                        "200": { "description": "Per-item claim evaluation results" },
                         "400": { "description": "Invalid request" },
                         "401": { "description": "Missing or invalid credential" },
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
@@ -569,21 +568,7 @@ fn build_openapi_document() -> OpenApi {
         .get_or_insert_with(utoipa::openapi::Components::new);
     components
         .schemas
-        .insert("SubjectRequest".to_string(), SubjectRequest::schema());
-    components.schemas.insert(
-        "BatchSubjectRequest".to_string(),
-        BatchSubjectRequest::schema(),
-    );
-    components
-        .schemas
         .insert("ClaimRef".to_string(), ClaimRef::schema());
-    components
-        .schemas
-        .insert("EvaluateRequest".to_string(), EvaluateRequest::schema());
-    components.schemas.insert(
-        "BatchEvaluateRequest".to_string(),
-        BatchEvaluateRequest::schema(),
-    );
     components.schemas.insert(
         "RenderEvaluationRequest".to_string(),
         RenderEvaluationRequest::schema(),
@@ -598,9 +583,67 @@ fn build_openapi_document() -> OpenApi {
 
     let mut document_value =
         serde_json::to_value(&document).expect("Registry Notary OpenAPI document serializes");
-    document_value["components"]["schemas"]["ClaimRef"] = claim_ref_schema();
-    serde_json::from_value(document_value)
-        .expect("Registry Notary OpenAPI ClaimRef schema is valid")
+    let schema_overrides = [
+        ("ClaimRef", claim_ref_schema()),
+        ("EvaluateRequest", evaluate_request_schema()),
+        ("BatchEvaluateRequest", batch_evaluate_request_schema()),
+        (
+            "BatchEvaluateItemRequest",
+            batch_evaluate_item_request_schema(),
+        ),
+        ("EvidenceEntity", evidence_entity_schema()),
+        ("EvidenceIdentifier", evidence_identifier_schema()),
+        ("EvidenceAssurance", evidence_assurance_schema()),
+        ("EvidenceRelationship", evidence_relationship_schema()),
+        ("EvidenceOnBehalfOf", evidence_on_behalf_of_schema()),
+        ("EvaluationResponse", evaluation_response_schema()),
+        ("ClaimResultView", claim_result_view_schema()),
+        ("BatchEvaluateResponse", batch_evaluate_response_schema()),
+        ("BatchItemResponse", batch_item_response_schema()),
+        ("BatchClaimResultView", batch_claim_result_view_schema()),
+        ("BatchItemError", batch_item_error_schema()),
+        ("BatchSummary", batch_summary_schema()),
+        ("ClaimProvenance", claim_provenance_schema()),
+        ("TargetRefView", target_ref_view_schema()),
+        ("EvidenceEntityRef", evidence_entity_ref_schema()),
+        ("MatchingMetadata", matching_metadata_schema()),
+    ];
+    for (name, schema) in schema_overrides.iter() {
+        document_value["components"]["schemas"][*name] = schema.clone();
+    }
+    set_json_response_schema(
+        &mut document_value,
+        "/v1/evaluations",
+        "post",
+        "200",
+        "#/components/schemas/EvaluationResponse",
+    );
+    set_json_response_schema(
+        &mut document_value,
+        "/v1/batch-evaluations",
+        "post",
+        "200",
+        "#/components/schemas/BatchEvaluateResponse",
+    );
+    set_json_response_schema(
+        &mut document_value,
+        "/v1/evaluations/{evaluation_id}/render",
+        "post",
+        "200",
+        "#/components/schemas/EvaluationResponse",
+    );
+    serde_json::from_value(document_value.clone()).unwrap_or_else(|err| {
+        let base_document_value =
+            serde_json::to_value(&document).expect("Registry Notary OpenAPI document serializes");
+        for (name, schema) in schema_overrides {
+            let mut probe = base_document_value.clone();
+            probe["components"]["schemas"][name] = schema;
+            if let Err(schema_err) = serde_json::from_value::<OpenApi>(probe) {
+                panic!("Registry Notary OpenAPI {name} schema is valid: {schema_err}");
+            }
+        }
+        panic!("Registry Notary OpenAPI schema overrides are valid: {err}");
+    })
 }
 
 fn add_response_examples(document: &mut Value) {
@@ -984,7 +1027,7 @@ fn add_response_examples(document: &mut Value) {
         "/v1/batch-evaluations",
         "post",
         "200",
-        "Per-subject claim evaluation results",
+        "Per-item claim evaluation results",
         batch_evaluate_example(),
     );
     set_problem_response(
@@ -1194,18 +1237,364 @@ fn add_response_examples(document: &mut Value) {
 
 fn claim_ref_schema() -> Value {
     json!({
-        "oneOf": [
-            { "type": "string" },
-            {
+        "type": "object",
+        "description": "Claim reference. Wire requests may also use a plain string claim id.",
+        "required": ["id"],
+        "properties": {
+            "id": { "type": "string" },
+            "version": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evaluate_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["claims"],
+        "properties": {
+            "requester": { "$ref": "#/components/schemas/EvidenceEntity" },
+            "target": { "$ref": "#/components/schemas/EvidenceEntity" },
+            "relationship": { "$ref": "#/components/schemas/EvidenceRelationship" },
+            "on_behalf_of": { "$ref": "#/components/schemas/EvidenceOnBehalfOf" },
+            "claims": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ClaimRef" }
+            },
+            "disclosure": { "type": "string" },
+            "format": { "type": "string" },
+            "purpose": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_evaluate_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["items", "claims"],
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/BatchEvaluateItemRequest" }
+            },
+            "claims": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ClaimRef" }
+            },
+            "disclosure": { "type": "string" },
+            "format": { "type": "string" },
+            "purpose": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_evaluate_item_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+            "requester": { "$ref": "#/components/schemas/EvidenceEntity" },
+            "target": { "$ref": "#/components/schemas/EvidenceEntity" },
+            "relationship": { "$ref": "#/components/schemas/EvidenceRelationship" },
+            "on_behalf_of": { "$ref": "#/components/schemas/EvidenceOnBehalfOf" },
+            "purpose": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_entity_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+            "type": { "type": "string" },
+            "id": { "type": "string" },
+            "identifiers": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/EvidenceIdentifier" }
+            },
+            "attributes": {
                 "type": "object",
-                "required": ["id"],
-                "properties": {
-                    "id": { "type": "string" },
-                    "version": { "type": "string" }
-                },
-                "additionalProperties": false
+                "additionalProperties": true
+            },
+            "assurance": { "$ref": "#/components/schemas/EvidenceAssurance" },
+            "profile": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_identifier_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["scheme", "value"],
+        "properties": {
+            "scheme": { "type": "string" },
+            "value": { "type": "string" },
+            "issuer": { "type": "string" },
+            "country": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_assurance_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "method": { "type": "string" },
+            "level_scheme": { "type": "string" },
+            "level": { "type": "string" },
+            "verified_at": { "type": "string", "format": "date-time" },
+            "issuer": { "type": "string" },
+            "evidence": {
+                "type": "array",
+                "items": { "type": "object", "additionalProperties": true }
             }
-        ]
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_relationship_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+            "type": { "type": "string" },
+            "attributes": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_on_behalf_of_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true
+    })
+}
+
+fn evaluation_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["results"],
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ClaimResultView" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn claim_result_view_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "evaluation_id",
+            "claim_id",
+            "claim_version",
+            "subject_type",
+            "target_ref",
+            "value",
+            "satisfied",
+            "disclosure",
+            "format",
+            "issued_at",
+            "expires_at",
+            "provenance"
+        ],
+        "properties": {
+            "evaluation_id": { "type": "string" },
+            "claim_id": { "type": "string" },
+            "claim_version": { "type": "string" },
+            "subject_type": { "type": "string" },
+            "requester_ref": { "$ref": "#/components/schemas/EvidenceEntityRef" },
+            "target_ref": { "$ref": "#/components/schemas/TargetRefView" },
+            "matching": { "$ref": "#/components/schemas/MatchingMetadata" },
+            "value": {
+                "type": "object",
+                "description": "Claim value. The runtime may return any JSON value."
+            },
+            "satisfied": { "type": "boolean", "nullable": true },
+            "disclosure": { "type": "string" },
+            "format": { "type": "string" },
+            "issued_at": { "type": "string", "format": "date-time" },
+            "expires_at": { "type": "string", "format": "date-time", "nullable": true },
+            "provenance": { "$ref": "#/components/schemas/ClaimProvenance" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_evaluate_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["batch_id", "status", "claims", "items", "summary"],
+        "properties": {
+            "batch_id": { "type": "string" },
+            "status": { "type": "string", "enum": ["completed"] },
+            "claims": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "items": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/BatchItemResponse" }
+            },
+            "summary": { "$ref": "#/components/schemas/BatchSummary" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_item_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["input_index", "target_ref", "status", "claim_results", "errors"],
+        "properties": {
+            "input_index": { "type": "integer", "minimum": 0 },
+            "target_ref": { "$ref": "#/components/schemas/TargetRefView" },
+            "requester_ref": { "$ref": "#/components/schemas/EvidenceEntityRef" },
+            "matching": { "$ref": "#/components/schemas/MatchingMetadata" },
+            "evaluation_id": { "type": "string" },
+            "status": { "type": "string", "enum": ["succeeded", "failed"] },
+            "claim_results": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/BatchClaimResultView" }
+            },
+            "errors": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/BatchItemError" }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_claim_result_view_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "result_id",
+            "claim_id",
+            "claim_version",
+            "value_type",
+            "value",
+            "disclosure",
+            "provenance"
+        ],
+        "properties": {
+            "result_id": { "type": "string" },
+            "claim_id": { "type": "string" },
+            "claim_version": { "type": "string" },
+            "value_type": { "type": "string" },
+            "value": {
+                "type": "object",
+                "description": "Claim value. The runtime may return any JSON value."
+            },
+            "satisfied": { "type": "boolean", "nullable": true },
+            "disclosure": { "type": "string" },
+            "provenance": { "$ref": "#/components/schemas/ClaimProvenance" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_item_error_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["code", "title", "retryable"],
+        "properties": {
+            "code": { "type": "string" },
+            "title": { "type": "string" },
+            "retryable": { "type": "boolean" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn batch_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["succeeded", "failed"],
+        "properties": {
+            "succeeded": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn claim_provenance_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["source_count", "source_versions", "computed_by"],
+        "properties": {
+            "source_count": { "type": "integer", "minimum": 0 },
+            "source_versions": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+            },
+            "computed_by": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn target_ref_view_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["handle"],
+        "properties": {
+            "type": { "type": "string" },
+            "handle": { "type": "string" },
+            "identifier_schemes": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "profile": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn evidence_entity_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "handle"],
+        "properties": {
+            "type": { "type": "string" },
+            "handle": { "type": "string" },
+            "identifier_schemes": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "profile": { "type": "string" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn matching_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "policy_id": { "type": "string" },
+            "method": { "type": "string" },
+            "confidence": { "type": "string" },
+            "score": { "type": "number", "nullable": true }
+        },
+        "required": ["policy_id", "method", "confidence"],
+        "additionalProperties": false
     })
 }
 
@@ -1225,6 +1614,40 @@ fn set_json_response(
         description,
         "application/json",
         example,
+    );
+}
+
+fn set_json_response_schema(
+    document: &mut Value,
+    path: &str,
+    method: &str,
+    status: &str,
+    schema_ref: &str,
+) {
+    let Some(media_type) = document
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .and_then(|paths| paths.get_mut(path))
+        .and_then(Value::as_object_mut)
+        .and_then(|path_item| path_item.get_mut(method))
+        .and_then(Value::as_object_mut)
+        .and_then(|operation| operation.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .and_then(|responses| responses.get_mut(status))
+        .and_then(Value::as_object_mut)
+        .and_then(|response| response.get_mut("content"))
+        .and_then(Value::as_object_mut)
+        .and_then(|content| content.get_mut("application/json"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    media_type.insert(
+        "schema".to_string(),
+        json!({
+            "$ref": schema_ref
+        }),
     );
 }
 
@@ -1382,7 +1805,8 @@ fn problem_details_schema() -> Value {
             "title": { "type": "string" },
             "status": { "type": "integer", "format": "int32" },
             "detail": { "type": "string" },
-            "code": { "type": "string" }
+            "code": { "type": "string" },
+            "request_id": { "type": "string" }
         },
         "additionalProperties": true
     })
@@ -1864,7 +2288,9 @@ fn batch_evaluate_example() -> Value {
         "items": [
             {
                 "input_index": 0,
-                "subject_ref": subject_ref_example(),
+                "target_ref": target_ref_example("Person"),
+                "requester_ref": requester_ref_example(),
+                "matching": matching_example(),
                 "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                 "status": "succeeded",
                 "claim_results": [
@@ -1903,7 +2329,9 @@ fn claim_result_example() -> Value {
         "claim_id": "farmer-under-4ha",
         "claim_version": "2026-05",
         "subject_type": "person",
-        "subject_ref": subject_ref_example(),
+        "requester_ref": requester_ref_example(),
+        "target_ref": target_ref_example("Person"),
+        "matching": matching_example(),
         "value": true,
         "satisfied": true,
         "disclosure": "predicate",
@@ -1914,10 +2342,30 @@ fn claim_result_example() -> Value {
     })
 }
 
-fn subject_ref_example() -> Value {
+fn target_ref_example(entity_type: &str) -> Value {
     json!({
-        "hash": "hmac-sha256:example-subject-ref-hash",
-        "id_type": "national_id"
+        "type": entity_type,
+        "handle": "rnref:v1:example-target-ref",
+        "identifier_schemes": ["national_id"],
+        "profile": "resident"
+    })
+}
+
+fn requester_ref_example() -> Value {
+    json!({
+        "type": "Agency",
+        "handle": "rnref:v1:example-requester-ref",
+        "identifier_schemes": ["agency_id"],
+        "profile": "benefits"
+    })
+}
+
+fn matching_example() -> Value {
+    json!({
+        "policy_id": "national-id-exact-v1",
+        "method": "identifier_exact",
+        "confidence": "high",
+        "score": 1.0
     })
 }
 
@@ -2073,6 +2521,61 @@ mod tests {
     }
 
     #[test]
+    fn evaluation_response_schemas_use_target_requester_and_matching_refs() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+
+        assert_eq!(
+            doc["paths"]["/v1/evaluations"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/EvaluationResponse")
+        );
+        assert_eq!(
+            doc["paths"]["/v1/batch-evaluations"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/BatchEvaluateResponse")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimResultView"]["properties"]["target_ref"]["$ref"],
+            json!("#/components/schemas/TargetRefView")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimResultView"]["properties"]["requester_ref"]["$ref"],
+            json!("#/components/schemas/EvidenceEntityRef")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimResultView"]["properties"]["matching"]["$ref"],
+            json!("#/components/schemas/MatchingMetadata")
+        );
+
+        let evaluate_example = &doc["paths"]["/v1/evaluations"]["post"]["responses"]["200"]
+            ["content"]["application/json"]["example"]["results"][0];
+        assert!(evaluate_example.get("subject_ref").is_none());
+        assert!(evaluate_example.get("target_ref").is_some());
+        assert!(evaluate_example.get("requester_ref").is_some());
+        assert!(evaluate_example.get("matching").is_some());
+
+        let batch_item_example = &doc["paths"]["/v1/batch-evaluations"]["post"]["responses"]["200"]
+            ["content"]["application/json"]["example"]["items"][0];
+        assert!(batch_item_example.get("subject_ref").is_none());
+        assert!(batch_item_example.get("target_ref").is_some());
+        assert!(batch_item_example.get("requester_ref").is_some());
+        assert!(batch_item_example.get("matching").is_some());
+
+        let evaluate_request = &doc["components"]["schemas"]["EvaluateRequest"]["properties"];
+        assert!(evaluate_request.get("subject").is_none());
+        assert!(evaluate_request.get("id_type").is_none());
+        assert!(evaluate_request.get("target").is_some());
+        assert_eq!(
+            doc["components"]["schemas"]["EvaluateRequest"]["required"],
+            json!(["claims"])
+        );
+
+        let batch_request = &doc["components"]["schemas"]["BatchEvaluateRequest"]["properties"];
+        assert!(batch_request.get("subjects").is_none());
+        assert!(batch_request.get("items").is_some());
+    }
+
+    #[test]
     fn common_error_responses_have_problem_detail_examples() {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         for (path, method, status) in [
@@ -2179,7 +2682,7 @@ mod tests {
         );
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
-            json!("Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 7807 Problem Details.")
+            json!("Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
         );
     }
 

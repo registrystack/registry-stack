@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary routes.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use axum::body::{to_bytes, Body, Bytes};
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::middleware::Next;
@@ -14,11 +15,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_notary_core::sd_jwt;
 use registry_notary_core::{
-    AccessMode, BatchEvaluateRequest, BatchSubjectRequest, BoundedClaimId, BoundedCorrelationId,
-    ClaimRef, ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig,
-    EvaluateRequest, EvidenceConfig, EvidenceError, EvidencePrincipal, FederationConfig, Hashed,
-    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, PolicyIdentifier,
-    RateLimitBucket, RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
+    AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
+    BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigMetadata,
+    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceBatchItemAuditEvent,
+    EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidencePrincipal,
+    EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
+    Oid4vciCredentialConfigurationConfig, PolicyIdentifier, RateLimitBucket,
+    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
     SelfAttestationScopePolicy, SourceCapability, StoredSelfAttestationMetadata, SubjectRequest,
     VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
@@ -572,6 +575,15 @@ pub struct EvidenceAuditContext {
     pub holder_binding_mode: Option<ConfigMetadata>,
     pub rate_limit_bucket: Option<RateLimitBucket>,
     pub policy_hash: Option<Hashed<PolicyIdentifier>>,
+    pub target_type: Option<String>,
+    pub target_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+    pub requester_type: Option<String>,
+    pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+    pub matching_policy_id: Option<String>,
+    pub matching_method: Option<String>,
+    pub matching_outcome: Option<String>,
+    pub matching_error_code: Option<String>,
+    pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
 }
 
 #[derive(Debug, Clone)]
@@ -852,22 +864,29 @@ async fn oid4vci_credential(
         );
         return response;
     }
+    let target = match oid4vci_bound_subject(&state.self_attestation, &principal) {
+        Ok(subject) => EvidenceEntity::from_subject_request("Person", subject),
+        Err(_) => {
+            let mut response = oid4vci_error_response(Oid4vciWireError::InvalidToken);
+            attach_oid4vci_self_attestation_denial_audit(
+                &mut response,
+                "oid4vci_credential_denied",
+                std::slice::from_ref(&configuration.claim_id),
+                configuration_id,
+                Some(SelfAttestationDenialCode::InvalidToken),
+                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
+    };
     let request = EvaluateRequest {
-        subject: match oid4vci_bound_subject(&state.self_attestation, &principal) {
-            Ok(subject) => subject,
-            Err(_) => {
-                let mut response = oid4vci_error_response(Oid4vciWireError::InvalidToken);
-                attach_oid4vci_self_attestation_denial_audit(
-                    &mut response,
-                    "oid4vci_credential_denied",
-                    std::slice::from_ref(&configuration.claim_id),
-                    configuration_id,
-                    Some(SelfAttestationDenialCode::InvalidToken),
-                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
-                );
-                return response;
-            }
-        },
+        requester: Some(target.clone()),
+        target: Some(target),
+        relationship: Some(EvidenceRelationship {
+            relationship_type: "self".to_string(),
+            attributes: Default::default(),
+        }),
+        on_behalf_of: None,
         claims: vec![ClaimRef::from(configuration.claim_id.clone())],
         disclosure: None,
         format: Some(FORMAT_SD_JWT_VC.to_string()),
@@ -1049,10 +1068,12 @@ async fn oid4vci_credential(
     })
     .into_response();
     state.metrics.record_credential("openid4vci", "issued");
-    attach_self_attestation_credential_audit(
+    if attach_self_attestation_credential_audit(
         &mut response,
+        &state.self_attestation_rate_keys,
         &evaluation_id,
         &evaluation.claim_ids,
+        &evaluation.results,
         evaluation.results.len() as u64,
         SelfAttestationCredentialAuditDetails {
             profile_id: &configuration.credential_profile,
@@ -1061,7 +1082,11 @@ async fn oid4vci_credential(
             protocol: Some("openid4vci"),
             credential_configuration_id: Some(configuration_id),
         },
-    );
+    )
+    .is_err()
+    {
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    }
     response
 }
 
@@ -1153,8 +1178,15 @@ async fn evaluate(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     correlation_id: Option<Extension<BoundedCorrelationId>>,
-    Json(request): Json<EvaluateRequest>,
+    request: Result<Json<EvaluateRequest>, JsonRejection>,
 ) -> Response {
+    if has_idempotency_key(&headers) {
+        return evidence_error_response(EvidenceError::InvalidRequest);
+    }
+    let request = match parse_json_body(request) {
+        Ok(request) => request,
+        Err(error) => return evidence_error_response(error),
+    };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -1218,6 +1250,34 @@ async fn evaluate(
             );
             return response;
         }
+        if let Err(error) = derive_self_attestation_request_context(
+            &state.self_attestation,
+            &principal,
+            &mut request,
+        ) {
+            if denial_code_from_error(&error) == Some(SelfAttestationDenialCode::SubjectMismatch) {
+                if let Err(rate_error) = consume_subject_mismatch_denial(&state, &principal_hash) {
+                    let mut response = evidence_error_response(rate_error.evidence_error());
+                    attach_self_attestation_rate_limit_audit(
+                        &mut response,
+                        "evaluate_rate_limited",
+                        &request_claim_ids,
+                        rate_error.bucket(),
+                    );
+                    return response;
+                }
+            }
+            let denial_code = denial_code_from_error(&error);
+            let mut response = evidence_error_response(error);
+            attach_self_attestation_audit(
+                &mut response,
+                "evaluate_denied",
+                &request_claim_ids,
+                denial_code,
+                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
         match prepare_self_attestation_evaluate(&state, evidence, &principal, &request) {
             Ok(context) => {
                 request.purpose = Some(context.purpose.clone());
@@ -1263,6 +1323,7 @@ async fn evaluate(
     let request_correlation_id = correlation_id
         .as_ref()
         .map(|Extension(correlation_id)| correlation_id.clone());
+    let audit_request = request.clone();
     let evaluation_future = async {
         if let Some(context) = self_attestation_context {
             runtime
@@ -1318,9 +1379,38 @@ async fn evaluate(
                     Some(1),
                 );
             }
+            if let Err(error) = attach_evaluate_request_audit(
+                &mut response,
+                &state.self_attestation_rate_keys,
+                &audit_request,
+                results.first(),
+                None,
+            ) {
+                return evidence_error_response(error);
+            }
             response
         }
-        Err(error) => evidence_error_response(error),
+        Err(error) => {
+            let audit_code = error.audit_code();
+            let mut response = evidence_error_response(error);
+            attach_evidence_audit(
+                &mut response,
+                "evaluate_denied",
+                None,
+                &requested_claims,
+                None,
+            );
+            if let Err(error) = attach_evaluate_request_audit(
+                &mut response,
+                &state.self_attestation_rate_keys,
+                &audit_request,
+                None,
+                Some(audit_code),
+            ) {
+                return evidence_error_response(error);
+            }
+            response
+        }
     }
 }
 
@@ -1329,8 +1419,12 @@ async fn batch_evaluate(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     correlation_id: Option<Extension<BoundedCorrelationId>>,
-    Json(request): Json<BatchEvaluateRequest>,
+    request: Result<Json<BatchEvaluateRequest>, JsonRejection>,
 ) -> Response {
+    let request = match parse_json_body(request) {
+        Ok(request) => request,
+        Err(error) => return evidence_error_response(error),
+    };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -1380,11 +1474,11 @@ async fn batch_evaluate(
         &state.self_attestation_rate_keys,
     ));
     let requested_claims = request_claim_ids;
-    let requested_subject_count = request.subjects.len();
+    let requested_subject_count = request.items.len();
     let audit_purposes = resolved_batch_audit_purposes(
         purpose_header(&headers),
         request.purpose.as_deref(),
-        &request.subjects,
+        &request.items,
     );
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
@@ -1405,7 +1499,8 @@ async fn batch_evaluate(
     };
     match result {
         Ok(result) => {
-            let mut response = Json(result).into_response();
+            let mut response = Json(result.clone()).into_response();
+            let batch_audit_purposes = audit_purposes.clone();
             attach_evidence_audit_with_purposes(
                 &mut response,
                 "batch_evaluate",
@@ -1414,6 +1509,14 @@ async fn batch_evaluate(
                 Some(requested_subject_count as u64),
                 audit_purposes,
             );
+            if let Err(error) = attach_batch_evaluate_response_audit(
+                &mut response,
+                &state.self_attestation_rate_keys,
+                &result,
+                batch_audit_purposes.as_deref(),
+            ) {
+                return evidence_error_response(error);
+            }
             response
         }
         Err(error) => evidence_error_response(error),
@@ -1421,11 +1524,19 @@ async fn batch_evaluate(
 }
 
 async fn render(
+    headers: HeaderMap,
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
     Path(evaluation_id): Path<String>,
-    Json(request): Json<RenderEvaluationRequest>,
+    request: Result<Json<RenderEvaluationRequest>, JsonRejection>,
 ) -> Response {
+    if has_idempotency_key(&headers) {
+        return evidence_error_response(EvidenceError::InvalidRequest);
+    }
+    let request = match parse_json_body(request) {
+        Ok(request) => request,
+        Err(error) => return evidence_error_response(error),
+    };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -1552,10 +1663,18 @@ async fn render(
 }
 
 async fn issue_credential(
+    headers: HeaderMap,
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
-    Json(request): Json<CredentialIssueRequest>,
+    request: Result<Json<CredentialIssueRequest>, JsonRejection>,
 ) -> Response {
+    if has_idempotency_key(&headers) {
+        return evidence_error_response(EvidenceError::InvalidRequest);
+    }
+    let request = match parse_json_body(request) {
+        Ok(request) => request,
+        Err(error) => return evidence_error_response(error),
+    };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
@@ -1730,7 +1849,7 @@ async fn issue_credential(
             evaluation
                 .results
                 .first()
-                .map(|result| result.subject_ref.hash.as_str())
+                .map(|result| result.target_ref.handle.as_str())
         }) {
             Some(subject_ref) => subject_ref,
             None => return evidence_error_response(EvidenceError::InvalidRequest),
@@ -1822,10 +1941,12 @@ async fn issue_credential(
         HeaderValue::from_static("application/json"),
     );
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
-        attach_self_attestation_credential_audit(
+        if let Err(error) = attach_self_attestation_credential_audit(
             &mut response,
+            &state.self_attestation_rate_keys,
             &request.evaluation_id,
             &evaluation.claim_ids,
+            &evaluation.results,
             evaluation.results.len() as u64,
             SelfAttestationCredentialAuditDetails {
                 profile_id,
@@ -1834,7 +1955,9 @@ async fn issue_credential(
                 protocol: None,
                 credential_configuration_id: None,
             },
-        );
+        ) {
+            return evidence_error_response(error);
+        }
     } else {
         attach_evidence_audit(
             &mut response,
@@ -2088,6 +2211,73 @@ fn oid4vci_bound_subject(
         id: subject_id.to_string(),
         id_type: Some(config.subject_binding.id_type.clone()),
     })
+}
+
+fn self_attestation_bound_subject(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+) -> Result<SubjectRequest, EvidenceError> {
+    let subject_id = principal
+        .verified_subject_binding_value(&config.subject_binding.token_claim)
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::SubjectClaimMissing))?;
+    Ok(SubjectRequest {
+        id: subject_id.to_string(),
+        id_type: Some(config.subject_binding.id_type.clone()),
+    })
+}
+
+fn derive_self_attestation_request_context(
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+    request: &mut EvaluateRequest,
+) -> Result<(), EvidenceError> {
+    let subject = self_attestation_bound_subject(config, principal)?;
+    let derived = EvidenceEntity::from_subject_request("Person", subject.clone());
+    ensure_optional_entity_matches_subject(config, request.target.as_ref(), &subject)?;
+    ensure_optional_entity_matches_subject(config, request.requester.as_ref(), &subject)?;
+    if let Some(relationship) = request.relationship.as_ref() {
+        if relationship.relationship_type != "self" || !relationship.attributes.is_empty() {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::SubjectMismatch,
+            ));
+        }
+    }
+    if request.on_behalf_of.is_some() {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    request.target = Some(derived.clone());
+    request.requester = Some(derived);
+    request.relationship = Some(EvidenceRelationship {
+        relationship_type: "self".to_string(),
+        attributes: Default::default(),
+    });
+    Ok(())
+}
+
+fn ensure_optional_entity_matches_subject(
+    config: &SelfAttestationConfig,
+    entity: Option<&EvidenceEntity>,
+    expected: &SubjectRequest,
+) -> Result<(), EvidenceError> {
+    let Some(entity) = entity else {
+        return Ok(());
+    };
+    let Some(actual) = entity.to_subject_request() else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    };
+    if actual.id.trim().is_empty()
+        || actual.id != expected.id
+        || actual.id_type.as_deref() != Some(config.subject_binding.id_type.as_str())
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    }
+    Ok(())
 }
 
 fn check_oid4vci_self_attestation_rate_limit(
@@ -2458,12 +2648,17 @@ fn require_self_attestation_evaluate(
     }
 
     let subject_binding = &config.subject_binding;
-    if request.subject.id.trim().is_empty() {
+    let Some(target_subject) = request.target_subject() else {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::SubjectMismatch,
+        ));
+    };
+    if target_subject.id.trim().is_empty() {
         return Err(self_attestation_denied(
             SelfAttestationDenialCode::SubjectMismatch,
         ));
     }
-    if request.subject.id_type.as_deref() != Some(subject_binding.id_type.as_str()) {
+    if target_subject.id_type.as_deref() != Some(subject_binding.id_type.as_str()) {
         return Err(self_attestation_denied(
             SelfAttestationDenialCode::SubjectMismatch,
         ));
@@ -2475,7 +2670,7 @@ fn require_self_attestation_evaluate(
             SelfAttestationDenialCode::SubjectClaimMissing,
         ));
     };
-    if bound_subject != request.subject.id {
+    if bound_subject != target_subject.id {
         return Err(self_attestation_denied(
             SelfAttestationDenialCode::SubjectMismatch,
         ));
@@ -2888,7 +3083,243 @@ fn attach_evidence_audit_with_purposes(
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     });
+}
+
+fn attach_evaluate_request_audit(
+    response: &mut Response,
+    keys: &SelfAttestationRateLimitKeys,
+    request: &EvaluateRequest,
+    result: Option<&ClaimResultView>,
+    matching_error_code: Option<&str>,
+) -> Result<(), EvidenceError> {
+    let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
+        return Ok(());
+    };
+    audit.target_type = result
+        .map(|result| result.target_ref.entity_type.as_str())
+        .or_else(|| {
+            request
+                .target
+                .as_ref()
+                .map(|target| target.entity_type.as_str())
+        })
+        .filter(|entity_type| !entity_type.is_empty())
+        .map(str::to_string);
+    audit.target_ref_hash = match result {
+        Some(result) => Some(hash_audit_handle(
+            keys,
+            "target",
+            result.target_ref.entity_type.as_str(),
+            request.purpose.as_deref(),
+            &result.target_ref.handle,
+        )?),
+        None => match request.target.as_ref() {
+            Some(target) => {
+                hash_audit_matching_attempt(keys, "target", request.purpose.as_deref(), target)?
+            }
+            None => None,
+        },
+    };
+    if let Some(requester_ref) = result.and_then(|result| result.requester_ref.as_ref()) {
+        audit.requester_type = Some(requester_ref.entity_type.clone());
+        audit.requester_ref_hash = Some(hash_audit_handle(
+            keys,
+            "requester",
+            requester_ref.entity_type.as_str(),
+            request.purpose.as_deref(),
+            &requester_ref.handle,
+        )?);
+    } else if let Some(requester) = request.requester.as_ref() {
+        audit.requester_type = Some(requester.entity_type.clone());
+        audit.requester_ref_hash =
+            hash_audit_matching_attempt(keys, "requester", request.purpose.as_deref(), requester)?;
+    }
+    if let Some(matching) = result.and_then(|result| result.matching.as_ref()) {
+        audit.matching_policy_id = Some(matching.policy_id.clone());
+        audit.matching_method = Some(matching.method.clone());
+        audit.matching_outcome = Some("matched".to_string());
+    } else if let Some(error_code) = matching_error_code.filter(|code| is_matching_audit_code(code))
+    {
+        audit.matching_outcome = Some("error".to_string());
+        audit.matching_error_code = Some(error_code.to_string());
+    }
+    Ok(())
+}
+
+fn attach_batch_evaluate_response_audit(
+    response: &mut Response,
+    keys: &SelfAttestationRateLimitKeys,
+    result: &registry_notary_core::BatchEvaluateResponse,
+    audit_purposes: Option<&[String]>,
+) -> Result<(), EvidenceError> {
+    let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
+        return Ok(());
+    };
+    let mut batch_items = Vec::with_capacity(result.items.len());
+    for item in &result.items {
+        let purpose_scope = audit_purposes
+            .and_then(|purposes| purposes.get(item.input_index))
+            .map(String::as_str);
+        let matching_error_code = item
+            .errors
+            .first()
+            .and_then(|error| error.audit_code.as_deref().or(Some(error.code.as_str())))
+            .filter(|code| is_matching_audit_code(code))
+            .map(str::to_string);
+        let matching = item.matching.as_ref();
+        batch_items.push(EvidenceBatchItemAuditEvent {
+            input_index: item.input_index,
+            target_type: Some(item.target_ref.entity_type.clone())
+                .filter(|entity_type| !entity_type.is_empty()),
+            target_ref_hash: if item.errors.is_empty() {
+                Some(hash_audit_handle(
+                    keys,
+                    "target",
+                    item.target_ref.entity_type.as_str(),
+                    purpose_scope,
+                    &item.target_ref.handle,
+                )?)
+            } else {
+                None
+            },
+            requester_type: item
+                .requester_ref
+                .as_ref()
+                .map(|requester| requester.entity_type.clone()),
+            requester_ref_hash: item
+                .requester_ref
+                .as_ref()
+                .filter(|_| item.errors.is_empty())
+                .map(|requester| {
+                    hash_audit_handle(
+                        keys,
+                        "requester",
+                        requester.entity_type.as_str(),
+                        purpose_scope,
+                        &requester.handle,
+                    )
+                })
+                .transpose()?,
+            matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
+            matching_method: matching.map(|matching| matching.method.clone()),
+            matching_outcome: if item.errors.is_empty() {
+                Some("matched".to_string())
+            } else if matching_error_code.is_some() {
+                Some("error".to_string())
+            } else {
+                None
+            },
+            matching_error_code,
+        });
+    }
+    audit.batch_items = Some(batch_items);
+    Ok(())
+}
+
+fn hash_audit_handle(
+    keys: &SelfAttestationRateLimitKeys,
+    role: &str,
+    entity_type: &str,
+    purpose_scope: Option<&str>,
+    handle: &str,
+) -> Result<Hashed<EvidenceEntityReference>, EvidenceError> {
+    let input = canonical_audit_handle_input(role, entity_type, purpose_scope, handle)?;
+    keys.audit_pseudonym_ref("matched-reference-v1", &input)
+        .map(|hash| Hashed::from_hash(hash.as_str().to_string()))
+        .map_err(|error| error.evidence_error())
+}
+
+fn hash_audit_matching_attempt(
+    _keys: &SelfAttestationRateLimitKeys,
+    role: &str,
+    purpose_scope: Option<&str>,
+    entity: &EvidenceEntity,
+) -> Result<Option<Hashed<EvidenceEntityReference>>, EvidenceError> {
+    let _ = canonical_audit_identifier_input(role, purpose_scope, entity)?;
+    Ok(None)
+}
+
+fn canonical_audit_handle_input(
+    role: &str,
+    entity_type: &str,
+    purpose_scope: Option<&str>,
+    handle: &str,
+) -> Result<String, EvidenceError> {
+    serde_json::to_string(&json!({
+        "class": "matched-reference-v1",
+        "version": 1,
+        "role": role,
+        "entity_type": entity_type,
+        "purpose_scope": purpose_scope.unwrap_or(""),
+        "handle": handle,
+    }))
+    .map_err(|_| EvidenceError::InvalidRequest)
+}
+
+fn canonical_audit_identifier_input(
+    role: &str,
+    purpose_scope: Option<&str>,
+    entity: &EvidenceEntity,
+) -> Result<Option<String>, EvidenceError> {
+    let mut identifiers = entity
+        .identifiers
+        .iter()
+        .filter(|identifier| !identifier.value.trim().is_empty())
+        .map(|identifier| {
+            let mut canonical = BTreeMap::new();
+            canonical.insert("country", identifier.country.as_deref().unwrap_or(""));
+            canonical.insert("issuer", identifier.issuer.as_deref().unwrap_or(""));
+            canonical.insert("scheme", identifier.scheme.as_str());
+            canonical.insert("value", identifier.value.as_str());
+            canonical
+        })
+        .collect::<Vec<_>>();
+    identifiers.sort_by(|left, right| {
+        (
+            left["scheme"],
+            left["issuer"],
+            left["country"],
+            left["value"],
+        )
+            .cmp(&(
+                right["scheme"],
+                right["issuer"],
+                right["country"],
+                right["value"],
+            ))
+    });
+    identifiers.dedup();
+    if identifiers.is_empty() && entity.id.as_deref().is_none_or(str::is_empty) {
+        return Ok(None);
+    }
+    serde_json::to_string(&json!({
+        "class": "matching-attempt-v1",
+        "version": 1,
+        "role": role,
+        "entity_type": entity.entity_type,
+        "purpose_scope": purpose_scope.unwrap_or(""),
+        "id": entity.id.as_deref().unwrap_or(""),
+        "identifiers": identifiers,
+    }))
+    .map(Some)
+    .map_err(|_| EvidenceError::InvalidRequest)
+}
+
+fn is_matching_audit_code(code: &str) -> bool {
+    code.starts_with("target.")
+        || code.starts_with("requester.")
+        || code.starts_with("relationship.")
+        || matches!(code, "purpose.not_allowed" | "evidence.not_available")
 }
 
 struct SelfAttestationCredentialAuditDetails<'a> {
@@ -2901,11 +3332,44 @@ struct SelfAttestationCredentialAuditDetails<'a> {
 
 fn attach_self_attestation_credential_audit(
     response: &mut Response,
+    keys: &SelfAttestationRateLimitKeys,
     evaluation_id: &str,
     claim_ids: &[String],
+    results: &[ClaimResultView],
     row_count: u64,
     details: SelfAttestationCredentialAuditDetails<'_>,
-) {
+) -> Result<(), EvidenceError> {
+    let first_result = results.first();
+    let target_type = first_result
+        .map(|result| result.target_ref.entity_type.clone())
+        .filter(|entity_type| !entity_type.is_empty());
+    let target_ref_hash = first_result
+        .map(|result| {
+            hash_audit_handle(
+                keys,
+                "target",
+                result.target_ref.entity_type.as_str(),
+                None,
+                &result.target_ref.handle,
+            )
+        })
+        .transpose()?;
+    let requester_type = first_result
+        .and_then(|result| result.requester_ref.as_ref())
+        .map(|requester| requester.entity_type.clone());
+    let requester_ref_hash = first_result
+        .and_then(|result| result.requester_ref.as_ref())
+        .map(|requester| {
+            hash_audit_handle(
+                keys,
+                "requester",
+                requester.entity_type.as_str(),
+                None,
+                &requester.handle,
+            )
+        })
+        .transpose()?;
+    let matching = first_result.and_then(|result| result.matching.as_ref());
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id: Some(evaluation_id.to_string()),
         verification_decision: Some("credential_issued".to_string()),
@@ -2925,7 +3389,17 @@ fn attach_self_attestation_credential_audit(
         holder_binding_mode: ConfigMetadata::new(details.holder_binding_mode).ok(),
         rate_limit_bucket: None,
         policy_hash: details.policy_hash,
+        target_type,
+        target_ref_hash,
+        requester_type,
+        requester_ref_hash,
+        matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
+        matching_method: matching.map(|matching| matching.method.clone()),
+        matching_outcome: matching.map(|_| "matched".to_string()),
+        matching_error_code: None,
+        batch_items: None,
     });
+    Ok(())
 }
 
 fn attach_self_attestation_success_audit(
@@ -2951,6 +3425,15 @@ fn attach_self_attestation_success_audit(
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     });
 }
 
@@ -2976,6 +3459,15 @@ fn attach_self_attestation_audit(
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     });
 }
 
@@ -3002,6 +3494,15 @@ fn attach_oid4vci_self_attestation_denial_audit(
         holder_binding_mode: None,
         rate_limit_bucket: None,
         policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     });
 }
 
@@ -3026,20 +3527,40 @@ fn attach_self_attestation_rate_limit_audit(
         holder_binding_mode: None,
         rate_limit_bucket: bucket.and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok()),
         policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     });
 }
 
 pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
+    let request_id = crate::standalone::current_request_correlation_id();
+    evidence_error_response_with_request_id(error, request_id.as_ref())
+}
+
+pub(crate) fn evidence_error_response_with_request_id(
+    error: EvidenceError,
+    request_id: Option<&BoundedCorrelationId>,
+) -> Response {
     let code = error.code().to_string();
     let audit_code = error.audit_code().to_string();
     let status = evidence_status(&error);
-    let body = json!({
+    let mut body = json!({
         "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('.', "/")),
         "title": evidence_title(&error),
         "status": status.as_u16(),
         "detail": evidence_detail(&error),
         "code": code,
     });
+    if let Some(request_id) = request_id {
+        body["request_id"] = json!(request_id.as_str());
+    }
     let mut response = (status, Json(body)).into_response();
     response
         .extensions_mut()
@@ -3048,6 +3569,11 @@ pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    if let Some(request_id) = request_id {
+        if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {
+            response.headers_mut().insert("x-request-id", value);
+        }
+    }
     response
 }
 
@@ -3060,19 +3586,38 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         EvidenceError::ClaimNotFound
         | EvidenceError::ClaimVersionNotFound
         | EvidenceError::SourceNotFound
+        | EvidenceError::RequesterNotFound
         | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
         EvidenceError::MissingCredential => StatusCode::UNAUTHORIZED,
         EvidenceError::MultipleCredentials => StatusCode::BAD_REQUEST,
         EvidenceError::SelfAttestationInvalidToken => StatusCode::UNAUTHORIZED,
         EvidenceError::InvalidRequest
+        | EvidenceError::TargetIdentifierMissing
+        | EvidenceError::TargetAttributesInsufficient
+        | EvidenceError::RequesterIdentifierMissing
+        | EvidenceError::RequesterAttributesInsufficient
+        | EvidenceError::RelationshipAttributesInsufficient
+        | EvidenceError::ProfileUnsupported
         | EvidenceError::HolderProofRequired
         | EvidenceError::PurposeRequired => StatusCode::BAD_REQUEST,
         EvidenceError::DisclosureNotAllowed
         | EvidenceError::EvaluationBindingMismatch
+        | EvidenceError::PurposeNotAllowed
+        | EvidenceError::RequesterReauthenticationRequired
+        | EvidenceError::RequesterMatchingPolicyRejected
+        | EvidenceError::TargetMatchingPolicyRejected
+        | EvidenceError::RelationshipNotEstablished
+        | EvidenceError::RelationshipPolicyRejected
         | EvidenceError::ScopeDenied { .. }
         | EvidenceError::SelfAttestationDenied { .. }
         | EvidenceError::SelfAttestationAssuranceDenied => StatusCode::FORBIDDEN,
         EvidenceError::SourceAmbiguous
+        | EvidenceError::RequesterMatchAmbiguous
+        | EvidenceError::RelationshipMatchAmbiguous
+        | EvidenceError::TargetNotInValidState
+        | EvidenceError::TargetMatchLowConfidence
+        | EvidenceError::EvidenceNotAvailable
+        | EvidenceError::MatchingEvidenceNotAvailable { .. }
         | EvidenceError::IdempotencyConflict
         | EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
         EvidenceError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -3093,8 +3638,27 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::OperationUnsupported => "Claim operation unsupported",
         EvidenceError::InvalidRequest => "Invalid evidence request",
         EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
-        EvidenceError::SourceNotFound => "Source record not found",
-        EvidenceError::SourceAmbiguous => "Source lookup ambiguous",
+        EvidenceError::SourceNotFound => "Target not found",
+        EvidenceError::SourceAmbiguous => "Target match ambiguous",
+        EvidenceError::TargetIdentifierMissing => "Target identifier missing",
+        EvidenceError::TargetAttributesInsufficient => "Target attributes insufficient",
+        EvidenceError::TargetMatchingPolicyRejected => "Target matching policy rejected",
+        EvidenceError::TargetNotInValidState => "Target not in valid state",
+        EvidenceError::TargetMatchLowConfidence => "Target match confidence too low",
+        EvidenceError::RequesterNotFound => "Requester not found",
+        EvidenceError::RequesterMatchAmbiguous => "Requester match ambiguous",
+        EvidenceError::RequesterIdentifierMissing => "Requester identifier missing",
+        EvidenceError::RequesterAttributesInsufficient => "Requester attributes insufficient",
+        EvidenceError::RequesterMatchingPolicyRejected => "Requester matching policy rejected",
+        EvidenceError::RequesterReauthenticationRequired => "Requester reauthentication required",
+        EvidenceError::RelationshipNotEstablished => "Relationship not established",
+        EvidenceError::RelationshipMatchAmbiguous => "Relationship match ambiguous",
+        EvidenceError::RelationshipAttributesInsufficient => "Relationship attributes insufficient",
+        EvidenceError::RelationshipPolicyRejected => "Relationship policy rejected",
+        EvidenceError::PurposeNotAllowed => "Purpose not allowed",
+        EvidenceError::ProfileUnsupported => "Profile unsupported",
+        EvidenceError::EvidenceNotAvailable
+        | EvidenceError::MatchingEvidenceNotAvailable { .. } => "Evidence not available",
         EvidenceError::SourceUnavailable => "Source unavailable",
         EvidenceError::BatchTooLarge => "Batch too large",
         EvidenceError::EvaluationNotFound => "Evaluation not found",
@@ -3126,8 +3690,51 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         EvidenceError::OperationUnsupported => "the requested operation is not enabled",
         EvidenceError::InvalidRequest => "the evidence request is invalid",
         EvidenceError::DisclosureNotAllowed => "the requested disclosure profile is not allowed",
-        EvidenceError::SourceNotFound => "the required source record was not found",
-        EvidenceError::SourceAmbiguous => "the source lookup returned multiple records",
+        EvidenceError::SourceNotFound => "the target could not be uniquely matched",
+        EvidenceError::SourceAmbiguous => "the target match is ambiguous",
+        EvidenceError::TargetIdentifierMissing => {
+            "a required target identifier is missing for the configured matching policy"
+        }
+        EvidenceError::TargetAttributesInsufficient => {
+            "the target data is insufficient for the configured matching policy"
+        }
+        EvidenceError::TargetMatchingPolicyRejected => {
+            "the target context is rejected by the configured matching policy"
+        }
+        EvidenceError::TargetNotInValidState => "the target is not in a valid state",
+        EvidenceError::TargetMatchLowConfidence => {
+            "the target match confidence is below the configured threshold"
+        }
+        EvidenceError::RequesterNotFound => "the requester could not be uniquely matched",
+        EvidenceError::RequesterMatchAmbiguous => "the requester match is ambiguous",
+        EvidenceError::RequesterIdentifierMissing => {
+            "a required requester identifier is missing for the configured matching policy"
+        }
+        EvidenceError::RequesterAttributesInsufficient => {
+            "the requester data is insufficient for the configured matching policy"
+        }
+        EvidenceError::RequesterMatchingPolicyRejected => {
+            "the requester context is rejected by the configured matching policy"
+        }
+        EvidenceError::RequesterReauthenticationRequired => {
+            "stronger requester authentication is required"
+        }
+        EvidenceError::RelationshipNotEstablished => {
+            "the required requester-target relationship is missing"
+        }
+        EvidenceError::RelationshipMatchAmbiguous => {
+            "the requester-target relationship match is ambiguous"
+        }
+        EvidenceError::RelationshipAttributesInsufficient => {
+            "the relationship data is insufficient for the configured matching policy"
+        }
+        EvidenceError::RelationshipPolicyRejected => {
+            "the requester-target relationship is not allowed"
+        }
+        EvidenceError::PurposeNotAllowed => "the declared purpose is not allowed",
+        EvidenceError::ProfileUnsupported => "the requested profile is not supported",
+        EvidenceError::EvidenceNotAvailable
+        | EvidenceError::MatchingEvidenceNotAvailable { .. } => "the evidence is not available",
         EvidenceError::SourceUnavailable => "the source registry is unavailable",
         EvidenceError::BatchTooLarge => "the batch exceeds the configured inline limit",
         EvidenceError::EvaluationNotFound => "the evaluation id is unknown or expired",
@@ -3363,10 +3970,16 @@ fn purpose_header(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
+fn parse_json_body<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, EvidenceError> {
+    request
+        .map(|Json(request)| request)
+        .map_err(|_| EvidenceError::InvalidRequest)
+}
+
 fn resolved_batch_audit_purposes(
     header_purpose: Option<&str>,
     body_purpose: Option<&str>,
-    subjects: &[BatchSubjectRequest],
+    subjects: &[BatchEvaluateItemRequest],
 ) -> Option<Vec<String>> {
     let default = match (header_purpose, body_purpose) {
         (Some(header), Some(body)) if header != body => return None,
@@ -3391,6 +4004,10 @@ fn idempotency_key(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
+fn has_idempotency_key(headers: &HeaderMap) -> bool {
+    headers.contains_key(IDEMPOTENCY_KEY_HEADER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3403,7 +4020,7 @@ mod tests {
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
-    use registry_platform_testing::sign_openid4vci_proof_jwt;
+    use registry_platform_testing::{assert_json_absent_strings, sign_openid4vci_proof_jwt};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3897,10 +4514,16 @@ mod tests {
 
     fn evaluate_request(subject_id: &str) -> EvaluateRequest {
         EvaluateRequest {
-            subject: SubjectRequest {
-                id: subject_id.to_string(),
-                id_type: Some("national_id".to_string()),
-            },
+            requester: None,
+            target: Some(EvidenceEntity::from_subject_request(
+                "Person",
+                SubjectRequest {
+                    id: subject_id.to_string(),
+                    id_type: Some("national_id".to_string()),
+                },
+            )),
+            relationship: None,
+            on_behalf_of: None,
             claims: vec![ClaimRef::from("person-is-alive")],
             disclosure: Some("predicate".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -4040,6 +4663,72 @@ mod tests {
             &evaluate_request("NAT-999"),
         )
         .expect_err("mismatched subject must be denied before runtime");
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::SubjectMismatch
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_derives_missing_request_identity_from_token_binding() {
+        let config = self_attestation_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let mut request = EvaluateRequest {
+            requester: None,
+            target: None,
+            relationship: None,
+            on_behalf_of: None,
+            claims: vec![ClaimRef::from("person-is-alive")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        };
+
+        derive_self_attestation_request_context(&config, &principal, &mut request)
+            .expect("request identity is derived");
+
+        let target_subject = request
+            .target_subject()
+            .expect("derived target maps to subject");
+        assert_eq!(target_subject.id, "NAT-123");
+        assert_eq!(target_subject.id_type.as_deref(), Some("national_id"));
+        assert_eq!(
+            request
+                .requester
+                .as_ref()
+                .and_then(EvidenceEntity::to_subject_request)
+                .expect("derived requester maps to subject")
+                .id,
+            "NAT-123"
+        );
+        assert_eq!(
+            request
+                .relationship
+                .as_ref()
+                .map(|relationship| relationship.relationship_type.as_str()),
+            Some("self")
+        );
+    }
+
+    #[test]
+    fn self_attestation_derivation_rejects_conflicting_request_identity() {
+        let config = self_attestation_config();
+        let principal = classify_self_attestation_principal(
+            &config,
+            &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let mut request = evaluate_request("NAT-999");
+
+        let err = derive_self_attestation_request_context(&config, &principal, &mut request)
+            .expect_err("conflicting target must be denied before runtime");
+
         assert!(matches!(
             err,
             EvidenceError::SelfAttestationDenied {
@@ -4443,11 +5132,13 @@ mod tests {
             Arc::new(NoopIssuerResolver),
         ));
         let request = BatchEvaluateRequest {
-            subjects: vec![registry_notary_core::BatchSubjectRequest {
-                id: "NAT-123".to_string(),
-                id_type: Some("national_id".to_string()),
-                purpose: None,
-            }],
+            items: vec![registry_notary_core::BatchEvaluateItemRequest::from(
+                registry_notary_core::BatchSubjectRequest {
+                    id: "NAT-123".to_string(),
+                    id_type: Some("national_id".to_string()),
+                    purpose: None,
+                },
+            )],
             claims: vec![ClaimRef::from("person-is-alive")],
             disclosure: Some("predicate".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -4462,7 +5153,7 @@ mod tests {
                 &["self_attestation"],
             ))),
             None,
-            Json(request),
+            Ok(Json(request)),
         )
         .await;
 
@@ -4485,21 +5176,337 @@ mod tests {
             None,
             Some("program-b"),
             &[
-                registry_notary_core::BatchSubjectRequest {
-                    id: "NAT-123".to_string(),
-                    id_type: Some("national_id".to_string()),
-                    purpose: Some("program-a".to_string()),
-                },
-                registry_notary_core::BatchSubjectRequest {
-                    id: "NAT-456".to_string(),
-                    id_type: Some("national_id".to_string()),
-                    purpose: None,
-                },
+                registry_notary_core::BatchEvaluateItemRequest::from(
+                    registry_notary_core::BatchSubjectRequest {
+                        id: "NAT-123".to_string(),
+                        id_type: Some("national_id".to_string()),
+                        purpose: Some("program-a".to_string()),
+                    },
+                ),
+                registry_notary_core::BatchEvaluateItemRequest::from(
+                    registry_notary_core::BatchSubjectRequest {
+                        id: "NAT-456".to_string(),
+                        id_type: Some("national_id".to_string()),
+                        purpose: None,
+                    },
+                ),
             ],
         )
         .expect("audit purposes resolve");
 
         assert_eq!(purposes, vec!["program-a", "program-b"]);
+    }
+
+    #[test]
+    fn batch_audit_context_hashes_each_item_and_keeps_matching_audit_code() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let result = registry_notary_core::BatchEvaluateResponse {
+            batch_id: "batch-1".to_string(),
+            status: registry_notary_core::BatchStatus::Completed,
+            claims: vec!["person-is-alive".to_string()],
+            items: vec![
+                registry_notary_core::BatchItemResponse {
+                    input_index: 0,
+                    target_ref: registry_notary_core::TargetRefView {
+                        entity_type: "Person".to_string(),
+                        handle: "rnref:v1:target-handle-1".to_string(),
+                        identifier_schemes: vec!["national_id".to_string()],
+                        profile: None,
+                    },
+                    requester_ref: Some(registry_notary_core::EvidenceEntityRef {
+                        entity_type: "Person".to_string(),
+                        handle: "rnref:v1:requester-handle".to_string(),
+                        identifier_schemes: vec!["national_id".to_string()],
+                        profile: None,
+                    }),
+                    matching: Some(registry_notary_core::MatchingMetadata {
+                        policy_id: "policy-v1".to_string(),
+                        method: "configured_lookup".to_string(),
+                        confidence: "high".to_string(),
+                        score: None,
+                    }),
+                    evaluation_id: Some("eval-1".to_string()),
+                    status: registry_notary_core::BatchItemStatus::Succeeded,
+                    claim_results: Vec::new(),
+                    errors: Vec::new(),
+                },
+                registry_notary_core::BatchItemResponse {
+                    input_index: 1,
+                    target_ref: registry_notary_core::TargetRefView {
+                        entity_type: "Person".to_string(),
+                        handle: "rnref:v1:target-handle-2".to_string(),
+                        identifier_schemes: vec!["national_id".to_string()],
+                        profile: None,
+                    },
+                    requester_ref: None,
+                    matching: None,
+                    evaluation_id: None,
+                    status: registry_notary_core::BatchItemStatus::Failed,
+                    claim_results: Vec::new(),
+                    errors: vec![registry_notary_core::BatchItemError {
+                        code: "evidence.not_available".to_string(),
+                        title: "Evidence not available".to_string(),
+                        retryable: false,
+                        audit_code: Some("target.match_ambiguous".to_string()),
+                    }],
+                },
+            ],
+            summary: registry_notary_core::BatchSummary {
+                succeeded: 1,
+                failed: 1,
+            },
+        };
+        let mut response = StatusCode::OK.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "batch_evaluate",
+            None,
+            &["person-is-alive".to_string()],
+            Some(2),
+        );
+
+        attach_batch_evaluate_response_audit(&mut response, &keys, &result, None)
+            .expect("batch audit context attaches");
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        let items = audit.batch_items.as_ref().expect("batch items captured");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].input_index, 0);
+        assert_eq!(items[0].target_type.as_deref(), Some("Person"));
+        assert_eq!(items[0].matching_outcome.as_deref(), Some("matched"));
+        assert_eq!(items[0].matching_policy_id.as_deref(), Some("policy-v1"));
+        assert!(items[0]
+            .target_ref_hash
+            .as_ref()
+            .map(Hashed::as_str)
+            .is_some_and(|hash| !hash.contains("target-handle-1")));
+        assert!(items[0].requester_ref_hash.is_some());
+        assert_eq!(items[1].input_index, 1);
+        assert_eq!(items[1].matching_outcome.as_deref(), Some("error"));
+        assert_eq!(
+            items[1].matching_error_code.as_deref(),
+            Some("target.match_ambiguous")
+        );
+        assert!(
+            items[1].target_ref_hash.is_none(),
+            "failed batch items must not emit durable matched-reference pseudonyms"
+        );
+    }
+
+    #[test]
+    fn evaluate_request_audit_context_hashes_entity_refs_and_matching_metadata() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let request = EvaluateRequest {
+            requester: Some(EvidenceEntity::with_identifier(
+                "person",
+                "national_id",
+                "NID-REQUESTER",
+            )),
+            target: Some({
+                let mut target =
+                    EvidenceEntity::with_identifier("person", "national_id", "NID-TARGET");
+                target
+                    .attributes
+                    .insert("given_name".to_string(), json!("Amina"));
+                target
+            }),
+            relationship: None,
+            on_behalf_of: None,
+            claims: vec![ClaimRef::from("person-is-alive")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-a".to_string()),
+        };
+        let mut result = claim_result_view("eval-1", "person-is-alive");
+        result.requester_ref = Some(registry_notary_core::EvidenceEntityRef {
+            entity_type: "Person".to_string(),
+            handle: "rnref:v1:requester-handle".to_string(),
+            identifier_schemes: vec!["national_id".to_string()],
+            profile: None,
+        });
+        result.matching = Some(registry_notary_core::MatchingMetadata {
+            policy_id: "policy-v1".to_string(),
+            method: "configured_lookup".to_string(),
+            confidence: "high".to_string(),
+            score: None,
+        });
+        let mut response = StatusCode::OK.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "evaluate",
+            Some("eval-1".to_string()),
+            &["person-is-alive".to_string()],
+            Some(1),
+        );
+
+        attach_evaluate_request_audit(&mut response, &keys, &request, Some(&result), None)
+            .expect("audit context attaches");
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        assert_eq!(audit.target_type.as_deref(), Some("Person"));
+        assert_eq!(audit.requester_type.as_deref(), Some("Person"));
+        assert_eq!(audit.matching_policy_id.as_deref(), Some("policy-v1"));
+        assert_eq!(audit.matching_method.as_deref(), Some("configured_lookup"));
+        assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
+        let target_hash = audit
+            .target_ref_hash
+            .as_ref()
+            .map(Hashed::as_str)
+            .expect("target ref hash is present");
+        let requester_hash = audit
+            .requester_ref_hash
+            .as_ref()
+            .map(Hashed::as_str)
+            .expect("requester ref hash is present");
+        assert!(!target_hash.contains("NID-TARGET"));
+        assert!(!target_hash.contains("Amina"));
+        assert!(!requester_hash.contains("NID-REQUESTER"));
+    }
+
+    #[test]
+    fn canonical_audit_identifier_input_sorts_identifiers_and_explicit_empty_fields() {
+        let mut first = registry_notary_core::EvidenceIdentifier {
+            scheme: "national_id".to_string(),
+            value: "NID-1001".to_string(),
+            issuer: None,
+            country: Some("RW".to_string()),
+        };
+        let second = registry_notary_core::EvidenceIdentifier {
+            scheme: "animal_ear_tag".to_string(),
+            value: "EAR-77".to_string(),
+            issuer: Some("vet-registry".to_string()),
+            country: None,
+        };
+        let mut entity = EvidenceEntity::new("Person");
+        entity.identifiers = vec![first.clone(), second.clone()];
+        let canonical = canonical_audit_identifier_input("target", Some("program-a"), &entity)
+            .expect("canonicalizes")
+            .expect("identifier input is present");
+
+        first.country = Some("RW".to_string());
+        let mut reordered = EvidenceEntity::new("Person");
+        reordered.identifiers = vec![second, first];
+        let reordered_canonical =
+            canonical_audit_identifier_input("target", Some("program-a"), &reordered)
+                .expect("canonicalizes")
+                .expect("identifier input is present");
+
+        assert_eq!(canonical, reordered_canonical);
+        assert!(canonical.contains(r#""issuer":"""#));
+        assert!(canonical.contains(r#""country":"""#));
+        assert!(canonical.find("animal_ear_tag") < canonical.find("national_id"));
+    }
+
+    #[test]
+    fn credential_audit_context_links_stored_target_and_requester_refs() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let mut result = claim_result_view("eval-1", "person-is-alive");
+        result.requester_ref = Some(registry_notary_core::EvidenceEntityRef {
+            entity_type: "Person".to_string(),
+            handle: "rnref:v1:requester-handle".to_string(),
+            identifier_schemes: vec!["national_id".to_string()],
+            profile: None,
+        });
+        result.matching = Some(registry_notary_core::MatchingMetadata {
+            policy_id: "policy-v1".to_string(),
+            method: "configured_lookup".to_string(),
+            confidence: "high".to_string(),
+            score: None,
+        });
+        let mut response = StatusCode::OK.into_response();
+
+        attach_self_attestation_credential_audit(
+            &mut response,
+            &keys,
+            "eval-1",
+            &["person-is-alive".to_string()],
+            &[result],
+            1,
+            SelfAttestationCredentialAuditDetails {
+                profile_id: "person_is_alive_sd_jwt",
+                holder_binding_mode: "did",
+                policy_hash: None,
+                protocol: Some("openid4vci"),
+                credential_configuration_id: Some("person_is_alive_sd_jwt"),
+            },
+        )
+        .expect("credential audit attaches");
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        assert_eq!(audit.target_type.as_deref(), Some("Person"));
+        assert_eq!(audit.requester_type.as_deref(), Some("Person"));
+        assert_eq!(audit.matching_policy_id.as_deref(), Some("policy-v1"));
+        assert_eq!(audit.matching_outcome.as_deref(), Some("matched"));
+        assert!(audit.target_ref_hash.is_some());
+        assert!(audit.requester_ref_hash.is_some());
+    }
+
+    #[test]
+    fn evaluate_request_audit_context_carries_matching_error_without_raw_inputs() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let mut target = EvidenceEntity::with_identifier("person", "national_id", "NID-TARGET");
+        target
+            .attributes
+            .insert("date_of_birth".to_string(), json!("1984-02-10"));
+        target
+            .attributes
+            .insert("given_name".to_string(), json!("Amina"));
+        let request = EvaluateRequest {
+            requester: None,
+            target: Some(target),
+            relationship: None,
+            on_behalf_of: None,
+            claims: vec![ClaimRef::from("person-is-alive")],
+            disclosure: Some("predicate".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("program-a".to_string()),
+        };
+        let mut response = StatusCode::FORBIDDEN.into_response();
+        attach_evidence_audit(
+            &mut response,
+            "evaluate_denied",
+            None,
+            &["person-is-alive".to_string()],
+            None,
+        );
+
+        attach_evaluate_request_audit(
+            &mut response,
+            &keys,
+            &request,
+            None,
+            Some("target.attributes_insufficient"),
+        )
+        .expect("audit context attaches");
+
+        let audit = response
+            .extensions()
+            .get::<EvidenceAuditContext>()
+            .expect("audit context is attached");
+        assert_eq!(audit.target_type.as_deref(), Some("person"));
+        assert_eq!(audit.matching_outcome.as_deref(), Some("error"));
+        assert_eq!(
+            audit.matching_error_code.as_deref(),
+            Some("target.attributes_insufficient")
+        );
+        assert!(
+            audit.target_ref_hash.is_none(),
+            "pre-match target errors must not create durable request-attribute pseudonyms"
+        );
+        let audit_value = json!({ "debug": format!("{audit:?}") });
+        assert_json_absent_strings(&audit_value, ["NID-TARGET", "Amina", "1984-02-10"])
+            .expect("raw matching inputs are absent from audit context");
+        assert!(audit.requester_type.is_none());
+        assert!(audit.requester_ref_hash.is_none());
     }
 
     fn sign_holder_proof(holder_id: &str, payload: Value) -> String {
@@ -4604,10 +5611,14 @@ mod tests {
             claim_id: claim_id.to_string(),
             claim_version: "1".to_string(),
             subject_type: "person".to_string(),
-            subject_ref: registry_notary_core::SubjectRefView {
-                hash: Hashed::from_hash("subject-hash"),
-                id_type: "national_id".to_string(),
+            requester_ref: None,
+            target_ref: registry_notary_core::TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "rnref:v1:subject-hash".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
             },
+            matching: None,
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
@@ -4709,16 +5720,17 @@ mod tests {
         };
 
         let response = issue_credential(
+            HeaderMap::new(),
             Some(Extension(state)),
             Some(Extension(principal)),
-            Json(CredentialIssueRequest {
+            Ok(Json(CredentialIssueRequest {
                 evaluation_id: "eval-status-write-fails".to_string(),
                 credential_profile: Some("civil_status_sd_jwt".to_string()),
                 format: Some(FORMAT_SD_JWT_VC.to_string()),
                 claims: Some(vec!["person-is-alive".to_string()]),
                 disclosure: Some("predicate".to_string()),
                 holder: None,
-            }),
+            })),
         )
         .await;
 

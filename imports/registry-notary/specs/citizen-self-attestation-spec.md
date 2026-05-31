@@ -15,15 +15,15 @@ This feature is intentionally stricter than ordinary Notary evaluation:
 
 ```text
 Default mode:
-  authorized client asks Notary about a subject
+  authorized client asks Notary about a target
 
 Citizen self-attestation mode:
-  authenticated citizen asks Notary about the subject bound to their own token
+  authenticated citizen asks Notary about the target bound to their own token
 ```
 
 The first version should support self-service claim evaluation and SD-JWT VC
-issuance for one subject at a time. It must not grant raw Registry Relay row
-access, arbitrary subject lookup, batch lookup, or delegated access.
+issuance for one target at a time. It must not grant raw Registry Relay row
+access, arbitrary target lookup, batch lookup, or delegated access.
 
 ## Background
 
@@ -34,9 +34,10 @@ and maps token scopes to Notary scopes.
 
 The missing piece for citizen-facing use is not token verification alone. A
 valid citizen token proves the caller authenticated, but it does not prove the
-caller may request attestations for an arbitrary `subject.id`. Self-attestation
-therefore needs an explicit subject-binding policy that compares the request
-subject with claims in the verified OIDC token before any source read occurs.
+caller may request attestations for an arbitrary evaluation target.
+Self-attestation therefore needs an explicit subject-binding policy that
+compares the request target identifier with claims in the verified OIDC token
+before any source read occurs.
 
 ## V1 User Story
 
@@ -45,7 +46,8 @@ V1 is deliberately small:
 1. A citizen authenticates through a trusted OIDC issuer.
 2. The issuer returns a JWT access token with a verified stable
    subject-binding claim.
-3. The citizen calls `POST /v1/evaluations` for exactly one `subject.id`.
+3. The citizen calls `POST /v1/evaluations` for exactly one `target`
+   identifier.
 4. Notary verifies the token, scopes, allow-lists, and exact subject binding
    before reading any source.
 5. Notary returns a configured claim result.
@@ -53,7 +55,7 @@ V1 is deliberately small:
    evaluation and supplies holder DID proof.
 7. Notary issues a short-lived, holder-bound SD-JWT VC.
 
-The citizen cannot request arbitrary subject ids, raw Relay rows, batch
+The citizen cannot request arbitrary target identifiers, raw Relay rows, batch
 evaluation, delegated access, or claims outside the configured allow-list.
 
 Holder binding does not prove that the holder DID belongs to the civil subject.
@@ -90,8 +92,9 @@ linkability, detectability, and disclosure.
   unchanged.
 - Self-attestation must require OIDC authentication. Static credentials are not
   sufficient for citizen self-service.
-- A self-attestation request must be allowed only when the request subject
-  matches a configured verified-token claim.
+- A self-attestation request must be allowed only when the server-derived
+  subject from a configured verified-token claim is used as the requester and
+  target context.
 - Subject binding must run before source reads, claim evaluation, rendering, or
   credential issuance.
 - Self-attestation must allow only configured claims, formats, disclosures, and
@@ -141,8 +144,8 @@ self_attestation:
   requires_auth_mode: oidc
   subject_binding:
     token_claim: "https://id.example.gov/claims/national_id"
-    request_field: SubjectId
-    id_type: national_id
+    request_field: TargetIdentifier
+    identifier_scheme: national_id
     normalize: exact
     allow_sub_as_civil_id: false
   citizen_clients:
@@ -349,12 +352,12 @@ credentials plus `SourceCapability::SelfAttestation`.
 
 ## Subject Binding
 
-V1 supports exact equality between one verified token claim and one request
-field:
+V1 supports exact equality between one verified token claim and the server
+derived target identifier:
 
 ```text
-principal.verified_claims[token_claim] == request.subject.id
-request.subject.id_type == subject_binding.id_type
+principal.verified_claims[token_claim] == derived.target.identifiers[configured_scheme].value
+derived.target.identifiers[configured_scheme].scheme == subject_binding.identifier_scheme
 ```
 
 The token claim should be:
@@ -379,8 +382,9 @@ The request must fail closed when:
 
 - the token claim is missing;
 - the token claim is not a string;
-- `subject.id` is empty;
-- `subject.id_type` does not match the configured `id_type`;
+- the configured target identifier value is empty;
+- the configured target identifier scheme does not match
+  `subject_binding.identifier_scheme`;
 - normalization is unsupported;
 - the normalized values do not match.
 
@@ -388,13 +392,14 @@ V1 should support only `normalize: exact`. Later versions may add explicit
 normalizers such as case folding or punctuation removal, but those should be
 named, tested, and jurisdiction-specific.
 
-V1 accepts exactly one subject identifier: `request.subject.id`. The config
-surface for `subject_binding.request_field` is an enum, `SubjectId`, not a
-free-form string.
-Self-attestation requests must be rejected if they include alternate, duplicate,
-or nested subject identifiers outside the supported request field, including
-query parameters, headers, arrays of subjects, per-claim subject overrides, or
-body fields that could override `request.subject.id`.
+V1 derives the self-attestation requester and target from the configured
+subject-binding token claim. The config surface for `subject_binding.request_field`
+is retained as a compatibility label for the derived target identifier, not as a
+caller-controlled request field.
+Self-attestation requests must be rejected if they include conflicting
+caller-supplied identity context, including query parameters, headers, arrays of
+items, per-claim target overrides, `on_behalf_of`, or body fields that could
+override the configured token-bound subject.
 
 ## Runtime Behavior
 
@@ -571,7 +576,7 @@ metadata:
 - subject-binding claim name;
 - subject-binding value hash using the audit hasher or an equivalent keyed
   hasher;
-- requested claim set hash;
+- requested claim set content hash;
 - disclosure mode;
 - result format;
 - `delegation_chain = []` for v1;
@@ -586,9 +591,14 @@ the profile purpose id, and the credential validity ceiling. Rate-limit,
 discovery, CORS, and unrelated claim/profile config are excluded so operational
 tuning does not invalidate otherwise valid in-flight evaluations.
 
+The requested claim set hash is a deterministic content hash over configured
+claim identifiers. It is not an identity pseudonym and is intentionally
+independent of audit-key rotation so render and credential issuance can verify
+that the requested claims did not change.
+
 Rotating the audit hasher key invalidates in-flight self-attestation
-evaluations because principal, subject-binding, and claim hashes can no longer
-be recomputed. This is acceptable in v1 because
+evaluations because principal and subject-binding hashes can no longer be
+recomputed. This is acceptable in v1 because
 `max_evaluation_age_seconds <= 600`. No key-id or multi-key verification
 mechanism is in scope for v1.
 
@@ -598,7 +608,7 @@ Render and credential issuance for a self-attestation evaluation must verify:
 - the current principal hash matches the stored principal hash;
 - the current issuer, audience, and client id are compatible with the stored
   authorization tuple;
-- the current `subject.id_type` matches the stored subject id type;
+- the current target identifier scheme matches the stored identifier scheme;
 - the current verified token contains the configured subject-binding claim;
 - the normalized token subject-binding value hashes to the stored
   subject-binding value hash;
@@ -815,10 +825,10 @@ At minimum, the implementation must emit auditable records for:
 
 The token-claim name is safe to record because it is configuration metadata. The
 token-claim value is not safe to record unless separately hashed with the audit
-hasher. The request subject id, OIDC `sub`, civil id, access token, holder proof,
-SD-JWT disclosures, source records, source tokens, and raw Relay response bodies
-must not appear in audit records, logs, metrics, Problem Details, or generated
-lab artifacts.
+hasher. Caller-supplied or derived subject ids, OIDC `sub`, civil id, access
+token, holder proof, SD-JWT disclosures, source records, source tokens, and raw
+Relay response bodies must not appear in audit records, logs, metrics, Problem
+Details, or generated lab artifacts.
 
 For pre-authentication or invalid-token rate-limit denials, `access_mode` may be
 `unknown` because the request has not been classified. Once OIDC verification
@@ -1040,9 +1050,10 @@ Definition of Done:
 - Source reads reject raw row access, arbitrary claim ids, and machine-only
   source operations when the capability is `SelfAttestation`.
 - Ambiguous citizen or machine-client classification fails closed.
-- A subject mismatch returns a stable denial before any source read.
+- A supplied identity-context mismatch returns a stable denial before any source
+  read.
 - A subject mismatch writes a self-attestation denial audit event without raw
-  subject identifiers.
+  target identifiers.
 - A claim outside the allow-list is denied before any source read.
 - A missing self-attestation scope is denied when `scope_policy = required`.
 - With `scope_policy = optional`, a token with no scope signal may proceed, but
@@ -1051,8 +1062,8 @@ Definition of Done:
 - With `scope_policy = disabled`, a token with no self-attestation scope may
   proceed only through the allowed citizen client/audience, assurance, and
   subject-binding checks.
-- Alternate or duplicate subject identifiers outside `request.subject.id` are
-  rejected.
+- Caller-supplied `target`, `requester`, `relationship`, or `on_behalf_of`
+  values that conflict with the token-derived self context are rejected.
 - Missing or unallowed purpose values fail before source reads.
 - Subject mismatch and repeated denial attempts are rate limited without source
   reads.
@@ -1119,9 +1130,10 @@ Definition of Done:
 ## Resolved V1 Decisions
 
 - Self-attestation lives in top-level `self_attestation`.
-- `subject.id_type` is mandatory and must match configured
-  `subject_binding.id_type`.
-- `subject_binding.request_field` is an enum, and v1 accepts only `SubjectId`.
+- The target identifier scheme is mandatory and must match configured
+  `subject_binding.identifier_scheme`.
+- `subject_binding.request_field` is an enum, and v1 accepts only
+  `TargetIdentifier`.
 - The registry-lab demo uses a namespaced custom subject-binding claim, not
   `sub`.
 - `token_claim: sub` requires `allow_sub_as_civil_id = true`; otherwise config
@@ -1174,9 +1186,9 @@ The feature is done only when all of the following are true:
 - Self-attestation is disabled by default and existing static-credential and
   machine-client OIDC behavior remain unchanged in tests.
 - Enabling `self_attestation` requires OIDC, a top-level config block, a
-  namespaced subject-binding claim, `SubjectId` request-field enum, mandatory
-  `subject.id_type`, allowed citizen client or audience, and self-attestation
-  scope.
+  namespaced subject-binding claim, `TargetIdentifier` request-field enum,
+  mandatory target identifier scheme, allowed citizen client or audience, and
+  self-attestation scope.
 - `EvidencePrincipal` carries typed `BoundedVerifiedClaims`; raw JWTs, raw
   claim maps, access tokens, and unrecognized claims are not stored, logged, or
   passed to source connectors.

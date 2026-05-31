@@ -167,13 +167,15 @@ After the edit, the generated source binding should still contain:
 
 ```yaml
 lookup:
-  input: subject_id
+  input: target.identifiers.UIN
   field: UIN
   op: eq
   cardinality: one
 ```
 
-That is the OpenCRVS-specific subject lookup used by the demo environment.
+That is the OpenCRVS-specific target lookup used by the demo environment. The
+request sends a `target` entity with a `UIN` identifier, and Registry Notary
+uses that configured path when querying OpenCRVS.
 
 ## Step 5: Add OpenCRVS OAuth Credentials
 
@@ -227,10 +229,10 @@ registry-notary doctor \
   --config dci-notary.yaml \
   --env-file .env.local \
   --live \
-  --subject-id "$OPENCRVS_TEST_UIN"
+  --target-id "$OPENCRVS_TEST_UIN"
 ```
 
-The subject id and source token must not appear in diagnostic output.
+The target identifier and source token must not appear in diagnostic output.
 
 ## Step 7: Start Registry Notary
 
@@ -258,7 +260,17 @@ curl -fsS http://127.0.0.1:4255/v1/evaluations \
   -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \
   -d '{
-    "subject": { "id": "'"$OPENCRVS_TEST_UIN"'" },
+    "target": {
+      "type": "Person",
+      "identifiers": [
+        {
+          "scheme": "UIN",
+          "value": "'"$OPENCRVS_TEST_UIN"'",
+          "issuer": "opencrvs"
+        }
+      ]
+    },
+    "relationship": { "type": "service_delivery" },
     "claims": ["opencrvs-birth-record-exists"],
     "disclosure": "value",
     "format": "application/vnd.registry-notary.claim-result+json"
@@ -292,7 +304,17 @@ EVALUATION_ID="$(
     -H "x-api-key: $REGISTRY_NOTARY_API_KEY" \
     -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci" \
     -d '{
-      "subject": { "id": "'"$OPENCRVS_TEST_UIN"'" },
+      "target": {
+        "type": "Person",
+        "identifiers": [
+          {
+            "scheme": "UIN",
+            "value": "'"$OPENCRVS_TEST_UIN"'",
+            "issuer": "opencrvs"
+          }
+        ]
+      },
+      "relationship": { "type": "service_delivery" },
       "claims": ["opencrvs-birth-record-exists"],
       "disclosure": "value",
       "format": "application/dc+sd-jwt"
@@ -340,6 +362,6 @@ test environment.
 ## Security Notes
 
 - Do not commit `.env.local`.
-- Do not commit OpenCRVS client credentials, bearer tokens, subject UINs, or
+- Do not commit OpenCRVS client credentials, bearer tokens, target UINs, or
   generated issuer private keys.
 - Do not store OpenCRVS access tokens in the config or env file.

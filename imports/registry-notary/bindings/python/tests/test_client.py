@@ -130,17 +130,23 @@ class RegistryNotaryClientTests(unittest.TestCase):
         )
         self.assertIn("http://registry-notary:8080", repr(client))
 
-    def test_high_level_evaluate_uses_python_args_and_wire_snake_case(self) -> None:
+    def test_high_level_evaluate_uses_target_args_and_wire_snake_case(self) -> None:
         recorder = _Recorder()
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url, default_purpose="benefits")
-            result = client.evaluate(subject_id="subj-1", id_type="NATIONAL_ID", claims=["age"])
+            result = client.evaluate(target_id="subj-1", identifier_scheme="NATIONAL_ID", claims=["age"])
 
         self.assertEqual(result["results"][0]["claim_id"], "age")
         self.assertEqual(recorder.requests[0]["path"], "/v1/evaluations")
         self.assertEqual(
             recorder.requests[0]["body"],
-            {"subject": {"id": "subj-1", "id_type": "NATIONAL_ID"}, "claims": ["age"]},
+            {
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{"scheme": "NATIONAL_ID", "value": "subj-1"}],
+                },
+                "claims": ["age"],
+            },
         )
         self.assertNotIn("idType", json.dumps(recorder.requests[0]["body"]))
         self.assertEqual(
@@ -152,7 +158,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
     def test_raw_evaluate_request_passes_snake_case_through(self) -> None:
         recorder = _Recorder()
         raw_request = {
-            "subject": {"id": "subj-2", "id_type": "NATIONAL_ID"},
+            "target": {"type": "Person", "identifiers": [{"scheme": "NATIONAL_ID", "value": "subj-2"}]},
             "claims": ["age"],
             "purpose": "eligibility",
         }
@@ -168,16 +174,16 @@ class RegistryNotaryClientTests(unittest.TestCase):
 
         with self.assertRaises(NotaryError) as string_error:
             client.evaluate(
-                subject_id="subj-1",
-                id_type="NATIONAL_ID",
+                target_id="subj-1",
+                identifier_scheme="NATIONAL_ID",
                 claims="age",  # type: ignore[arg-type]
             )
         self.assertEqual(string_error.exception.code, "request.invalid_claims")
 
         with self.assertRaises(NotaryError) as mapping_error:
             client.evaluate(
-                subject_id="subj-1",
-                id_type="NATIONAL_ID",
+                target_id="subj-1",
+                identifier_scheme="NATIONAL_ID",
                 claims={"id": "age", "version": "2026-05"},  # type: ignore[arg-type]
             )
         self.assertEqual(mapping_error.exception.code, "request.invalid_claims")
@@ -187,16 +193,19 @@ class RegistryNotaryClientTests(unittest.TestCase):
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url)
             result = asyncio.run(
-                client.aevaluate(subject_id="subj-3", id_type="NATIONAL_ID", claims=["age"])
+                client.aevaluate(target_id="subj-3", identifier_scheme="NATIONAL_ID", claims=["age"])
             )
 
         self.assertEqual(result["results"][0]["value"], True)
-        self.assertEqual(recorder.requests[0]["body"]["subject"]["id_type"], "NATIONAL_ID")
+        self.assertEqual(
+            recorder.requests[0]["body"]["target"]["identifiers"][0]["scheme"],
+            "NATIONAL_ID",
+        )
 
     def test_batch_evaluate_sends_idempotency_key(self) -> None:
         recorder = _Recorder(body={"batch_id": "batch-1", "status": "completed"})
         request = {
-            "subjects": [{"id": "subj-1", "id_type": "NATIONAL_ID"}],
+            "items": [{"target": {"type": "Person", "identifiers": [{"scheme": "NATIONAL_ID", "value": "subj-1"}]}}],
             "claims": ["age"],
         }
         with Server(recorder) as base_url:
@@ -214,7 +223,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             client = RegistryNotaryClient(base_url=base_url)
             batch = asyncio.run(
                 client.abatch_evaluate_request(
-                    {"subjects": [{"id": "subj-1"}], "claims": ["age"]},
+                    {"items": [{"target": {"type": "Person", "id": "subj-1"}}], "claims": ["age"]},
                     idempotency_key="batch-key",
                 )
             )
@@ -254,7 +263,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
         recorder = _Recorder(body={"credential_id": "cred-1"})
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url)
-            issued = client.issue_credential_request({"subject": {"id": "subj-1"}})
+            issued = client.issue_credential_request({"evaluation_id": "eval-1"})
 
         self.assertEqual(issued["credential_id"], "cred-1")
         self.assertEqual(recorder.requests[0]["path"], "/v1/credentials")
@@ -287,26 +296,26 @@ class RegistryNotaryClientTests(unittest.TestCase):
         recorder = _Recorder(
             status=404,
             body={
-                "type": "https://docs.registry-notary.dev/problems/source/not-found",
-                "title": "Source record not found",
+                "type": "https://docs.registry-notary.dev/problems/target/not-found",
+                "title": "Target not found",
                 "status": 404,
-                "detail": "subject subj-secret was not found",
-                "code": "source.not_found",
+                "detail": "target subj-secret was not found",
+                "code": "target.not_found",
             },
         )
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url)
             with self.assertRaises(NotaryProblemError) as raised:
-                client.evaluate(subject_id="subj-secret", id_type="NATIONAL_ID", claims=["age"])
+                client.evaluate(target_id="subj-secret", identifier_scheme="NATIONAL_ID", claims=["age"])
 
         error = raised.exception
         self.assertEqual(error.kind, "problem")
         self.assertEqual(error.status, 404)
-        self.assertEqual(error.code, "source.not_found")
-        self.assertEqual(error.title, "Source record not found")
+        self.assertEqual(error.code, "target.not_found")
+        self.assertEqual(error.title, "Target not found")
         self.assertFalse(error.retryable)
         self.assertEqual(error.request_id, "req-test-1")
-        self.assertNotIn("subject subj-secret", str(error))
+        self.assertNotIn("target subj-secret", str(error))
         self.assertFalse(hasattr(error, "detail"))
 
     def test_decode_and_oversized_response_errors_are_redacted(self) -> None:
@@ -333,7 +342,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
         with self.assertRaises(NotaryError) as raised:
             client.evaluate_request(
                 {
-                    "subject": {"id": "subj-4", "id_type": "NATIONAL_ID"},
+                    "target": {"type": "Person", "identifiers": [{"scheme": "NATIONAL_ID", "value": "subj-4"}]},
                     "claims": ["age"],
                     "purpose": "two",
                 }
@@ -370,7 +379,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url, retry_policy=policy)
             batch = client.batch_evaluate_request(
-                {"subjects": [{"id": "subj-1"}], "claims": ["age"]},
+                {"items": [{"target": {"type": "Person", "id": "subj-1"}}], "claims": ["age"]},
                 idempotency_key="batch-key",
             )
 
@@ -386,7 +395,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url, retry_policy=policy)
             with self.assertRaises(NotaryProblemError):
-                client.evaluate(subject_id="subj-1", id_type="NATIONAL_ID", claims=["age"])
+                client.evaluate(target_id="subj-1", identifier_scheme="NATIONAL_ID", claims=["age"])
 
         self.assertEqual(len(recorder.requests), 1)
 
@@ -496,13 +505,13 @@ class RegistryNotaryClientTests(unittest.TestCase):
             claims = client.list_claims()
             claim = client.get_claim("eligibility.open_spp")
             evaluation = client.evaluate(
-                subject_id="beneficiary-1",
-                id_type="openspp_id",
+                target_id="beneficiary-1",
+                identifier_scheme="openspp_id",
                 claims=[versioned_ref],
             )
             batch = client.batch_evaluate_request(
                 {
-                    "subjects": [{"id": "beneficiary-1", "id_type": "openspp_id"}],
+                    "items": [{"target": {"type": "Person", "identifiers": [{"scheme": "openspp_id", "value": "beneficiary-1"}]}}],
                     "claims": [versioned_ref],
                 },
                 idempotency_key="openspp-batch-1",
@@ -512,7 +521,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             status = client.credential_status("cred-1")
             with self.assertRaises(NotaryProblemError) as missing_version:
                 client.evaluate_request({
-                    "subject": {"id": "beneficiary-1", "id_type": "openspp_id"},
+                    "target": {"type": "Person", "identifiers": [{"scheme": "openspp_id", "value": "beneficiary-1"}]},
                     "claims": [{"id": "eligibility.open_spp", "version": "missing"}],
                 })
 
@@ -542,8 +551,8 @@ class RegistryNotaryClientTests(unittest.TestCase):
 
     def test_openspp_problem_codes_are_preserved_for_policy_mapping(self) -> None:
         stable_codes = [
-            "source.not_found",
-            "source.ambiguous",
+            "target.not_found",
+            "target.match_ambiguous",
             "source.unavailable",
             "claim.not_found",
             "claim.version_not_found",
@@ -552,6 +561,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
             "auth.missing_credential",
             "idempotency.conflict",
             "batch.too_large",
+            "deployment.custom_problem",
         ]
 
         for code in stable_codes:

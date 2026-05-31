@@ -81,7 +81,7 @@ Move Notary-specific application routes under `/v1`:
 | `GET /claims` | `GET /v1/claims` | Same response shape. |
 | `GET /claims/{claim_id}` | `GET /v1/claims/{claim_id}` | Same response shape. |
 | `GET /formats` | `GET /v1/formats` | Same response shape. |
-| `POST /claims/evaluate` | `POST /v1/evaluations` | Creates an evaluation result from subject plus claims. |
+| `POST /claims/evaluate` | `POST /v1/evaluations` | Creates an evaluation result from target plus claims. |
 | `POST /claims/batch-evaluate` | `POST /v1/batch-evaluations` | Creates a batch evaluation job/result. |
 | `POST /evidence/render` | `POST /v1/evaluations/{evaluation_id}/render` | Renders stored evaluation evidence. |
 | `POST /credentials/issue` | `POST /v1/credentials` | Issues a credential. |

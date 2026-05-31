@@ -17,8 +17,8 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use registry_notary_core::model::{
-    ClaimProvenance, ClaimResultView, EvidenceAuditEvent, Hashed, PrincipalIdentifier,
-    SubjectBinding, SubjectRefView,
+    ClaimProvenance, ClaimResultView, EvidenceAuditEvent, EvidenceEntityRef,
+    EvidenceEntityReference, Hashed, MatchingMetadata, PrincipalIdentifier, TargetRefView,
 };
 use serde_json::{json, Value};
 
@@ -61,6 +61,19 @@ fn build_audit_event() -> EvidenceAuditEvent {
         rate_limit_bucket: None,
         policy_version: None,
         policy_hash: None,
+        target_type: Some("Person".to_string()),
+        target_ref_hash: Some(Hashed::<EvidenceEntityReference>::from_hash(
+            "hmac-sha256:target-bench-0000007",
+        )),
+        requester_type: Some("Agency".to_string()),
+        requester_ref_hash: Some(Hashed::<EvidenceEntityReference>::from_hash(
+            "hmac-sha256:requester-bench-001",
+        )),
+        matching_policy_id: Some("national-id-exact-v1".to_string()),
+        matching_method: Some("identifier_exact".to_string()),
+        matching_outcome: Some("matched".to_string()),
+        matching_error_code: None,
+        batch_items: None,
     }
 }
 
@@ -73,10 +86,24 @@ fn build_claim_result_view() -> ClaimResultView {
         claim_id: "date-of-birth".to_string(),
         claim_version: "1.0.0".to_string(),
         subject_type: "national_id".to_string(),
-        subject_ref: SubjectRefView {
-            hash: Hashed::<SubjectBinding>::from_hash("hmac-sha256:subj-0000007"),
-            id_type: "national_id".to_string(),
+        requester_ref: Some(EvidenceEntityRef {
+            entity_type: "Agency".to_string(),
+            handle: "rnref:v1:requester-bench-001".to_string(),
+            identifier_schemes: vec!["agency_id".to_string()],
+            profile: Some("civil-registry".to_string()),
+        }),
+        target_ref: TargetRefView {
+            entity_type: "Person".to_string(),
+            handle: "rnref:v1:target-bench-0000007".to_string(),
+            identifier_schemes: vec!["national_id".to_string()],
+            profile: Some("resident".to_string()),
         },
+        matching: Some(MatchingMetadata {
+            policy_id: "national-id-exact-v1".to_string(),
+            method: "identifier_exact".to_string(),
+            confidence: "high".to_string(),
+            score: Some(1.0),
+        }),
         value: Some(json!("1990-01-01")),
         satisfied: Some(true),
         disclosure: "full_disclosure".to_string(),

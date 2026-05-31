@@ -92,5 +92,14 @@ pub(super) fn federation_audit_event(
         rate_limit_bucket: None,
         policy_version: None,
         policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        batch_items: None,
     }
 }

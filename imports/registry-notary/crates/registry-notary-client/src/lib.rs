@@ -18,8 +18,9 @@
 //!     .build()?;
 //!
 //! let evaluation = client
-//!     .evaluate("person-1")
-//!     .id_type("national_id")
+//!     .evaluate_target("Person")
+//!     .target_identifier("national_id", "person-1")
+//!     .relationship("self")
 //!     .claims(["person-is-alive"])
 //!     .disclosure("predicate")
 //!     .send()

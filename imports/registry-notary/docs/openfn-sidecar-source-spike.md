@@ -137,7 +137,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.id
             field: national_id
             op: eq
             cardinality: one

@@ -33,13 +33,41 @@ export interface GetRequestOptions {
   signal?: AbortSignal;
 }
 
-export interface EvaluateSubject {
-  id: string;
-  idType?: string;
+export interface EvidenceIdentifier {
+  scheme: string;
+  value: string;
+  issuer?: string;
+  country?: string;
+}
+
+export interface EvidenceAssurance {
+  method?: string;
+  levelScheme?: string;
+  level?: string;
+  verifiedAt?: string;
+  issuer?: string;
+  evidence?: Array<Record<string, unknown>>;
+}
+
+export interface EvidenceEntity {
+  type: string;
+  id?: string;
+  identifiers?: EvidenceIdentifier[];
+  attributes?: Record<string, unknown>;
+  assurance?: EvidenceAssurance;
+  profile?: string;
+}
+
+export interface EvidenceRelationship {
+  type: string;
+  attributes?: Record<string, unknown>;
 }
 
 export interface EvaluateRequest {
-  subject: EvaluateSubject;
+  requester?: EvidenceEntity;
+  target: EvidenceEntity;
+  relationship?: EvidenceRelationship;
+  onBehalfOf?: Record<string, unknown>;
   claims: Array<string | { id: string; version?: string }>;
   disclosure?: string;
   format?: string;
@@ -47,13 +75,41 @@ export interface EvaluateRequest {
   signal?: AbortSignal;
 }
 
-export interface RawEvaluateSubject {
-  id: string;
-  id_type?: string;
+export interface RawEvidenceIdentifier {
+  scheme: string;
+  value: string;
+  issuer?: string;
+  country?: string;
+}
+
+export interface RawEvidenceAssurance {
+  method?: string;
+  level_scheme?: string;
+  level?: string;
+  verified_at?: string;
+  issuer?: string;
+  evidence?: Array<Record<string, unknown>>;
+}
+
+export interface RawEvidenceEntity {
+  type: string;
+  id?: string;
+  identifiers?: RawEvidenceIdentifier[];
+  attributes?: Record<string, unknown>;
+  assurance?: RawEvidenceAssurance;
+  profile?: string;
+}
+
+export interface RawEvidenceRelationship {
+  type: string;
+  attributes?: Record<string, unknown>;
 }
 
 export interface RawEvaluateRequest {
-  subject: RawEvaluateSubject;
+  requester?: RawEvidenceEntity;
+  target: RawEvidenceEntity;
+  relationship?: RawEvidenceRelationship;
+  on_behalf_of?: Record<string, unknown>;
   claims: Array<string | { id: string; version?: string }>;
   disclosure?: string;
   format?: string;
@@ -61,14 +117,16 @@ export interface RawEvaluateRequest {
   [key: string]: unknown;
 }
 
-export interface BatchSubject {
-  id: string;
-  idType?: string;
+export interface BatchEvaluateItemRequest {
+  requester?: EvidenceEntity;
+  target: EvidenceEntity;
+  relationship?: EvidenceRelationship;
+  onBehalfOf?: Record<string, unknown>;
   purpose?: string;
 }
 
 export interface BatchEvaluateRequest {
-  subjects: BatchSubject[];
+  items: BatchEvaluateItemRequest[];
   claims: Array<string | { id: string; version?: string }>;
   disclosure?: string;
   format?: string;
@@ -76,14 +134,16 @@ export interface BatchEvaluateRequest {
   signal?: AbortSignal;
 }
 
-export interface RawBatchSubject {
-  id: string;
-  id_type?: string;
+export interface RawBatchEvaluateItemRequest {
+  requester?: RawEvidenceEntity;
+  target: RawEvidenceEntity;
+  relationship?: RawEvidenceRelationship;
+  on_behalf_of?: Record<string, unknown>;
   purpose?: string;
 }
 
 export interface RawBatchEvaluateRequest {
-  subjects: RawBatchSubject[];
+  items: RawBatchEvaluateItemRequest[];
   claims: Array<string | { id: string; version?: string }>;
   disclosure?: string;
   format?: string;

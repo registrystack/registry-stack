@@ -137,7 +137,7 @@ evidence:
       value:
         type: boolean
       inputs:
-        - name: subject_id
+        - name: target.identifiers.national_id
           type: string
       source_bindings:
         birth_record:
@@ -147,7 +147,7 @@ evidence:
           dataset: civil_registry
           entity: birth_registration
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: UIN
             op: eq
             cardinality: one
@@ -183,8 +183,8 @@ credential status mutation, require `registry_notary:admin`.
 - `principal_claim`: claim used for audit principal identity. The default is
   `sub`.
 
-For citizen self-attestation, the OIDC token must also carry a subject-binding
-claim that can be compared exactly to the requested subject id.
+For citizen self-attestation, the OIDC token must also carry a binding claim
+that Registry Notary uses to derive the requester and target context.
 
 ## Source Connections
 
@@ -239,7 +239,10 @@ Important fields:
 - `id`: stable machine id used by clients and credential profiles.
 - `title`, `version`, `subject_type`, and `value`: operator and verifier
   metadata.
-- `inputs`: request fields. Most deployments use `subject_id`.
+- `inputs`: request lookup paths. Supported paths include `target.id`,
+  `target.identifiers.<scheme>`, `target.attributes.<name>`, `requester.id`,
+  `requester.identifiers.<scheme>`, `requester.attributes.<name>`, and
+  `relationship.attributes.<name>`.
 - `source_bindings`: upstream reads, lookup fields, required caller scope, and
   extracted source fields.
 - `rule`: `exists`, `extract`, or `cel`.
@@ -391,12 +394,12 @@ Run config checks before exposing the service:
 ```sh
 registry-notary explain-config --config registry-notary.yaml --env-file .env.local
 registry-notary doctor --config registry-notary.yaml --env-file .env.local
-registry-notary doctor --config registry-notary.yaml --env-file .env.local --live --subject-id 1234567890
+registry-notary doctor --config registry-notary.yaml --env-file .env.local --live
 ```
 
-Use `--live` only against a test subject or a controlled integration
-environment. The doctor output redacts subject ids and tokens, but the upstream
-source still receives a real lookup.
+Use `--live` only against a test target or a controlled integration
+environment. When live lookup values are supplied, the doctor output redacts
+target ids and tokens, but the upstream source still receives a real lookup.
 
 For local VC smoke tests:
 

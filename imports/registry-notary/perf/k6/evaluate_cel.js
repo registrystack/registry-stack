@@ -18,6 +18,7 @@ import {
   CLAIM_RESULT_ACCEPT,
   celClaim,
   nextSubjectId,
+  targetForSubjectId,
   handleResultsFor,
   trackResponse,
   logScenarioStart,
@@ -44,7 +45,7 @@ export function setup() {
 export default function (ctx) {
   const subjectId = nextSubjectId(__VU, __ITER);
   const payload = JSON.stringify({
-    subject: { id: subjectId, id_type: 'NATIONAL_ID' },
+    target: targetForSubjectId(subjectId),
     claims: [ctx.claim],
     disclosure: 'predicate',
   });

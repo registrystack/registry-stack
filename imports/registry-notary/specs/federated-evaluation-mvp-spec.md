@@ -212,6 +212,11 @@ protocol stabilizes.
 
 Example payload:
 
+This payload is the federation v0.1 legacy shim. It intentionally signs the
+historical `subject` request shape and returns `subject_ref` in the signed
+response while the public evaluation API migrates to `target`, `items`, and
+`target_ref`.
+
 ```json
 {
   "iss": "https://agency-a.example.gov",
@@ -462,7 +467,7 @@ flowchart TD
 
 ## Denial Responses
 
-Denials use a small RFC 7807-style body:
+Denials use a small RFC 9457 Problem Details body:
 
 ```json
 {

@@ -16,6 +16,7 @@ import {
   extractClaim,
   batchSize,
   nextSubjectId,
+  targetForSubjectId,
   handleResultsFor,
   trackResponse,
   logScenarioStart,
@@ -27,15 +28,14 @@ export const options = commonOptions({
   defaultDuration: '30s',
 });
 
-function buildSubjects(vuId, iter, size) {
-  const subjects = new Array(size);
+function buildItems(vuId, iter, size) {
+  const items = new Array(size);
   for (let i = 0; i < size; i++) {
-    subjects[i] = {
-      id: nextSubjectId(vuId, iter * size + i),
-      id_type: 'NATIONAL_ID',
+    items[i] = {
+      target: targetForSubjectId(nextSubjectId(vuId, iter * size + i)),
     };
   }
-  return subjects;
+  return items;
 }
 
 export function setup() {
@@ -52,9 +52,9 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const subjects = buildSubjects(__VU, __ITER, ctx.size);
+  const items = buildItems(__VU, __ITER, ctx.size);
   const payload = JSON.stringify({
-    subjects,
+    items,
     claims: [ctx.claim],
   });
 

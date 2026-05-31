@@ -81,6 +81,14 @@ impl StandaloneRegistryNotaryConfig {
                 max_validity_seconds: 600,
             });
         }
+        if self
+            .evidence
+            .allowed_purposes
+            .iter()
+            .any(|purpose| purpose.trim().is_empty())
+        {
+            return Err(EvidenceConfigError::InvalidPurpose);
+        }
         self.credential_status.validate()?;
         for (connection_id, connection) in &self.evidence.source_connections {
             if connection.max_in_flight < 1 {
@@ -139,7 +147,7 @@ impl StandaloneRegistryNotaryConfig {
             if claim.id.trim().is_empty() {
                 return Err(EvidenceConfigError::InvalidClaim);
             }
-            for binding in claim.source_bindings.values() {
+            for (binding_id, binding) in &claim.source_bindings {
                 if binding.connection.is_none() {
                     return Err(EvidenceConfigError::MissingSourceConnection);
                 }
@@ -150,6 +158,7 @@ impl StandaloneRegistryNotaryConfig {
                 {
                     return Err(EvidenceConfigError::MissingSourceConnection);
                 }
+                validate_source_matching_config(&claim.id, binding_id, &binding.matching)?;
             }
         }
         // Registry Notary currently resolves holder material only from
@@ -2498,6 +2507,14 @@ pub enum EvidenceConfigError {
     InvalidSourceAuthConfig { connection: String, reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
+    #[error("allowed purpose must not be empty")]
+    InvalidPurpose,
+    #[error("claim '{claim}' binding '{binding}' has invalid matching config: {reason}")]
+    InvalidMatchingConfig {
+        claim: String,
+        binding: String,
+        reason: String,
+    },
     #[error("each standalone source binding must reference a configured source connection")]
     MissingSourceConnection,
     #[error(
@@ -2621,6 +2638,8 @@ pub struct EvidenceConfig {
     #[serde(default = "default_max_credential_validity_seconds")]
     pub max_credential_validity_seconds: u64,
     #[serde(default)]
+    pub allowed_purposes: Vec<String>,
+    #[serde(default)]
     pub claims: Vec<ClaimDefinition>,
     #[serde(default)]
     pub signing_keys: BTreeMap<String, SigningKeyConfig>,
@@ -2653,6 +2672,95 @@ impl EvidenceConfig {
         }
         Ok(())
     }
+}
+
+fn validate_source_matching_config(
+    claim: &str,
+    binding: &str,
+    matching: &SourceMatchingConfig,
+) -> Result<(), EvidenceConfigError> {
+    if matching
+        .target_type
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "target_type must not be empty");
+    }
+    if matching
+        .requester_type
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "requester_type must not be empty");
+    }
+    if matching
+        .policy_id
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "policy_id must not be empty");
+    }
+    if matching
+        .method
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "method must not be empty");
+    }
+    if matching
+        .allowed_purposes
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(claim, binding, "allowed_purposes must not contain blanks");
+    }
+    if matching
+        .allowed_relationships
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "allowed_relationships must not contain blanks",
+        );
+    }
+    if matching
+        .sufficient_target_inputs
+        .iter()
+        .any(|group| group.is_empty() || group.iter().any(|path| path.trim().is_empty()))
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "sufficient_target_inputs groups must be non-empty and contain no blank paths",
+        );
+    }
+    if matching
+        .allowed_target_inputs
+        .iter()
+        .chain(matching.allowed_requester_inputs.iter())
+        .any(|path| path.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "allowed input path lists must not contain blanks",
+        );
+    }
+    Ok(())
+}
+
+fn invalid_matching_config<T>(
+    claim: &str,
+    binding: &str,
+    reason: &str,
+) -> Result<T, EvidenceConfigError> {
+    Err(EvidenceConfigError::InvalidMatchingConfig {
+        claim: claim.to_string(),
+        binding: binding.to_string(),
+        reason: reason.to_string(),
+    })
 }
 
 fn validate_signing_key_id(key_id: &str) -> Result<(), EvidenceConfigError> {
@@ -2751,6 +2859,66 @@ pub struct SourceBindingConfig {
     pub lookup: SourceLookupConfig,
     #[serde(default)]
     pub fields: BTreeMap<String, SourceFieldConfig>,
+    #[serde(default)]
+    pub matching: SourceMatchingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceMatchingConfig {
+    #[serde(default)]
+    pub policy_id: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub target_type: Option<String>,
+    #[serde(default)]
+    pub requester_type: Option<String>,
+    #[serde(default)]
+    pub allowed_purposes: Vec<String>,
+    #[serde(default)]
+    pub allowed_relationships: Vec<String>,
+    /// OR-of-AND groups of request paths. Example:
+    /// `[["target.attributes.given_name", "target.attributes.family_name"]]`.
+    #[serde(default)]
+    pub sufficient_target_inputs: Vec<Vec<String>>,
+    /// Maximum target input paths accepted by this binding. Empty means
+    /// unrestricted for backwards-compatible identifier-only configs.
+    #[serde(default)]
+    pub allowed_target_inputs: Vec<String>,
+    /// Maximum requester input paths accepted by this binding. Empty means
+    /// unrestricted.
+    #[serde(default)]
+    pub allowed_requester_inputs: Vec<String>,
+    #[serde(default = "default_collapse_matching_errors")]
+    pub collapse_matching_errors: bool,
+    #[serde(default)]
+    pub require_requester_reauthentication: bool,
+    #[serde(default)]
+    pub confidence: Option<String>,
+}
+
+impl Default for SourceMatchingConfig {
+    fn default() -> Self {
+        Self {
+            policy_id: None,
+            method: None,
+            target_type: None,
+            requester_type: None,
+            allowed_purposes: Vec::new(),
+            allowed_relationships: Vec::new(),
+            sufficient_target_inputs: Vec::new(),
+            allowed_target_inputs: Vec::new(),
+            allowed_requester_inputs: Vec::new(),
+            collapse_matching_errors: default_collapse_matching_errors(),
+            require_requester_reauthentication: false,
+            confidence: None,
+        }
+    }
+}
+
+const fn default_collapse_matching_errors() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -3508,6 +3676,57 @@ rule:
         .expect("minimal claim is valid YAML")
     }
 
+    #[test]
+    fn matching_config_rejects_blank_policy_id() {
+        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
+            r#"
+evidence:
+  enabled: true
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: ISSUER_KEY
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+  source_connections:
+    registry:
+      base_url: https://registry.example
+      token_env: SOURCE_TOKEN
+  claims:
+    - id: person-is-alive
+      title: Person is alive
+      version: "1.0"
+      subject_type: Person
+      source_bindings:
+        src:
+          connector: registry_data_api
+          connection: registry
+          dataset: people
+          entity: person
+          lookup:
+            input: target.attributes.birthdate
+            field: birthdate
+          matching:
+            policy_id: ""
+      rule:
+        type: exists
+        source: src
+auth:
+  mode: api_key
+  api_keys:
+    - id: test-key
+      hash_env: TEST_TOKEN_HASH
+"#,
+        )
+        .expect("config shape parses");
+        let err = config.validate().expect_err("blank policy id is rejected");
+        assert!(matches!(
+            err,
+            EvidenceConfigError::InvalidMatchingConfig { .. }
+        ));
+    }
+
     fn valid_self_attestation_config() -> StandaloneRegistryNotaryConfig {
         serde_norway::from_str(
             r#"
@@ -3558,7 +3777,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -5018,12 +5237,13 @@ source_auth:
             dataset: "farmer_registry".to_string(),
             entity: "farmer".to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: cardinality.to_string(),
             },
             fields: BTreeMap::new(),
+            matching: SourceMatchingConfig::default(),
         }
     }
 
@@ -5035,12 +5255,13 @@ source_auth:
             dataset: "farmer_registry".to_string(),
             entity: "farmer".to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id_type".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
             },
             fields: BTreeMap::new(),
+            matching: SourceMatchingConfig::default(),
         }
     }
 
@@ -5279,6 +5500,18 @@ allowed_claims: ["", "   "]
             }
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    #[test]
+    fn blank_evidence_allowed_purpose_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.allowed_purposes = vec!["benefits".to_string(), "  ".to_string()];
+
+        let err = config
+            .validate()
+            .expect_err("blank evidence allowed_purposes must fail validation");
+
+        assert!(matches!(err, EvidenceConfigError::InvalidPurpose));
     }
 
     #[test]

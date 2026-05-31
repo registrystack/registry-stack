@@ -677,7 +677,7 @@ must not merge the peer checkpoint into its own audit chain.
 
 ### Denial Responses
 
-Federation denial responses use RFC 7807-style JSON with a stable reason class
+Federation denial responses use RFC 9457 Problem Details JSON with a stable reason class
 and no subject-existence detail.
 
 | Case | Status | `type` |
@@ -720,6 +720,11 @@ approximate event time.
 
 Privileged requests use a JWS envelope in V1. Compact JWS is preferred for
 transport. JCS is not applied to the JWT payload before signing.
+
+The examples in this section intentionally show the federation v0.1 legacy
+shim. That shim signs the historical `subject` request shape and returns
+`subject_ref` handles inside the federation envelope while the public evaluation
+API migrates to `target`, `items`, and `target_ref`.
 
 Protected header:
 
@@ -797,6 +802,9 @@ flowchart TD
 
 When local policy allows batching, the request payload uses `subjects`. A
 request must include either `subject` or `subjects`, not both.
+
+This is also part of the federation v0.1 legacy shim. Public batch evaluation
+examples outside this federation envelope should use `items`.
 
 ```json
 {
@@ -1632,7 +1640,7 @@ and verified in CI or by named local commands:
 - Allowed delegated evaluation returns a compact JWS response with the expected
   `typ`, serving Notary `iss` and `sub`, requesting peer `aud`, `request_jti`,
   no raw source rows, and a pairwise `subject_ref.hash`.
-- Denied delegated evaluation returns the specified RFC 7807 problem envelope
+- Denied delegated evaluation returns the specified RFC 9457 Problem Details envelope
   and never performs a source read before peer policy succeeds.
 - Audit records are emitted for allowed, denied, replayed, stale-source, and
   audit-write-failure paths, with peer id and subject redacted or hashed.

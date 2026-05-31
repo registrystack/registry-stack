@@ -12,7 +12,10 @@ test("evaluate converts camelCase request fields and response fields", async () 
   const calls = [];
   const controller = new AbortController();
   const request = {
-    subject: { id: "subj-0000001", idType: "NATIONAL_ID" },
+    target: {
+      type: "Person",
+      identifiers: [{ scheme: "NATIONAL_ID", value: "subj-0000001" }],
+    },
     claims: [{ id: "date-of-birth", version: "2026-05-29" }],
     signal: controller.signal,
   };
@@ -40,13 +43,16 @@ test("evaluate converts camelCase request fields and response fields", async () 
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.signal, controller.signal);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
-    subject: { id: "subj-0000001", id_type: "NATIONAL_ID" },
+    target: {
+      type: "Person",
+      identifiers: [{ scheme: "NATIONAL_ID", value: "subj-0000001" }],
+    },
     claims: [{ id: "date-of-birth", version: "2026-05-29" }],
   });
   assert.equal(calls[0].init.headers.get("accept"), "application/vnd.registry-notary.claim-result+json");
   assert.equal(calls[0].init.headers.get("authorization"), "Bearer test-token");
   assert.equal(calls[0].init.headers.get("data-purpose"), "benefits_eligibility");
-  assert.equal(request.subject.idType, "NATIONAL_ID");
+  assert.equal(request.target.identifiers[0].scheme, "NATIONAL_ID");
 });
 
 test("evaluateRequest preserves snake_case request and response shapes", async () => {
@@ -65,7 +71,10 @@ test("evaluateRequest preserves snake_case request and response shapes", async (
 
   const result = await client.evaluateRequest(
     {
-      subject: { id: "subj-0000001", id_type: "NATIONAL_ID" },
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "NATIONAL_ID", value: "subj-0000001" }],
+      },
       claims: ["date-of-birth"],
       purpose: "benefits_eligibility",
     },
@@ -77,7 +86,10 @@ test("evaluateRequest preserves snake_case request and response shapes", async (
     results: [{ claim_id: "date-of-birth" }],
   });
   assert.deepEqual(JSON.parse(calls[0].init.body), {
-    subject: { id: "subj-0000001", id_type: "NATIONAL_ID" },
+    target: {
+      type: "Person",
+      identifiers: [{ scheme: "NATIONAL_ID", value: "subj-0000001" }],
+    },
     claims: ["date-of-birth"],
     purpose: "benefits_eligibility",
   });
@@ -93,7 +105,7 @@ test("evaluateRequest rejects idempotency keys on non-idempotent evaluate route"
 
   await assert.rejects(
     client.evaluateRequest(
-      { subject: { id: "subj-0000001" }, claims: ["date-of-birth"] },
+      { target: { type: "Person", id: "subj-0000001" }, claims: ["date-of-birth"] },
       { idempotencyKey: "ignored-by-server" },
     ),
     (error) => error instanceof NotaryError && error.code === "unsupported_idempotency_key",
@@ -111,7 +123,17 @@ test("batchEvaluateRequest sends Idempotency-Key when supplied", async () => {
   });
 
   const result = await client.batchEvaluateRequest(
-    { subjects: [{ id: "subj-1", id_type: "NATIONAL_ID" }], claims: ["age"] },
+    {
+      items: [
+        {
+          target: {
+            type: "Person",
+            identifiers: [{ scheme: "NATIONAL_ID", value: "subj-1" }],
+          },
+        },
+      ],
+      claims: ["age"],
+    },
     { idempotencyKey: "batch-key" },
   );
 
@@ -131,11 +153,25 @@ test("batchEvaluate converts camelCase request and response fields", async () =>
   });
 
   const result = await client.batchEvaluate({
-    subjects: [{ id: "subj-1", idType: "NATIONAL_ID" }],
+    items: [
+      {
+        target: {
+          type: "Person",
+          identifiers: [{ scheme: "NATIONAL_ID", value: "subj-1" }],
+        },
+      },
+    ],
     claims: ["age"],
   });
 
-  assert.deepEqual(JSON.parse(calls[0].init.body).subjects, [{ id: "subj-1", id_type: "NATIONAL_ID" }]);
+  assert.deepEqual(JSON.parse(calls[0].init.body).items, [
+    {
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "NATIONAL_ID", value: "subj-1" }],
+      },
+    },
+  ]);
   assert.deepEqual(result, { batchId: "batch-1", summary: { succeeded: 1, failed: 0 } });
 });
 
@@ -158,7 +194,7 @@ test("core helper methods cover claims, render, issue, and credential status", a
   assert.deepEqual(await client.renderRequest({ evaluation_id: "eval-1", format: "json" }), {
     document: { ok: true },
   });
-  assert.deepEqual(await client.issueCredentialRequest({ subject: { id: "subj-1" } }), {
+  assert.deepEqual(await client.issueCredentialRequest({ evaluation_id: "eval-1" }), {
     credential_id: "cred-1",
   });
   assert.deepEqual(await client.credentialStatus("cred-1"), {
@@ -207,7 +243,7 @@ test("AbortSignal is passed to fetch and abort maps to NotaryTransportError", as
 
   await assert.rejects(
     client.evaluate({
-      subject: { id: "subj-0000001" },
+      target: { type: "Person", id: "subj-0000001" },
       claims: ["date-of-birth"],
       signal: controller.signal,
     }),
@@ -225,11 +261,11 @@ test("Problem Details errors are mapped and detail is redacted by default", asyn
     fetch: async () =>
       jsonResponse(
         {
-          type: "https://docs.registry-notary.dev/problems/source/not-found",
-          title: "Source record not found",
+          type: "https://docs.registry-notary.dev/problems/target/not-found",
+          title: "Target not found",
           status: 404,
-          detail: "secret subject subj-0000001 was not found",
-          code: "source.not_found",
+          detail: "secret target subj-0000001 was not found",
+          code: "target.not_found",
         },
         {
           status: 404,
@@ -240,21 +276,21 @@ test("Problem Details errors are mapped and detail is redacted by default", asyn
   });
 
   await assert.rejects(
-    client.evaluateRequest({ subject: { id: "subj-0000001" }, claims: ["date-of-birth"] }),
+    client.evaluateRequest({ target: { type: "Person", id: "subj-0000001" }, claims: ["date-of-birth"] }),
     (error) => {
       assert.ok(error instanceof NotaryProblemError);
       assert.equal(error.status, 404);
-      assert.equal(error.code, "source.not_found");
-      assert.equal(error.title, "Source record not found");
+      assert.equal(error.code, "target.not_found");
+      assert.equal(error.title, "Target not found");
       assert.equal(error.requestId, "req-123");
-      assert.equal(error.problemType, "https://docs.registry-notary.dev/problems/source/not-found");
+      assert.equal(error.problemType, "https://docs.registry-notary.dev/problems/target/not-found");
       assert.equal(error.detail, undefined);
-      assert.equal(error.message.includes("secret subject"), false);
+      assert.equal(error.message.includes("secret target"), false);
       assert.deepEqual(error.toJSON(), {
         kind: "problem",
         status: 404,
-        code: "source.not_found",
-        title: "Source record not found",
+        code: "target.not_found",
+        title: "Target not found",
         retryable: false,
         request_id: "req-123",
       });
@@ -336,7 +372,7 @@ test("purpose conflicts fail before sending", async () => {
 
   await assert.rejects(
     client.evaluateRequest({
-      subject: { id: "subj-0000001" },
+      target: { type: "Person", id: "subj-0000001" },
       claims: ["date-of-birth"],
       purpose: "another_purpose",
     }),
@@ -386,7 +422,7 @@ test("retry policy retries GET and idempotent batch only", async () => {
 
   assert.deepEqual(
     await batchClient.batchEvaluateRequest(
-      { subjects: [{ id: "subj-1" }], claims: ["age"] },
+      { items: [{ target: { type: "Person", id: "subj-1" } }], claims: ["age"] },
       { idempotencyKey: "batch-key" },
     ),
     { batch_id: "batch-1" },
@@ -410,7 +446,7 @@ test("retry policy retries GET and idempotent batch only", async () => {
   });
 
   await assert.rejects(
-    evaluateClient.evaluateRequest({ subject: { id: "subj-1" }, claims: ["age"] }),
+    evaluateClient.evaluateRequest({ target: { type: "Person", id: "subj-1" }, claims: ["age"] }),
     (error) => error instanceof NotaryProblemError && error.status === 503,
   );
   assert.equal(evaluateCalls.length, 1);

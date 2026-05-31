@@ -304,6 +304,9 @@ pub enum PrincipalIdentifier {}
 pub enum SubjectBinding {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceEntityReference {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HolderIdentifier {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -575,7 +578,14 @@ impl<'de> Deserialize<'de> for ClaimRef {
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
-    pub subject: SubjectRequest,
+    #[serde(default)]
+    pub requester: Option<EvidenceEntity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EvidenceEntity>,
+    #[serde(default)]
+    pub relationship: Option<EvidenceRelationship>,
+    #[serde(default)]
+    pub on_behalf_of: Option<Value>,
     pub claims: Vec<ClaimRef>,
     #[serde(default)]
     pub disclosure: Option<String>,
@@ -583,6 +593,225 @@ pub struct EvaluateRequest {
     pub format: Option<String>,
     #[serde(default)]
     pub purpose: Option<String>,
+}
+
+impl EvaluateRequest {
+    #[must_use]
+    pub fn target_subject(&self) -> Option<SubjectRequest> {
+        self.target
+            .as_ref()
+            .and_then(EvidenceEntity::to_subject_request)
+    }
+
+    #[must_use]
+    pub fn request_context(&self) -> Option<EvidenceRequestContext> {
+        self.target.as_ref().map(|target| EvidenceRequestContext {
+            requester: self.requester.clone(),
+            target: target.clone(),
+            relationship: self.relationship.clone(),
+            on_behalf_of: self.on_behalf_of.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceRequestContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester: Option<EvidenceEntity>,
+    pub target: EvidenceEntity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship: Option<EvidenceRelationship>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_behalf_of: Option<Value>,
+}
+
+impl EvidenceRequestContext {
+    #[must_use]
+    pub fn target_subject(&self) -> Option<SubjectRequest> {
+        self.target.to_subject_request()
+    }
+
+    #[must_use]
+    pub fn lookup_value(&self, path: &str) -> Option<Value> {
+        match path {
+            "target.id" => self
+                .target
+                .id
+                .as_ref()
+                .map(|value| Value::String(value.clone())),
+            "requester.id" => self
+                .requester
+                .as_ref()
+                .and_then(|requester| requester.id.as_ref())
+                .map(|value| Value::String(value.clone())),
+            _ if path.starts_with("target.attributes.") => {
+                let key = path.strip_prefix("target.attributes.")?;
+                self.target.attributes.get(key).cloned()
+            }
+            _ if path.starts_with("requester.attributes.") => {
+                let key = path.strip_prefix("requester.attributes.")?;
+                self.requester
+                    .as_ref()
+                    .and_then(|requester| requester.attributes.get(key))
+                    .cloned()
+            }
+            _ if path.starts_with("relationship.attributes.") => {
+                let key = path.strip_prefix("relationship.attributes.")?;
+                self.relationship
+                    .as_ref()
+                    .and_then(|relationship| relationship.attributes.get(key))
+                    .cloned()
+            }
+            _ if path.starts_with("target.identifiers.") => {
+                let scheme = path.strip_prefix("target.identifiers.")?;
+                self.target
+                    .identifier_value(scheme)
+                    .map(|value| Value::String(value.to_string()))
+            }
+            _ if path.starts_with("requester.identifiers.") => {
+                let scheme = path.strip_prefix("requester.identifiers.")?;
+                self.requester
+                    .as_ref()
+                    .and_then(|requester| requester.identifier_value(scheme))
+                    .map(|value| Value::String(value.to_string()))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceEntity {
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identifiers: Vec<EvidenceIdentifier>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assurance: Option<EvidenceAssurance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+impl EvidenceEntity {
+    #[must_use]
+    pub fn new(entity_type: impl Into<String>) -> Self {
+        Self {
+            entity_type: entity_type.into(),
+            id: None,
+            identifiers: Vec::new(),
+            attributes: BTreeMap::new(),
+            assurance: None,
+            profile: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_identifier(
+        entity_type: impl Into<String>,
+        scheme: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            entity_type: entity_type.into(),
+            id: None,
+            identifiers: vec![EvidenceIdentifier {
+                scheme: scheme.into(),
+                value: value.into(),
+                issuer: None,
+                country: None,
+            }],
+            attributes: BTreeMap::new(),
+            assurance: None,
+            profile: None,
+        }
+    }
+
+    #[must_use]
+    pub fn from_subject_request(entity_type: impl Into<String>, subject: SubjectRequest) -> Self {
+        match subject.id_type {
+            Some(id_type) => Self::with_identifier(entity_type, id_type, subject.id),
+            None => {
+                let mut entity = Self::new(entity_type);
+                entity.id = Some(subject.id);
+                entity
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn to_subject_request(&self) -> Option<SubjectRequest> {
+        if let Some(identifier) = self.identifiers.first() {
+            return Some(SubjectRequest {
+                id: identifier.value.clone(),
+                id_type: Some(identifier.scheme.clone()),
+            });
+        }
+        self.id.as_ref().map(|id| SubjectRequest {
+            id: id.clone(),
+            id_type: None,
+        })
+    }
+
+    #[must_use]
+    pub fn identifier_value(&self, scheme: &str) -> Option<&str> {
+        self.identifiers
+            .iter()
+            .find(|identifier| identifier.scheme == scheme)
+            .map(|identifier| identifier.value.as_str())
+    }
+
+    #[must_use]
+    pub fn has_matching_input(&self) -> bool {
+        self.id.as_ref().is_some_and(|id| !id.trim().is_empty())
+            || self
+                .identifiers
+                .iter()
+                .any(|identifier| !identifier.value.trim().is_empty())
+            || !self.attributes.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceIdentifier {
+    pub scheme: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceAssurance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceRelationship {
+    #[serde(rename = "type")]
+    pub relationship_type: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
@@ -624,8 +853,64 @@ impl From<SubjectRequest> for BatchSubjectRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct BatchEvaluateItemRequest {
+    pub target: EvidenceEntity,
+    #[serde(default)]
+    pub requester: Option<EvidenceEntity>,
+    #[serde(default)]
+    pub relationship: Option<EvidenceRelationship>,
+    #[serde(default)]
+    pub on_behalf_of: Option<Value>,
+    #[serde(default)]
+    pub purpose: Option<String>,
+}
+
+impl BatchEvaluateItemRequest {
+    #[must_use]
+    pub fn target_subject(&self) -> Option<SubjectRequest> {
+        self.target.to_subject_request()
+    }
+
+    #[must_use]
+    pub fn request_context(&self) -> EvidenceRequestContext {
+        EvidenceRequestContext {
+            requester: self.requester.clone(),
+            target: self.target.clone(),
+            relationship: self.relationship.clone(),
+            on_behalf_of: self.on_behalf_of.clone(),
+        }
+    }
+}
+
+impl From<BatchSubjectRequest> for BatchEvaluateItemRequest {
+    fn from(subject: BatchSubjectRequest) -> Self {
+        let purpose = subject.purpose.clone();
+        Self {
+            target: EvidenceEntity::from_subject_request("Person", SubjectRequest::from(subject)),
+            requester: None,
+            relationship: None,
+            on_behalf_of: None,
+            purpose,
+        }
+    }
+}
+
+impl From<SubjectRequest> for BatchEvaluateItemRequest {
+    fn from(subject: SubjectRequest) -> Self {
+        Self {
+            target: EvidenceEntity::from_subject_request("Person", subject),
+            requester: None,
+            relationship: None,
+            on_behalf_of: None,
+            purpose: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BatchEvaluateRequest {
-    pub subjects: Vec<BatchSubjectRequest>,
+    pub items: Vec<BatchEvaluateItemRequest>,
     pub claims: Vec<ClaimRef>,
     #[serde(default)]
     pub disclosure: Option<String>,
@@ -659,7 +944,11 @@ pub struct BatchSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchItemResponse {
     pub input_index: usize,
-    pub subject_ref: SubjectRefView,
+    pub target_ref: TargetRefView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_ref: Option<EvidenceEntityRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching: Option<MatchingMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation_id: Option<String>,
     pub status: BatchItemStatus,
@@ -692,6 +981,8 @@ pub struct BatchItemError {
     pub code: String,
     pub title: String,
     pub retryable: bool,
+    #[serde(default, skip)]
+    pub audit_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
@@ -783,7 +1074,11 @@ pub struct ClaimResultView {
     pub claim_id: String,
     pub claim_version: String,
     pub subject_type: String,
-    pub subject_ref: SubjectRefView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_ref: Option<EvidenceEntityRef>,
+    pub target_ref: TargetRefView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching: Option<MatchingMetadata>,
     pub value: Option<Value>,
     pub satisfied: Option<bool>,
     pub disclosure: String,
@@ -794,9 +1089,34 @@ pub struct ClaimResultView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubjectRefView {
-    pub hash: Hashed<SubjectBinding>,
-    pub id_type: String,
+pub struct TargetRefView {
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
+    pub entity_type: String,
+    pub handle: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identifier_schemes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceEntityRef {
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub handle: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identifier_schemes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchingMetadata {
+    pub policy_id: String,
+    pub method: String,
+    pub confidence: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -960,6 +1280,45 @@ pub struct EvidenceAuditEvent {
     pub policy_version: Option<BoundedPolicyId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_hash: Option<Hashed<PolicyIdentifier>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EvidenceBatchItemAuditEvent {
+    pub input_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_error_code: Option<String>,
 }
 
 #[cfg(test)]
@@ -995,6 +1354,178 @@ mod tests {
                 .expect("versioned claim ref deserializes");
         assert_eq!(versioned.id, "person-is-alive");
         assert_eq!(versioned.version.as_deref(), Some("2026-05"));
+    }
+
+    #[test]
+    fn evaluate_request_deserializes_identity_bundle_target() {
+        let request: EvaluateRequest = serde_json::from_value(json!({
+            "requester": {
+                "type": "person",
+                "identifiers": [
+                    { "scheme": "national_id", "value": "NID-9001", "country": "RW" }
+                ]
+            },
+            "target": {
+                "type": "person",
+                "identifiers": [
+                    { "scheme": "national_id", "value": "NID-1001" }
+                ],
+                "attributes": {
+                    "given_name": "Amina",
+                    "family_name": "Kamanzi",
+                    "date_of_birth": "1990-01-15"
+                },
+                "assurance": {
+                    "method": "oidc",
+                    "level_scheme": "example-loa",
+                    "level": "substantial"
+                }
+            },
+            "relationship": {
+                "type": "self"
+            },
+            "on_behalf_of": {
+                "mode": "reserved"
+            },
+            "claims": ["person-is-alive"],
+            "purpose": "https://purpose.example/social-protection"
+        }))
+        .expect("new request shape deserializes");
+
+        let target = request.target.as_ref().expect("target is present");
+        assert_eq!(target.entity_type, "person");
+        assert_eq!(
+            request
+                .target_subject()
+                .expect("identifier target maps to source subject")
+                .id_type
+                .as_deref(),
+            Some("national_id")
+        );
+        assert_eq!(target.attributes["date_of_birth"], json!("1990-01-15"));
+    }
+
+    #[test]
+    fn evaluate_request_allows_missing_target_for_server_derived_context() {
+        let request: EvaluateRequest = serde_json::from_value(json!({
+            "claims": ["person-is-alive"],
+            "purpose": "https://purpose.example/self"
+        }))
+        .expect("target may be omitted when the server derives self-attestation context");
+
+        assert!(request.target.is_none());
+        assert!(request.target_subject().is_none());
+        assert!(request.request_context().is_none());
+    }
+
+    #[test]
+    fn evaluate_request_rejects_old_subject_shape() {
+        let error = serde_json::from_value::<EvaluateRequest>(json!({
+            "subject": { "id": "NID-1001", "id_type": "national_id" },
+            "claims": ["person-is-alive"]
+        }))
+        .expect_err("old subject shape is no longer accepted");
+
+        assert!(
+            error.to_string().contains("missing field `target`")
+                || error.to_string().contains("unknown field `subject`"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn evidence_entity_reports_matching_input_only_when_non_empty() {
+        let mut entity = EvidenceEntity::new("Person");
+        assert!(!entity.has_matching_input());
+
+        entity.id = Some("   ".to_string());
+        entity.identifiers.push(EvidenceIdentifier {
+            scheme: "national_id".to_string(),
+            value: "  ".to_string(),
+            issuer: None,
+            country: None,
+        });
+        assert!(!entity.has_matching_input());
+
+        entity.identifiers[0].value = "NID-1001".to_string();
+        assert!(entity.has_matching_input());
+
+        entity.identifiers[0].value = "  ".to_string();
+        entity
+            .attributes
+            .insert("district".to_string(), json!("north"));
+        assert!(entity.has_matching_input());
+    }
+
+    #[test]
+    fn batch_evaluate_request_deserializes_items_with_mixed_targets() {
+        let request: BatchEvaluateRequest = serde_json::from_value(json!({
+            "items": [
+                {
+                    "target": {
+                        "type": "person",
+                        "identifiers": [
+                            { "scheme": "national_id", "value": "NID-1001" }
+                        ]
+                    }
+                },
+                {
+                    "target": {
+                        "type": "land_parcel",
+                        "identifiers": [
+                            { "scheme": "parcel_id", "value": "LP-42" }
+                        ]
+                    },
+                    "purpose": "https://purpose.example/land"
+                }
+            ],
+            "claims": ["eligibility"]
+        }))
+        .expect("batch request shape deserializes");
+
+        assert_eq!(request.items.len(), 2);
+        assert_eq!(
+            request.items[1]
+                .target_subject()
+                .expect("target maps to source subject")
+                .id_type
+                .as_deref(),
+            Some("parcel_id")
+        );
+    }
+
+    #[test]
+    fn result_views_serialize_target_ref_without_subject_ref_or_id_type() {
+        let result = ClaimResultView {
+            evaluation_id: "eval-1".to_string(),
+            claim_id: "person-is-alive".to_string(),
+            claim_version: "1.0.0".to_string(),
+            subject_type: "person".to_string(),
+            requester_ref: None,
+            target_ref: TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "rnref:v1:test".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
+            },
+            matching: None,
+            value: Some(json!(true)),
+            satisfied: Some(true),
+            disclosure: "predicate".to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
+            issued_at: "2026-05-31T00:00:00Z".to_string(),
+            expires_at: None,
+            provenance: ClaimProvenance {
+                source_count: 1,
+                source_versions: BTreeMap::new(),
+                computed_by: "test".to_string(),
+            },
+        };
+
+        let value = serde_json::to_value(result).expect("result serializes");
+        assert!(value.get("target_ref").is_some());
+        assert!(value.get("subject_ref").is_none());
+        assert!(value["target_ref"].get("id_type").is_none());
     }
 
     #[test]
@@ -1081,6 +1612,25 @@ mod tests {
             rate_limit_bucket: None,
             policy_version: Some(bounded("citizen-v1")),
             policy_hash: Some(Hashed::from_hash("sha256:policy")),
+            target_type: Some("person".to_string()),
+            target_ref_hash: Some(Hashed::from_hash("hmac-sha256:target")),
+            requester_type: Some("person".to_string()),
+            requester_ref_hash: Some(Hashed::from_hash("hmac-sha256:requester")),
+            matching_policy_id: Some("civil-registry-v1".to_string()),
+            matching_method: Some("configured_lookup".to_string()),
+            matching_outcome: Some("matched".to_string()),
+            matching_error_code: None,
+            batch_items: Some(vec![EvidenceBatchItemAuditEvent {
+                input_index: 0,
+                target_type: Some("person".to_string()),
+                target_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-target")),
+                requester_type: Some("person".to_string()),
+                requester_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-requester")),
+                matching_policy_id: Some("civil-registry-v1".to_string()),
+                matching_method: Some("configured_lookup".to_string()),
+                matching_outcome: Some("matched".to_string()),
+                matching_error_code: None,
+            }]),
         };
 
         let value = serde_json::to_value(&event).expect("audit event serializes");
@@ -1100,6 +1650,20 @@ mod tests {
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
         assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());
+        assert_eq!(value["target_type"], json!("person"));
+        assert_eq!(value["target_ref_hash"], json!("hmac-sha256:target"));
+        assert_eq!(value["requester_type"], json!("person"));
+        assert_eq!(value["requester_ref_hash"], json!("hmac-sha256:requester"));
+        assert_eq!(value["matching_policy_id"], json!("civil-registry-v1"));
+        assert_eq!(value["matching_method"], json!("configured_lookup"));
+        assert_eq!(value["matching_outcome"], json!("matched"));
+        assert_eq!(
+            value["batch_items"][0]["target_ref_hash"],
+            json!("hmac-sha256:batch-target")
+        );
+        assert!(value.get("target_id").is_none());
+        assert!(value.get("target_attributes").is_none());
+        assert!(value.get("requester_id").is_none());
 
         let decoded: EvidenceAuditEvent =
             serde_json::from_value(value).expect("audit event deserializes");
@@ -1121,6 +1685,26 @@ mod tests {
             decoded.policy_hash.as_ref().map(Hashed::as_str),
             Some("sha256:policy")
         );
+        assert_eq!(decoded.target_type.as_deref(), Some("person"));
+        assert_eq!(
+            decoded.target_ref_hash.as_ref().map(Hashed::as_str),
+            Some("hmac-sha256:target")
+        );
+        assert_eq!(decoded.requester_type.as_deref(), Some("person"));
+        assert_eq!(
+            decoded.requester_ref_hash.as_ref().map(Hashed::as_str),
+            Some("hmac-sha256:requester")
+        );
+        assert_eq!(
+            decoded.matching_policy_id.as_deref(),
+            Some("civil-registry-v1")
+        );
+        assert_eq!(
+            decoded.matching_method.as_deref(),
+            Some("configured_lookup")
+        );
+        assert_eq!(decoded.matching_outcome.as_deref(), Some("matched"));
+        assert_eq!(decoded.batch_items.as_ref().map(Vec::len), Some(1));
     }
 
     #[test]
@@ -1141,6 +1725,15 @@ mod tests {
         assert!(decoded.row_count.is_none());
         assert!(decoded.error_code.is_none());
         assert!(decoded.access_mode.is_none());
+        assert!(decoded.target_type.is_none());
+        assert!(decoded.target_ref_hash.is_none());
+        assert!(decoded.requester_type.is_none());
+        assert!(decoded.requester_ref_hash.is_none());
+        assert!(decoded.matching_policy_id.is_none());
+        assert!(decoded.matching_method.is_none());
+        assert!(decoded.matching_outcome.is_none());
+        assert!(decoded.matching_error_code.is_none());
+        assert!(decoded.batch_items.is_none());
     }
 
     #[test]

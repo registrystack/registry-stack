@@ -286,7 +286,7 @@ Before first shared deployment:
 ```sh
 registry-notary explain-config --config registry-notary.yaml
 registry-notary doctor --config registry-notary.yaml
-registry-notary doctor --config registry-notary.yaml --live --subject-id <test-subject>
+registry-notary doctor --config registry-notary.yaml --live --target-id <test-target>
 ```
 
 During rollout:

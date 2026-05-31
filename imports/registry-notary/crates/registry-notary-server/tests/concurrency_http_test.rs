@@ -18,6 +18,13 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 
+fn person_target(id: &str) -> Value {
+    json!({
+        "type": "Person",
+        "id": id,
+    })
+}
+
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
 fn set_audit_secret() {
@@ -256,7 +263,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -344,7 +351,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -406,11 +413,11 @@ async fn outbound_semaphore_caps_upstream_in_flight_at_max() {
     // Fire 8 batch_evaluate requests concurrently, each with 4 subjects, to
     // give the runtime plenty of headroom to overlap.
     let subjects: Vec<Value> = (0..4)
-        .map(|i| json!({ "id": format!("person-{i}") }))
+        .map(|i| person_target(&format!("person-{i}")))
         .collect();
     let body = json!({
         "claims": ["farmed-land-size"],
-        "subjects": subjects,
+        "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
         "disclosure": "value",
     });
 
@@ -488,7 +495,7 @@ async fn oauth_source_auth_fetches_form_token_once_and_reads_source() {
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
-                "subject": { "id": id },
+                "target": person_target(id),
                 "claims": ["farmed-land-size"],
                 "disclosure": "value",
             }))
@@ -546,7 +553,7 @@ async fn oauth_source_auth_supports_json_token_requests() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))
@@ -596,7 +603,7 @@ async fn oauth_source_auth_refreshes_before_expiry_when_token_ttl_is_short() {
             .add_header("x-api-key", "api-token")
             .add_header("data-purpose", "https://purpose.example.test/eligibility")
             .json(&json!({
-                "subject": { "id": id },
+                "target": person_target(id),
                 "claims": ["farmed-land-size"],
                 "disclosure": "value",
             }))
@@ -645,14 +652,14 @@ async fn oauth_source_auth_coalesces_concurrent_initial_token_fetch() {
     let server = TestServer::builder().http_transport().build(app);
 
     let subjects: Vec<Value> = (0..8)
-        .map(|i| json!({ "id": format!("person-{i}") }))
+        .map(|i| person_target(&format!("person-{i}")))
         .collect();
     let response = server
         .post("/v1/batch-evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subjects": subjects,
+            "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))
@@ -707,7 +714,7 @@ async fn oauth_source_auth_applies_fetch_url_policy_to_token_url() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))
@@ -765,7 +772,7 @@ async fn oauth_source_auth_refreshes_once_after_unauthorized_source_response() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))
@@ -826,7 +833,7 @@ async fn outbound_retries_once_on_http_500_and_returns_success() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))
@@ -878,7 +885,7 @@ async fn outbound_gives_up_after_one_retry_when_upstream_keeps_failing() {
         .add_header("x-api-key", "api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-1" },
+            "target": person_target("person-1"),
             "claims": ["farmed-land-size"],
             "disclosure": "value",
         }))

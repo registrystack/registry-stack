@@ -102,8 +102,9 @@ Rust returns `NotaryClientError`. Python and Node expose:
 - `NotaryProblemError`
 
 Safe fields for logs are status, code, title, retryable, and request id. Do not
-log raw request bodies, subject ids, holder proofs, credential bodies, SD-JWT
-disclosures, nonces, Authorization, `X-Api-Key`, or Problem Details `detail`.
+log raw request bodies, requester or target identifiers, holder proofs,
+credential bodies, SD-JWT disclosures, nonces, Authorization, `X-Api-Key`, or
+Problem Details `detail`.
 
 The Rust `portable()` error envelope is intended for language bindings and FFI.
 It intentionally excludes sensitive detail strings.
@@ -111,8 +112,27 @@ It intentionally excludes sensitive detail strings.
 The following application problem `code` values are part of the stable client
 contract for policy mapping:
 
-- `source.not_found`
-- `source.ambiguous`
+- `request.invalid`
+- `purpose.not_allowed`
+- `profile.unsupported`
+- `evidence.not_available`
+- `requester.reauthentication_required`
+- `requester.matching_policy_rejected`
+- `requester.not_found`
+- `requester.match_ambiguous`
+- `requester.identifier_missing`
+- `requester.attributes_insufficient`
+- `target.not_found`
+- `target.match_ambiguous`
+- `target.identifier_missing`
+- `target.match_low_confidence`
+- `target.attributes_insufficient`
+- `target.not_in_valid_state`
+- `target.matching_policy_rejected`
+- `relationship.not_established`
+- `relationship.match_ambiguous`
+- `relationship.attributes_insufficient`
+- `relationship.policy_rejected`
 - `source.unavailable`
 - `claim.not_found`
 - `claim.version_not_found`
@@ -121,6 +141,11 @@ contract for policy mapping:
 - `auth.missing_credential`
 - `idempotency.conflict`
 - `batch.too_large`
+
+Profiles may collapse granular matching outcomes to public
+`evidence.not_available` when revealing cardinality, state, or relationship
+policy would create an oracle. Operators can still inspect the granular audit
+code in the server audit trail.
 
 ## Rust
 
@@ -163,10 +188,17 @@ let client = RegistryNotaryClient::builder("https://notary.example.gov")
 
 ### High-Level Evaluation
 
+Evaluation requests use the canonical requester/target evidence model. The
+target is the entity being evaluated; optional requester context identifies the
+actor or represented party, and relationship explains why the requester may ask
+about that target.
+
 ```rust
 let response = client
-    .evaluate("person-1")
-    .id_type("national_id")
+    .evaluate_target("Person")
+    .target_identifier("national_id", "person-1")
+    .target_identifier_issuer("civil_registry")
+    .relationship("self")
     .claims(["person-is-alive", "age-over-18"])
     .disclosure("predicate")
     .send()
@@ -181,13 +213,29 @@ if let Some(result) = response.body.result_for("person-is-alive") {
 
 ```rust
 use registry_notary_client::RequestOptions;
-use registry_notary_core::{ClaimRef, EvaluateRequest, SubjectRequest};
+use registry_notary_core::{
+    ClaimRef, EvidenceEntity, EvidenceIdentifier, EvidenceRelationship, EvaluateRequest,
+};
 
 let request = EvaluateRequest {
-    subject: SubjectRequest {
-        id: "person-1".to_string(),
-        id_type: Some("national_id".to_string()),
+    requester: None,
+    target: EvidenceEntity {
+        entity_type: "Person".to_string(),
+        id: None,
+        identifiers: vec![EvidenceIdentifier {
+            scheme: "national_id".to_string(),
+            value: "person-1".to_string(),
+            issuer: Some("civil_registry".to_string()),
+        }],
+        attributes: Default::default(),
+        assurance: None,
+        profile: None,
     },
+    relationship: Some(EvidenceRelationship {
+        relationship_type: "self".to_string(),
+        attributes: Default::default(),
+    }),
+    on_behalf_of: None,
     claims: vec![ClaimRef::new("person-is-alive")],
     disclosure: Some("predicate".to_string()),
     format: None,
@@ -209,7 +257,10 @@ the client.
 
 ```rust
 use registry_notary_client::{RequestOptions, RetryPolicy};
-use registry_notary_core::{BatchEvaluateRequest, BatchSubjectRequest, ClaimRef};
+use registry_notary_core::{
+    BatchEvaluateItemRequest, BatchEvaluateRequest, ClaimRef, EvidenceEntity,
+    EvidenceIdentifier, EvidenceRelationship,
+};
 use std::time::Duration;
 
 let client = RegistryNotaryClient::builder("https://notary.example.gov")
@@ -224,9 +275,25 @@ let client = RegistryNotaryClient::builder("https://notary.example.gov")
     .build()?;
 
 let request = BatchEvaluateRequest {
-    subjects: vec![BatchSubjectRequest {
-        id: "person-1".to_string(),
-        id_type: Some("national_id".to_string()),
+    items: vec![BatchEvaluateItemRequest {
+        requester: None,
+        target: EvidenceEntity {
+            entity_type: "Person".to_string(),
+            id: None,
+            identifiers: vec![EvidenceIdentifier {
+                scheme: "national_id".to_string(),
+                value: "person-1".to_string(),
+                issuer: Some("civil_registry".to_string()),
+            }],
+            attributes: Default::default(),
+            assurance: None,
+            profile: None,
+        },
+        relationship: Some(EvidenceRelationship {
+            relationship_type: "self".to_string(),
+            attributes: Default::default(),
+        }),
+        on_behalf_of: None,
         purpose: None,
     }],
     claims: vec![ClaimRef::new("person-is-alive")],
@@ -354,7 +421,15 @@ let handle = NotaryClientHandle::new(client);
 let response = handle
     .evaluate_json(
         serde_json::json!({
-            "subject": { "id": "person-1", "id_type": "national_id" },
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "national_id",
+                    "value": "person-1",
+                    "issuer": "civil_registry"
+                }]
+            },
+            "relationship": { "type": "self" },
             "claims": ["person-is-alive"],
             "purpose": "benefits_eligibility"
         }),
@@ -406,21 +481,39 @@ client = RegistryNotaryClient(
 
 ```python
 result = client.evaluate(
-    subject_id="person-1",
-    id_type="national_id",
+    target_id="person-1",
+    identifier_scheme="national_id",
     claims=["person-is-alive"],
 )
 ```
 
-Use `evaluate_request` for optional wire fields such as `disclosure` or
-`format`:
+Use `evaluate_request` for the full canonical wire shape, including
+relationship context and optional fields such as `disclosure` or `format`:
 
 ```python
 result = client.evaluate_request({
-    "subject": {"id": "person-1", "id_type": "national_id"},
+    "target": {
+        "type": "Person",
+        "identifiers": [{
+            "scheme": "national_id",
+            "value": "person-1",
+            "issuer": "civil_registry",
+        }],
+    },
+    "relationship": {"type": "self"},
     "claims": [{"id": "person-is-alive", "version": "2026-05"}],
     "disclosure": "predicate",
     "purpose": "benefits_eligibility",
+})
+```
+
+For citizen self-attestation, omit identity fields and let the server derive the
+requester, target, and `self` relationship from the verified token binding:
+
+```python
+result = client.evaluate_request({
+    "claims": [{"id": "person-is-alive", "version": "2026-05"}],
+    "disclosure": "predicate",
 })
 ```
 
@@ -450,7 +543,17 @@ client = RegistryNotaryClient(
 
 result = client.batch_evaluate_request(
     {
-        "subjects": [{"id": "person-1", "id_type": "national_id"}],
+        "items": [{
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "national_id",
+                    "value": "person-1",
+                    "issuer": "civil_registry",
+                }],
+            },
+            "relationship": {"type": "self"},
+        }],
         "claims": ["person-is-alive"],
         "purpose": "benefits_eligibility",
     },
@@ -501,8 +604,8 @@ from registry_notary.errors import NotaryProblemError, NotaryTransportError
 
 try:
     client.evaluate(
-        subject_id="person-1",
-        id_type="national_id",
+        target_id="person-1",
+        identifier_scheme="national_id",
         claims=["person-is-alive"],
     )
 except NotaryProblemError as exc:
@@ -540,7 +643,11 @@ High-level Node helpers use camelCase at the wrapper boundary:
 
 ```js
 const result = await client.evaluate({
-  subject: { id: "person-1", idType: "national_id" },
+  target: {
+    type: "Person",
+    identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
+  },
+  relationship: { type: "self" },
   claims: ["person-is-alive"],
   disclosure: "predicate",
 });
@@ -550,7 +657,11 @@ Raw helpers preserve canonical wire shape:
 
 ```js
 const result = await client.evaluateRequest({
-  subject: { id: "person-1", id_type: "national_id" },
+  target: {
+    type: "Person",
+    identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
+  },
+  relationship: { type: "self" },
   claims: ["person-is-alive"],
   purpose: "benefits_eligibility",
 });
@@ -587,7 +698,13 @@ const client = new RegistryNotaryClient({
 
 const result = await client.batchEvaluate(
   {
-    subjects: [{ id: "person-1", idType: "national_id" }],
+    items: [{
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
+      },
+      relationship: { type: "self" },
+    }],
     claims: ["person-is-alive"],
     purpose: "benefits_eligibility",
   },
@@ -621,7 +738,11 @@ const responseJws = await client.federationEvaluateJws("eyJ...");
 import { NotaryProblemError, NotaryTransportError } from "@registry-notary/client";
 
 try {
-  await client.evaluate({ subject: { id: "person-1" }, claims: ["person-is-alive"] });
+  await client.evaluate({
+    target: { type: "Person", identifiers: [{ scheme: "national_id", value: "person-1" }] },
+    relationship: { type: "self" },
+    claims: ["person-is-alive"],
+  });
 } catch (error) {
   if (error instanceof NotaryProblemError) {
     console.log(error.status, error.code, error.requestId);

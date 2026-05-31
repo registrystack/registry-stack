@@ -203,10 +203,7 @@ fn format_time(value: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        ClaimProvenance, Hashed, SubjectBinding, SubjectRefView, FORMAT_SD_JWT_VC,
-        SD_JWT_VC_JWT_TYP,
-    };
+    use crate::model::{ClaimProvenance, TargetRefView, FORMAT_SD_JWT_VC, SD_JWT_VC_JWT_TYP};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use registry_platform_crypto::did_jwk_from_public_jwk;
@@ -358,7 +355,7 @@ mod tests {
         let iat = OffsetDateTime::from_unix_timestamp(1_700_000_000)
             .expect("test fixture timestamp is valid");
         let mut result = claim_result("first");
-        result.subject_ref = subject_ref_view("registry-subject-ref");
+        result.target_ref = target_ref_view("registry-subject-ref");
         let signed = issue(
             &holder_required_profile(),
             &issuer,
@@ -455,7 +452,7 @@ mod tests {
             .expect("test issuer builds");
         let holder = holder_did_jwk();
         let mut result = claim_result("first");
-        result.subject_ref = subject_ref_view("registry-subject-ref");
+        result.target_ref = target_ref_view("registry-subject-ref");
 
         let signed = issue(
             &test_profile(),
@@ -481,7 +478,7 @@ mod tests {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
         let mut result = claim_result("first");
-        result.subject_ref = subject_ref_view("registry-subject-ref");
+        result.target_ref = target_ref_view("registry-subject-ref");
 
         let signed = issue(
             &test_profile(),
@@ -687,7 +684,9 @@ mod tests {
             claim_id: claim_id.to_string(),
             claim_version: "1.0.0".to_string(),
             subject_type: "person".to_string(),
-            subject_ref: subject_ref_view("subject-ref"),
+            requester_ref: None,
+            target_ref: target_ref_view("subject-ref"),
+            matching: None,
             value: Some(json!({ "claim": claim_id })),
             satisfied: Some(true),
             disclosure: "redacted".to_string(),
@@ -753,10 +752,12 @@ mod tests {
         .expect("header decodes as JSON")
     }
 
-    fn subject_ref_view(hash: &str) -> SubjectRefView {
-        SubjectRefView {
-            hash: Hashed::<SubjectBinding>::from_hash(hash),
-            id_type: "national_id".to_string(),
+    fn target_ref_view(handle: &str) -> TargetRefView {
+        TargetRefView {
+            entity_type: "Person".to_string(),
+            handle: handle.to_string(),
+            identifier_schemes: Vec::new(),
+            profile: None,
         }
     }
 

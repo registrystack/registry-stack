@@ -19,11 +19,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use registry_notary_core::sd_jwt::{issue as sd_jwt_issue, EvidenceIssuer, IssueOptions};
 use registry_notary_core::{
-    AccessMode, BatchEvaluateRequest, BatchSubjectRequest, ClaimDefinition, ClaimOperationsConfig,
-    ClaimRef, ClaimResultView, ClaimValueConfig, ConcurrencyConfig, CredentialProfileConfig,
-    DisclosureConfig, EvidenceConfig, EvidenceError, EvidencePrincipal, RuleConfig,
-    SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
-    StandaloneRegistryNotaryConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, ClaimDefinition,
+    ClaimOperationsConfig, ClaimRef, ClaimResultView, ClaimValueConfig, ConcurrencyConfig,
+    CredentialProfileConfig, DisclosureConfig, EvidenceConfig, EvidenceError, EvidencePrincipal,
+    RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
+    SourceMatchingConfig, StandaloneRegistryNotaryConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC,
 };
 use registry_notary_server::{
     standalone_router, BatchEvaluateOptions, EvidenceStore, MemoState, RegistryNotaryRuntime,
@@ -38,6 +39,13 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn person_target(id: &str) -> Value {
+    json!({
+        "type": "Person",
+        "id": id,
+    })
+}
 
 fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
@@ -173,7 +181,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -250,7 +258,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -285,7 +293,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -360,7 +368,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -395,7 +403,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -429,7 +437,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -505,7 +513,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -539,7 +547,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -618,7 +626,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id_type
             op: eq
             cardinality: one
@@ -651,7 +659,7 @@ evidence:
           dataset: farmer_registry
           entity: farmer
           lookup:
-            input: subject_id
+            input: target.id
             field: id_type
             op: eq
             cardinality: one
@@ -729,7 +737,7 @@ async fn single_subject_two_claims_shared_binding_deduplicates_to_one_upstream_c
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size", "is-active-farmer"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await;
@@ -772,7 +780,7 @@ async fn batch_50_subjects_3_claims_shared_binding_produces_50_upstream_calls() 
     let server = TestServer::builder().http_transport().build(app);
 
     let subjects: Vec<Value> = (0..50)
-        .map(|i| json!({ "id": format!("person-{i}") }))
+        .map(|i| person_target(&format!("person-{i}")))
         .collect();
     let response = server
         .post("/v1/batch-evaluations")
@@ -780,7 +788,7 @@ async fn batch_50_subjects_3_claims_shared_binding_produces_50_upstream_calls() 
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size", "is-active-farmer", "large-farm"],
-            "subjects": subjects,
+            "items": subjects.iter().map(|subject| json!({ "target": subject })).collect::<Vec<_>>(),
             "disclosure": "value",
         }))
         .await;
@@ -829,7 +837,7 @@ async fn claims_with_different_projected_fields_are_not_memoized_together() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size", "farmer-id-only"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await;
@@ -885,7 +893,7 @@ async fn different_purpose_across_batches_each_reaches_upstream() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await
@@ -898,7 +906,7 @@ async fn different_purpose_across_batches_each_reaches_upstream() {
         .add_header("data-purpose", "https://purpose.example.test/subsidy")
         .json(&json!({
             "claims": ["farmed-land-size"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await
@@ -944,7 +952,7 @@ async fn dci_claims_with_different_query_type_are_not_memoized_together() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["dci-claim-a", "dci-claim-b"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await;
@@ -997,7 +1005,7 @@ async fn error_result_is_not_cached_and_second_call_can_succeed() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await;
@@ -1018,7 +1026,7 @@ async fn error_result_is_not_cached_and_second_call_can_succeed() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size"],
-            "subjects": [{ "id": "person-1" }],
+            "items": [{ "target": person_target("person-1") }],
             "disclosure": "value",
         }))
         .await;
@@ -1087,7 +1095,7 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
         .add_header("x-api-key", "memo-api-token")
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
-            "subject": { "id": "person-memo-iat" },
+            "target": person_target("person-memo-iat"),
             "claims": ["farmed-land-size", "is-active-farmer"],
             "disclosure": "value",
         }))
@@ -1123,7 +1131,7 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
         .add_header("data-purpose", "https://purpose.example.test/eligibility")
         .json(&json!({
             "claims": ["farmed-land-size", "is-active-farmer"],
-            "subjects": [{ "id": "person-batch-iat" }],
+            "items": [{ "target": person_target("person-batch-iat") }],
             "disclosure": "value",
         }))
         .await;
@@ -1189,8 +1197,8 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
     let subject_ref = results
         .first()
         .expect("at least one result")
-        .subject_ref
-        .hash
+        .target_ref
+        .handle
         .as_str();
     let signed_1 = sd_jwt_issue(
         &profile,
@@ -1312,7 +1320,7 @@ fn shared_binding_claim(id: &str) -> ClaimDefinition {
             dataset: "ds".to_string(),
             entity: "ent".to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
@@ -1327,6 +1335,7 @@ fn shared_binding_claim(id: &str) -> ClaimDefinition {
                     semantic_term: None,
                 },
             )]),
+            matching: SourceMatchingConfig::default(),
         },
     );
     ClaimDefinition {
@@ -1399,9 +1408,9 @@ async fn memo_counters_record_hits_and_misses_on_shared_binding_batch() {
         })
         .collect();
     let request = BatchEvaluateRequest {
-        subjects: subjects
+        items: subjects
             .into_iter()
-            .map(BatchSubjectRequest::from)
+            .map(BatchEvaluateItemRequest::from)
             .collect(),
         claims: vec![ClaimRef::from("claim-a"), ClaimRef::from("claim-b")],
         disclosure: Some("value".to_string()),

@@ -22,6 +22,11 @@ Notary validates the token, checks client and audience policy, checks subject
 binding, checks scopes and operation allow-lists, then reads sources. Source
 reads should not happen before those gates pass.
 
+For `/v1/evaluations`, citizen callers do not need to send their own target
+identity. Registry Notary derives `requester`, `target`, and
+`relationship: self` from the verified subject-binding token claim. Conflicting
+caller-supplied identity context is rejected before any source read.
+
 ## When To Use It
 
 Use self-attestation when:
@@ -281,7 +286,7 @@ claim boundaries and source bindings.
 | --- | --- | --- |
 | Config validation fails | OIDC mode is not enabled or static auth is still present | `auth.mode`, `auth.api_keys`, `auth.bearer_tokens` |
 | Token rejected | Issuer, audience, client id, algorithm, or scope mismatch | Token header and claims, `auth.oidc`, `scope_map` |
-| Subject mismatch | Token claim and request subject differ | `subject_binding.token_claim`, token claims, request subject |
+| Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
 | Credential issuance denied | Profile or claim missing from allow-lists | `allowed_claims`, `credential_profiles`, claim/profile cross references |
 | Batch request denied | Self-attestation v1 does not allow batch | Keep `batch_evaluate: false` |

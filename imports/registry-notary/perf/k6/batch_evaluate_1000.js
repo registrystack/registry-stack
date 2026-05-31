@@ -19,6 +19,7 @@ import {
   CLAIM_RESULT_ACCEPT,
   extractClaim,
   nextSubjectId,
+  targetForSubjectId,
   handleResultsFor,
   trackResponse,
   logScenarioStart,
@@ -32,15 +33,14 @@ export const options = commonOptions({
   defaultDuration: '30s',
 });
 
-function buildSubjects(vuId, iter) {
-  const subjects = new Array(BATCH_SIZE);
+function buildItems(vuId, iter) {
+  const items = new Array(BATCH_SIZE);
   for (let i = 0; i < BATCH_SIZE; i++) {
-    subjects[i] = {
-      id: nextSubjectId(vuId, iter * BATCH_SIZE + i),
-      id_type: 'NATIONAL_ID',
+    items[i] = {
+      target: targetForSubjectId(nextSubjectId(vuId, iter * BATCH_SIZE + i)),
     };
   }
-  return subjects;
+  return items;
 }
 
 export function setup() {
@@ -56,8 +56,8 @@ export function setup() {
 }
 
 export default function (ctx) {
-  const subjects = buildSubjects(__VU, __ITER);
-  const payload = JSON.stringify({ subjects, claims: [ctx.claim] });
+  const items = buildItems(__VU, __ITER);
+  const payload = JSON.stringify({ items, claims: [ctx.claim] });
 
   const res = http.post(`${baseUrl()}/v1/batch-evaluations`, payload, {
     headers: bearerHeaders(ctx.token, { json: true, purpose: 'perf', accept: CLAIM_RESULT_ACCEPT }),

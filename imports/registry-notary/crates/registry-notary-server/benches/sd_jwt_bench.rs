@@ -17,7 +17,7 @@ use registry_notary_core::config::{
     CredentialDisclosureConfig, CredentialProfileConfig, HolderBindingConfig,
 };
 use registry_notary_core::model::{
-    ClaimProvenance, ClaimResultView, Hashed, SubjectBinding, SubjectRefView,
+    ClaimProvenance, ClaimResultView, EvidenceEntityRef, MatchingMetadata, TargetRefView,
 };
 use registry_notary_core::sd_jwt::{issue, EvidenceIssuer, IssueOptions};
 use time::OffsetDateTime;
@@ -53,10 +53,24 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
         claim_id: claim_id.to_string(),
         claim_version: "1.0.0".to_string(),
         subject_type: "farmer".to_string(),
-        subject_ref: SubjectRefView {
-            hash: Hashed::<SubjectBinding>::from_hash("hmac-sha256:subject-perf-ref"),
-            id_type: "farmer_id".to_string(),
+        requester_ref: Some(EvidenceEntityRef {
+            entity_type: "Agency".to_string(),
+            handle: "rnref:v1:requester-perf-ref".to_string(),
+            identifier_schemes: vec!["agency_id".to_string()],
+            profile: Some("benefits".to_string()),
+        }),
+        target_ref: TargetRefView {
+            entity_type: "Farmer".to_string(),
+            handle: "rnref:v1:target-perf-ref".to_string(),
+            identifier_schemes: vec!["farmer_id".to_string()],
+            profile: Some("smallholder".to_string()),
         },
+        matching: Some(MatchingMetadata {
+            policy_id: "farmer-id-exact-v1".to_string(),
+            method: "identifier_exact".to_string(),
+            confidence: "high".to_string(),
+            score: Some(1.0),
+        }),
         value: Some(value),
         satisfied: Some(true),
         disclosure: "value".to_string(),

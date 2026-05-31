@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use registry_notary_core::{
-    Bounded, EvidenceError, Hashed, HolderIdentifier, PrincipalIdentifier,
+    Bounded, EvidenceEntityReference, EvidenceError, Hashed, HolderIdentifier, PrincipalIdentifier,
     SelfAttestationDenialCode, SelfAttestationRateLimitsConfig, SubjectBinding,
 };
 use registry_platform_audit::AuditKeyHasher;
@@ -159,11 +159,28 @@ impl SelfAttestationRateLimitKeys {
                 reason: "subject_ref identifier is empty".to_string(),
             });
         }
-        let hashed = self.hasher.hash(&format!(
-            "registry-notary:subject-ref:{}:{id_type}:{}:{subject_ref}",
+        let canonical_input = format!(
+            "id_type\0{}\0{id_type}\0subject_ref\0{}\0{subject_ref}",
             id_type.len(),
             subject_ref.len()
-        ));
+        );
+        let hashed =
+            self.audit_reference_hash("self-attestation-subject-ref-v1", &canonical_input)?;
+        ensure_bounded(&hashed)?;
+        Ok(Hashed::from_hash(hashed))
+    }
+
+    pub fn audit_pseudonym_ref(
+        &self,
+        class: &str,
+        canonical_input: &str,
+    ) -> SelfAttestationRateLimitResult<Hashed<EvidenceEntityReference>> {
+        if class.is_empty() || canonical_input.is_empty() {
+            return Err(SelfAttestationRateLimitError::Unavailable {
+                reason: "audit pseudonym input is empty".to_string(),
+            });
+        }
+        let hashed = self.audit_reference_hash(class, canonical_input)?;
         ensure_bounded(&hashed)?;
         Ok(Hashed::from_hash(hashed))
     }
@@ -196,11 +213,23 @@ impl SelfAttestationRateLimitKeys {
                 reason: format!("{kind} rate-limit identifier is empty"),
             });
         }
-        let hashed = self
-            .hasher
-            .hash(&format!("registry-notary:self-attestation:{kind}:{raw}"));
+        let canonical_input = format!("value\0{}\0{raw}", raw.len());
+        let class = format!("self-attestation-{kind}-v1");
+        let hashed = self.audit_reference_hash(&class, &canonical_input)?;
         ensure_bounded(&hashed)?;
         Ok(Hashed::from_hash(hashed))
+    }
+
+    fn audit_reference_hash(
+        &self,
+        class: &str,
+        canonical_input: &str,
+    ) -> SelfAttestationRateLimitResult<String> {
+        self.hasher
+            .audit_reference_hash(class, "", canonical_input)
+            .map_err(|error| SelfAttestationRateLimitError::Unavailable {
+                reason: error.to_string(),
+            })
     }
 }
 
@@ -625,6 +654,46 @@ mod tests {
         assert_ne!(
             first, second,
             "id_type and subject_ref must be encoded unambiguously before hashing"
+        );
+    }
+
+    #[test]
+    fn identity_keys_use_platform_audit_reference_domain() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+        let key_builder = SelfAttestationRateLimitKeys::new(hasher.clone());
+        let principal = key_builder
+            .principal("citizen-123")
+            .expect("principal hashes");
+        let expected = hasher
+            .audit_reference_hash(
+                "self-attestation-principal-v1",
+                "",
+                &format!("value\0{}\0citizen-123", "citizen-123".len()),
+            )
+            .expect("reference hash");
+        let legacy = hasher.hash("registry-notary:self-attestation:principal:citizen-123");
+
+        assert_eq!(principal.as_str(), expected);
+        assert_ne!(principal.as_str(), legacy);
+    }
+
+    #[test]
+    fn audit_pseudonym_ref_uses_separate_domain_from_subject_ref() {
+        let key_builder = keys();
+        let subject_ref = key_builder
+            .subject_ref("national_id", "rnref:v1:target")
+            .expect("subject ref hashes");
+        let audit_ref = key_builder
+            .audit_pseudonym_ref(
+                "matched-reference-v1",
+                r#"{"class":"matched-reference-v1","handle":"rnref:v1:target"}"#,
+            )
+            .expect("audit pseudonym hashes");
+
+        assert_ne!(
+            subject_ref.as_str(),
+            audit_ref.as_str(),
+            "audit pseudonyms must not be interchangeable with legacy subject refs"
         );
     }
 

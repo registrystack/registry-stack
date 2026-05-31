@@ -12,11 +12,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use registry_notary_core::{
-    AccessMode, BatchEvaluateRequest, BatchSubjectRequest, ClaimDefinition, ClaimOperationsConfig,
-    ClaimRef, ClaimValueConfig, ConcurrencyConfig, DisclosureConfig, EvaluateRequest,
-    EvidenceConfig, EvidenceError, EvidencePrincipal, RuleConfig, SourceBindingConfig,
-    SourceConnectorKind, SourceFieldConfig, SourceLookupConfig, SubjectRequest,
-    FORMAT_CLAIM_RESULT_JSON,
+    AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, ClaimDefinition,
+    ClaimOperationsConfig, ClaimRef, ClaimValueConfig, ConcurrencyConfig, DisclosureConfig,
+    EvaluateRequest, EvidenceConfig, EvidenceEntity, EvidenceError, EvidencePrincipal, RuleConfig,
+    SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
+    SourceMatchingConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
@@ -156,7 +156,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
                 dataset: "ds".to_string(),
                 entity: entity.to_string(),
                 lookup: SourceLookupConfig {
-                    input: "subject_id".to_string(),
+                    input: "target.id".to_string(),
                     field: "id".to_string(),
                     op: "eq".to_string(),
                     cardinality: "one".to_string(),
@@ -171,6 +171,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
                         semantic_term: None,
                     },
                 )]),
+                matching: SourceMatchingConfig::default(),
             },
         );
     }
@@ -215,7 +216,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
             dataset: "ds".to_string(),
             entity: entity.to_string(),
             lookup: SourceLookupConfig {
-                input: "subject_id".to_string(),
+                input: "target.id".to_string(),
                 field: "id".to_string(),
                 op: "eq".to_string(),
                 cardinality: "one".to_string(),
@@ -230,6 +231,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
                     semantic_term: None,
                 },
             )]),
+            matching: SourceMatchingConfig::default(),
         },
     );
     ClaimDefinition {
@@ -312,10 +314,16 @@ async fn parallel_sibling_claims_overlap_in_one_subject() {
     let store = EvidenceStore::default();
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
-        subject: SubjectRequest {
-            id: "p-1".to_string(),
-            id_type: None,
-        },
+        requester: None,
+        target: Some(EvidenceEntity::from_subject_request(
+            "Person",
+            SubjectRequest {
+                id: "p-1".to_string(),
+                id_type: None,
+            },
+        )),
+        relationship: None,
+        on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-a"), ClaimRef::from("claim-b")],
         disclosure: Some("value".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -360,10 +368,16 @@ async fn dependent_claim_b_starts_after_a_completes() {
     let store = EvidenceStore::default();
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
-        subject: SubjectRequest {
-            id: "p-1".to_string(),
-            id_type: None,
-        },
+        requester: None,
+        target: Some(EvidenceEntity::from_subject_request(
+            "Person",
+            SubjectRequest {
+                id: "p-1".to_string(),
+                id_type: None,
+            },
+        )),
+        relationship: None,
+        on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-b")],
         disclosure: Some("value".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -412,9 +426,9 @@ async fn batch_evaluate_meets_numeric_dod() {
         })
         .collect();
     let request = BatchEvaluateRequest {
-        subjects: subjects
+        items: subjects
             .into_iter()
-            .map(BatchSubjectRequest::from)
+            .map(BatchEvaluateItemRequest::from)
             .collect(),
         claims: vec![ClaimRef::from("claim-a")],
         disclosure: Some("value".to_string()),
@@ -475,9 +489,9 @@ async fn kill_switch_one_one_serializes_subjects() {
         })
         .collect();
     let request = BatchEvaluateRequest {
-        subjects: subjects
+        items: subjects
             .into_iter()
-            .map(BatchSubjectRequest::from)
+            .map(BatchEvaluateItemRequest::from)
             .collect(),
         claims: vec![ClaimRef::from("claim-a")],
         disclosure: Some("value".to_string()),
@@ -573,9 +587,9 @@ async fn one_failing_subject_does_not_block_others() {
         })
         .collect();
     let request = BatchEvaluateRequest {
-        subjects: subjects
+        items: subjects
             .into_iter()
-            .map(BatchSubjectRequest::from)
+            .map(BatchEvaluateItemRequest::from)
             .collect(),
         claims: vec![ClaimRef::from("claim-a")],
         disclosure: Some("value".to_string()),
@@ -680,9 +694,9 @@ async fn batch_response_preserves_input_index_ordering() {
         })
         .collect();
     let request = BatchEvaluateRequest {
-        subjects: subjects
+        items: subjects
             .into_iter()
-            .map(BatchSubjectRequest::from)
+            .map(BatchEvaluateItemRequest::from)
             .collect(),
         claims: vec![ClaimRef::from("claim-a")],
         disclosure: Some("value".to_string()),
@@ -724,10 +738,16 @@ async fn parallel_bindings_in_one_claim_overlap() {
     let store = EvidenceStore::default();
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
-        subject: SubjectRequest {
-            id: "p-1".to_string(),
-            id_type: None,
-        },
+        requester: None,
+        target: Some(EvidenceEntity::from_subject_request(
+            "Person",
+            SubjectRequest {
+                id: "p-1".to_string(),
+                id_type: None,
+            },
+        )),
+        relationship: None,
+        on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-mixed")],
         disclosure: Some("value".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -774,10 +794,16 @@ async fn kill_switch_bindings_one_serializes_within_claim() {
     let store = EvidenceStore::default();
     let runtime = RegistryNotaryRuntime::new();
     let request = EvaluateRequest {
-        subject: SubjectRequest {
-            id: "p-1".to_string(),
-            id_type: None,
-        },
+        requester: None,
+        target: Some(EvidenceEntity::from_subject_request(
+            "Person",
+            SubjectRequest {
+                id: "p-1".to_string(),
+                id_type: None,
+            },
+        )),
+        relationship: None,
+        on_behalf_of: None,
         claims: vec![ClaimRef::from("claim-mixed")],
         disclosure: Some("value".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),

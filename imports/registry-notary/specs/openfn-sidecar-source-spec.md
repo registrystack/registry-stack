@@ -3,7 +3,7 @@
 ## Goal
 
 Provide a small synchronous source sidecar that lets Registry Notary evaluate a
-single-subject claim using OpenFn adaptors. The first implementation uses
+single-target claim using OpenFn adaptors. The first implementation uses
 OpenFn, but the contract is a synchronous Registry Data API-shaped source
 contract, not an OpenFn-specific Notary connector.
 

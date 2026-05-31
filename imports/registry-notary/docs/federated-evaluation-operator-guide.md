@@ -121,7 +121,7 @@ Successful responses are compact signed JWTs with:
 - `result.subject_ref.hash` as a pairwise `hmac-sha256:` handle
 
 Stale source observations return HTTP 200 with a signed top-level `error`
-object. Transport denials use RFC 7807-style JSON and do not prove whether the
+object. Transport denials use RFC 9457 Problem Details JSON and do not prove whether the
 subject exists.
 
 ## Replay Store

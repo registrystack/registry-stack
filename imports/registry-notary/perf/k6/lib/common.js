@@ -141,6 +141,18 @@ export function nextSubjectId(vu, iter) {
   return subjectIdFor(vu * stride + iter);
 }
 
+export function targetForSubjectId(subjectId) {
+  return {
+    type: 'Person',
+    identifiers: [
+      {
+        scheme: 'NATIONAL_ID',
+        value: subjectId,
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Threshold definitions
 // ---------------------------------------------------------------------------

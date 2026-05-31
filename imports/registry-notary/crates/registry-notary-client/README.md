@@ -18,12 +18,14 @@ let client = RegistryNotaryClient::builder("https://notary.example.gov")
     .build()?;
 ```
 
-Evaluate one subject:
+Evaluate one target:
 
 ```rust
 let response = client
-    .evaluate("person-1")
-    .id_type("national_id")
+    .evaluate_target("Person")
+    .target_identifier("national_id", "person-1")
+    .target_identifier_issuer("civil_registry")
+    .relationship("self")
     .claims(["person-is-alive"])
     .disclosure("predicate")
     .send()
@@ -37,7 +39,7 @@ if let Some(result) = response.body.first_result() {
 ## Main API
 
 - `RegistryNotaryClient::builder(base_url)` creates a client.
-- `evaluate(subject_id)` starts the ergonomic evaluation builder.
+- `evaluate_target(target_type)` starts the ergonomic evaluation builder.
 - `evaluate_request`, `batch_evaluate_request`, `render_request`, and
   `issue_credential_request` accept core wire request types. `render_request`
   extracts `evaluation_id` into the route path before sending the body.

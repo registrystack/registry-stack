@@ -133,7 +133,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
           fields:
             deceased:
@@ -162,7 +162,7 @@ evidence:
           dataset: social_protection_registry
           entity: program_enrollment
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
           fields:
             enrollment_status:
@@ -258,7 +258,10 @@ async fn cross_source_cel_claim_reads_dependencies_with_distinct_tokens() {
             "https://purpose.example.test/combined-support",
         )
         .json(&json!({
-            "subject": { "id": "NID-1" },
+            "target": {
+                "type": "Person",
+                "identifiers": [{ "scheme": "national_id", "value": "NID-1" }]
+            },
             "claims": ["eligible-for-combined-support"],
             "disclosure": "predicate"
         }))

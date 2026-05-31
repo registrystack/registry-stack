@@ -63,12 +63,12 @@ enum Command {
         /// Fetch OAuth source tokens and run live reachability checks.
         #[arg(long)]
         live: bool,
-        /// Subject id for record-level live probes. Output is redacted.
+        /// Target id for record-level live probes. Output is redacted.
         #[arg(long)]
-        subject_id: Option<String>,
+        target_id: Option<String>,
         /// Override the lookup field used by DCI idtype-value probes.
         #[arg(long)]
-        subject_id_type: Option<String>,
+        target_id_type: Option<String>,
         /// Validate local VC issuing setup. This does not print credentials.
         #[arg(long)]
         issue_demo_vc: bool,
@@ -232,8 +232,8 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Some(Command::Doctor {
             live,
-            subject_id,
-            subject_id_type,
+            target_id,
+            target_id_type,
             issue_demo_vc,
             show_expanded_config,
         }) => {
@@ -244,8 +244,8 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 args.bind,
                 DoctorOptions {
                     live,
-                    subject_id,
-                    subject_id_type,
+                    target_id,
+                    target_id_type,
                     issue_demo_vc,
                     show_expanded_config,
                 },
@@ -470,8 +470,8 @@ fn env_file_error(line: usize, reason: &str) -> EnvFileError {
 #[derive(Debug)]
 struct DoctorOptions {
     live: bool,
-    subject_id: Option<String>,
-    subject_id_type: Option<String>,
+    target_id: Option<String>,
+    target_id_type: Option<String>,
     issue_demo_vc: bool,
     show_expanded_config: bool,
 }
@@ -528,13 +528,13 @@ async fn doctor(
     if let Some(config) = &config {
         diagnostics.extend(local_env_diagnostics(config, env_report));
         diagnostics.extend(vc_diagnostics(config, options.issue_demo_vc));
-        diagnostics.extend(dci_diagnostics(config, options.subject_id_type.as_deref()));
+        diagnostics.extend(dci_diagnostics(config, options.target_id_type.as_deref()));
         if options.live {
             diagnostics.extend(
                 live_diagnostics(
                     config,
-                    options.subject_id.as_deref(),
-                    options.subject_id_type.as_deref(),
+                    options.target_id.as_deref(),
+                    options.target_id_type.as_deref(),
                 )
                 .await,
             );
@@ -874,8 +874,8 @@ fn dci_diagnostics(
 
 async fn live_diagnostics(
     config: &StandaloneRegistryNotaryConfig,
-    subject_id: Option<&str>,
-    subject_id_type: Option<&str>,
+    target_id: Option<&str>,
+    target_id_type: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (connection_id, connection) in &config.evidence.source_connections {
@@ -885,21 +885,21 @@ async fn live_diagnostics(
                     diagnostics.push(Diagnostic::ok(format!(
                         "{connection_id} OAuth token fetched without printing the token"
                     )));
-                    if let Some(subject_id) = subject_id {
+                    if let Some(target_id) = target_id {
                         diagnostics.push(
                             dci_record_probe(
                                 config,
                                 connection_id,
                                 connection,
                                 &token,
-                                subject_id,
-                                subject_id_type,
+                                target_id,
+                                target_id_type,
                             )
                             .await,
                         );
                     } else {
                         diagnostics.push(Diagnostic::ok(
-                            "record-level live probe skipped because --subject-id was not supplied",
+                            "record-level live probe skipped because --target-id was not supplied",
                         ));
                     }
                 }
@@ -1566,7 +1566,7 @@ evidence:
           dataset: registry_records
           entity: record
           lookup:
-            input: subject_id
+            input: target.id
             field: {lookup_field}
             op: eq
             cardinality: one
@@ -1777,7 +1777,7 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
@@ -1785,6 +1785,8 @@ mod tests {
     use axum::routing::post;
     use axum::{Json, Router};
     use axum_test::TestServer;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Clone, Default)]
     struct DoctorLiveState {
@@ -1959,6 +1961,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
 
     #[test]
     fn bind_cli_override_wins_over_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
         std::env::set_var("REGISTRY_NOTARY_BIND", "0.0.0.0:8080");
         let args = Args::try_parse_from([
             "registry-notary",
@@ -1977,6 +1980,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
 
     #[test]
     fn env_bind_override_is_loaded_by_cli() {
+        let _guard = ENV_LOCK.lock().expect("env lock is not poisoned");
         std::env::set_var("REGISTRY_NOTARY_BIND", "0.0.0.0:8080");
         let args = Args::try_parse_from(["registry-notary", "explain-config"]).expect("args parse");
         std::env::remove_var("REGISTRY_NOTARY_BIND");
@@ -2378,7 +2382,7 @@ evidence:
           dataset: registry_records
           entity: record
           lookup:
-            input: subject_id
+            input: target.id
             field: SUBJECT_ID
             op: eq
             cardinality: one
