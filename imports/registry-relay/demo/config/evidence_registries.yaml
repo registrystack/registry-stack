@@ -144,6 +144,10 @@ datasets:
           allowed_filters:
             - field: national_id
               ops: [eq, in]
+            - field: given_name
+              ops: [eq]
+            - field: surname
+              ops: [eq]
             - field: birth_date
               ops: [eq, gte, lte]
             - field: district
