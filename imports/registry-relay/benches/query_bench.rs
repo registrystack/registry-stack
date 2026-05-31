@@ -42,13 +42,13 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/bench.csv
-    refresh:
-      mode: manual
     tables:
       - id: facility_table
+        source:
+          type: file
+          path: fixtures/bench.csv
+        refresh:
+          mode: manual
         primary_key: facility_id
         schema:
           strict: true

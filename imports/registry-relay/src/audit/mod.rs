@@ -202,7 +202,7 @@ pub struct AuditRecord {
     pub dataset_id: Option<String>,
     /// Set when path includes an entity.
     pub entity_name: Option<String>,
-    /// HMAC binding for the internal backing table when known by the handler.
+    /// Precomputed audit hash for the internal backing table when known by the handler.
     #[serde(
         rename = "table_id_hash",
         serialize_with = "serialize_optional_table_id_hash"
@@ -331,8 +331,18 @@ impl OperationalAuditEvent {
         self
     }
 
+    /// Sets a precomputed audit hash for the backing table identifier.
+    ///
+    /// `table_id_hash` must already use the `sha256:` or `hmac-sha256:`
+    /// audit-hash format. Request handlers that have a plaintext table id
+    /// should set [`AuditContextExt::table_id`] instead and let the audit
+    /// middleware hash it with the configured audit hasher.
     #[must_use]
     pub fn with_table_id_hash(mut self, table_id_hash: String) -> Self {
+        debug_assert!(
+            is_audit_hash(&table_id_hash),
+            "with_table_id_hash expects a precomputed audit hash"
+        );
         self.table_id_hash = Some(table_id_hash);
         self
     }
@@ -798,10 +808,9 @@ where
 {
     match value.as_deref() {
         Some(value) if is_audit_hash(value) => serializer.serialize_some(value),
-        Some(value) => {
-            let hash = sensitive_value_hash("table_id", value);
-            serializer.serialize_some(&hash)
-        }
+        Some(_) => Err(serde::ser::Error::custom(
+            "table_id must be pre-hashed before audit record serialization",
+        )),
         None => serializer.serialize_none(),
     }
 }

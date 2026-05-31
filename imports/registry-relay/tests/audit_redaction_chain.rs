@@ -3,6 +3,7 @@
 use registry_platform_audit::{
     verify_chain, verify_jsonl_lines, AuditChainHasher, ChainState, ChainVerificationError,
 };
+use registry_platform_testing::assert_json_absent_strings;
 use registry_relay::audit::redact::{
     redact_query_with_sensitive_fields, sensitive_value_hash, QueryRedactionError, QueryRedactor,
 };
@@ -20,7 +21,7 @@ fn sample_record(request_id: usize) -> AuditRecord {
         endpoint_kind: EndpointKind::Rows,
         dataset_id: Some("social_registry".to_string()),
         entity_name: Some("individuals".to_string()),
-        table_id: Some("individuals".to_string()),
+        table_id: Some("hmac-sha256:test-table-id".to_string()),
         relationship: None,
         aggregate_id: None,
         underlying_kind: None,
@@ -55,6 +56,10 @@ fn sensitive_value_hash_is_deterministic_and_field_bound() {
     assert_eq!(first, second);
     assert_ne!(first, other_field);
     assert!(first.starts_with("sha256:"));
+    assert_ne!(
+        first,
+        registry_relay::audit::AuditKeyHasher::unkeyed_dev_only().hash("id\0IND-001234")
+    );
 }
 
 #[test]
@@ -76,11 +81,8 @@ fn redaction_hashes_sensitive_values_without_leaking_raw_pii() {
     assert_eq!(redacted["created_at.gte"]["op"], "gte");
     assert_eq!(redacted["api_key"]["op"], "redacted");
 
-    let dump = redacted.to_string();
-    assert!(!dump.contains("IND-001234"), "{dump}");
-    assert!(!dump.contains("Ana"));
-    assert!(!dump.contains("2026-01-01"));
-    assert!(!dump.contains("secret"));
+    assert_json_absent_strings(&redacted, ["IND-001234", "Ana", "2026-01-01", "secret"])
+        .expect("raw query values are absent from redacted audit JSON");
 }
 
 #[test]

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Stable error taxonomy and RFC 9457 Problem Details rendering.
-//! (RFC 9457 obsoletes RFC 7807; the wire shape is identical.)
 //!
 //! Every code is namespaced (`auth.*`, `filter.*`, ...) and renders as
 //! an `application/problem+json` response carrying the stable string

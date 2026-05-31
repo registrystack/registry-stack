@@ -40,13 +40,13 @@ const DATASET_HEADER: &str = "  - id: {DS}
     sensitivity: personal
     access_rights: restricted
     update_frequency: monthly
-    source:
-      type: file
-      path: fixtures/bench.csv
-    refresh:
-      mode: manual
     tables:
       - id: tbl_{DS}
+        source:
+          type: file
+          path: fixtures/bench.csv
+        refresh:
+          mode: manual
         primary_key: facility_id
         schema:
           strict: true

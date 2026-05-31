@@ -28,7 +28,7 @@
 //!    Empty allowlist (the default) means no `Access-Control-Allow-*`
 //!    headers go out, matching the default-deny CORS policy.
 //! 7. Internal error normalizer: maps timeout/body-limit responses into
-//!    RFC 7807 Problem Details before audit records them.
+//!    RFC 9457 Problem Details before audit records them.
 //! 8. `RequestBodyLimitLayer` at 1 MiB as a defensive backstop.
 //! 9. `RequestBodyTimeoutLayer`: built from
 //!    `config.server.request_body_timeout`.

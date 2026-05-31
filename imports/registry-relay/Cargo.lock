@@ -2092,6 +2092,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "deadpool"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0be2b1d1d6ec8d846f05e137292d0b89133caf95ef33695424c09568bdd39b1b"
+dependencies = [
+ "deadpool-runtime",
+ "lazy_static",
+ "num_cpus",
+ "tokio",
+]
+
+[[package]]
+name = "deadpool-runtime"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
+
+[[package]]
 name = "debug_unsafe"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2866,6 +2884,12 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hermit-abi"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hex"
@@ -3821,6 +3845,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
+dependencies = [
+ "hermit-abi",
+ "libc",
+]
+
+[[package]]
 name = "objc2-core-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4760,6 +4794,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-cache"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "registry-platform-crypto"
 version = "0.1.2"
 dependencies = [
@@ -4802,6 +4847,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-oid4vci"
+version = "0.1.2"
+dependencies = [
+ "base64",
+ "registry-platform-crypto",
+ "registry-platform-replay",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "registry-platform-oidc"
 version = "0.1.2"
 dependencies = [
@@ -4817,6 +4875,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-replay"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "registry-platform-cache",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "registry-platform-sdjwt"
 version = "0.1.2"
 dependencies = [
@@ -4829,6 +4897,31 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.18",
  "ulid",
+]
+
+[[package]]
+name = "registry-platform-testing"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "jsonwebtoken",
+ "registry-platform-audit",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oid4vci",
+ "registry-platform-oidc",
+ "registry-platform-replay",
+ "reqwest",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tower",
+ "wiremock",
 ]
 
 [[package]]
@@ -4873,6 +4966,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-sdjwt",
+ "registry-platform-testing",
  "reqwest",
  "serde",
  "serde-saphyr",
@@ -6721,6 +6815,29 @@ name = "winnow"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+
+[[package]]
+name = "wiremock"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08db1edfb05d9b3c1542e521aea074442088292f00b5f28e435c714a98f85031"
+dependencies = [
+ "assert-json-diff",
+ "base64",
+ "deadpool",
+ "futures",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "wit-bindgen"

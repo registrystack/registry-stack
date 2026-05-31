@@ -98,10 +98,10 @@ pub fn sensitive_value_hash(field: &str, value: &str) -> String {
     sensitive_value_hash_keyed(&AuditKeyHasher::unkeyed_dev_only(), field, value)
 }
 
-/// Hash `field || \0 || value` through the platform audit hasher.
+/// Hash a field-bound sensitive value through the platform audit hasher.
 #[must_use]
 pub fn sensitive_value_hash_keyed(hasher: &AuditKeyHasher, field: &str, value: &str) -> String {
-    hasher.hash(&format!("{field}\0{value}"))
+    hasher.sensitive_value_hash(field, value)
 }
 
 #[must_use]

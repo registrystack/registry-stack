@@ -20,7 +20,7 @@ use axum::Router;
 use registry_relay::audit::{
     audit_layer, redact_query, sensitive_value_hash, sensitive_value_hash_keyed, AuditContextExt,
     AuditHashSecret, AuditKeyHasher, AuditOutcome, AuditPipeline, AuditRecord, AuditSettings,
-    EndpointKind, ErrorCodeExt, InMemorySink, StdoutSink,
+    EndpointKind, ErrorCodeExt, InMemorySink, OperationalAuditEvent, StdoutSink,
 };
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use serde_json::Value;
@@ -199,20 +199,31 @@ fn record_field_types_match_contract() {
 }
 
 #[test]
-fn record_serialization_hashes_plaintext_table_id() {
+fn record_serialization_rejects_plaintext_table_id() {
     let record = AuditRecord {
         table_id: Some("individuals_table".to_string()),
         ..sample_record()
     };
 
-    let json = serde_json::to_value(&record).expect("serialize");
-    assert!(json["table_id"].is_null());
-    assert_ne!(json["table_id_hash"], "individuals_table");
-    assert!(json["table_id_hash"]
-        .as_str()
-        .expect("table id hash")
-        .starts_with("sha256:"));
-    assert!(!json.to_string().contains("individuals_table"));
+    let error = serde_json::to_value(&record).expect_err("plaintext table id is rejected");
+    assert!(
+        error.to_string().contains("table_id must be pre-hashed"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn operational_event_rejects_plaintext_table_hash_in_debug() {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+
+    let result = std::panic::catch_unwind(|| {
+        let _ = OperationalAuditEvent::new("ingest.failed", "ingest.source_unreadable")
+            .with_table_id_hash("individuals_table".to_string());
+    });
+
+    assert!(result.is_err(), "plaintext table ids must be caught early");
 }
 
 #[test]
@@ -812,7 +823,7 @@ async fn middleware_primary_key_hash_uses_hmac_when_secret_configured() {
     );
 
     // Cross-check the exact value against the keyed helper to pin the
-    // construction (HMAC-SHA256(secret, field || \0 || id)).
+    // platform field-bound sensitive-value construction.
     assert_eq!(
         parsed_a["primary_key"],
         sensitive_value_hash_keyed(

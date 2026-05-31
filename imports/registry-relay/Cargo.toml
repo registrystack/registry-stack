@@ -129,6 +129,7 @@ wkt = { version = "0.12", optional = true, features = ["geo-types"] }
 [dev-dependencies]
 axum-test = { version = "20" }
 assert-json-diff = { version = "2" }
+registry-platform-testing = { version = "0.1.2", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
 proptest = { version = "1" }
 tempfile = { version = "3" }
 insta = { version = "1", features = ["json"] }

@@ -18,7 +18,7 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   RUST_BACKTRACE: 1
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
+  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'codex/audit-hash-helpers' && 'codex/audit-reference-hashing' || ((github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main') }}
   REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
   REGISTRY_MANIFEST_REF: main
   CEL_MAPPING_REPOSITORY: PublicSchema/crosswalk

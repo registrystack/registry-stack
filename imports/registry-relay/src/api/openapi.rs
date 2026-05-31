@@ -2168,7 +2168,7 @@ fn pagination_schema() -> Value {
 fn problem_details_schema() -> Value {
     json!({
         "type": "object",
-        "description": "RFC 7807 Problem Details, returned for every non-2xx response.",
+        "description": "RFC 9457 Problem Details, returned for every non-2xx response.",
         "required": ["type", "title", "status", "detail", "code"],
         "properties": {
             "type": { "type": "string", "format": "uri" },
