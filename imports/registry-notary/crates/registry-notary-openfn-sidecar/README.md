@@ -195,6 +195,30 @@ sandbox. The sidecar provides:
 - `/healthz` for process liveness while requests are arriving.
 - `/metrics` for Prometheus text metrics without lookup values or credentials.
 
+## Container Image
+
+The repository owns the sidecar image through
+[`Dockerfile.openfn-sidecar`](../../Dockerfile.openfn-sidecar). The image
+contains the Rust sidecar binary, [workers/openfn_worker.mjs](workers/openfn_worker.mjs),
+and the locked Node dependencies from [workers/package-lock.json](workers/package-lock.json).
+Deployment-specific job files remain configuration and should be mounted into
+the container, for example under `/opt/openfn/jobs`.
+
+```bash
+docker build \
+  --build-context registry-platform=../registry-platform \
+  --build-context cel-mapping=../cel-mapping \
+  -f Dockerfile.openfn-sidecar \
+  -t registry-notary-openfn-sidecar .
+```
+
+The container healthcheck runs
+[scripts/container-healthcheck.mjs](scripts/container-healthcheck.mjs) with
+Node's built-in `fetch`, so the image does not need curl. It probes
+`http://127.0.0.1:9191/healthz` by default; set
+`REGISTRY_NOTARY_OPENFN_SIDECAR_HEALTHCHECK_URL` when the sidecar binds a
+different listener.
+
 ## Verification
 
 The focused sidecar checks are:

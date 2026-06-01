@@ -103,6 +103,24 @@ enum Command {
         #[arg(long, default_value = "did:web:localhost#registry-notary-demo")]
         kid: String,
     },
+    /// Probe the local HTTP health endpoint and exit non-zero when unhealthy.
+    Healthcheck {
+        /// Health endpoint URL.
+        #[arg(
+            long,
+            env = "REGISTRY_NOTARY_HEALTHCHECK_URL",
+            default_value = "http://127.0.0.1:8080/healthz"
+        )]
+        url: String,
+        /// Request timeout in milliseconds.
+        #[arg(
+            long,
+            env = "REGISTRY_NOTARY_HEALTHCHECK_TIMEOUT_MS",
+            default_value_t = 5000,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        timeout_ms: u64,
+    },
     /// Print a lightweight JSON schema for top-level config discovery.
     Schema,
 }
@@ -305,6 +323,11 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("{}", demo_issuer_jwk(&kid)?);
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Healthcheck { url, timeout_ms }) => {
+            run_healthcheck(&url, Duration::from_millis(timeout_ms)).await?;
+            println!("registry-notary healthcheck ok");
+            Ok(ExitCode::SUCCESS)
+        }
         Some(Command::Schema) => {
             println!("{}", serde_json::to_string_pretty(&lightweight_schema())?);
             Ok(ExitCode::SUCCESS)
@@ -356,13 +379,89 @@ fn required_config_path(path: Option<&Path>) -> Result<&Path, Box<dyn std::error
     path.ok_or_else(|| "--config is required for this command".into())
 }
 
+async fn run_healthcheck(url: &str, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
+    let response = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()?
+        .get(url)
+        .send()
+        .await?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("health endpoint returned HTTP {}", response.status()).into())
+    }
+}
+
 fn load_expanded_config(
     config_path: &Path,
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path)?;
-    let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&raw)?;
+    let expanded = expand_config_env_vars(&raw)?;
+    let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&expanded)?;
     config.validate()?;
     Ok(config)
+}
+
+#[derive(Debug)]
+struct ConfigEnvExpansionError(String);
+
+impl fmt::Display for ConfigEnvExpansionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConfigEnvExpansionError {}
+
+fn expand_config_env_vars(raw: &str) -> Result<String, ConfigEnvExpansionError> {
+    let mut expanded = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find("${") {
+        expanded.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            return Err(ConfigEnvExpansionError(
+                "unterminated ${...} expression in config".to_string(),
+            ));
+        };
+        let expression = &after_start[..end];
+        expanded.push_str(&resolve_config_env_expression(expression)?);
+        rest = &after_start[end + 1..];
+    }
+    expanded.push_str(rest);
+    Ok(expanded)
+}
+
+fn resolve_config_env_expression(expression: &str) -> Result<String, ConfigEnvExpansionError> {
+    let (name, operator, fallback) = if let Some((name, fallback)) = expression.split_once(":-") {
+        (name, ":-", fallback)
+    } else if let Some((name, fallback)) = expression.split_once(":?") {
+        (name, ":?", fallback)
+    } else {
+        (expression, "", "")
+    };
+    if !valid_env_key(name) {
+        return Err(ConfigEnvExpansionError(format!(
+            "invalid env var name in config expression: {name}"
+        )));
+    }
+
+    match std::env::var(name) {
+        Ok(value) if !value.is_empty() => Ok(value),
+        _ if operator == ":-" => Ok(fallback.to_string()),
+        _ if operator == ":?" => {
+            let message = if fallback.trim().is_empty() {
+                format!("missing required env var {name}")
+            } else {
+                fallback.to_string()
+            };
+            Err(ConfigEnvExpansionError(message))
+        }
+        _ => Err(ConfigEnvExpansionError(format!(
+            "missing required env var {name}"
+        ))),
+    }
 }
 
 fn load_env_file_arg(
@@ -1782,7 +1881,7 @@ mod tests {
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::{IntoResponse, Response};
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use axum_test::TestServer;
 
@@ -1872,6 +1971,41 @@ CLIENT_SECRET='secret value'
     }
 
     #[test]
+    fn config_env_expansion_replaces_required_and_default_values() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var("RN_CONFIG_EXPAND_REQUIRED", "https://upstream.example");
+        std::env::remove_var("RN_CONFIG_EXPAND_DEFAULT");
+
+        let expanded = expand_config_env_vars(
+            "base_url: ${RN_CONFIG_EXPAND_REQUIRED:?missing upstream}\noptional: ${RN_CONFIG_EXPAND_DEFAULT:-fallback}\n",
+        )
+        .expect("config expands");
+
+        assert!(expanded.contains("base_url: https://upstream.example"));
+        assert!(expanded.contains("optional: fallback"));
+        std::env::remove_var("RN_CONFIG_EXPAND_REQUIRED");
+    }
+
+    #[test]
+    fn config_env_expansion_rejects_missing_required_values() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::remove_var("RN_CONFIG_EXPAND_MISSING");
+
+        let err = expand_config_env_vars("${RN_CONFIG_EXPAND_MISSING:?missing configured URL}")
+            .expect_err("missing env var fails");
+
+        assert!(err.to_string().contains("missing configured URL"));
+    }
+
+    #[test]
+    fn config_env_expansion_rejects_invalid_variable_names() {
+        let err =
+            expand_config_env_vars("${NOT-A-VALID-NAME:-fallback}").expect_err("invalid var fails");
+
+        assert!(err.to_string().contains("invalid env var name"));
+    }
+
+    #[test]
     fn env_file_ignores_quotes_inside_trailing_comments() {
         let parsed = parse_env_file(
             r#"
@@ -1932,6 +2066,74 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
             sha256_hash("api-token"),
             "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51"
         );
+    }
+
+    #[test]
+    fn healthcheck_cli_defaults_to_container_health_endpoint() {
+        let args = Args::try_parse_from(["registry-notary", "healthcheck"]).expect("args parse");
+        let Some(Command::Healthcheck { url, timeout_ms }) = args.command else {
+            panic!("expected healthcheck command");
+        };
+
+        assert_eq!(url, "http://127.0.0.1:8080/healthz");
+        assert_eq!(timeout_ms, 5000);
+    }
+
+    #[test]
+    fn healthcheck_cli_accepts_url_and_timeout_overrides() {
+        let args = Args::try_parse_from([
+            "registry-notary",
+            "healthcheck",
+            "--url",
+            "http://127.0.0.1:9000/ready",
+            "--timeout-ms",
+            "250",
+        ])
+        .expect("args parse");
+        let Some(Command::Healthcheck { url, timeout_ms }) = args.command else {
+            panic!("expected healthcheck command");
+        };
+
+        assert_eq!(url, "http://127.0.0.1:9000/ready");
+        assert_eq!(timeout_ms, 250);
+    }
+
+    #[test]
+    fn healthcheck_cli_rejects_zero_timeout() {
+        let err = Args::try_parse_from(["registry-notary", "healthcheck", "--timeout-ms", "0"])
+            .expect_err("zero timeout is rejected");
+
+        assert!(err.to_string().contains("invalid value"));
+    }
+
+    #[tokio::test]
+    async fn healthcheck_succeeds_for_success_status() {
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route("/healthz", get(|| async { StatusCode::OK })));
+        let base_url = upstream.server_address().expect("upstream address");
+        let url = format!("{}/healthz", base_url.as_str().trim_end_matches('/'));
+
+        run_healthcheck(&url, Duration::from_secs(1))
+            .await
+            .expect("healthcheck succeeds");
+    }
+
+    #[tokio::test]
+    async fn healthcheck_fails_for_non_success_status() {
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route(
+                "/healthz",
+                get(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+            ));
+        let base_url = upstream.server_address().expect("upstream address");
+        let url = format!("{}/healthz", base_url.as_str().trim_end_matches('/'));
+
+        let err = run_healthcheck(&url, Duration::from_secs(1))
+            .await
+            .expect_err("healthcheck fails");
+        assert!(err.to_string().contains("HTTP 503"));
     }
 
     #[test]

@@ -12,9 +12,14 @@ COPY --from=cel-mapping Cargo.toml /workspace/cel-mapping/
 COPY --from=cel-mapping crates /workspace/cel-mapping/crates
 COPY . .
 
+ARG REGISTRY_NOTARY_FEATURES=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
-    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin \
+    if [ -n "$REGISTRY_NOTARY_FEATURES" ]; then \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin --features "$REGISTRY_NOTARY_FEATURES"; \
+    else \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin; \
+    fi \
     && cp /workspace/target/release/registry-notary /usr/local/bin/registry-notary
 
 # Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
@@ -24,5 +29,7 @@ COPY --from=builder /usr/local/bin/registry-notary /usr/local/bin/registry-notar
 
 ENV REGISTRY_NOTARY_BIND=0.0.0.0:8080
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/registry-notary"]

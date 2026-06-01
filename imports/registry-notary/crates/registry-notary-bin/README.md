@@ -11,6 +11,7 @@ The crate builds the `registry-notary` binary.
 - Tracing initialization.
 - Axum listener startup and graceful shutdown.
 - OpenAPI document printing through `registry-notary openapi`.
+- Container liveness probing through `registry-notary healthcheck`.
 
 ## Subcommands
 
@@ -22,6 +23,7 @@ The crate builds the `registry-notary` binary.
 | `init dci` | Generate a generic DCI source starter skeleton. |
 | `hash-api-key` | Generate or hash a Registry Notary API key. |
 | `demo-issuer-key` | Generate a demo Ed25519 issuer JWK for local VC smoke tests. |
+| `healthcheck` | Probe the local HTTP health endpoint and exit non-zero when unhealthy. |
 | `schema` | Print a lightweight JSON schema for top-level config discovery. |
 
 ## Typical Use
@@ -36,6 +38,12 @@ Print the OpenAPI document:
 
 ```sh
 cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
+```
+
+Probe the container health endpoint without requiring curl in the image:
+
+```sh
+cargo run -p registry-notary-bin -- healthcheck --url http://127.0.0.1:8080/healthz
 ```
 
 ## Features

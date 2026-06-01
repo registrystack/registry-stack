@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# syntax=docker/dockerfile:1.7
+
+# Keep the tag for humans and the digest for reproducible pulls.
+FROM rust:1-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
+
+WORKDIR /workspace/registry-notary
+COPY --from=registry-platform Cargo.toml README.md LICENSE /workspace/registry-platform/
+COPY --from=registry-platform crates /workspace/registry-platform/crates
+COPY --from=cel-mapping Cargo.toml /workspace/cel-mapping/
+COPY --from=cel-mapping crates /workspace/cel-mapping/crates
+COPY . .
+
+ARG REGISTRY_NOTARY_OPENFN_SIDECAR_FEATURES=""
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/workspace/target \
+    if [ -n "$REGISTRY_NOTARY_OPENFN_SIDECAR_FEATURES" ]; then \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar --features "$REGISTRY_NOTARY_OPENFN_SIDECAR_FEATURES"; \
+    else \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-openfn-sidecar --bin registry-notary-openfn-sidecar; \
+    fi \
+    && cp /workspace/target/release/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
+
+FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS node-deps
+
+WORKDIR /opt/openfn
+COPY crates/registry-notary-openfn-sidecar/workers/package.json crates/registry-notary-openfn-sidecar/workers/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS runtime
+
+ENV NODE_ENV=production \
+    REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG=/etc/registry-notary-openfn-sidecar/sidecar.yaml
+WORKDIR /opt/openfn
+
+COPY --from=node-deps /opt/openfn/package.json /opt/openfn/package-lock.json ./
+COPY --from=node-deps /opt/openfn/node_modules ./node_modules
+COPY crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs ./openfn_worker.mjs
+COPY crates/registry-notary-openfn-sidecar/scripts/container-healthcheck.mjs ./container-healthcheck.mjs
+COPY --from=builder /usr/local/bin/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
+
+USER node
+EXPOSE 9191
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "/opt/openfn/container-healthcheck.mjs"]
+
+ENTRYPOINT ["/usr/local/bin/registry-notary-openfn-sidecar"]

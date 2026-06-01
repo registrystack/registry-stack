@@ -69,6 +69,8 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund --prefix crates/registry-notary-openfn-sidecar/workers
       - name: Syntax-check OpenFn worker
         run: node --check crates/registry-notary-openfn-sidecar/workers/openfn_worker.mjs
+      - name: Syntax-check sidecar container healthcheck
+        run: node --check crates/registry-notary-openfn-sidecar/scripts/container-healthcheck.mjs
       - name: Smoke-test OpenFn worker
         run: crates/registry-notary-openfn-sidecar/scripts/smoke-openfn-worker.sh
 
@@ -118,3 +120,9 @@ jobs:
       - name: Build Docker image
         working-directory: ${{ github.workspace }}
         run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --file registry-notary/Dockerfile --tag registry-notary:ci registry-notary
+      - name: Build Docker image with lab feature flags
+        working-directory: ${{ github.workspace }}
+        run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel --file registry-notary/Dockerfile --tag registry-notary:ci-cel registry-notary
+      - name: Build OpenFn sidecar Docker image
+        working-directory: ${{ github.workspace }}
+        run: docker build --build-context registry-platform=registry-platform --build-context cel-mapping=cel-mapping --file registry-notary/Dockerfile.openfn-sidecar --tag registry-notary-openfn-sidecar:ci registry-notary

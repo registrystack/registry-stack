@@ -1,0 +1,87 @@
+name: Container Images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: ${{ (github.head_ref || github.ref_name) == 'commons-release-cleanup' && 'commons-release-cleanup' || 'main' }}
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 54e0f537830837fcd0c9efa87990987b1846931c
+  NOTARY_IMAGE: ghcr.io/jeremi/registry-notary
+  OPENFN_SIDECAR_IMAGE: ghcr.io/jeremi/registry-notary-openfn-sidecar
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout registry-notary
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          path: registry-notary
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          path: registry-platform
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: cel-mapping
+      - name: Build registry-notary image
+        run: |
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context cel-mapping=cel-mapping \
+            --file registry-notary/Dockerfile \
+            --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}" \
+            --tag "$NOTARY_IMAGE:main" \
+            registry-notary
+      - name: Build registry-notary lab image
+        run: |
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context cel-mapping=cel-mapping \
+            --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel \
+            --file registry-notary/Dockerfile \
+            --tag "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel" \
+            --tag "$NOTARY_IMAGE:main-cel" \
+            registry-notary
+      - name: Build OpenFn sidecar image
+        run: |
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context cel-mapping=cel-mapping \
+            --file registry-notary/Dockerfile.openfn-sidecar \
+            --tag "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}" \
+            --tag "$OPENFN_SIDECAR_IMAGE:main" \
+            registry-notary
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Push images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "$NOTARY_IMAGE:sha-${GITHUB_SHA}"
+          docker push "$NOTARY_IMAGE:main"
+          docker push "$NOTARY_IMAGE:sha-${GITHUB_SHA}-cel"
+          docker push "$NOTARY_IMAGE:main-cel"
+          docker push "$OPENFN_SIDECAR_IMAGE:sha-${GITHUB_SHA}"
+          docker push "$OPENFN_SIDECAR_IMAGE:main"

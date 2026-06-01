@@ -298,9 +298,51 @@ docker build \
   -t registry-notary .
 ```
 
+Default Docker builds match the default Cargo feature set. Lab or integration
+builds that need CEL can opt in without changing the default image:
+
+```bash
+docker build \
+  --build-context registry-platform=../registry-platform \
+  --build-context cel-mapping=../cel-mapping \
+  --build-arg REGISTRY_NOTARY_FEATURES=registry-notary-cel \
+  -t registry-notary:cel .
+```
+
+The product container workflow publishes the default image as `main` /
+`sha-<commit>` and the CEL-enabled lab image as `main-cel` /
+`sha-<commit>-cel` under `ghcr.io/jeremi/registry-notary`. Lab deployments
+should consume the CEL-enabled tag family and pin by digest for rollback.
+
 Native runs default to `127.0.0.1:8081`. The Docker image sets
 `REGISTRY_NOTARY_BIND=0.0.0.0:8080` and exposes port `8080`; override it with
 `--bind` or `REGISTRY_NOTARY_BIND` when deploying behind a different listener.
+The image healthcheck runs `registry-notary healthcheck`, which probes
+`http://127.0.0.1:8080/healthz` by default and does not require a shell or curl
+inside the distroless runtime. Override `REGISTRY_NOTARY_HEALTHCHECK_URL` when
+the container listener differs.
+
+Mounted config supports simple environment expansion before YAML parsing:
+`${VAR}` requires a non-empty value, `${VAR:-default}` supplies a default, and
+`${VAR:?message}` fails startup with the provided message when the value is
+missing. This keeps distroless deployments from needing shell wrappers for
+environment-specific URLs.
+
+The OpenFn sidecar image is owned by this repository as well:
+
+```bash
+docker build \
+  --build-context registry-platform=../registry-platform \
+  --build-context cel-mapping=../cel-mapping \
+  -f Dockerfile.openfn-sidecar \
+  -t registry-notary-openfn-sidecar .
+```
+
+It packages the Rust sidecar binary, the pinned OpenFn worker, and its locked
+Node dependencies. The sidecar healthcheck uses Node's built-in `fetch` against
+`http://127.0.0.1:9191/healthz` by default; override
+`REGISTRY_NOTARY_OPENFN_SIDECAR_HEALTHCHECK_URL` when the sidecar binds a
+different port.
 
 ## OpenAPI
 
