@@ -1,0 +1,124 @@
+name: build-hosted-images
+
+# Builds the feature-complete Registry Lab images for the hosted Coolify deploy
+# and pushes digest-pinned tags to GHCR. Runs natively on amd64 (matches the
+# server), so no cross-arch emulation. Requires the SUBMODULES_PAT secret: a
+# classic PAT with `repo` scope whose owner can read every private vendor
+# submodule, including the cross-org PublicSchema/crosswalk (= vendor/cel-mapping).
+#
+# After a run, copy the three digests from the job summary into the Coolify
+# app env (REGISTRY_RELAY_IMAGE / REGISTRY_NOTARY_IMAGE /
+# REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE) and redeploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      relay_features:
+        description: "Cargo features for registry-relay"
+        default: "spdci-api-standards,standards-cel-mapping,ogcapi-edr"
+      notary_features:
+        description: "Cargo features for registry-notary"
+        default: "registry-notary-cel"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with private submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_PAT }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push registry-relay
+        id: relay
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.registry-relay
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          build-args: |
+            REGISTRY_RELAY_FEATURES=${{ inputs.relay_features }}
+          build-contexts: |
+            registry_relay_src=vendor/registry-relay
+            registry_platform_src=vendor/registry-platform
+            registry_manifest_src=vendor/registry-manifest
+            cel_mapping_src=vendor/cel-mapping
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/registry-relay:cel
+            ghcr.io/${{ github.repository_owner }}/registry-relay:sha-${{ github.sha }}
+          cache-from: type=gha,scope=relay
+          cache-to: type=gha,mode=max,scope=relay
+
+      - name: Build & push registry-notary
+        id: notary
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.registry-notary
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          build-args: |
+            REGISTRY_NOTARY_FEATURES=${{ inputs.notary_features }}
+          build-contexts: |
+            notary_src=vendor/registry-notary
+            registry_platform_src=vendor/registry-platform
+            cel_mapping_src=vendor/cel-mapping
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/registry-notary:cel
+            ghcr.io/${{ github.repository_owner }}/registry-notary:sha-${{ github.sha }}
+          cache-from: type=gha,scope=notary
+          cache-to: type=gha,mode=max,scope=notary
+
+      - name: Build & push registry-notary-openfn-sidecar
+        id: sidecar
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.registry-notary-openfn-sidecar
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          build-contexts: |
+            notary_src=vendor/registry-notary
+            registry_platform_src=vendor/registry-platform
+            cel_mapping_src=vendor/cel-mapping
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/registry-notary-openfn-sidecar:cel
+            ghcr.io/${{ github.repository_owner }}/registry-notary-openfn-sidecar:sha-${{ github.sha }}
+          cache-from: type=gha,scope=sidecar
+          cache-to: type=gha,mode=max,scope=sidecar
+
+      - name: Image digests
+        run: |
+          owner='${{ github.repository_owner }}'
+          {
+            echo "## Hosted image digests"
+            echo ""
+            echo "Paste these into the Coolify app env, then redeploy:"
+            echo '```'
+            echo "REGISTRY_RELAY_IMAGE=ghcr.io/${owner}/registry-relay@${{ steps.relay.outputs.digest }}"
+            echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"
+            echo "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=ghcr.io/${owner}/registry-notary-openfn-sidecar@${{ steps.sidecar.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
