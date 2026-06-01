@@ -214,7 +214,7 @@ services:
       context: .
       dockerfile: Dockerfile.registry-notary-openfn-sidecar
       additional_contexts:
-        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
     entrypoint: ["/bin/sh", "-eu", "-c"]
@@ -244,7 +244,7 @@ services:
       context: .
       dockerfile: Dockerfile.registry-notary-openfn-sidecar
       additional_contexts:
-        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
     env_file:
@@ -281,7 +281,7 @@ services:
       context: .
       dockerfile: Dockerfile.registry-notary
       additional_contexts:
-        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
     command: ["--config", "/etc/registry-notary/openfn-civil-notary.yaml"]
@@ -306,7 +306,7 @@ services:
       context: .
       dockerfile: Dockerfile.registry-notary-openfn-sidecar
       additional_contexts:
-        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
     env_file:
@@ -343,7 +343,7 @@ services:
       context: .
       dockerfile: Dockerfile.registry-notary
       additional_contexts:
-        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-../registry-notary}}
+        notary_src: ${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${REGISTRY_NOTARY_SOURCE_DIR:-./vendor/registry-notary}}
         registry_platform_src: ${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${REGISTRY_PLATFORM_SOURCE_DIR:-./vendor/registry-platform}}
         cel_mapping_src: ${CEL_MAPPING_SOURCE_DIR:-./vendor/cel-mapping}
     command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]

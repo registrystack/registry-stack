@@ -293,11 +293,11 @@ when you want to keep the current Postgres, Zitadel, or OpenFn containers
 running for inspection.
 
 The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
-`REGISTRY_NOTARY_SOURCE_DIR`, `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, and
-`REGISTRY_PLATFORM_SOURCE_DIR` to sibling checkouts when present. It also
-defaults `CEL_MAPPING_SOURCE_DIR` to `../cel-mapping`, because current Relay and
-Notary builds use the Crosswalk crates from that checkout. Override those
-variables when you want to build from pinned sources or another local path.
+`REGISTRY_NOTARY_SOURCE_DIR`, and `REGISTRY_PLATFORM_SOURCE_DIR` to sibling
+checkouts when present, otherwise to the pinned `vendor/` submodules.
+`REGISTRY_OPENFN_NOTARY_SOURCE_DIR` follows `REGISTRY_NOTARY_SOURCE_DIR` by
+default. Override those variables when you want to build from another local
+path.
 
 ## Live Notary Redis checks
 
@@ -448,9 +448,8 @@ just up
 just openfn
 ```
 
-The default OpenFn build uses `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, which points
-to `../registry-notary` unless overridden. Set it to `vendor/registry-notary`
-when you want to build from the pinned submodule.
+The default OpenFn build uses `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, which follows
+`REGISTRY_NOTARY_SOURCE_DIR` unless overridden.
 
 OpenFn is part of the default Compose topology. The sidecar and mock registry
 are not published to host ports; they run only on the private
@@ -614,14 +613,14 @@ Use the same variables with `scripts/generate-demo-secrets.py` when you want
 that script to use a sibling Relay checkout instead of the
 `vendor/registry-relay` submodule. `scripts/publish-static-metadata.sh` uses
 the Registry Manifest CLI from `REGISTRY_MANIFEST_REPO`, defaulting to the
-`../registry-manifest` sibling checkout. For a release, pin the submodules to
+`vendor/registry-manifest` submodule. For a release, pin the submodules to
 commits that already include the Registry Platform, Registry Relay, and Registry
 Notary behavior required by this demo.
 
 OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
-the core Notary image. The lab default points OpenFn at `../registry-notary` so
-local source checkouts can be tested before the lab submodule pin moves. Set it
-to `vendor/registry-notary` for a pinned-submodule build.
+the core Notary image. The lab default points OpenFn at the selected Notary
+source, so local source checkouts can be tested before the lab submodule pin
+moves.
 
 `just notary-client` imports the Registry Notary Python client directly from a
 source checkout and runs it against the default lab Notary services. It looks at
