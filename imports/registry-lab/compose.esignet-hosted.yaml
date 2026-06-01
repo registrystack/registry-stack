@@ -1,0 +1,189 @@
+name: registry-lab-esignet-hosted
+
+x-hosted-domains:
+  esignet: esignet.lab.registrystack.org
+  esignet-ui: esignet-ui.lab.registrystack.org
+
+services:
+  database:
+    image: postgres:bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
+    volumes:
+      - esignet-postgres-data:/var/lib/postgresql/data
+      - ./config/esignet/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:6.0
+    command: ["redis-server"]
+    restart: unless-stopped
+    volumes:
+      - esignet-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  mock-identity-system:
+    image: mosipid/mock-identity-system:0.13.0
+    user: root
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      active_profile_env: default,local
+      spring_config_label_env: ""
+      spring_config_url_env: ""
+      hsm_client_zip_url_env: ""
+      hsm_local_dir_env: hsm-client
+      loader_path_env: /home/mosip/additional_jars/
+      work_dir: /home/mosip
+      container_user: mosip
+      SPRING_DATASOURCE_URL: jdbc:postgresql://database:5432/mosip_mockidentitysystem?currentSchema=mockidentitysystem
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
+      MOSIP_ESIGNET_HOST: esignet.lab.registrystack.org
+      MOSIP_MOCK_IDA_KYC_TRANSACTION_TIMEOUT_SECS: "900"
+      MOSIP_MOCK_IDA_IDENTITY_OPENID_CLAIMS_MAPPING: '{"individualId":"individual_id","fullName":"name","givenName":"given_name","familyName":"family_name","email":"email","phone":"phone_number","gender":"gender","dateOfBirth":"birthdate","encodedPhoto":"picture","preferredUsername":"preferred_username","middleName":"middle_name","nickName":"nickname","streetAddress":"address.street_address","locality":"address.locality","region":"address.region","country":"address.country","postalCode":"address.postal_code","preferredLang":"locale","zoneInfo":"address.zoneinfo"}'
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://mock-identity-system:8082/v1/mock-identity-system/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  esignet:
+    image: mosipid/esignet-with-plugins:1.8.0
+    user: root
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mock-identity-system:
+        condition: service_healthy
+    environment:
+      active_profile_env: default,local
+      spring_config_label_env: ""
+      spring_config_url_env: ""
+      hsm_client_zip_url_env: ""
+      hsm_local_dir_env: hsm-client
+      loader_path_env: /home/mosip/additional_jars/
+      work_dir: /home/mosip
+      container_user: mosip
+      plugin_name_env: esignet-mock-plugin.jar
+      plugin_url_env: ""
+      plugins_path_env: /home/mosip/plugins
+      amr_acr_mapping_file_path_env: /home/mosip/amr_acr_mapping.json
+      KAFKA_ENABLED: "false"
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      SPRING_CACHE_TYPE: redis
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_REDIS_PASSWORD: ""
+      MOSIP_ESIGNET_HOST: esignet.lab.registrystack.org
+      MOSIP_ESIGNET_DISCOVERY_ISSUER_ID: https://esignet.lab.registrystack.org
+      MOSIP_ESIGNET_DISCOVERY_KEY_VALUES: "{'issuer':'https://esignet.lab.registrystack.org','authorization_endpoint':'https://esignet-ui.lab.registrystack.org/authorize','token_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oauth/v2/token','userinfo_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oidc/userinfo','jwks_uri':'https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json'}"
+      MOSIP_ESIGNET_OAUTH_KEY_VALUES: "{'issuer':'https://esignet.lab.registrystack.org','authorization_endpoint':'https://esignet-ui.lab.registrystack.org/authorize','token_endpoint':'https://esignet.lab.registrystack.org/v1/esignet/oauth/v2/token','jwks_uri':'https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json'}"
+      MOSIP_ESIGNET_DATABASE_URL: jdbc:postgresql://database:5432/mosip_esignet?currentSchema=esignet
+      MOSIP_ESIGNET_DATABASE_USERNAME: postgres
+      MOSIP_ESIGNET_DATABASE_PASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
+      MOSIP_ESIGNET_INTEGRATION_KEY_BINDER: MockKeyBindingWrapperService
+      MOSIP_ESIGNET_MOCK_DOMAIN_URL: http://mock-identity-system:8082
+      MOSIP_ESIGNET_OPENID_SCOPE_CLAIMS: "{'profile' : {'name','address','gender','birthdate','picture','email','phone_number','phone_number_verified','registration_type','updated_at','individual_id'},'email' : {'email'}, 'phone' : {'phone_number','phone_number_verified'}, 'address': {'address'}}"
+    expose:
+      - "8088"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://esignet:8088/v1/esignet/oidc/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 90s
+
+  esignet-ui:
+    image: mosipid/oidc-ui:1.8.0
+    user: root
+    depends_on:
+      esignet:
+        condition: service_healthy
+    environment:
+      container_user: mosip
+      DEFAULT_WELLKNOWN: "%5B%7B%22name%22%3A%22OpenID%20Configuration%22%2C%22value%22%3A%22%2F.well-known%2Fopenid-configuration%22%7D%2C%7B%22name%22%3A%22Jwks%20Json%22%2C%22value%22%3A%22%2F.well-known%2Fjwks.json%22%7D%2C%7B%22name%22%3A%22Authorization%20Server%22%2C%22value%22%3A%22%2F.well-known%2Foauth-authorization-server%22%7D%5D"
+      SIGN_IN_WITH_ESIGNET_PLUGIN_URL: https://raw.githubusercontent.com/mosip/artifactory-ref-impl/master/artifacts/src/mosip-plugins/sign-in-with-esignet/sign-in-with-esignet.zip
+      i18n_url_env: ""
+      theme_url_env: ""
+      images_url_env: ""
+    expose:
+      - "3000"
+    volumes:
+      - ./config/esignet/nginx-hosted.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://esignet-ui:3000/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  esignet-seed:
+    image: python:3.12-alpine
+    depends_on:
+      database:
+        condition: service_healthy
+      esignet:
+        condition: service_healthy
+      mock-identity-system:
+        condition: service_healthy
+    environment:
+      PGHOST: database
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-replace-in-coolify}
+      ESIGNET_CLIENT_PRIVATE_KEY_FILE: /var/lib/esignet-seed/client-private.pem
+      REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON: '${REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON:-["https://esignet-ui.lab.registrystack.org/callback"]}'
+    volumes:
+      - ./scripts/seed-esignet-live.py:/seed/seed-esignet-live.py:ro
+      - esignet-seed-data:/var/lib/esignet-seed
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        apk add --no-cache openssl postgresql-client >/dev/null
+        python /seed/seed-esignet-live.py
+        python - <<'PY' | psql -v ON_ERROR_STOP=1 -d mosip_esignet
+        import json
+        import os
+        from ipaddress import ip_address
+        from urllib.parse import urlparse
+
+        redirect_uris = json.loads(os.environ["REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON"])
+        if not isinstance(redirect_uris, list) or not redirect_uris:
+            raise SystemExit("REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON must be a non-empty JSON array")
+        for uri in redirect_uris:
+            parsed = urlparse(uri)
+            host = (parsed.hostname or "").lower()
+            local_name = "local" + "host"
+            try:
+                is_loopback = ip_address(host).is_loopback
+            except ValueError:
+                is_loopback = host == local_name or host.endswith("." + local_name)
+            if not isinstance(uri, str) or parsed.scheme != "https" or is_loopback:
+                raise SystemExit(f"hosted eSignet redirect URI must be public HTTPS: {uri}")
+
+        value = json.dumps(redirect_uris, separators=(",", ":")).replace("'", "''")
+        print(
+            "update esignet.client_detail "
+            f"set redirect_uris = '{value}', upd_dtimes = now() "
+            "where id = 'registry-lab-live-client';"
+        )
+        PY
+    restart: "no"
+
+volumes:
+  esignet-postgres-data:
+  esignet-redis-data:
+  esignet-seed-data:

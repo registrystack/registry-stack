@@ -1,0 +1,1050 @@
+#!/usr/bin/env python3
+"""Validate hosted Coolify deployment artifacts before deployment."""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+
+LAB_DOMAIN = "lab.registrystack.org"
+
+REQUIRED_SERVICES = {
+    "registry-lab": {
+        "postgres",
+        "redis",
+        "citizen-civil-notary",
+        "civil-registry-relay",
+        "social-protection-registry-relay",
+        "health-registry-relay",
+        "static-metadata-publisher",
+        "zitadel",
+        "openfn-dhis2-sidecar",
+        "dhis2-health-notary",
+        "opencrvs-dci-notary",
+    },
+    "esignet": {
+        "database",
+        "redis",
+        "mock-identity-system",
+        "esignet",
+        "esignet-ui",
+    },
+}
+
+REQUIRED_DOMAINS = {
+    "registry-lab": {
+        "citizen-civil-notary": f"citizen-notary.{LAB_DOMAIN}",
+        "civil-registry-relay": f"civil-relay.{LAB_DOMAIN}",
+        "social-protection-registry-relay": f"social-relay.{LAB_DOMAIN}",
+        "health-registry-relay": f"health-relay.{LAB_DOMAIN}",
+        "static-metadata-publisher": f"metadata.{LAB_DOMAIN}",
+        "zitadel": f"zitadel.{LAB_DOMAIN}",
+        "dhis2-health-notary": f"dhis2-notary.{LAB_DOMAIN}",
+        "opencrvs-dci-notary": f"opencrvs-notary.{LAB_DOMAIN}",
+    },
+    "esignet": {
+        "esignet": f"esignet.{LAB_DOMAIN}",
+        "esignet-ui": f"esignet-ui.{LAB_DOMAIN}",
+    },
+}
+
+REQUIRED_HOSTED_VARIABLES = {
+    "registry-lab": {
+        "REGISTRY_LAB_POSTGRES_PASSWORD",
+        "ZITADEL_MASTERKEY",
+        "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
+        "REGISTRY_NOTARY_ISSUER_JWK",
+        "CIVIL_EVIDENCE_SOURCE_RAW",
+        "OPENFN_SIDECAR_TOKEN_HASH",
+        "OPENFN_SIDECAR_TOKEN_RAW",
+        "OPENFN_DHIS2_HOST_URL",
+        "OPENFN_DHIS2_USERNAME",
+        "OPENFN_DHIS2_PASSWORD",
+        "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH",
+        "DHIS2_EVIDENCE_CLIENT_BEARER_HASH",
+        "OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH",
+        "OPENCRVS_DCI_BASE_URL",
+        "OPENCRVS_DCI_CLIENT_ID",
+        "OPENCRVS_DCI_CLIENT_SECRET",
+        "OPENCRVS_DCI_SHA_SECRET",
+        "REGISTRY_RELAY_AUDIT_HASH_SECRET",
+        "CIVIL_METADATA_CLIENT_HASH",
+        "CIVIL_EVIDENCE_SOURCE_HASH",
+        "CIVIL_EVIDENCE_ONLY_HASH",
+        "CIVIL_ROW_READER_HASH",
+        "SHARED_CIVIL_EVIDENCE_SOURCE_HASH",
+        "SOCIAL_METADATA_CLIENT_HASH",
+        "SOCIAL_EVIDENCE_SOURCE_HASH",
+        "SOCIAL_EVIDENCE_ONLY_HASH",
+        "SOCIAL_ROW_READER_HASH",
+        "SOCIAL_AGGREGATE_READER_HASH",
+        "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH",
+        "HEALTH_METADATA_CLIENT_HASH",
+        "HEALTH_EVIDENCE_SOURCE_HASH",
+        "HEALTH_EVIDENCE_ONLY_HASH",
+        "HEALTH_ROW_READER_HASH",
+        "SHARED_HEALTH_EVIDENCE_SOURCE_HASH",
+    },
+    "esignet": {
+        "REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD",
+        "REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON",
+    },
+}
+
+ALLOWED_INTERIM_PRODUCT_IMAGES = {
+    "registry-relay:hosted",
+    "registry-notary:hosted",
+    "registry-notary-openfn-sidecar:hosted",
+}
+
+PRODUCT_IMAGE_NAMES = {
+    "registry-relay",
+    "registry-notary",
+    "registry-notary-openfn-sidecar",
+}
+
+PUBLIC_KEYWORDS = (
+    "API_BASE_URL",
+    "AUTHORIZATION",
+    "BASE_URL",
+    "CALLBACK",
+    "CREDENTIAL_ENDPOINT",
+    "CREDENTIAL_ISSUER",
+    "DISCOVERY",
+    "DOMAIN",
+    "ENDPOINT",
+    "EXTERNALDOMAIN",
+    "HOST",
+    "ISSUER",
+    "JWKS",
+    "ORIGIN",
+    "PUBLIC_URL",
+    "REDIRECT",
+    "TOKEN_ENDPOINT",
+    "UI_PUBLIC_URL",
+    "URI",
+    "URL",
+    "USERINFO",
+)
+PUBLIC_SERVICE_KEYS = {
+    "domain",
+    "domains",
+    "labels",
+    "x-coolify-domain",
+    "x-coolify-domains",
+    "x-hosted-domain",
+    "x-hosted-domains",
+}
+URL_RE = re.compile(r"https?://[^\s'\"<>),]+")
+HOST_RULE_RE = re.compile(r"Host\(([^)]*)\)")
+LOOPBACK_RE = re.compile(r"(^|[^a-z0-9_.-])(localhost|127(?:\.\d{1,3}){3})(?=$|[^a-z0-9_.-])", re.I)
+REQUIRED_VAR_RE = re.compile(r"required variable ([A-Za-z_][A-Za-z0-9_]*) is missing")
+SCANNED_FILE_SUFFIXES = {
+    ".conf",
+    ".env",
+    ".json",
+    ".template",
+    ".toml",
+    ".yaml",
+    ".yml",
+}
+
+
+@dataclass(frozen=True)
+class Issue:
+    code: str
+    artifact: str
+    path: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"{self.artifact}:{self.path}: [{self.code}] {self.message}"
+
+
+def validate_artifacts(
+    artifacts: dict[str, dict[str, Any]],
+    artifact_roots: dict[str, Path] | None = None,
+    artifact_texts: dict[str, str] | None = None,
+    *,
+    require_secret_values: bool = False,
+    env: dict[str, str] | None = None,
+) -> list[Issue]:
+    issues: list[Issue] = []
+    artifact_roots = artifact_roots or {}
+    artifact_texts = artifact_texts or {}
+    env = dict(os.environ if env is None else env)
+    for artifact, compose in artifacts.items():
+        root = artifact_roots.get(artifact, Path("."))
+        services = compose.get("services")
+        if not isinstance(services, dict):
+            issues.append(
+                Issue(
+                    "missing-services-section",
+                    artifact,
+                    "services",
+                    "compose artifact must define a services map",
+                )
+            )
+            services = {}
+
+        issues.extend(validate_required_services(artifact, services))
+        issues.extend(validate_required_domains(artifact, compose, services, root))
+        issues.extend(
+            validate_required_variables(
+                artifact,
+                compose,
+                artifact_texts.get(artifact, ""),
+                require_secret_values,
+                env,
+            )
+        )
+        issues.extend(validate_service_ports(artifact, services))
+        issues.extend(validate_build_inputs(artifact, compose))
+        issues.extend(validate_image_refs(artifact, services))
+        issues.extend(validate_runtime_commands(artifact, services))
+        issues.extend(validate_repo_output_binds(artifact, services))
+        issues.extend(validate_public_urls(artifact, compose, root))
+
+    issues.extend(validate_cross_artifact_contracts(artifacts, artifact_roots))
+    return sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
+
+
+def validate_required_services(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    issues = []
+    for service in sorted(REQUIRED_SERVICES.get(artifact, set())):
+        if service not in services:
+            issues.append(
+                Issue(
+                    "missing-service",
+                    artifact,
+                    f"services.{service}",
+                    f"required hosted service {service!r} is missing",
+                )
+            )
+    return issues
+
+
+def validate_required_domains(
+    artifact: str,
+    compose: dict[str, Any],
+    services: dict[str, Any],
+    root: Path,
+) -> list[Issue]:
+    issues = []
+    for service, domain in sorted(REQUIRED_DOMAINS.get(artifact, {}).items()):
+        if service not in services:
+            continue
+        domains = collect_domains_for_service(compose, service, root)
+        if domain not in domains:
+            found = ", ".join(sorted(domains)) or "none"
+            issues.append(
+                Issue(
+                    "missing-domain",
+                    artifact,
+                    f"services.{service}",
+                    f"required hosted domain {domain!r} is missing; found {found}",
+                )
+            )
+    return issues
+
+
+def validate_required_variables(
+    artifact: str,
+    compose: dict[str, Any],
+    raw_text: str,
+    require_secret_values: bool,
+    env: dict[str, str],
+) -> list[Issue]:
+    issues = []
+    for variable in sorted(REQUIRED_HOSTED_VARIABLES.get(artifact, set())):
+        if not compose_references_variable(compose, variable, raw_text):
+            issues.append(
+                Issue(
+                    "missing-required-variable",
+                    artifact,
+                    variable,
+                    f"required hosted variable {variable!r} is not referenced by the compose artifact",
+                )
+            )
+        if require_secret_values and not usable_secret_value(env.get(variable)):
+            issues.append(
+                Issue(
+                    "missing-required-secret-value",
+                    artifact,
+                    variable,
+                    f"required hosted variable {variable!r} has no non-placeholder value in the environment",
+                )
+            )
+    return issues
+
+
+def validate_service_ports(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    issues = []
+    for service, config in services.items():
+        if isinstance(config, dict) and config.get("ports"):
+            issues.append(
+                Issue(
+                    "host-ports",
+                    artifact,
+                    f"services.{service}.ports",
+                    "hosted Coolify compose must not publish host ports",
+                )
+            )
+    return issues
+
+
+def validate_build_inputs(artifact: str, compose: dict[str, Any]) -> list[Issue]:
+    issues = []
+    services = compose.get("services")
+    if isinstance(services, dict):
+        for service, config in services.items():
+            if isinstance(config, dict) and config.get("build"):
+                issues.append(
+                    Issue(
+                        "host-build",
+                        artifact,
+                        f"services.{service}.build",
+                        "hosted compose must consume pre-built images, not build on the host",
+                    )
+                )
+
+    for path, value in walk(compose):
+        if path and path[-1] == "additional_contexts" and value:
+            issues.append(
+                Issue(
+                    "additional-contexts",
+                    artifact,
+                    format_path(path),
+                    "hosted compose must not reference local additional_contexts",
+                )
+            )
+    return issues
+
+
+def validate_image_refs(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    issues = []
+    for service, config in services.items():
+        if not isinstance(config, dict):
+            continue
+        image = config.get("image")
+        if not isinstance(image, str):
+            continue
+        if image_uses_latest_tag(image):
+            issues.append(
+                Issue(
+                    "latest-image-tag",
+                    artifact,
+                    f"services.{service}.image",
+                    "hosted compose must not deploy images tagged latest",
+                )
+            )
+        if image_uses_floating_product_tag(image):
+            issues.append(
+                Issue(
+                    "floating-product-image-tag",
+                    artifact,
+                    f"services.{service}.image",
+                    "canonical product images must be digest-pinned; use only local :hosted tags as interim",
+                )
+            )
+    return issues
+
+
+def validate_runtime_commands(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    issues = []
+    if artifact != "registry-lab":
+        return issues
+    for service, config in services.items():
+        if not isinstance(config, dict):
+            continue
+        image = str(config.get("image", ""))
+        command_text = json.dumps(
+            {
+                "entrypoint": config.get("entrypoint"),
+                "command": config.get("command"),
+                "healthcheck": config.get("healthcheck"),
+            },
+            sort_keys=True,
+        )
+        if is_registry_relay_service(service, image) and "registry-notary" in command_text:
+            issues.append(
+                Issue(
+                    "unsupported-relay-healthcheck",
+                    artifact,
+                    f"services.{service}.healthcheck",
+                    "relay healthchecks must use tools available in the relay image, not registry-notary",
+                )
+            )
+        if is_registry_notary_service(service, image):
+            healthcheck_text = json.dumps(config.get("healthcheck"), sort_keys=True)
+            if "curl" in healthcheck_text:
+                issues.append(
+                    Issue(
+                        "unsupported-notary-healthcheck",
+                        artifact,
+                        f"services.{service}.healthcheck",
+                        "notary healthchecks must use registry-notary healthcheck, not curl",
+                    )
+                )
+            entrypoint_text = json.dumps(config.get("entrypoint"), sort_keys=True)
+            if "/bin/sh" in entrypoint_text or '"sh"' in entrypoint_text:
+                issues.append(
+                    Issue(
+                        "unsupported-notary-entrypoint",
+                        artifact,
+                        f"services.{service}.entrypoint",
+                        "distroless notary images must not require a shell entrypoint",
+                    )
+                )
+    openfn = services.get("openfn-dhis2-sidecar")
+    if isinstance(openfn, dict) and not service_mounts_target(openfn, "/opt/openfn/jobs"):
+        issues.append(
+            Issue(
+                "missing-openfn-job-mount",
+                artifact,
+                "services.openfn-dhis2-sidecar.volumes",
+                "OpenFn sidecar must mount the lab job directory used by its hosted config",
+            )
+        )
+    return issues
+
+
+def validate_repo_output_binds(artifact: str, services: dict[str, Any]) -> list[Issue]:
+    issues = []
+    for service, config in services.items():
+        if not isinstance(config, dict):
+            continue
+        volumes = config.get("volumes") or []
+        if not isinstance(volumes, list):
+            continue
+        for index, volume in enumerate(volumes):
+            source = volume_source(volume)
+            if source and is_repo_output_source(source):
+                issues.append(
+                    Issue(
+                        "repo-output-bind",
+                        artifact,
+                        f"services.{service}.volumes[{index}]",
+                        "hosted seed or secret material must not bind-mount repo ./output",
+                    )
+                )
+    return issues
+
+
+def validate_public_urls(artifact: str, compose: dict[str, Any], root: Path) -> list[Issue]:
+    issues = []
+    for path, key, value in iter_public_settings(compose):
+        issues.extend(validate_public_text(artifact, format_path(path), key, str(value)))
+
+    services = compose.get("services") or {}
+    if isinstance(services, dict):
+        for service, config in services.items():
+            if not isinstance(config, dict):
+                continue
+            for file_path, text in iter_referenced_file_texts(root, config):
+                issues.extend(
+                    validate_public_text(
+                        artifact,
+                        f"services.{service}.volumes:{file_path}",
+                        str(file_path),
+                        text,
+                    )
+                )
+    return issues
+
+
+def validate_cross_artifact_contracts(
+    artifacts: dict[str, dict[str, Any]],
+    artifact_roots: dict[str, Path],
+) -> list[Issue]:
+    issues = []
+    registry_lab = artifacts.get("registry-lab")
+    esignet = artifacts.get("esignet")
+    if not registry_lab or not esignet:
+        return issues
+
+    registry_root = artifact_roots.get("registry-lab", Path("."))
+    esignet_root = artifact_roots.get("esignet", Path("."))
+    citizen_issuer = extract_citizen_esignet_issuer(registry_lab, registry_root)
+    esignet_issuer = extract_esignet_discovery_issuer(esignet, esignet_root)
+    if citizen_issuer and esignet_issuer and citizen_issuer != esignet_issuer:
+        issues.append(
+            Issue(
+                "esignet-issuer-mismatch",
+                "registry-lab",
+                "services.citizen-civil-notary.auth.oidc.issuer",
+                f"citizen notary issuer {citizen_issuer!r} must match hosted eSignet issuer {esignet_issuer!r}",
+            )
+        )
+
+    text = collect_service_contract_text(registry_lab, registry_root, "citizen-civil-notary")
+    if text:
+        if "person_is_alive_sd_jwt" not in text:
+            issues.append(
+                Issue(
+                    "missing-credential-configuration",
+                    "registry-lab",
+                    "services.citizen-civil-notary.oid4vci",
+                    "citizen OID4VCI contract must advertise person_is_alive_sd_jwt",
+                )
+            )
+        if "dc+sd-jwt" not in text:
+            issues.append(
+                Issue(
+                    "missing-oid4vci-format",
+                    "registry-lab",
+                    "services.citizen-civil-notary.oid4vci",
+                    "citizen OID4VCI contract must advertise dc+sd-jwt",
+                )
+            )
+    return issues
+
+
+def validate_public_text(artifact: str, issue_path: str, key: str, text: str) -> list[Issue]:
+    issues = []
+    if "demo.example.gov" in text:
+        issues.append(
+            Issue(
+                "stale-demo-url",
+                artifact,
+                issue_path,
+                "hosted public settings must not advertise demo.example.gov",
+            )
+        )
+
+    if LOOPBACK_RE.search(text):
+        issues.append(
+            Issue(
+                "public-local-url",
+                artifact,
+                issue_path,
+                f"public hosted setting {key!r} must not reference localhost or loopback",
+            )
+        )
+
+    for url in extract_urls(text):
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme == "http" and is_public_http_host(host):
+            issues.append(
+                Issue(
+                    "public-http-url",
+                    artifact,
+                    issue_path,
+                    f"public hosted URL must use https, not {url!r}",
+                )
+            )
+    return issues
+
+
+def collect_domains_for_service(compose: dict[str, Any], service: str, root: Path) -> set[str]:
+    domains: set[str] = set()
+    top_domains = compose.get("x-hosted-domains")
+    if isinstance(top_domains, dict) and service in top_domains:
+        domains.update(extract_domains(top_domains[service]))
+
+    service_config = compose.get("services", {}).get(service)
+    if isinstance(service_config, dict):
+        for key, value in service_config.items():
+            if key in PUBLIC_SERVICE_KEYS or public_key_name(str(key)):
+                domains.update(extract_domains(value))
+        domains.update(extract_label_domains(service_config.get("labels")))
+        for _path, key, value in iter_environment_settings(service_config, ("services", service)):
+            if public_key_name(key):
+                domains.update(extract_domains(value))
+        for _file_path, text in iter_referenced_file_texts(root, service_config):
+            domains.update(extract_domains(text))
+
+    return domains
+
+
+def iter_public_settings(compose: dict[str, Any]):
+    top_domains = compose.get("x-hosted-domains")
+    if top_domains is not None:
+        yield ("x-hosted-domains",), "x-hosted-domains", top_domains
+
+    services = compose.get("services") or {}
+    if not isinstance(services, dict):
+        return
+
+    for service, config in services.items():
+        if not isinstance(config, dict):
+            continue
+        base = ("services", str(service))
+        yield from iter_environment_settings(config, base)
+        labels = config.get("labels")
+        if labels is not None:
+            yield base + ("labels",), "labels", labels
+        for key in PUBLIC_SERVICE_KEYS:
+            if key in config:
+                yield base + (key,), key, config[key]
+        for path, value in walk(config, base):
+            if not path:
+                continue
+            leaf = path[-1]
+            if str(leaf) in {"healthcheck", "test"} or "healthcheck" in path:
+                continue
+            if public_key_name(str(leaf)):
+                yield path, str(leaf), value
+
+
+def iter_environment_settings(config: dict[str, Any], base: tuple[str, ...]):
+    env = config.get("environment")
+    if isinstance(env, dict):
+        for key, value in env.items():
+            if public_key_name(str(key)):
+                yield base + ("environment", str(key)), str(key), value
+    elif isinstance(env, list):
+        for index, entry in enumerate(env):
+            if not isinstance(entry, str):
+                continue
+            key = entry.split("=", 1)[0]
+            if public_key_name(key):
+                yield base + ("environment", str(index)), key, entry
+
+
+def extract_urls(text: str) -> list[str]:
+    return [match.group(0).rstrip(".,;]") for match in URL_RE.finditer(text)]
+
+
+def extract_domains(value: Any) -> set[str]:
+    domains: set[str] = set()
+    for _path, leaf in walk(value):
+        if not isinstance(leaf, str):
+            continue
+        text = leaf.strip()
+        domains.update(extract_label_domains(text))
+        for url in extract_urls(text):
+            host = urlsplit(url).hostname
+            if host:
+                domains.add(host.lower())
+        if looks_like_domain(text):
+            domains.add(text.lower().removeprefix("https://").removeprefix("http://").split("/", 1)[0])
+    return domains
+
+
+def extract_label_domains(labels: Any) -> set[str]:
+    domains: set[str] = set()
+    values: list[str] = []
+    if isinstance(labels, str):
+        values.append(labels)
+    elif isinstance(labels, list):
+        values.extend(item for item in labels if isinstance(item, str))
+    elif isinstance(labels, dict):
+        values.extend(str(item) for item in labels.values())
+
+    for value in values:
+        for match in HOST_RULE_RE.finditer(value):
+            raw_hosts = re.findall(r"`([^`]+)`|'([^']+)'|\"([^\"]+)\"", match.group(1))
+            for host_parts in raw_hosts:
+                host = next(part for part in host_parts if part)
+                if looks_like_domain(host):
+                    domains.add(host.lower())
+    return domains
+
+
+def public_key_name(key: str) -> bool:
+    normalized = re.sub(r"[^A-Z0-9]+", "_", key.upper())
+    return any(keyword in normalized for keyword in PUBLIC_KEYWORDS)
+
+
+def is_public_http_host(host: str) -> bool:
+    if not host:
+        return False
+    if host == "localhost" or host.startswith("127."):
+        return True
+    if host.endswith(f".{LAB_DOMAIN}") or host == LAB_DOMAIN:
+        return True
+    if host == "demo.example.gov" or host.endswith(".example.gov"):
+        return True
+    return "." in host
+
+
+def image_uses_latest_tag(image: str) -> bool:
+    if "@sha256:" in image:
+        return False
+    last_segment = image.rsplit("/", 1)[-1]
+    return ":" not in last_segment or last_segment.endswith(":latest")
+
+
+def image_uses_floating_product_tag(image: str) -> bool:
+    if "@sha256:" in image or image in ALLOWED_INTERIM_PRODUCT_IMAGES:
+        return False
+    image_ref = image.split("@", 1)[0]
+    name = image_ref.rsplit("/", 1)[-1].split(":", 1)[0]
+    return name in PRODUCT_IMAGE_NAMES
+
+
+def is_registry_relay_service(service: str, image: str) -> bool:
+    return "relay" in service and "registry-relay" in image
+
+
+def is_registry_notary_service(service: str, image: str) -> bool:
+    return "notary" in service and "registry-notary" in image and "openfn-sidecar" not in image
+
+
+def service_mounts_target(service_config: dict[str, Any], target: str) -> bool:
+    for volume in service_config.get("volumes") or []:
+        if isinstance(volume, str):
+            parts = volume.split(":")
+            if len(parts) >= 2 and parts[1] == target:
+                return True
+        elif isinstance(volume, dict) and volume.get("target") == target:
+            return True
+    return False
+
+
+def compose_references_variable(compose: dict[str, Any], variable: str, raw_text: str = "") -> bool:
+    variable_ref_re = r"\$\{" + re.escape(variable) + r"(?::[-?][^}]*)?\}"
+    if raw_text and re.search(variable_ref_re, raw_text):
+        return True
+    serialized = json.dumps(compose, sort_keys=True)
+    if re.search(variable_ref_re, serialized):
+        return True
+    return f'"{variable}"' in serialized
+
+
+def usable_secret_value(value: str | None) -> bool:
+    if value is None:
+        return False
+    stripped = value.strip()
+    if not stripped:
+        return False
+    return stripped not in {"replace-in-coolify", "hosted-validation-placeholder"}
+
+
+def looks_like_domain(value: str) -> bool:
+    text = value.strip().lower()
+    if "://" in text:
+        parsed = urlsplit(text)
+        text = parsed.hostname or ""
+    if "/" in text or ":" in text or not text:
+        return False
+    return "." in text and not text.startswith(".") and not text.endswith(".")
+
+
+def volume_source(volume: Any) -> str | None:
+    if isinstance(volume, str):
+        if ":" not in volume:
+            return None
+        return volume.split(":", 1)[0]
+    if isinstance(volume, dict):
+        source = volume.get("source")
+        return str(source) if source else None
+    return None
+
+
+def iter_referenced_file_texts(root: Path, service_config: dict[str, Any]):
+    for path in iter_referenced_file_paths(root, service_config):
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            yield path, path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+
+
+def iter_referenced_file_paths(root: Path, service_config: dict[str, Any]):
+    volumes = service_config.get("volumes") or []
+    if not isinstance(volumes, list):
+        return
+    for volume in volumes:
+        source = volume_source(volume)
+        if not source:
+            continue
+        path = resolve_volume_source(root, source)
+        if not path:
+            continue
+        if path.is_file() and path.suffix in SCANNED_FILE_SUFFIXES:
+            yield path
+        elif path.is_dir() and should_scan_directory_mount(path):
+            for child in sorted(path.rglob("*")):
+                if child.is_file() and child.suffix in SCANNED_FILE_SUFFIXES:
+                    yield child
+
+
+def resolve_volume_source(root: Path, source: str) -> Path | None:
+    if source.startswith("${") or source.startswith("$"):
+        return None
+    source_path = Path(source)
+    if not source_path.is_absolute() and not source.startswith("."):
+        return None
+    path = source_path if source_path.is_absolute() else root / source_path
+    try:
+        return path.resolve()
+    except OSError:
+        return None
+
+
+def is_repo_output_source(source: str) -> bool:
+    normalized = source.replace("\\", "/").strip()
+    if normalized in {"./output", "output"}:
+        return True
+    return normalized.startswith("./output/") or normalized.startswith("output/")
+
+
+def should_scan_directory_mount(path: Path) -> bool:
+    return path.name not in {"data", "static-metadata"}
+
+
+def walk(value: Any, path: tuple[str, ...] = ()):
+    yield path, value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from walk(child, path + (str(key),))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from walk(child, path + (str(index),))
+
+
+def format_path(path: tuple[str, ...]) -> str:
+    if not path:
+        return "."
+    formatted = path[0]
+    for part in path[1:]:
+        if part.isdigit():
+            formatted += f"[{part}]"
+        else:
+            formatted += f".{part}"
+    return formatted
+
+
+def dedupe_issues(issues: list[Issue]) -> list[Issue]:
+    seen: set[tuple[str, str, str, str]] = set()
+    unique = []
+    for issue in issues:
+        key = (issue.code, issue.artifact, issue.path, issue.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(issue)
+    return unique
+
+
+def collect_service_contract_text(compose: dict[str, Any], root: Path, service: str) -> str:
+    service_config = compose.get("services", {}).get(service)
+    chunks: list[str] = []
+    if isinstance(service_config, dict):
+        chunks.append(json.dumps(service_config, sort_keys=True))
+        for _path, text in iter_referenced_file_texts(root, service_config):
+            chunks.append(text)
+    return "\n".join(chunks)
+
+
+def extract_citizen_esignet_issuer(compose: dict[str, Any], root: Path) -> str | None:
+    service_config = compose.get("services", {}).get("citizen-civil-notary")
+    if not isinstance(service_config, dict):
+        return None
+
+    env = normalize_environment(service_config.get("environment"))
+    if isinstance(env.get("ESIGNET_ISSUER"), str):
+        return env["ESIGNET_ISSUER"]
+
+    for path in iter_referenced_file_paths(root, service_config):
+        if path.suffix not in {".yaml", ".yml"}:
+            continue
+        try:
+            loaded = load_yaml_mapping(path)
+        except Exception:
+            continue
+        issuer = nested_get(loaded, ("auth", "oidc", "issuer"))
+        if isinstance(issuer, str):
+            return issuer
+    return None
+
+
+def extract_esignet_discovery_issuer(compose: dict[str, Any], root: Path) -> str | None:
+    del root
+    service_config = compose.get("services", {}).get("esignet")
+    if not isinstance(service_config, dict):
+        return None
+    env = normalize_environment(service_config.get("environment"))
+    issuer = env.get("MOSIP_ESIGNET_DISCOVERY_ISSUER_ID")
+    if isinstance(issuer, str):
+        return issuer
+    key_values = env.get("MOSIP_ESIGNET_DISCOVERY_KEY_VALUES")
+    if not isinstance(key_values, str):
+        return None
+    try:
+        loaded = ast.literal_eval(key_values)
+    except (SyntaxError, ValueError):
+        match = re.search(r"['\"]issuer['\"]\s*:\s*['\"]([^'\"]+)['\"]", key_values)
+        return match.group(1) if match else None
+    if isinstance(loaded, dict) and isinstance(loaded.get("issuer"), str):
+        return loaded["issuer"]
+    return None
+
+
+def normalize_environment(env: Any) -> dict[str, str]:
+    if isinstance(env, dict):
+        return {str(key): str(value) for key, value in env.items()}
+    if isinstance(env, list):
+        values: dict[str, str] = {}
+        for entry in env:
+            if not isinstance(entry, str):
+                continue
+            key, _, value = entry.partition("=")
+            values[key] = value
+        return values
+    return {}
+
+
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    import yaml  # type: ignore[import-not-found]
+
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def nested_get(value: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def load_compose(path: Path) -> dict[str, Any]:
+    if path.suffix == ".json":
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return render_compose_json(path)
+
+    with path.open(encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} did not load as a mapping")
+    return loaded
+
+
+def render_compose_json(path: Path) -> dict[str, Any]:
+    env = os.environ.copy()
+    missing_vars: set[str] = set()
+    for _attempt in range(20):
+        try:
+            result = subprocess.run(
+                ["docker", "compose", "-f", str(path), "config", "--format", "json"],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            return json.loads(result.stdout)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "install PyYAML or Docker Compose so hosted compose YAML can be rendered"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            match = REQUIRED_VAR_RE.search(exc.stderr)
+            if match and match.group(1) not in missing_vars:
+                missing_vars.add(match.group(1))
+                env[match.group(1)] = "hosted-validation-placeholder"
+                continue
+            raise RuntimeError(exc.stderr.strip() or str(exc)) from exc
+
+    raise RuntimeError(
+        "could not render compose after adding placeholders for required variables: "
+        + ", ".join(sorted(missing_vars))
+    )
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--registry-lab-compose",
+        type=Path,
+        default=Path("compose.coolify.yaml"),
+        help="hosted Registry Lab compose file",
+    )
+    parser.add_argument(
+        "--esignet-compose",
+        type=Path,
+        default=Path("compose.esignet-hosted.yaml"),
+        help="hosted eSignet compose file",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print validation issues as JSON",
+    )
+    parser.add_argument(
+        "--require-secret-values",
+        action="store_true",
+        help="also require every hosted secret variable to have a non-placeholder environment value",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    artifacts: dict[str, dict[str, Any]] = {}
+    artifact_roots: dict[str, Path] = {}
+    artifact_texts: dict[str, str] = {}
+    issues: list[Issue] = []
+
+    for artifact, path in (
+        ("registry-lab", args.registry_lab_compose),
+        ("esignet", args.esignet_compose),
+    ):
+        if not path.exists():
+            issues.append(
+                Issue(
+                    "missing-artifact",
+                    artifact,
+                    str(path),
+                    f"required hosted compose artifact {path} is missing",
+                )
+            )
+            continue
+        try:
+            artifact_texts[artifact] = path.read_text(encoding="utf-8")
+            artifacts[artifact] = load_compose(path)
+            artifact_roots[artifact] = path.parent
+        except Exception as exc:
+            issues.append(
+                Issue(
+                    "unreadable-artifact",
+                    artifact,
+                    str(path),
+                    f"could not load hosted compose artifact: {exc}",
+                )
+            )
+
+    issues.extend(
+        validate_artifacts(
+            artifacts,
+            artifact_roots,
+            artifact_texts,
+            require_secret_values=args.require_secret_values,
+        )
+    )
+    issues = sorted(dedupe_issues(issues), key=lambda issue: (issue.artifact, issue.path, issue.code))
+
+    if args.json:
+        print(json.dumps([issue.__dict__ for issue in issues], indent=2, sort_keys=True))
+    elif issues:
+        for issue in issues:
+            print(issue, file=sys.stderr)
+    else:
+        print("hosted deploy artifacts passed validation")
+
+    return 1 if issues else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,90 @@
+name: hosted-lab
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/hosted-lab.yml"
+      - "compose.coolify.yaml"
+      - "compose.esignet-hosted.yaml"
+      - "config/coolify/**"
+      - "config/esignet/nginx-hosted.conf"
+      - "scripts/validate-hosted-deploy.py"
+      - "scripts/test_validate_hosted_deploy.py"
+      - "justfile"
+  push:
+    branches:
+      - main
+      - staging
+    paths:
+      - ".github/workflows/hosted-lab.yml"
+      - "compose.coolify.yaml"
+      - "compose.esignet-hosted.yaml"
+      - "config/coolify/**"
+      - "config/esignet/nginx-hosted.conf"
+      - "scripts/validate-hosted-deploy.py"
+      - "scripts/test_validate_hosted_deploy.py"
+      - "justfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-hosted-artifacts:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD: hosted-validation-placeholder
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Check whitespace
+        run: |
+          git ls-files -z \
+            .github/workflows/hosted-lab.yml \
+            compose.coolify.yaml \
+            compose.esignet-hosted.yaml \
+            config/coolify \
+            config/esignet/nginx-hosted.conf \
+            scripts/validate-hosted-deploy.py \
+            scripts/test_validate_hosted_deploy.py \
+            justfile \
+            | xargs -0 perl -ne 'if (/[ \t]$/) { print "$ARGV:$.: trailing whitespace\n"; $bad = 1 } END { exit($bad || 0) }'
+
+      - name: Require hosted compose artifacts
+        run: |
+          test -f compose.coolify.yaml
+          test -f compose.esignet-hosted.yaml
+
+      - name: Render Registry Lab hosted compose
+        run: docker compose -f compose.coolify.yaml config >/tmp/compose.coolify.config.yaml
+
+      - name: Render hosted eSignet compose
+        run: docker compose -f compose.esignet-hosted.yaml config >/tmp/compose.esignet-hosted.config.yaml
+
+      - name: Run hosted deploy validator tests
+        run: python3 scripts/test_validate_hosted_deploy.py
+
+      - name: Validate hosted deploy artifacts
+        run: python3 scripts/validate-hosted-deploy.py
+
+  deploy-coolify:
+    needs: validate-hosted-artifacts
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions: {}
+    concurrency:
+      group: hosted-lab-coolify-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Trigger Coolify deploy webhook
+        env:
+          COOLIFY_DEPLOY_WEBHOOK_URL: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK_URL }}
+        run: |
+          test -n "$COOLIFY_DEPLOY_WEBHOOK_URL"
+          curl -fsS -X POST "$COOLIFY_DEPLOY_WEBHOOK_URL"

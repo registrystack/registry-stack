@@ -1,0 +1,278 @@
+name: registry-lab
+
+x-hosted-domains:
+  citizen-civil-notary: citizen-notary.lab.registrystack.org
+  civil-registry-relay: civil-relay.lab.registrystack.org
+  social-protection-registry-relay: social-relay.lab.registrystack.org
+  health-registry-relay: health-relay.lab.registrystack.org
+  static-metadata-publisher: metadata.lab.registrystack.org
+  zitadel: zitadel.lab.registrystack.org
+  dhis2-health-notary: dhis2-notary.lab.registrystack.org
+  opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
+
+x-relay-common: &relay-common
+  image: ${REGISTRY_RELAY_IMAGE:-registry-relay:hosted}
+  environment: &relay-env
+    RUST_LOG: ${RUST_LOG:-info}
+    REGISTRY_RELAY_AUDIT_HASH_SECRET: ${REGISTRY_RELAY_AUDIT_HASH_SECRET:-}
+    CIVIL_METADATA_CLIENT_HASH: ${CIVIL_METADATA_CLIENT_HASH:-}
+    CIVIL_EVIDENCE_SOURCE_HASH: ${CIVIL_EVIDENCE_SOURCE_HASH:-}
+    CIVIL_EVIDENCE_ONLY_HASH: ${CIVIL_EVIDENCE_ONLY_HASH:-}
+    CIVIL_ROW_READER_HASH: ${CIVIL_ROW_READER_HASH:-}
+    SHARED_CIVIL_EVIDENCE_SOURCE_HASH: ${SHARED_CIVIL_EVIDENCE_SOURCE_HASH:-}
+    SOCIAL_METADATA_CLIENT_HASH: ${SOCIAL_METADATA_CLIENT_HASH:-}
+    SOCIAL_EVIDENCE_SOURCE_HASH: ${SOCIAL_EVIDENCE_SOURCE_HASH:-}
+    SOCIAL_EVIDENCE_ONLY_HASH: ${SOCIAL_EVIDENCE_ONLY_HASH:-}
+    SOCIAL_ROW_READER_HASH: ${SOCIAL_ROW_READER_HASH:-}
+    SOCIAL_AGGREGATE_READER_HASH: ${SOCIAL_AGGREGATE_READER_HASH:-}
+    SHARED_SOCIAL_EVIDENCE_SOURCE_HASH: ${SHARED_SOCIAL_EVIDENCE_SOURCE_HASH:-}
+    HEALTH_METADATA_CLIENT_HASH: ${HEALTH_METADATA_CLIENT_HASH:-}
+    HEALTH_EVIDENCE_SOURCE_HASH: ${HEALTH_EVIDENCE_SOURCE_HASH:-}
+    HEALTH_EVIDENCE_ONLY_HASH: ${HEALTH_EVIDENCE_ONLY_HASH:-}
+    HEALTH_ROW_READER_HASH: ${HEALTH_ROW_READER_HASH:-}
+    SHARED_HEALTH_EVIDENCE_SOURCE_HASH: ${SHARED_HEALTH_EVIDENCE_SOURCE_HASH:-}
+  restart: unless-stopped
+  expose:
+    - "8080"
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+
+x-notary-common: &notary-common
+  image: ${REGISTRY_NOTARY_IMAGE:-registry-notary:hosted}
+  environment: &notary-env
+    RUST_LOG: ${RUST_LOG:-info}
+    REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}
+    REGISTRY_NOTARY_ISSUER_JWK: ${REGISTRY_NOTARY_ISSUER_JWK:-}
+    REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
+    CIVIL_EVIDENCE_SOURCE_RAW: ${CIVIL_EVIDENCE_SOURCE_RAW:-}
+  restart: unless-stopped
+  expose:
+    - "8080"
+  healthcheck:
+    test: ["CMD", "registry-notary", "healthcheck"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+
+services:
+  postgres:
+    image: ${REGISTRY_LAB_POSTGRES_IMAGE:-postgres:16-alpine}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p "$$PGDATA/ssl"
+        if [ ! -s "$$PGDATA/ssl/server.key" ] || [ ! -s "$$PGDATA/ssl/server.crt" ]; then
+          openssl req -new -x509 -days "$${REGISTRY_LAB_POSTGRES_SSL_DAYS:-397}" -nodes \
+            -subj "/CN=postgres" \
+            -keyout "$$PGDATA/ssl/server.key" \
+            -out "$$PGDATA/ssl/server.crt"
+        fi
+        chmod 600 "$$PGDATA/ssl/server.key"
+        chown postgres:postgres "$$PGDATA/ssl/server.crt" "$$PGDATA/ssl/server.key"
+        exec docker-entrypoint.sh postgres \
+          -c ssl=on \
+          -c ssl_cert_file="$$PGDATA/ssl/server.crt" \
+          -c ssl_key_file="$$PGDATA/ssl/server.key"
+    environment:
+      POSTGRES_USER: ${REGISTRY_LAB_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${REGISTRY_LAB_POSTGRES_PASSWORD:-replace-in-coolify}
+      POSTGRES_DB: ${REGISTRY_LAB_POSTGRES_DB:-registry_lab}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: ${REGISTRY_LAB_REDIS_IMAGE:-redis:7.4-alpine}
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  zitadel-seed-init:
+    image: ${REGISTRY_LAB_ALPINE_IMAGE:-alpine:3.20}
+    restart: "no"
+    command: ["chown", "-R", "1000:1000", "/seed"]
+    volumes:
+      - zitadel-seed:/seed
+
+  zitadel:
+    image: ${REGISTRY_LAB_ZITADEL_IMAGE:-ghcr.io/zitadel/zitadel:v2.66.4}
+    command: start-from-init --tlsMode disabled
+    environment:
+      ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY:-}
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: ${REGISTRY_LAB_POSTGRES_USER:-postgres}
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${REGISTRY_LAB_POSTGRES_PASSWORD:-replace-in-coolify}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${REGISTRY_LAB_POSTGRES_USER:-postgres}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${REGISTRY_LAB_POSTGRES_PASSWORD:-replace-in-coolify}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_EXTERNALDOMAIN: zitadel.lab.registrystack.org
+      ZITADEL_EXTERNALPORT: 443
+      ZITADEL_EXTERNALSECURE: "true"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: zitadel-bootstrap-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Bootstrap Service Account
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-12-31T23:59:59Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /seed/zitadel-pat
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zitadel-seed-init:
+        condition: service_completed_successfully
+    volumes:
+      - zitadel-seed:/seed
+    expose:
+      - "8080"
+    labels:
+      traefik.http.services.zitadel.loadbalancer.server.scheme: h2c
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  civil-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/civil-registry-relay.yaml"]
+    volumes:
+      - ./config/coolify/relay:/etc/registry-relay:ro
+      - ./data/civil:/demo/data/civil:ro
+      - civil-registry-cache:/var/lib/registry-relay/cache
+
+  social-protection-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/social-protection-registry-relay.yaml"]
+    volumes:
+      - ./config/coolify/relay:/etc/registry-relay:ro
+      - ./data/social-protection:/demo/data/social-protection:ro
+      - social-protection-registry-cache:/var/lib/registry-relay/cache
+
+  health-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/health-registry-relay.yaml"]
+    volumes:
+      - ./config/coolify/relay:/etc/registry-relay:ro
+      - ./data/health:/demo/data/health:ro
+      - health-registry-cache:/var/lib/registry-relay/cache
+
+  static-metadata-publisher:
+    image: ${REGISTRY_LAB_STATIC_METADATA_IMAGE:-python:3.12.3-slim-bookworm}
+    command: ["python", "/usr/local/bin/static-metadata-server.py", "--port", "8080", "--host", "0.0.0.0", "--directory", "/srv/static"]
+    restart: unless-stopped
+    expose:
+      - "8080"
+    volumes:
+      - ./static-metadata:/srv/static:ro
+      - ./scripts/static-metadata-server.py:/usr/local/bin/static-metadata-server.py:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/.well-known/registry-manifest.json\", timeout=2).read()'"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  citizen-civil-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/citizen-civil-notary.yaml"]
+    volumes:
+      - ./config/coolify/notary/citizen-civil-notary.yaml:/etc/registry-notary/citizen-civil-notary.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      civil-registry-relay:
+        condition: service_healthy
+
+  openfn-dhis2-sidecar:
+    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-registry-notary-openfn-sidecar:hosted}
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        : "$${OPENFN_DHIS2_HOST_URL:?missing OPENFN_DHIS2_HOST_URL}"
+        escaped="$$(printf '%s' "$${OPENFN_DHIS2_HOST_URL%/}" | sed 's/[&|]/\\&/g')"
+        sed "s|__OPENFN_DHIS2_HOST_URL__|$${escaped}|g" \
+          /etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template \
+          > /tmp/openfn-dhis2-sidecar.yaml
+        exec registry-notary-openfn-sidecar --config /tmp/openfn-dhis2-sidecar.yaml
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      OPENFN_SIDECAR_TOKEN_HASH: ${OPENFN_SIDECAR_TOKEN_HASH:-}
+      OPENFN_DHIS2_HOST_URL: ${OPENFN_DHIS2_HOST_URL:-}
+      OPENFN_DHIS2_USERNAME: ${OPENFN_DHIS2_USERNAME:-}
+      OPENFN_DHIS2_PASSWORD: ${OPENFN_DHIS2_PASSWORD:-}
+      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"hostUrl":"${OPENFN_DHIS2_HOST_URL:-}","baseUrl":"${OPENFN_DHIS2_HOST_URL:-}","username":"${OPENFN_DHIS2_USERNAME:-}","password":"${OPENFN_DHIS2_PASSWORD:-}"}'
+    volumes:
+      - ./config/coolify/openfn/openfn-dhis2-sidecar.yaml.template:/etc/registry-notary-openfn/openfn-dhis2-sidecar.yaml.template:ro
+      - ./config/openfn/jobs:/opt/openfn/jobs:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e 'fetch(\"http://127.0.0.1:8080/ready\").then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));'"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  dhis2-health-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]
+    environment:
+      <<: *notary-env
+      DHIS2_EVIDENCE_CLIENT_TOKEN_HASH: ${DHIS2_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      DHIS2_EVIDENCE_CLIENT_BEARER_HASH: ${DHIS2_EVIDENCE_CLIENT_BEARER_HASH:-}
+      OPENFN_SIDECAR_TOKEN_RAW: ${OPENFN_SIDECAR_TOKEN_RAW:-}
+    volumes:
+      - ./config/coolify/notary/dhis2-health-notary.yaml:/etc/registry-notary/dhis2-health-notary.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      openfn-dhis2-sidecar:
+        condition: service_healthy
+
+  opencrvs-dci-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/opencrvs-dci-notary.yaml"]
+    environment:
+      <<: *notary-env
+      OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      OPENCRVS_DCI_CLIENT_ID: ${OPENCRVS_DCI_CLIENT_ID:-}
+      OPENCRVS_DCI_CLIENT_SECRET: ${OPENCRVS_DCI_CLIENT_SECRET:-}
+      OPENCRVS_DCI_SHA_SECRET: ${OPENCRVS_DCI_SHA_SECRET:-}
+      OPENCRVS_DCI_BASE_URL: ${OPENCRVS_DCI_BASE_URL:-}
+    volumes:
+      - ./config/coolify/notary/opencrvs-dci-notary.yaml:/etc/registry-notary/opencrvs-dci-notary.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  zitadel-seed:
+  civil-registry-cache:
+  social-protection-registry-cache:
+  health-registry-cache:

@@ -1,0 +1,194 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+
+auth:
+  mode: oidc
+  oidc:
+    issuer: https://esignet.lab.registrystack.org
+    jwks_uri: https://esignet.lab.registrystack.org/v1/esignet/oauth/.well-known/jwks.json
+    userinfo_endpoint: https://esignet.lab.registrystack.org/v1/esignet/oidc/userinfo
+    audiences:
+      - registry-lab-live-client
+    allowed_clients:
+      - registry-lab-live-client
+    allowed_algorithms:
+      - RS256
+    allowed_typ: []
+    scope_claim: scope
+    scope_separator: " "
+    principal_claim: sub
+    leeway_seconds: 60
+    scope_map:
+      self_attestation:
+        - self_attestation
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+replay:
+  storage: redis
+  redis:
+    url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
+    key_prefix: registry-lab:citizen-civil-notary
+    connect_timeout_ms: 1000
+    operation_timeout_ms: 500
+
+evidence:
+  enabled: true
+  service_id: citizen-civil-notary
+  api_base_url: https://citizen-notary.lab.registrystack.org
+  inline_batch_limit: 20
+  source_connections:
+    civil:
+      base_url: http://civil-registry-relay:8080
+      allow_insecure_private_network: true
+      token_env: CIVIL_EVIDENCE_SOURCE_RAW
+      dci:
+        search_path: /dci/crvs/registry/sync/search
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          national_id: /person/national_id
+          deceased: /person/deceased
+  signing_keys:
+    citizen-civil-hosted:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:citizen-notary.lab.registrystack.org#citizen-civil-hosted-key-1
+      status: active
+  credential_profiles:
+    citizen_civil_status_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:citizen-notary.lab.registrystack.org
+      signing_key: citizen-civil-hosted
+      vct: https://citizen-notary.lab.registrystack.org/credentials/citizen-civil-status/v1
+      validity_seconds: 600
+      allowed_claims:
+        - person-is-alive
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - predicate
+  claims:
+    - id: person-is-alive
+      title: Person is alive
+      version: 2026-05
+      subject_type: person
+      purpose: citizen_self_attestation
+      value:
+        type: boolean
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.identifiers.national_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.civil.deceased == false"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - citizen_civil_status_sd_jwt
+
+self_attestation:
+  enabled: true
+  subject_binding:
+    token_claim: individual_id
+    claim_source: userinfo
+    id_type: national_id
+  citizen_clients:
+    allowed_client_ids:
+      - registry-lab-live-client
+    allowed_audiences:
+      - registry-lab-live-client
+  token_policy:
+    assurance_claim_source: id_token
+    max_auth_age_seconds: 1200
+    max_access_token_lifetime_seconds: 1200
+    max_evaluation_age_seconds: 600
+    max_credential_validity_seconds: 600
+    max_clock_leeway_seconds: 60
+  allowed_operations:
+    evaluate: true
+    render: true
+    issue_credential: true
+    batch_evaluate: false
+  allowed_purposes:
+    - citizen_self_attestation
+  allowed_claims:
+    - person-is-alive
+  allowed_formats:
+    - application/vnd.registry-notary.claim-result+json
+    - application/dc+sd-jwt
+  allowed_disclosures:
+    - predicate
+    - redacted
+  scope_policy: disabled
+  credential_profiles:
+    - citizen_civil_status_sd_jwt
+  allowed_wallet_origins: []
+  rate_limits:
+    mode: in_process
+    invalid_token_per_client_address_per_minute: 20
+    per_principal_per_minute: 10
+    subject_mismatch_per_principal_per_hour: 5
+    per_holder_per_hour: 10
+    credential_issuance_per_principal_per_hour: 5
+
+oid4vci:
+  enabled: true
+  credential_issuer: https://citizen-notary.lab.registrystack.org
+  authorization_servers:
+    - https://esignet.lab.registrystack.org/v1/esignet
+  accepted_token_audiences:
+    - https://citizen-notary.lab.registrystack.org
+    - registry-lab-live-client
+  credential_endpoint: https://citizen-notary.lab.registrystack.org/oid4vci/credential
+  offer_endpoint: https://citizen-notary.lab.registrystack.org/oid4vci/credential-offer
+  nonce_endpoint: https://citizen-notary.lab.registrystack.org/oid4vci/nonce
+  nonce:
+    enabled: true
+    ttl_seconds: 300
+  authorization:
+    require_pkce_method: S256
+  proof:
+    max_age_seconds: 300
+    max_clock_skew_seconds: 30
+  credential_configurations:
+    person_is_alive_sd_jwt:
+      claim_id: person-is-alive
+      credential_profile: citizen_civil_status_sd_jwt
+      format: dc+sd-jwt
+      scope: person-is-alive
+      vct: https://citizen-notary.lab.registrystack.org/credentials/citizen-civil-status/v1
+      display_name: Person is alive
+      proof_signing_alg_values_supported:
+        - EdDSA
+      cryptographic_binding_methods_supported:
+        - did:jwk

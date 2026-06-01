@@ -125,6 +125,22 @@ oidc-relay:
 citizen-self-attestation:
     scripts/smoke-citizen-self-attestation.sh
 
+# Validate hosted Coolify compose artifacts before deployment.
+hosted-validate:
+    docker compose -f compose.coolify.yaml config >/dev/null
+    REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" uv run scripts/validate-hosted-deploy.py
+
+# Validate hosted artifacts and require real secret values in the current environment.
+hosted-validate-strict:
+    docker compose -f compose.coolify.yaml config >/dev/null
+    REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    uv run scripts/validate-hosted-deploy.py --require-secret-values
+
+# Run focused tests for hosted deployment validation.
+hosted-validate-test:
+    python3 scripts/test_validate_hosted_deploy.py
+
 # Print the local eSignet authorization URL and save PKCE state.
 citizen-self-attestation-esignet-login:
     @set +e; \
