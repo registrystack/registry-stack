@@ -356,7 +356,7 @@ missing access-token `typ`, or a 1200s token lifetime, the script detects or
 accepts explicit env overrides for those settings. The script generates
 `output/citizen-self-attestation/citizen-civil-notary.yaml`, starts a host-side
 Notary against the existing civil Relay, evaluates `person-is-alive` for the
-token-bound citizen, and proves `NID-1002` is denied. See
+token-bound citizen, and proves `NID-1002` is denied by subject binding. See
 `output/citizen-self-attestation/report.md` and
 `output/citizen-self-attestation/flow-transcript.txt` for the evidence trail,
 and `docs/citizen-self-attestation-esignet-use-case.md` for the use case and
@@ -649,6 +649,33 @@ XLSX, and Parquet extracts. It writes a small but non-trivial fixture set:
 The generator validates key coverage before writing files so the demo keeps a
 successful subject, failed predicates, deceased-member cases, cross-source
 subjects, and health-linked support cases.
+
+The shared OpenSPP and Registry Lab v1 subject matrix is:
+
+| ID | Story person | Type | Civil | Social protection | Health | Notary purpose |
+| --- | --- | --- | --- | --- | --- | --- |
+| `NID-1001` | Miguel Santos | child | alive | active | available | happy path combined support |
+| `NID-1002` | Maria Dela Cruz | child | alive | inactive | unavailable | social or health negative |
+| `NID-1003` | dedicated negative-control persona | adult | deceased | review/none | available | civil negative control |
+| `NID-1004` | Rafael Aquino | child | alive | active | available | single-parent household positive |
+| `NID-1005` | Rosalie Bautista | child | alive | active | partial health | large family mixed case |
+| `NID-1006` | Miguel Martinez | child | alive | active | available | disability support story |
+| `NID-1007` | Lola Santos | elderly | alive | inactive | available | elderly age-band and pension story |
+| `NID-1008` | Rosa Garcia | elderly | alive | active | available | individual elderly positive |
+| `NID-1009` | Ana Mendoza | adult | alive | none | available | registered adult, not social-active |
+| `NID-1010` | Pedro Reyes | adult | alive | none | unavailable | community leader negative |
+
+Expected Registry Notary outcomes:
+
+| Claim | Positive IDs | Negative IDs |
+| --- | --- | --- |
+| `person-is-alive` | `NID-1001`, `NID-1002`, `NID-1004`, `NID-1005`, `NID-1006`, `NID-1007`, `NID-1008`, `NID-1009`, `NID-1010` | `NID-1003` |
+| `health-service-available` | `NID-1001`, `NID-1003`, `NID-1004`, `NID-1006`, `NID-1007`, `NID-1008`, `NID-1009` | `NID-1002`, `NID-1005`, `NID-1010` |
+| `eligible-for-combined-support` | `NID-1001`, `NID-1004`, `NID-1006`, `NID-1008` | `NID-1002`, `NID-1003`, `NID-1005`, `NID-1007`, `NID-1009`, `NID-1010` |
+
+Regenerate aligned local fixtures with `just generate`. For release validation,
+run `just generate`, `just build`, `just up`, `just smoke`, and
+`just notary-client`.
 
 ## Credentials
 

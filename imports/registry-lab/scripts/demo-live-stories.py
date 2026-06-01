@@ -34,6 +34,22 @@ CORRELATION_ID = os.environ.get("DEMO_CORRELATION_ID", "registry-lab-live-storie
 SERVICE_IRI = "https://demo.example.gov/services/health-linked-child-support"
 STATIC_METADATA_URL = os.environ.get("STATIC_METADATA_URL", "http://127.0.0.1:4331")
 API_CATALOG_PATH = "/.well-known/api-catalog"
+V1_MATRIX = [
+    {"id": "NID-1001", "person": "Miguel Santos", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1002", "person": "Maria Dela Cruz", "alive": True, "health": False, "combined": False},
+    {"id": "NID-1003", "person": "dedicated negative-control persona", "alive": False, "health": True, "combined": False},
+    {"id": "NID-1004", "person": "Rafael Aquino", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1005", "person": "Rosalie Bautista", "alive": True, "health": False, "combined": False},
+    {"id": "NID-1006", "person": "Miguel Martinez", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1007", "person": "Lola Santos", "alive": True, "health": True, "combined": False},
+    {"id": "NID-1008", "person": "Rosa Garcia", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1009", "person": "Ana Mendoza", "alive": True, "health": True, "combined": False},
+    {"id": "NID-1010", "person": "Pedro Reyes", "alive": True, "health": False, "combined": False},
+]
+PRIMARY_SUBJECT = V1_MATRIX[0]["id"]
+SECONDARY_INACTIVE_SUBJECT = V1_MATRIX[1]["id"]
+POSTGRES_INSERT_SUBJECT = V1_MATRIX[3]["id"]
+FORM_APPLICANT_SUBJECT = V1_MATRIX[8]["id"]
 
 
 class StoryError(RuntimeError):
@@ -943,9 +959,9 @@ def form_schema_url(index: dict[str, Any], form_id: str) -> str | None:
 def service_form_sample() -> dict[str, Any]:
     return {
         "supportType": "health_linked",
-        "applicantNationalId": "NID-1001",
-        "children": [{"childNationalId": "NID-2001"}],
-        "healthDistrict": "central",
+        "applicantNationalId": FORM_APPLICANT_SUBJECT,
+        "children": [{"childNationalId": PRIMARY_SUBJECT}],
+        "healthDistrict": "north",
     }
 
 
@@ -1008,25 +1024,25 @@ def notary_call_config(values: dict[str, str]) -> dict[str, dict[str, Any]]:
     return {
         "https://demo.example.gov/evidence-types/civil-child-status": {
             "token": env("CIVIL_EVIDENCE_CLIENT_BEARER", values),
-            "target_id": "NID-1001",
+            "target_id": PRIMARY_SUBJECT,
             "disclosure": "predicate",
             "route_label": "civil child status via civil Notary",
         },
         "https://demo.example.gov/evidence-types/household-support": {
             "token": env("SOCIAL_EVIDENCE_CLIENT_BEARER", values),
-            "target_id": "NID-1001",
+            "target_id": PRIMARY_SUBJECT,
             "disclosure": "predicate",
             "route_label": "household support via social protection Notary",
         },
         "https://demo.example.gov/evidence-types/health-service-availability": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
-            "target_id": "NID-1001",
+            "target_id": PRIMARY_SUBJECT,
             "disclosure": "predicate",
             "route_label": "health service availability via shared Notary",
         },
         "https://demo.example.gov/evidence-types/combined-support": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
-            "target_id": "NID-1001",
+            "target_id": PRIMARY_SUBJECT,
             "disclosure": "predicate",
             "route_label": "combined support via shared Notary",
         },
@@ -1485,7 +1501,7 @@ def story_postgres(out: Path, values: dict[str, str], step: int) -> int:
     compose("up", "-d", "postgres")
     wait_for("Postgres SQL shell", wait_for_postgres_psql)
     psql(
-        """
+        f"""
 DROP SCHEMA IF EXISTS demo_story CASCADE;
 CREATE SCHEMA demo_story;
 CREATE TABLE demo_story.beneficiaries (
@@ -1497,8 +1513,8 @@ CREATE TABLE demo_story.beneficiaries (
   updated_at timestamptz not null
 );
 INSERT INTO demo_story.beneficiaries VALUES
-  (1, 'NID-1001', 'CHILD_SUPPORT', 85.50, 'active', '2026-01-10T00:00:00Z'),
-  (2, 'NID-1002', 'CHILD_SUPPORT', 0.00, 'inactive', '2026-01-11T00:00:00Z');
+  (1, '{PRIMARY_SUBJECT}', 'CHILD_SUPPORT', 85.50, 'active', '2026-01-10T00:00:00Z'),
+  (2, '{SECONDARY_INACTIVE_SUBJECT}', 'CHILD_SUPPORT', 0.00, 'inactive', '2026-01-11T00:00:00Z');
 """
     )
     token = secrets.token_urlsafe(24)
@@ -1545,7 +1561,7 @@ INSERT INTO demo_story.beneficiaries VALUES
         save(out, step, "postgres-live-before-insert", before)
         step += 1
         explain("Insert one operational row directly into Postgres, without restarting Relay or changing Relay config.")
-        psql("INSERT INTO demo_story.beneficiaries VALUES (3, 'NID-1004', 'CHILD_SUPPORT', 110.00, 'active', '2026-01-12T00:00:00Z');")
+        psql(f"INSERT INTO demo_story.beneficiaries VALUES (3, '{POSTGRES_INSERT_SUBJECT}', 'CHILD_SUPPORT', 110.00, 'active', '2026-01-12T00:00:00Z');")
         show_query("GET", base, "/v1/datasets/postgres_registry/entities/beneficiary/records?limit=10", authenticated=True, purpose=True)
         after = require(
             request("GET", base, "/v1/datasets/postgres_registry/entities/beneficiary/records?limit=10", token, headers={"Data-Purpose": PURPOSE}),
@@ -1854,12 +1870,13 @@ def write_case_file(out: Path, enabled: list[str]) -> dict[str, Any]:
             {"id": "postgres", "role": "Holds a live operational source table."},
         ],
         "subject_refs": {
-            "service_first_case": "NID-1001",
-            "postgres_live_case": "NID-1001",
-            "postgres_inserted_case": "NID-1004",
+            "service_first_case": PRIMARY_SUBJECT,
+            "postgres_live_case": PRIMARY_SUBJECT,
+            "postgres_inserted_case": POSTGRES_INSERT_SUBJECT,
             "openfn_lookup_subject": "person-123",
             "oidc_principal": oidc_claims.get("subject"),
         },
+        "v1_notary_matrix": V1_MATRIX,
         "story_results": {
             "service_first": {
                 "enabled": "service_first" in enabled,

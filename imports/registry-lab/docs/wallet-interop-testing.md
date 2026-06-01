@@ -43,7 +43,8 @@ storage, and display.
 
 ## Preconditions
 
-- Local eSignet is running and can authenticate the seeded citizen `NID-1001`.
+- Local eSignet is running and can authenticate the seeded citizen `NID-1001`,
+  Miguel Santos.
 - Registry Relay civil fixtures are running.
 - Registry Notary is started through the citizen OID4VCI flow.
 - The wallet can reach the Notary issuer URL and eSignet authorization URL.
@@ -159,8 +160,8 @@ Testing path:
 3. Register the Mimoto/Inji client with the eSignet issuer used by the lab.
 4. Ensure eSignet returns `individual_id=NID-1001` through signed UserInfo, or
    another configured subject-binding claim.
-5. In Inji, use the configured provider from the add-card flow.
-6. Authenticate as the seeded citizen.
+5. Authenticate as the seeded `NID-1001` citizen, Miguel Santos.
+6. In Inji, use the configured provider from the add-card flow.
 7. Download and inspect the credential.
 
 Expected result:

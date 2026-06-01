@@ -14,6 +14,18 @@ from typing import Any
 
 CLAIM_RESULT_JSON = "application/vnd.registry-notary.claim-result+json"
 PURPOSE = "https://demo.example.gov/purpose/decentralized-evidence-demo"
+V1_MATRIX = [
+    {"id": "NID-1001", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1002", "alive": True, "health": False, "combined": False},
+    {"id": "NID-1003", "alive": False, "health": True, "combined": False},
+    {"id": "NID-1004", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1005", "alive": True, "health": False, "combined": False},
+    {"id": "NID-1006", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1007", "alive": True, "health": True, "combined": False},
+    {"id": "NID-1008", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1009", "alive": True, "health": True, "combined": False},
+    {"id": "NID-1010", "alive": True, "health": False, "combined": False},
+]
 
 
 def fail(message: str) -> None:
@@ -94,6 +106,16 @@ def result_for(response: dict[str, Any], expected_claim: str) -> dict[str, Any]:
         if isinstance(result, dict) and result.get("claim_id") == expected_claim:
             return result
     fail(f"evaluation response did not contain claim_id={expected_claim}")
+
+
+def assert_boolean_result(response: dict[str, Any], expected_claim: str, expected: bool) -> dict[str, Any]:
+    result = result_for(response, expected_claim)
+    actual = result.get("satisfied")
+    if actual is None:
+        actual = result.get("value")
+    if actual is not expected:
+        fail(f"{expected_claim} expected {expected}, got {actual!r}")
+    return result
 
 
 def assert_service_document(response: dict[str, Any], expected_service: str) -> None:
@@ -179,49 +201,92 @@ def main() -> None:
         fail("civil get claim returned the wrong claim")
     record("civil get claim", {"claim_id": specific_claim.get("id")})
 
-    civil_evaluation = check(
-        "civil high-level evaluation through client",
-        lambda: civil.evaluate(
-            target_id="NID-1001",
-            identifier_scheme="national_id",
-            claims=["person-is-alive"],
-            request_id=f"{correlation_id}-civil-evaluate",
-        ),
-    )
-    civil_result = result_for(civil_evaluation, "person-is-alive")
-    record(
-        "civil high-level evaluation",
-        {
-            "claim_id": civil_result.get("claim_id"),
-            "provenance_source_count": civil_result.get("provenance", {}).get("source_count"),
-        },
-    )
-
-    shared_evaluation = check(
-        "shared raw evaluation through client",
-        lambda: shared.evaluate_request(
+    matrix_results = []
+    for case in V1_MATRIX:
+        subject = case["id"]
+        civil_evaluation = check(
+            f"civil high-level evaluation through client for {subject}",
+            lambda subject=subject: civil.evaluate(
+                target_id=subject,
+                identifier_scheme="national_id",
+                claims=["person-is-alive"],
+                request_id=f"{correlation_id}-civil-evaluate-{subject}",
+            ),
+        )
+        civil_result = assert_boolean_result(civil_evaluation, "person-is-alive", case["alive"])
+        matrix_results.append(
             {
-                "target": {
-                    "type": "Person",
-                    "identifiers": [{"scheme": "national_id", "value": "NID-1001"}],
+                "subject": subject,
+                "claim_id": "person-is-alive",
+                "expected": case["alive"],
+                "observed": civil_result.get("satisfied") if civil_result.get("satisfied") is not None else civil_result.get("value"),
+                "provenance_source_count": civil_result.get("provenance", {}).get("source_count"),
+            }
+        )
+
+        health_evaluation = check(
+            f"shared health evaluation through client for {subject}",
+            lambda subject=subject: shared.evaluate_request(
+                {
+                    "target": {
+                        "type": "Person",
+                        "identifiers": [{"scheme": "national_id", "value": subject}],
+                    },
+                    "claims": ["health-service-available"],
+                    "disclosure": "predicate",
+                    "format": CLAIM_RESULT_JSON,
+                    "purpose": PURPOSE,
                 },
-                "claims": ["eligible-for-combined-support"],
-                "disclosure": "predicate",
-                "format": CLAIM_RESULT_JSON,
-                "purpose": PURPOSE,
-            },
-            request_id=f"{correlation_id}-shared-evaluate",
-        ),
-    )
-    shared_result = result_for(shared_evaluation, "eligible-for-combined-support")
-    source_count = shared_result.get("provenance", {}).get("source_count", 0)
-    if not isinstance(source_count, int) or source_count < 2:
-        fail(f"shared evaluation expected at least 2 sources, got {source_count!r}")
+                request_id=f"{correlation_id}-health-evaluate-{subject}",
+            ),
+        )
+        health_result = assert_boolean_result(health_evaluation, "health-service-available", case["health"])
+        matrix_results.append(
+            {
+                "subject": subject,
+                "claim_id": "health-service-available",
+                "expected": case["health"],
+                "observed": health_result.get("satisfied") if health_result.get("satisfied") is not None else health_result.get("value"),
+                "provenance_source_count": health_result.get("provenance", {}).get("source_count"),
+            }
+        )
+
+        shared_evaluation = check(
+            f"shared combined-support evaluation through client for {subject}",
+            lambda subject=subject: shared.evaluate_request(
+                {
+                    "target": {
+                        "type": "Person",
+                        "identifiers": [{"scheme": "national_id", "value": subject}],
+                    },
+                    "claims": ["eligible-for-combined-support"],
+                    "disclosure": "predicate",
+                    "format": CLAIM_RESULT_JSON,
+                    "purpose": PURPOSE,
+                },
+                request_id=f"{correlation_id}-shared-evaluate-{subject}",
+            ),
+        )
+        shared_result = assert_boolean_result(shared_evaluation, "eligible-for-combined-support", case["combined"])
+        source_count = shared_result.get("provenance", {}).get("source_count", 0)
+        if case["combined"] and (not isinstance(source_count, int) or source_count < 2):
+            fail(f"shared evaluation expected at least 2 sources for {subject}, got {source_count!r}")
+        matrix_results.append(
+            {
+                "subject": subject,
+                "claim_id": "eligible-for-combined-support",
+                "expected": case["combined"],
+                "observed": shared_result.get("satisfied") if shared_result.get("satisfied") is not None else shared_result.get("value"),
+                "provenance_source_count": source_count,
+            }
+        )
+
     record(
-        "shared raw evaluation",
+        "v1 Notary outcome matrix",
         {
-            "claim_id": shared_result.get("claim_id"),
-            "provenance_source_count": source_count,
+            "subject_count": len(V1_MATRIX),
+            "claim_result_count": len(matrix_results),
+            "results": matrix_results,
         },
     )
 

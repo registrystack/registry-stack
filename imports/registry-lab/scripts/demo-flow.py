@@ -25,6 +25,19 @@ CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 CCCEV_FORMAT = 'application/ld+json; profile="cccev"'
 SD_JWT_FORMAT = "application/dc+sd-jwt"
 CORRELATION_ID = os.environ.get("DEMO_CORRELATION_ID", "decentralized-demo-correlation-001")
+V1_MATRIX = [
+    {"id": "NID-1001", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1002", "alive": True, "health": False, "combined": False},
+    {"id": "NID-1003", "alive": False, "health": True, "combined": False},
+    {"id": "NID-1004", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1005", "alive": True, "health": False, "combined": False},
+    {"id": "NID-1006", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1007", "alive": True, "health": True, "combined": False},
+    {"id": "NID-1008", "alive": True, "health": True, "combined": True},
+    {"id": "NID-1009", "alive": True, "health": True, "combined": False},
+    {"id": "NID-1010", "alive": True, "health": False, "combined": False},
+]
+PRIMARY_SUBJECT = V1_MATRIX[0]["id"]
 
 DEMO_HOLDER_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEINpAgYVDwfGjJ/3AJ6IKwVqB8vpnxoX4E4RbnLSFarM+
@@ -217,6 +230,26 @@ def first_result_id(evaluation: dict[str, Any]) -> str:
     if not evaluation_id:
         raise DemoError(f"evaluation response has no evaluation_id: {evaluation}")
     return evaluation_id
+
+
+def result_for(evaluation: dict[str, Any], expected_claim: str) -> dict[str, Any]:
+    results = evaluation.get("results") or evaluation.get("claim_results") or []
+    if not results:
+        raise DemoError(f"evaluation response has no results: {evaluation}")
+    for result in results:
+        if isinstance(result, dict) and result.get("claim_id") == expected_claim:
+            return result
+    raise DemoError(f"evaluation response has no result for {expected_claim}: {evaluation}")
+
+
+def require_boolean_result(evaluation: dict[str, Any], claim: str, expected: bool, label: str) -> dict[str, Any]:
+    result = result_for(evaluation, claim)
+    observed = result.get("satisfied")
+    if observed is None:
+        observed = result.get("value")
+    if observed is not expected:
+        raise DemoError(f"{label} expected {claim}={expected}, got {observed!r}: {result}")
+    return result
 
 
 def first_data_row(response: dict[str, Any], label: str) -> dict[str, Any]:
@@ -444,10 +477,10 @@ def main() -> int:
     step += 1
 
     eval_specs = [
-        (evidence[0], "civil-claim-evaluation", ["person-is-alive"], "NID-1001", "predicate", CLAIM_RESULT_FORMAT),
-        (evidence[1], "social-claim-evaluation", ["program-enrollment-status"], "NID-1001", "value", CLAIM_RESULT_FORMAT),
-        (evidence[2], "health-claim-evaluation", ["health-service-available"], "NID-1001", "predicate", CLAIM_RESULT_FORMAT),
-        (evidence[2], "shared-cross-source-evaluation", ["eligible-for-combined-support"], "NID-1001", "predicate", CLAIM_RESULT_FORMAT),
+        (evidence[0], "civil-claim-evaluation", ["person-is-alive"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
+        (evidence[1], "social-claim-evaluation", ["program-enrollment-status"], PRIMARY_SUBJECT, "value", CLAIM_RESULT_FORMAT),
+        (evidence[2], "health-claim-evaluation", ["health-service-available"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
+        (evidence[2], "shared-cross-source-evaluation", ["eligible-for-combined-support"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
     ]
     first_eval: dict[str, Any] | None = None
     for service, label, claims, subject, disclosure, fmt in eval_specs:
@@ -466,6 +499,52 @@ def main() -> int:
         save(out, step, label, result)
         first_eval = first_eval or result
         step += 1
+
+    matrix_results = []
+    matrix_claims = [
+        (evidence[0], "person-is-alive", "alive"),
+        (evidence[2], "health-service-available", "health"),
+        (evidence[2], "eligible-for-combined-support", "combined"),
+    ]
+    for case in V1_MATRIX:
+        subject = str(case["id"])
+        for service, claim, expected_key in matrix_claims:
+            expected = bool(case[expected_key])
+            label = f"v1 matrix {claim} {subject}"
+            result = require(
+                request(
+                    "POST",
+                    service.url,
+                    "/v1/evaluations",
+                    env(service.token_env),
+                    evaluate_payload(subject, [claim], "predicate", CLAIM_RESULT_FORMAT),
+                    {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
+                ),
+                200,
+                label,
+            )
+            claim_result = require_boolean_result(result, claim, expected, label)
+            matrix_results.append(
+                {
+                    "subject": subject,
+                    "claim_id": claim,
+                    "expected": expected,
+                    "observed": claim_result.get("satisfied")
+                    if claim_result.get("satisfied") is not None
+                    else claim_result.get("value"),
+                    "provenance_source_count": claim_result.get("provenance", {}).get("source_count"),
+                }
+            )
+    save(
+        out,
+        step,
+        "v1-notary-outcome-matrix",
+        {
+            "subjects": [case["id"] for case in V1_MATRIX],
+            "results": matrix_results,
+        },
+    )
+    step += 1
 
     missing = request(
         "POST",
@@ -492,7 +571,7 @@ def main() -> int:
                             "identifiers": [{"scheme": "national_id", "value": subject}],
                         }
                     }
-                    for subject in ("NID-1001", "NID-1002", "NID-9999")
+                    for subject in [case["id"] for case in V1_MATRIX]
                 ],
                 "claims": ["eligible-for-combined-support"],
                 "disclosure": "predicate",
@@ -505,6 +584,19 @@ def main() -> int:
     )
     save(out, step, "batch-evaluation", batch)
     step += 1
+    batch_items = batch.get("items") if isinstance(batch, dict) else None
+    if not isinstance(batch_items, list) or len(batch_items) < len(V1_MATRIX):
+        raise DemoError(f"batch evaluation expected at least {len(V1_MATRIX)} items, got {len(batch_items or [])}")
+    for index, case in enumerate(V1_MATRIX):
+        item = batch_items[index]
+        if not isinstance(item, dict) or item.get("status") != "succeeded":
+            raise DemoError(f"batch evaluation for {case['id']} did not succeed: {item}")
+        claim_result = result_for({"results": item.get("claim_results", [])}, "eligible-for-combined-support")
+        observed = claim_result.get("satisfied")
+        if observed is None:
+            observed = claim_result.get("value")
+        if observed is not case["combined"]:
+            raise DemoError(f"batch evaluation for {case['id']} expected combined={case['combined']}, got {observed!r}")
 
     cccev_eval = require(
         request(
@@ -512,7 +604,7 @@ def main() -> int:
             evidence[0].url,
             "/v1/evaluations",
             env(evidence[0].token_env),
-            evaluate_payload("NID-1001", ["person-is-alive"], "predicate", CCCEV_FORMAT),
+            evaluate_payload(PRIMARY_SUBJECT, ["person-is-alive"], "predicate", CCCEV_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": CCCEV_FORMAT},
         ),
         200,
@@ -541,7 +633,7 @@ def main() -> int:
             evidence[0].url,
             "/v1/evaluations",
             env(evidence[0].token_env),
-            evaluate_payload("NID-1001", ["person-is-alive"], "predicate", SD_JWT_FORMAT),
+            evaluate_payload(PRIMARY_SUBJECT, ["person-is-alive"], "predicate", SD_JWT_FORMAT),
             {"Data-Purpose": PURPOSE, "Accept": SD_JWT_FORMAT},
         ),
         200,
@@ -625,7 +717,8 @@ def main() -> int:
                     "shared Evidence Server discovery and OpenAPI",
                     "health-backed claim evaluation",
                     "cross-source CEL evaluation",
-                    "batch evaluation with mixed outcomes",
+                    "full v1 Notary outcome matrix",
+                    "batch evaluation with mixed v1 outcomes",
                     "missing-subject failure",
                 ],
                 "artifact_labels": [
@@ -636,6 +729,7 @@ def main() -> int:
                     "shared-evidence-openapi",
                     "health-claim-evaluation",
                     "shared-cross-source-evaluation",
+                    "v1-notary-outcome-matrix",
                     "batch-evaluation",
                     "missing-subject-evaluation",
                 ],

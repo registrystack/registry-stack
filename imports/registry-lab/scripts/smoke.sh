@@ -160,6 +160,33 @@ if value != expected_value:
 PY
 }
 
+assert_claim_outcome() {
+  python - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+path, claim, expected = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding="utf-8") as fh:
+    body = json.load(fh)
+results = body.get("results") or body.get("claim_results") or []
+if not results:
+    raise SystemExit("evaluation has no results")
+matched = next(
+    (item for item in results if item.get("claim") == claim or item.get("claim_id") == claim),
+    results[0],
+)
+matched_claim = matched.get("claim") or matched.get("claim_id")
+if matched_claim not in (None, claim):
+    raise SystemExit(f"claim {claim!r} not found in results")
+actual = matched.get("satisfied")
+if actual is None:
+    actual = matched.get("value")
+expected_value = expected == "true"
+if actual is not expected_value:
+    raise SystemExit(f"{claim} expected {expected_value}, got {actual!r}: {matched}")
+PY
+}
+
 atlas_service_view() {
   local atlas_root
   atlas_root="$("${script_dir}/check-service-first-deps.sh" atlas-path)"
@@ -333,6 +360,47 @@ source_count = results[0].get("provenance", {}).get("source_count", 0)
 if source_count < 2:
     raise SystemExit(1)
 PY
+
+matrix_cases=(
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1001|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1002|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1003|false"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1004|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1005|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1006|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1007|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1008|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1009|true"
+  "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1010|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1001|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1002|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1003|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1004|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1005|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1006|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1007|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1008|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1009|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1010|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1001|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1002|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1003|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1004|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1005|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1006|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1007|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1008|true"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1009|false"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1010|false"
+)
+
+for matrix_case in "${matrix_cases[@]}"; do
+  IFS='|' read -r service_name url token_var claim subject expected <<<"${matrix_case}"
+  token="${!token_var}"
+  matrix_output="${output_dir}/smoke-matrix-${service_name}-${claim}-${subject}.json"
+  check "v1 matrix ${claim} ${subject}" curl_json POST "${url}" "${token}" "${matrix_output}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "${subject}" "national_id" "${claim}")"
+  check "v1 matrix ${claim} ${subject} outcome" assert_claim_outcome "${matrix_output}" "${claim}" "${expected}"
+done
 
 missing_status="$(curl_status POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-9999" "national_id" "eligible-for-combined-support")")"
 [[ "${missing_status}" == "409" ]] || fail "missing-subject evaluation expected stable 409, got ${missing_status}"

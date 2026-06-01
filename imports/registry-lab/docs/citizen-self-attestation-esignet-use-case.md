@@ -146,18 +146,18 @@ the lab fixtures:
 ```json
 {
   "individual_id": "NID-1001",
-  "name": "Amina Diallo",
-  "given_name": "Amina",
-  "family_name": "Diallo"
+  "name": "Miguel Santos",
+  "given_name": "Miguel",
+  "family_name": "Santos"
 }
 ```
 
 The required binding value is `individual_id=NID-1001` when running with
 `ESIGNET_SUBJECT_CLAIM_SOURCE=userinfo` and
-`ESIGNET_SUBJECT_CLAIM=individual_id`. `scripts/generate-fixtures.py` seeds
-`NID-1001` as Amina Diallo in the civil registry with `deceased=false`, so the
-smoke expects `person-is-alive` to evaluate to true for `NID-1001`. The negative
-control remains `NID-1002`, which must be denied because it does not match the
+`ESIGNET_SUBJECT_CLAIM=individual_id`. The aligned v1 fixture matrix treats
+`NID-1001` as Miguel Santos with `deceased=false`, so the smoke expects
+`person-is-alive` to evaluate to true for `NID-1001`. `NID-1002` is Maria Dela
+Cruz in the shared matrix and must be denied here because it does not match the
 token-bound UserInfo subject.
 
 If a token is not already available, the script can prepare the Authorization
