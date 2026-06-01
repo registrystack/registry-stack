@@ -155,9 +155,6 @@ evidence:
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: &voucher_snapshot_binding
         voucher_snapshot:
           connector: registry_data_api
@@ -166,7 +163,7 @@ evidence:
           dataset: agri_registry
           entity: voucher_eligibility_snapshot
           lookup:
-            input: subject_id
+            input: target.identifiers.farmer_id
             field: id
             op: eq
             cardinality: one
@@ -225,135 +222,126 @@ evidence:
           - redacted
       formats: &json_formats
         - application/vnd.registry-notary.claim-result+json
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: data-use-authorized-for-purpose
       title: Data use authorized for purpose
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.data_use_authorized == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: active-smallholder-farmer
       title: Active smallholder farmer
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.active_smallholder_farmer == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: active-farm-parcel
       title: Active farm parcel
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.active_farm_parcel == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: crop-declared-for-season
       title: Crop declared for season
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.crop_declared_for_season == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: district-climate-risk-active
       title: District climate risk active
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.district_climate_risk_active == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: voucher-entitlement-current
       title: Voucher entitlement current
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.voucher_entitlement_current == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: voucher-not-redeemed
       title: Voucher not redeemed
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.voucher_not_redeemed == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: supplier-license-active
       title: Supplier license active
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.supplier_license_active == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: voucher-eligibility-reason-code
       title: Voucher eligibility reason code
       version: 2026-05
       subject_type: farmer
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: extract
@@ -371,24 +359,20 @@ evidence:
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *voucher_snapshot_binding
       rule:
         type: cel
         expression: "source.voucher_snapshot.manual_review_required == false"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - climate_smart_input_voucher_sd_jwt
     - id: eligible-for-climate-smart-input-voucher
       title: Eligible for climate-smart input voucher
       version: 2026-05
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       depends_on:
         - farmer-registered
         - data-use-authorized-for-purpose
@@ -444,9 +428,6 @@ evidence:
       subject_type: farmer
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       depends_on:
         - eligible-for-climate-smart-input-voucher
         - supplier-license-active
@@ -477,9 +458,6 @@ evidence:
       subject_type: policy
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         market_policy:
           connector: registry_data_api
@@ -488,7 +466,7 @@ evidence:
           dataset: agri_registry
           entity: purpose_policy
           lookup:
-            input: subject_id
+            input: target.id
             field: id
             op: eq
             cardinality: one
@@ -524,9 +502,6 @@ evidence:
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: &livestock_snapshot_binding
         livestock_snapshot:
           connector: registry_data_api
@@ -535,7 +510,7 @@ evidence:
           dataset: agri_registry
           entity: livestock_movement_snapshot
           lookup:
-            input: subject_id
+            input: target.identifiers.herd_id
             field: id
             op: eq
             cardinality: one
@@ -577,90 +552,84 @@ evidence:
         expression: "source.livestock_snapshot.registered_livestock_holder == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - livestock_movement_sd_jwt
     - id: registered-herd
       title: Registered herd
       version: 2026-05
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *livestock_snapshot_binding
       rule:
         type: cel
         expression: "source.livestock_snapshot.registered_herd == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - livestock_movement_sd_jwt
     - id: herd-vaccination-current
       title: Herd vaccination current
       version: 2026-05
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *livestock_snapshot_binding
       rule:
         type: cel
         expression: "source.livestock_snapshot.herd_vaccination_current == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - livestock_movement_sd_jwt
     - id: origin-district-not-quarantined
       title: Origin district not quarantined
       version: 2026-05
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *livestock_snapshot_binding
       rule:
         type: cel
         expression: "source.livestock_snapshot.origin_district_not_quarantined == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - livestock_movement_sd_jwt
     - id: destination-district-open
       title: Destination district open
       version: 2026-05
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *livestock_snapshot_binding
       rule:
         type: cel
         expression: "source.livestock_snapshot.destination_district_open == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - livestock_movement_sd_jwt
     - id: no-conflicting-open-movement-permit
       title: No conflicting open movement permit
       version: 2026-05
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *livestock_snapshot_binding
       rule:
         type: cel
         expression: "source.livestock_snapshot.no_conflicting_open_movement_permit == true"
       disclosure: *predicate_disclosure
       formats: *json_formats
+      credential_profiles:
+        - livestock_movement_sd_jwt
     - id: livestock-movement-reason-code
       title: Livestock movement reason code
       version: 2026-05
       subject_type: herd
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings: *livestock_snapshot_binding
       rule:
         type: extract
@@ -678,9 +647,6 @@ evidence:
       subject_type: herd
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       depends_on:
         - registered-livestock-holder
         - registered-herd

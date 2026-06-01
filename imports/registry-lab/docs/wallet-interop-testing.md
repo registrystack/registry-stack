@@ -1,4 +1,9 @@
-# Wallet Interop Testing
+# Wallet interop testing
+
+Page type: how-to guide
+Product: Registry Lab, Registry Notary, OID4VCI
+Layer: credential
+Audience: integrators testing wallet interoperability
 
 This guide explains how to test the citizen self-attestation OID4VCI facade
 with real wallet software after the scripted Registry Lab probe passes.
@@ -178,7 +183,7 @@ If Inji does not complete the flow, capture:
 - Redact raw tokens, proof JWTs, issued credentials, and seeded civil IDs before
   sharing artifacts outside the local demo workspace.
 
-## Evidence Checklist
+## Evidence checklist
 
 For each wallet run, save a short note beside the lab output:
 
@@ -203,7 +208,7 @@ The run is considered passed when:
 - `NID-1001` is the token-bound subject.
 - An attempted other-person flow remains denied by the base citizen smoke.
 
-## Known Boundaries
+## Known boundaries
 
 - V1 proves wallet key possession, not wallet certification or wallet instance
   attestation.

@@ -112,9 +112,6 @@ evidence:
       subject_type: person
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         enrollment:
           connector: registry_data_api
@@ -123,7 +120,7 @@ evidence:
           dataset: social_protection_registry
           entity: program_enrollment
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
             op: eq
             cardinality: one
@@ -152,9 +149,6 @@ evidence:
       subject_type: person
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         household:
           connector: registry_data_api
@@ -163,7 +157,7 @@ evidence:
           dataset: social_protection_registry
           entity: household
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
             op: eq
             cardinality: one
@@ -192,9 +186,6 @@ evidence:
       subject_type: person
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       depends_on:
         - program-enrollment-status
       rule:

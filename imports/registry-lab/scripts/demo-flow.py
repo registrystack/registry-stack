@@ -271,7 +271,10 @@ def household_benefit_decision(row_response: dict[str, Any], aggregate_response:
 
 def evaluate_payload(subject: str, claims: list[str], disclosure: str = "predicate", fmt: str = CLAIM_RESULT_FORMAT) -> dict[str, Any]:
     return {
-        "subject": {"id": subject, "id_type": "national_id"},
+        "target": {
+            "type": "Person",
+            "identifiers": [{"scheme": "national_id", "value": subject}],
+        },
         "claims": claims,
         "disclosure": disclosure,
         "format": fmt,
@@ -482,7 +485,15 @@ def main() -> int:
             "/v1/batch-evaluations",
             env(evidence[2].token_env),
             {
-                "subjects": [{"id": "NID-1001"}, {"id": "NID-1002"}, {"id": "NID-9999"}],
+                "items": [
+                    {
+                        "target": {
+                            "type": "Person",
+                            "identifiers": [{"scheme": "national_id", "value": subject}],
+                        }
+                    }
+                    for subject in ("NID-1001", "NID-1002", "NID-9999")
+                ],
                 "claims": ["eligible-for-combined-support"],
                 "disclosure": "predicate",
                 "format": CLAIM_RESULT_FORMAT,

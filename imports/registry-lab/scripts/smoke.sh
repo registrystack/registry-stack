@@ -43,6 +43,29 @@ curl_json() {
   curl "${args[@]}"
 }
 
+evaluation_payload() {
+  local target_id="$1"
+  local identifier_scheme="$2"
+  local claim="$3"
+  local disclosure="${4:-predicate}"
+  local format="${5:-application/vnd.registry-notary.claim-result+json}"
+  jq -nc \
+    --arg target_id "${target_id}" \
+    --arg identifier_scheme "${identifier_scheme}" \
+    --arg claim "${claim}" \
+    --arg disclosure "${disclosure}" \
+    --arg format "${format}" \
+    '{
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: $identifier_scheme, value: $target_id }]
+      },
+      claims: [$claim],
+      disclosure: $disclosure,
+      format: $format
+    }'
+}
+
 curl_json_api_key() {
   local method="$1"
   local url="$2"
@@ -292,13 +315,13 @@ aggregate_status="$(curl_status GET http://127.0.0.1:4312/v1/datasets/social_pro
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-aggregate-denial.json"
 check "aggregate denial stable error code" json_path_equals "${output_dir}/smoke-aggregate-denial.json" code auth.scope_denied
 
-check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["person-is-alive"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}'
+check "civil evidence evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-civil-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "person-is-alive")"
 check "civil evidence evaluation results" json_has_key "${output_dir}/smoke-civil-evaluation.json" results
 
-check "health evidence evaluation" curl_json POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-health-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["health-service-available"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}'
+check "health evidence evaluation" curl_json POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-health-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "health-service-available")"
 check "health evidence evaluation results" json_has_key "${output_dir}/smoke-health-evaluation.json" results
 
-check "shared evidence evaluation" curl_json POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["eligible-for-combined-support"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}'
+check "shared evidence evaluation" curl_json POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-shared-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-1001" "national_id" "eligible-for-combined-support")"
 check "shared evidence source count" python - "${output_dir}/smoke-shared-evaluation.json" <<'PY'
 import json
 import sys
@@ -311,11 +334,12 @@ if source_count < 2:
     raise SystemExit(1)
 PY
 
-missing_status="$(curl_status POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data '{"subject":{"id":"NID-9999","id_type":"national_id"},"claims":["eligible-for-combined-support"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}')"
-[[ "${missing_status}" =~ ^(200|404|422)$ ]] || fail "missing-subject evaluation expected stable 200/404/422, got ${missing_status}"
+missing_status="$(curl_status POST http://127.0.0.1:4323/v1/evaluations "${SHARED_EVIDENCE_CLIENT_BEARER}" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" --data "$(evaluation_payload "NID-9999" "national_id" "eligible-for-combined-support")")"
+[[ "${missing_status}" == "409" ]] || fail "missing-subject evaluation expected stable 409, got ${missing_status}"
 cp /tmp/decentralized-smoke-response.json "${output_dir}/smoke-missing-subject.json"
+check "missing-subject stable error code" json_path_equals "${output_dir}/smoke-missing-subject.json" code evidence.not_available
 
-check "credential-bound evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-credential-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" -H "Accept: application/dc+sd-jwt" --data '{"subject":{"id":"NID-1001","id_type":"national_id"},"claims":["person-is-alive"],"disclosure":"predicate","format":"application/dc+sd-jwt"}'
+check "credential-bound evaluation" curl_json POST http://127.0.0.1:4321/v1/evaluations "${CIVIL_EVIDENCE_CLIENT_BEARER}" "${output_dir}/smoke-credential-evaluation.json" -H "Content-Type: application/json" -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" -H "Accept: application/dc+sd-jwt" --data "$(evaluation_payload "NID-1001" "national_id" "person-is-alive" "predicate" "application/dc+sd-jwt")"
 
 check "full demo flow" env DEMO_OUTPUT_DIR="${output_dir}" DEMO_CORRELATION_ID="${correlation_id}" "${script_dir}/demo-flow.py"
 grep -R "${correlation_id}" "${output_dir}" >/dev/null || fail "correlation ID artifact"

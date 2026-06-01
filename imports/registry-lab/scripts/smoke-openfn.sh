@@ -68,6 +68,9 @@ docker compose -f "${compose_file}" up -d --force-recreate --remove-orphans \
 wait_http "OpenFn civil notary discovery" http://127.0.0.1:4324/.well-known/evidence-service "${CIVIL_EVIDENCE_CLIENT_BEARER}"
 
 notary_body="${output_dir}/smoke-openfn-notary-evaluation.json"
+vc_evaluation_body="${output_dir}/smoke-openfn-vc-evaluation.json"
+credential_body="${output_dir}/smoke-openfn-credential.json"
+credential_summary_body="${output_dir}/smoke-openfn-credential-summary.json"
 curl -fsS \
   -X POST \
   -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
@@ -76,18 +79,84 @@ curl -fsS \
   -H "x-request-id: ${correlation_id}" \
   -o "${notary_body}" \
   http://127.0.0.1:4324/v1/evaluations \
-  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}'
+  --data '{"target":{"type":"Person","identifiers":[{"scheme":"national_id","value":"person-123"}]},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}'
 
-python - "${notary_body}" <<'PY'
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
+  -H "x-request-id: ${correlation_id}-vc-evaluation" \
+  -o "${vc_evaluation_body}" \
+  http://127.0.0.1:4324/v1/evaluations \
+  --data '{"target":{"type":"Person","identifiers":[{"scheme":"national_id","value":"person-123"}]},"claims":["date-of-birth"],"disclosure":"value","format":"application/dc+sd-jwt"}'
+
+evaluation_id="$(
+  python - "${vc_evaluation_body}" <<'PY'
 import json
 import sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
+print(body["results"][0]["evaluation_id"])
+PY
+)"
+
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${CIVIL_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "x-request-id: ${correlation_id}-vc-issue" \
+  -o "${credential_body}" \
+  http://127.0.0.1:4324/v1/credentials \
+  --data "$(jq -nc --arg evaluation_id "${evaluation_id}" '{
+    evaluation_id: $evaluation_id,
+    credential_profile: "openfn_civil_sd_jwt",
+    format: "application/dc+sd-jwt",
+    claims: ["date-of-birth"],
+    disclosure: "value"
+  }')"
+
+python - "${notary_body}" "${vc_evaluation_body}" "${credential_body}" "${credential_summary_body}" <<'PY'
+import json
+import sys
+notary_body = json.load(open(sys.argv[1], encoding="utf-8"))
+vc_evaluation_body = json.load(open(sys.argv[2], encoding="utf-8"))
+credential_body = json.load(open(sys.argv[3], encoding="utf-8"))
+summary_path = sys.argv[4]
+body = notary_body
 results = body.get("results") or []
 assert len(results) == 1, body
 result = results[0]
 assert result.get("claim_id") == "date-of-birth", body
 assert result.get("value") == "1990-01-01", body
 assert result.get("provenance", {}).get("source_count") == 1, body
+
+vc_results = vc_evaluation_body.get("results") or []
+assert len(vc_results) == 1, vc_evaluation_body
+assert vc_results[0].get("claim_id") == "date-of-birth", vc_evaluation_body
+assert vc_results[0].get("value") == "1990-01-01", vc_evaluation_body
+
+credential = credential_body.get("credential") or ""
+issuer_signed_jwt = credential_body.get("issuer_signed_jwt") or ""
+disclosures = credential_body.get("disclosures") or []
+assert credential_body.get("format") == "application/dc+sd-jwt", credential_body
+assert credential_body.get("issuer") == "did:web:openfn-civil-notary.demo.example", credential_body
+assert credential_body.get("credential_id"), credential_body
+assert credential_body.get("expires_at"), credential_body
+assert credential and issuer_signed_jwt and len(disclosures) == 1, credential_body
+summary = {
+    "credential_id": credential_body.get("credential_id"),
+    "credential_profile": "openfn_civil_sd_jwt",
+    "format": credential_body.get("format"),
+    "issuer": credential_body.get("issuer"),
+    "expires_at": credential_body.get("expires_at"),
+    "disclosure_count": len(disclosures),
+    "credential_compact_length": len(credential),
+}
+with open(summary_path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, indent=2)
+    handle.write("\n")
 PY
 
+printf '\nIssued OpenFn civil SD-JWT VC summary:\n'
+cat "${credential_summary_body}"
 printf 'OpenFn sidecar Registry Notary smoke passed\n'

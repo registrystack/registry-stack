@@ -182,8 +182,8 @@ def main() -> None:
     civil_evaluation = check(
         "civil high-level evaluation through client",
         lambda: civil.evaluate(
-            subject_id="NID-1001",
-            id_type="national_id",
+            target_id="NID-1001",
+            identifier_scheme="national_id",
             claims=["person-is-alive"],
             request_id=f"{correlation_id}-civil-evaluate",
         ),
@@ -201,7 +201,10 @@ def main() -> None:
         "shared raw evaluation through client",
         lambda: shared.evaluate_request(
             {
-                "subject": {"id": "NID-1001", "id_type": "national_id"},
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{"scheme": "national_id", "value": "NID-1001"}],
+                },
                 "claims": ["eligible-for-combined-support"],
                 "disclosure": "predicate",
                 "format": CLAIM_RESULT_JSON,

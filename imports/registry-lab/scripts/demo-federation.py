@@ -173,8 +173,8 @@ def federation_payload(
     audience: str,
     jti: str,
     profile: str,
-    subject_id: str,
-    subject_id_type: str,
+    target_id: str,
+    target_identifier_scheme: str,
     claim_id: str,
     purpose: str = PURPOSE,
 ) -> dict[str, Any]:
@@ -192,7 +192,10 @@ def federation_payload(
         "profile": profile,
         "purpose": purpose,
         "request": {
-            "subject": {"id": subject_id, "id_type": subject_id_type},
+            "target": {
+                "type": "Person",
+                "identifiers": [{"scheme": target_identifier_scheme, "value": target_id}],
+            },
             "claims": [claim_id],
         },
     }
@@ -314,8 +317,8 @@ def main() -> int:
         audience=CIVIL_NODE_ID,
         jti=new_ulid(),
         profile="civil_age_band_value",
-        subject_id="NID-1001",
-        subject_id_type="national_id",
+        target_id="NID-1001",
+        target_identifier_scheme="national_id",
         claim_id="age-band",
     )
     age = call_profile(label="civil-age-band", payload=age_payload, **civil_common)
@@ -327,8 +330,8 @@ def main() -> int:
         audience=CIVIL_NODE_ID,
         jti=new_ulid(),
         profile="civil_alive_predicate",
-        subject_id="NID-1001",
-        subject_id_type="national_id",
+        target_id="NID-1001",
+        target_identifier_scheme="national_id",
         claim_id="person-is-alive",
     )
     alive = call_profile(label="civil-alive", payload=alive_payload, **civil_common)
@@ -340,8 +343,8 @@ def main() -> int:
         audience=SOCIAL_NODE_ID,
         jti=new_ulid(),
         profile="beneficiary_active_predicate",
-        subject_id="NID-1001",
-        subject_id_type="national_id",
+        target_id="NID-1001",
+        target_identifier_scheme="national_id",
         claim_id="beneficiary-active",
     )
     active = call_profile(label="social-beneficiary-active", payload=active_payload, **social_common)
@@ -353,8 +356,8 @@ def main() -> int:
         audience=SOCIAL_NODE_ID,
         jti=new_ulid(),
         profile="household_eligibility_band_value",
-        subject_id="NID-1001",
-        subject_id_type="national_id",
+        target_id="NID-1001",
+        target_identifier_scheme="national_id",
         claim_id="household-eligibility-band",
     )
     band = call_profile(label="social-household-band", payload=band_payload, **social_common)

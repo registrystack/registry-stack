@@ -104,7 +104,10 @@ def main() -> int:
         f"{base_url}/v1/evaluations",
         token,
         {
-            "subject": {"id": args.subject, "id_type": "national_id"},
+            "target": {
+                "type": "Person",
+                "identifiers": [{"scheme": "national_id", "value": args.subject}],
+            },
             "claims": [CLAIM_ID],
             "disclosure": "value",
             "format": SD_JWT_FORMAT,

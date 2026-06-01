@@ -177,8 +177,12 @@ def wait_for(label: str, fn, timeout: int = 120) -> None:
 
 
 def evaluation_payload(subject: str, claim: str, disclosure: str = "predicate", fmt: str = CLAIM_RESULT_FORMAT, id_type: str = "farmer_id") -> dict[str, Any]:
+    target_type = "Herd" if id_type == "herd_id" else "Farmer"
     return {
-        "subject": {"id": subject, "id_type": id_type},
+        "target": {
+            "type": target_type,
+            "identifiers": [{"scheme": id_type, "value": subject}],
+        },
         "claims": [claim],
         "disclosure": disclosure,
         "format": fmt,

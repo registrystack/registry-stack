@@ -56,16 +56,29 @@ evidence:
         allowed:
           - predicate
           - redacted
+    dhis2_child_program_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:dhis2-health-notary.demo.example.gov
+      signing_key: dhis2-health-demo
+      vct: https://demo.example.gov/credentials/dhis2/child-program/v1
+      validity_seconds: 600
+      allowed_claims:
+        - dhis2-tracked-entity-first-name
+        - dhis2-tracked-entity-last-name
+        - dhis2-child-program-active
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+          - redacted
   claims:
-    - id: dhis2-child-program-active
-      title: DHIS2 child programme active
+    - id: dhis2-tracked-entity-first-name
+      title: DHIS2 tracked entity first name
       version: 2026-05
       subject_type: person
       value:
-        type: boolean
-      inputs:
-        - name: subject_id
-          type: string
+        type: string
       source_bindings:
         dhis2:
           connector: registry_data_api
@@ -74,7 +87,81 @@ evidence:
           dataset: dhis2_tracker
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            first_name:
+              field: first_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: first_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_child_program_sd_jwt
+    - id: dhis2-tracked-entity-last-name
+      title: DHIS2 tracked entity last name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: registry_data_api
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            last_name:
+              field: last_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: last_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_child_program_sd_jwt
+    - id: dhis2-child-program-active
+      title: DHIS2 child programme active
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        dhis2:
+          connector: registry_data_api
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
             field: tracked_entity
             op: eq
             cardinality: one
@@ -89,6 +176,7 @@ evidence:
       disclosure:
         default: predicate
         allowed:
+          - value
           - predicate
           - redacted
       formats:
@@ -96,15 +184,13 @@ evidence:
         - application/dc+sd-jwt
       credential_profiles:
         - dhis2_health_status_sd_jwt
+        - dhis2_child_program_sd_jwt
     - id: dhis2-maternal-pnc-active
       title: DHIS2 maternal and postnatal care active
       version: 2026-05
       subject_type: person
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         dhis2:
           connector: registry_data_api
@@ -113,7 +199,7 @@ evidence:
           dataset: dhis2_tracker
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.dhis2_tracked_entity
             field: tracked_entity
             op: eq
             cardinality: one
@@ -141,9 +227,6 @@ evidence:
       subject_type: person
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         dhis2:
           connector: registry_data_api
@@ -152,7 +235,7 @@ evidence:
           dataset: dhis2_tracker
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.dhis2_tracked_entity
             field: tracked_entity
             op: eq
             cardinality: one
@@ -180,9 +263,6 @@ evidence:
       subject_type: person
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         dhis2:
           connector: registry_data_api
@@ -191,7 +271,7 @@ evidence:
           dataset: dhis2_tracker
           entity: person
           lookup:
-            input: subject_id
+            input: target.identifiers.dhis2_tracked_entity
             field: tracked_entity
             op: eq
             cardinality: one

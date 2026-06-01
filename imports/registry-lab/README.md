@@ -10,6 +10,17 @@ health registry patterns, but they are not real OpenCRVS, OpenSPP, DHIS2,
 OpenIMIS, MOSIP, or other product integrations unless an optional live-service
 profile explicitly says otherwise.
 
+## Documentation map
+
+Use this README for setup, service ports, and command reference. Use
+[`docs/README.md`](docs/README.md) to choose a guided tutorial:
+
+- [OpenFn sidecar Notary tutorial](docs/openfn-sidecar-notary-tutorial.md)
+- [OpenCRVS DCI Notary tutorial](docs/opencrvs-dci-notary-tutorial.md)
+- [DHIS2 OpenFn Notary tutorial](docs/dhis2-openfn-notary-tutorial.md)
+- [Citizen self-attestation eSignet use case](docs/citizen-self-attestation-esignet-use-case.md)
+- [Wallet interop testing](docs/wallet-interop-testing.md)
+
 ## Topology
 
 - `civil-registry-relay`: CSV-backed civil registry authority on host port `4311`.
@@ -34,7 +45,7 @@ Inside Compose, services use DNS names like
 not mount source data. They read registry facts over HTTP from Relay. The demo
 client also has no `data/` mount.
 
-## Quick Start
+## Quick start
 
 Clone with submodules:
 
@@ -93,7 +104,7 @@ just commons-check
 Lab vendor or submodule pins only after Platform, Manifest, Relay, and Notary
 source changes are committed.
 
-## Demo Commands
+## Demo commands
 
 List available recipes:
 
@@ -202,15 +213,22 @@ just opencrvs-dci
 ```
 
 The OpenCRVS DCI smoke starts `opencrvs-dci-notary` on host port `4352` by
-default and evaluates four claims against the Farajaland integration DCI API:
+default and evaluates OpenCRVS birth-record claims against the Farajaland
+integration DCI API:
 
 - `opencrvs-birth-record-exists`
 - `opencrvs-date-of-birth`
 - `opencrvs-sex`
 - `opencrvs-age-band`
+- `opencrvs-child-given-name`
+- `opencrvs-child-family-name`
+- `opencrvs-child-date-of-birth`
+- `opencrvs-child-place-of-birth`
 
-It also issues a demo `application/dc+sd-jwt` VC with credential profile
-`opencrvs_birth_summary_sd_jwt` and writes the full response to
+It also attempts the demographic lookup path without UIN using child given
+name, family name, and date of birth, then issues a demo
+`application/dc+sd-jwt` VC with credential profile
+`opencrvs_birth_attributes_sd_jwt`. The full response is written to
 `output/opencrvs-dci/credential.json`.
 
 Put the live OpenCRVS values in `.env.local`, which is ignored by Git:
@@ -281,7 +299,7 @@ defaults `CEL_MAPPING_SOURCE_DIR` to `../cel-mapping`, because current Relay and
 Notary builds use the Crosswalk crates from that checkout. Override those
 variables when you want to build from pinned sources or another local path.
 
-## Live Notary Redis Checks
+## Live Notary Redis checks
 
 The lab includes a Redis service so the Redis-backed replay and credential
 status paths can be tested against a real backend without requiring a local
@@ -300,7 +318,7 @@ runs the focused live Redis tests from sibling `registry-platform` and
 Notary containers also receive `REGISTRY_NOTARY_REDIS_URL=redis://redis:6379/`
 for configs that opt into Redis-backed storage.
 
-## Live Relay Scenarios
+## Live Relay scenarios
 
 The lab includes live services by default so the same checkout can exercise
 file-backed Relays, Postgres-backed Relay ingest, and OIDC bearer-JWT auth:
@@ -416,10 +434,12 @@ The nonce request is bound to the selected `credential_configuration_id`,
 matching the Notary nonce replay checks. To test the same facade with Walt
 Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
-## OpenFn Sidecar Demo
+## OpenFn sidecar demo
 
 The OpenFn nodes prove the Registry Notary `registry_data_api` connector can
-source one-item civil lookups from an OpenFn HTTP adaptor sidecar:
+source one-item civil lookups from an OpenFn HTTP adaptor sidecar and issue a
+date-of-birth SD-JWT VC from that evidence. For the guided path, see
+[`docs/openfn-sidecar-notary-tutorial.md`](docs/openfn-sidecar-notary-tutorial.md).
 
 ```bash
 just generate
@@ -428,9 +448,9 @@ just up
 just openfn
 ```
 
-The default OpenFn build uses `../registry-notary` through
-`REGISTRY_OPENFN_NOTARY_SOURCE_DIR` until the vendored Notary pin contains
-`crates/registry-notary-openfn-sidecar`.
+The default OpenFn build uses `REGISTRY_OPENFN_NOTARY_SOURCE_DIR`, which points
+to `../registry-notary` unless overridden. Set it to `vendor/registry-notary`
+when you want to build from the pinned submodule.
 
 OpenFn is part of the default Compose topology. The sidecar and mock registry
 are not published to host ports; they run only on the private
@@ -438,8 +458,10 @@ are not published to host ports; they run only on the private
 containers with `--force-recreate --remove-orphans` so repeated local runs do
 not get stuck on stale Compose container IDs.
 
-The smoke writes `output/smoke-openfn-notary-evaluation.json`. The sidecar is
-not published to the host; use the Notary API for evidence requests:
+The smoke writes `output/smoke-openfn-notary-evaluation.json`,
+`output/smoke-openfn-vc-evaluation.json`, and
+`output/smoke-openfn-credential-summary.json`. The sidecar is not published to
+the host; use the Notary API for evidence and credential requests:
 
 ```bash
 set -a
@@ -452,10 +474,10 @@ curl -fsS \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: https://demo.example.gov/purpose/openfn-sidecar-demo" \
   http://127.0.0.1:4324/v1/evaluations \
-  --data '{"subject":{"id":"person-123","id_type":"national_id"},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}' | jq
+  --data '{"target":{"type":"Person","identifiers":[{"scheme":"national_id","value":"person-123"}]},"claims":["date-of-birth"],"disclosure":"value","format":"application/vnd.registry-notary.claim-result+json"}' | jq
 ```
 
-## Live DHIS2 OpenFn Demo
+## Live DHIS2 OpenFn demo
 
 The optional DHIS2 profile uses the public DHIS2 2.43 demo at
 `https://play.im.dhis2.org/stable-2-43-0` through pinned OpenFn HTTP adaptor
@@ -465,25 +487,34 @@ Because the DHIS2 demo is a live public sandbox, this smoke is outside
 `just quick` and may need sample subject refreshes if the upstream demo data is
 reset.
 
+For the guided path, see
+[`docs/dhis2-openfn-notary-tutorial.md`](docs/dhis2-openfn-notary-tutorial.md).
+
 ```bash
 just generate
 just build
 just dhis2-openfn
 ```
 
-The DHIS2 Notary exposes four predicate claims:
+The DHIS2 Notary exposes four health predicate claims:
 
 - `dhis2-child-program-active`
 - `dhis2-maternal-pnc-active`
 - `dhis2-child-health-visit-recorded`
 - `dhis2-tb-program-active`
 
-The smoke writes positive and negative predicate responses under
-`output/smoke-dhis2-*.json`, then issues a demo `application/dc+sd-jwt`
-credential with profile `dhis2_health_status_sd_jwt` at
-`output/smoke-dhis2-health-status-credential.json`.
+For the credential path it also exposes two value claims from the same DHIS2
+tracked entity:
 
-## Live-Service Story Runner
+- `dhis2-tracked-entity-first-name`
+- `dhis2-tracked-entity-last-name`
+
+The smoke writes positive and negative predicate responses under
+`output/dhis2-openfn/smoke-dhis2-*.json`, then issues a demo
+`application/dc+sd-jwt` credential with profile `dhis2_child_program_sd_jwt` at
+`output/dhis2-openfn/smoke-dhis2-child-program-credential.json`.
+
+## Live-service story runner
 
 `scripts/demo-live-stories.sh` turns the default live services into narrated
 demo stories. The terminal output shows each discovery query, key response
@@ -557,7 +588,7 @@ This lab does not call OOTS Evidence Broker or Data Service Directory services.
 Those remain future cross-border integration points rather than hidden demo
 behavior.
 
-## Source Repositories
+## Source repositories
 
 This demo keeps runtime orchestration, fixtures, static metadata config, and
 walkthrough scripts in this repository. Registry Platform, Registry Relay, and
@@ -588,9 +619,9 @@ commits that already include the Registry Platform, Registry Relay, and Registry
 Notary behavior required by this demo.
 
 OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
-the core Notary image. The current lab default points OpenFn at
-`../registry-notary` because the vendored Notary pin does not yet include the
-OpenFn sidecar crate.
+the core Notary image. The lab default points OpenFn at `../registry-notary` so
+local source checkouts can be tested before the lab submodule pin moves. Set it
+to `vendor/registry-notary` for a pinned-submodule build.
 
 `just notary-client` imports the Registry Notary Python client directly from a
 source checkout and runs it against the default lab Notary services. It looks at
@@ -600,7 +631,7 @@ then `../registry-notary`, and finally `vendor/registry-notary`. Use
 the lab submodule pin has moved. This smoke is explicit and is not part of
 `just quick`.
 
-## Fixture Data
+## Fixture data
 
 `scripts/generate-fixtures.py` is the source of truth for the synthetic CSV,
 XLSX, and Parquet extracts. It writes a small but non-trivial fixture set:
@@ -647,7 +678,7 @@ names for outbound calls to Relay. The OpenFn sidecar auth config also requires
 `OPENFN_SIDECAR_TOKEN_HASH`; plaintext sidecar token config is rejected. No raw
 token should be committed.
 
-## Static Metadata
+## Static metadata
 
 `scripts/publish-static-metadata.sh` runs
 `registry-manifest-cli publish` from `REGISTRY_MANIFEST_REPO`, defaulting to the
@@ -666,7 +697,7 @@ The static bundle is generated from portable metadata, not scraped from a
 running Relay. It must not include source paths, table ids, scopes, cache paths,
 or backend runtime details.
 
-## Demo Flow
+## Demo flow
 
 `scripts/demo-flow.py` narrates three scenarios:
 
@@ -687,13 +718,10 @@ Every client request sends `x-request-id` using
 ## Notes
 
 The Relay demo image is built by `Dockerfile.registry-relay` with configurable
-Cargo features. The `just` recipes default to
+Cargo features. Docker Compose and the `just` recipes default to
 `spdci-api-standards,standards-cel-mapping,ogcapi-edr` so DCI source routes and
-the aggregate-only OGC EDR `/area` surface are available when using the sibling
-`../registry-relay` checkout. Plain Docker Compose defaults to
-`spdci-api-standards,standards-cel-mapping`, which keeps the vendored fallback
-buildable even though that older Relay source does not define `ogcapi-edr`.
-Set `REGISTRY_RELAY_FEATURES` explicitly when using a different Relay source.
+the aggregate-only OGC EDR `/area` surface are available. Set
+`REGISTRY_RELAY_FEATURES` explicitly when using a different Relay source.
 
 The social protection walkthrough uses the dataset-scoped aggregate endpoint at
 `/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band`

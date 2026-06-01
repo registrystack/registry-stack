@@ -82,6 +82,7 @@ def generate_env() -> dict[str, str]:
     agri_federation_client_jwk = generate_registry_notary_issuer_jwk()
     agri_federation_response_jwk = generate_registry_notary_issuer_jwk()
     openfn_sidecar_token = generate_raw_key()
+    opencrvs_evidence_client_token = generate_raw_key()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_raw_key(),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
@@ -102,6 +103,8 @@ def generate_env() -> dict[str, str]:
         "OPENFN_SIDECAR_TOKEN_RAW": openfn_sidecar_token,
         "OPENFN_SIDECAR_TOKEN_HASH": fingerprint(openfn_sidecar_token),
         "OPENFN_MOCK_REGISTRY_TOKEN_RAW": generate_raw_key(),
+        "OPENCRVS_EVIDENCE_CLIENT_TOKEN": opencrvs_evidence_client_token,
+        "OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH": fingerprint(opencrvs_evidence_client_token),
     }
     for name in TOKEN_NAMES:
         raw = generate_raw_key()

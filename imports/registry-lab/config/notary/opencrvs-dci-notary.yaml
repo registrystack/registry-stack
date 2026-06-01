@@ -37,6 +37,27 @@ evidence:
         registry_type: ns:org:RegistryType:Civil
         registry_event_type: birth
         records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          child_given_name: /name/given_name
+          child_family_name: /name/surname
+          child_birth_date: /birth_date
+          child_place_of_birth: /birth_place
+    opencrvs_crvs_demographic:
+      base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
+      source_auth:
+        type: oauth2_client_credentials
+        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
+        client_id_env: OPENCRVS_DCI_CLIENT_ID
+        client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
+        request_format: json
+      bulk_mode: none
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: expression
+        registry_type: ns:org:RegistryType:Civil
+        registry_event_type: birth
+        records_path: /message/search_response/0/data/reg_records
   signing_keys:
     opencrvs-dci-demo:
       provider: local_jwk_env
@@ -56,6 +77,23 @@ evidence:
         - opencrvs-date-of-birth
         - opencrvs-sex
         - opencrvs-age-band
+        - opencrvs-birth-record-exists-by-demographics
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+    opencrvs_birth_attributes_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:opencrvs-dci.demo.example.gov
+      signing_key: opencrvs-dci-demo
+      vct: https://demo.example.gov/credentials/opencrvs-birth-attributes/v1
+      validity_seconds: 600
+      allowed_claims:
+        - opencrvs-child-given-name
+        - opencrvs-child-family-name
+        - opencrvs-child-date-of-birth
+        - opencrvs-child-place-of-birth
       holder_binding:
         mode: none
       disclosure:
@@ -68,9 +106,6 @@ evidence:
       subject_type: person
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         birth_record:
           connector: dci
@@ -79,7 +114,7 @@ evidence:
           dataset: civil_registry
           entity: birth_registration
           lookup:
-            input: subject_id
+            input: target.identifiers.UIN
             field: UIN
             op: eq
             cardinality: one
@@ -102,9 +137,6 @@ evidence:
       subject_type: person
       value:
         type: date
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         birth_record:
           connector: dci
@@ -113,7 +145,7 @@ evidence:
           dataset: civil_registry
           entity: birth_registration
           lookup:
-            input: subject_id
+            input: target.identifiers.UIN
             field: UIN
             op: eq
             cardinality: one
@@ -142,9 +174,6 @@ evidence:
       subject_type: person
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         birth_record:
           connector: dci
@@ -153,7 +182,7 @@ evidence:
           dataset: civil_registry
           entity: birth_registration
           lookup:
-            input: subject_id
+            input: target.identifiers.UIN
             field: UIN
             op: eq
             cardinality: one
@@ -182,9 +211,6 @@ evidence:
       subject_type: person
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         birth_record:
           connector: dci
@@ -193,7 +219,7 @@ evidence:
           dataset: civil_registry
           entity: birth_registration
           lookup:
-            input: subject_id
+            input: target.identifiers.UIN
             field: UIN
             op: eq
             cardinality: one
@@ -218,3 +244,203 @@ evidence:
         - application/dc+sd-jwt
       credential_profiles:
         - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-birth-record-exists-by-demographics
+      title: OpenCRVS birth record exists by demographics
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs_demographic
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: target.attributes.given_name
+            field: given_name
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: childFirstNames
+              op: eq
+            - input: target.attributes.family_name
+              field: childLastName
+              op: eq
+            - input: target.attributes.birthdate
+              field: childDoB
+              op: eq
+          matching:
+            target_type: Person
+            method: configured_demographic_lookup
+            sufficient_target_inputs:
+              - - target.attributes.given_name
+                - target.attributes.family_name
+                - target.attributes.birthdate
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.family_name
+              - target.attributes.birthdate
+      rule:
+        type: exists
+        source: birth_record
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-child-given-name
+      title: OpenCRVS child given name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_given_name:
+              field: child_given_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_given_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+    - id: opencrvs-child-family-name
+      title: OpenCRVS child family name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_family_name:
+              field: child_family_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_family_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+    - id: opencrvs-child-date-of-birth
+      title: OpenCRVS child date of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_birth_date:
+              field: child_birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+    - id: opencrvs-child-place-of-birth
+      title: OpenCRVS child place of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_place_of_birth:
+              field: child_place_of_birth
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_place_of_birth
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt

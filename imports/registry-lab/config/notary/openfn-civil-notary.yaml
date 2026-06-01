@@ -58,9 +58,6 @@ evidence:
       subject_type: person
       value:
         type: date
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         civil:
           connector: registry_data_api
@@ -69,7 +66,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: national_id
             op: eq
             cardinality: one

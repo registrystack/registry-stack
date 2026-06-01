@@ -1053,9 +1053,6 @@ evidence:
       purpose: citizen_self_attestation
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         civil:
           connector: dci
@@ -1064,7 +1061,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -1365,7 +1362,7 @@ print_discovery_status
 
 step 8 "Evaluate self claim" "Requesting person-is-alive for ${self_subject}."
 curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${self_eval_path}" 200 \
-  --data "{\"subject\":{\"id\":\"${self_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-notary.claim-result+json\"}"
+  --data "$(jq -nc --arg subject "${self_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["person-is-alive"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
 
 python3 - "${self_eval_path}" <<'PY'
 import json
@@ -1383,7 +1380,7 @@ print_self_evaluation_status
 
 step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before any source read."
 curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${other_eval_path}" 403 \
-  --data "{\"subject\":{\"id\":\"${other_subject}\",\"id_type\":\"national_id\"},\"claims\":[\"person-is-alive\"],\"disclosure\":\"predicate\",\"format\":\"application/vnd.registry-notary.claim-result+json\"}"
+  --data "$(jq -nc --arg subject "${other_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["person-is-alive"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
 print_denial_status
 
 sleep 1

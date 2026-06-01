@@ -1008,25 +1008,25 @@ def notary_call_config(values: dict[str, str]) -> dict[str, dict[str, Any]]:
     return {
         "https://demo.example.gov/evidence-types/civil-child-status": {
             "token": env("CIVIL_EVIDENCE_CLIENT_BEARER", values),
-            "subject": "NID-1001",
+            "target_id": "NID-1001",
             "disclosure": "predicate",
             "route_label": "civil child status via civil Notary",
         },
         "https://demo.example.gov/evidence-types/household-support": {
             "token": env("SOCIAL_EVIDENCE_CLIENT_BEARER", values),
-            "subject": "NID-1001",
+            "target_id": "NID-1001",
             "disclosure": "predicate",
             "route_label": "household support via social protection Notary",
         },
         "https://demo.example.gov/evidence-types/health-service-availability": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
-            "subject": "NID-1001",
+            "target_id": "NID-1001",
             "disclosure": "predicate",
             "route_label": "health service availability via shared Notary",
         },
         "https://demo.example.gov/evidence-types/combined-support": {
             "token": env("SHARED_EVIDENCE_CLIENT_BEARER", values),
-            "subject": "NID-1001",
+            "target_id": "NID-1001",
             "disclosure": "predicate",
             "route_label": "combined support via shared Notary",
         },
@@ -1381,7 +1381,10 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                 )
                 continue
             payload = {
-                "subject": {"id": route["subject"], "id_type": "national_id"},
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{"scheme": "national_id", "value": route["target_id"]}],
+                },
                 "claims": [route["claim"]],
                 "disclosure": route.get("disclosure", "predicate"),
                 "format": "application/vnd.registry-notary.claim-result+json",
@@ -1412,7 +1415,8 @@ def story_service_first(out: Path, values: dict[str, str], step: int) -> int:
                     "route_label": route["route_label"],
                     "claim": route["claim"],
                     "claim_metadata": route.get("claim_metadata"),
-                    "subject": route["subject"],
+                    "target_id": route["target_id"],
+                    "target_identifier_scheme": "national_id",
                     "discovered_endpoint_url": route["discovered_endpoint_url"],
                     "host_access_url": route["base_url"],
                     "offering": route.get("offering"),
@@ -1737,7 +1741,10 @@ def story_openfn(out: Path, values: dict[str, str], step: int) -> int:
     save(out, step, "openfn-notary-claims", claims)
     step += 1
     evaluation_payload = {
-        "subject": {"id": "person-123", "id_type": "national_id"},
+        "target": {
+            "type": "Person",
+            "identifiers": [{"scheme": "national_id", "value": "person-123"}],
+        },
         "claims": ["date-of-birth"],
         "disclosure": "value",
         "format": "application/vnd.registry-notary.claim-result+json",
@@ -2554,8 +2561,8 @@ def write_interactive_story_html(out: Path, case_file: dict[str, Any], conforman
                 + " links the service evidence type to Notary claim metadata.",
                 chip("evaluations", service_eval_count, tone="green")
                 + " cover every satisfiable option, including granular and combined routes.",
-                chip("subject", first_service_eval.get("subject"), tone="neutral")
-                + " is the service-review subject.",
+                chip("target id", first_service_eval.get("target_id"), tone="neutral")
+                + " is the service-review target identifier.",
             ],
             used_next="The evaluation count and validation result become the service-first assurance result.",
             proof="The standards chain is complete: api-catalog -> CPSV-AP PublicService -> CCCEV option -> BRegDCAT/DCAT access service -> Notary claim discovery -> evaluation.",

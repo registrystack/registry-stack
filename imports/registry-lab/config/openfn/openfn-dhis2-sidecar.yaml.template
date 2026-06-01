@@ -9,7 +9,7 @@ auth:
       hash_env: OPENFN_SIDECAR_TOKEN_HASH
 
 limits:
-  max_workers: 2
+  max_workers: 4
   worker_timeout_ms: 15000
   max_worker_memory_mb: 12288
   max_output_bytes: 1048576

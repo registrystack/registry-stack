@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 demo_dir="$(cd "${script_dir}/.." && pwd)"
 compose_file="${demo_dir}/compose.yaml"
-output_dir="${demo_dir}/output"
+output_dir="${demo_dir}/output/dhis2-openfn"
 correlation_id="${DEMO_CORRELATION_ID:-dhis2-openfn-demo-correlation-001}"
 
 if [[ -f "${demo_dir}/.env" ]]; then
@@ -70,12 +70,19 @@ evaluate_claim() {
     -H "x-request-id: ${correlation_id}" \
     -o "${output_file}" \
     http://127.0.0.1:4326/v1/evaluations \
-    --data "{\"subject\":{\"id\":\"${subject}\",\"id_type\":\"dhis2_tracked_entity\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${response_format}\"}"
+    --data "$(jq -nc \
+      --arg subject "${subject}" \
+      --arg claim "${claim}" \
+      --arg format "${response_format}" \
+      '{target:{type:"TrackedEntity",identifiers:[{scheme:"dhis2_tracked_entity",value:$subject}]},claims:[$claim],disclosure:"predicate",format:$format}')"
 }
 
 issue_credential() {
   local evaluation_file="$1"
   local output_file="$2"
+  local profile="$3"
+  local disclosure="$4"
+  local claims_json="$5"
   local evaluation_id
   evaluation_id="$(
     python - "${evaluation_file}" <<'PY'
@@ -93,7 +100,18 @@ PY
     -H "x-request-id: ${correlation_id}-vc-issue" \
     -o "${output_file}" \
     http://127.0.0.1:4326/v1/credentials \
-    --data "{\"evaluation_id\":\"${evaluation_id}\",\"credential_profile\":\"dhis2_health_status_sd_jwt\",\"format\":\"application/dc+sd-jwt\",\"claims\":[\"dhis2-child-program-active\"],\"disclosure\":\"predicate\"}"
+    --data "$(jq -nc \
+      --arg evaluation_id "${evaluation_id}" \
+      --arg profile "${profile}" \
+      --arg disclosure "${disclosure}" \
+      --argjson claims "${claims_json}" \
+      '{
+        evaluation_id: $evaluation_id,
+        credential_profile: $profile,
+        format: "application/dc+sd-jwt",
+        claims: $claims,
+        disclosure: $disclosure
+      }')"
 }
 
 mkdir -p "${output_dir}"
@@ -112,16 +130,43 @@ evaluate_claim "dhis2-child-program-active" "vOxUH373fy5" "${output_dir}/smoke-d
 evaluate_claim "dhis2-maternal-pnc-active" "PQfMcpmXeFE" "${output_dir}/smoke-dhis2-maternal-pnc-active-negative.json"
 evaluate_claim "dhis2-child-health-visit-recorded" "PQfMcpmXeFE" "${output_dir}/smoke-dhis2-child-health-visit-recorded-negative.json"
 evaluate_claim "dhis2-tb-program-active" "mXAzn3hMR5a" "${output_dir}/smoke-dhis2-tb-program-active-negative.json"
-evaluate_claim "dhis2-child-program-active" "PQfMcpmXeFE" "${output_dir}/smoke-dhis2-health-status-vc-evaluation.json" "application/dc+sd-jwt"
-issue_credential "${output_dir}/smoke-dhis2-health-status-vc-evaluation.json" "${output_dir}/smoke-dhis2-health-status-credential.json"
 
-python - "${output_dir}" "${output_dir}/smoke-dhis2-health-status-credential.json" <<'PY'
+vc_claims='["dhis2-tracked-entity-first-name","dhis2-tracked-entity-last-name","dhis2-child-program-active"]'
+curl -fsS \
+  -X POST \
+  -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/dhis2-openfn-health-evidence" \
+  -H "x-request-id: ${correlation_id}-vc-evaluation" \
+  -o "${output_dir}/smoke-dhis2-child-program-vc-evaluation.json" \
+  http://127.0.0.1:4326/v1/evaluations \
+  --data "$(jq -nc \
+    --arg subject "PQfMcpmXeFE" \
+    --argjson claims "${vc_claims}" \
+    '{
+      target: {
+        type: "TrackedEntity",
+        identifiers: [{scheme: "dhis2_tracked_entity", value: $subject}]
+      },
+      claims: $claims,
+      disclosure: "value",
+      format: "application/dc+sd-jwt"
+    }')"
+issue_credential \
+  "${output_dir}/smoke-dhis2-child-program-vc-evaluation.json" \
+  "${output_dir}/smoke-dhis2-child-program-credential.json" \
+  "dhis2_child_program_sd_jwt" \
+  "value" \
+  "${vc_claims}"
+
+python - "${output_dir}" "${output_dir}/smoke-dhis2-child-program-vc-evaluation.json" "${output_dir}/smoke-dhis2-child-program-credential.json" <<'PY'
 import json
 import pathlib
 import sys
 
 output_dir = pathlib.Path(sys.argv[1])
-credential_file = pathlib.Path(sys.argv[2])
+vc_evaluation_file = pathlib.Path(sys.argv[2])
+credential_file = pathlib.Path(sys.argv[3])
 checks = {
     "smoke-dhis2-child-program-active.json": ("dhis2-child-program-active", True),
     "smoke-dhis2-maternal-pnc-active.json": ("dhis2-maternal-pnc-active", True),
@@ -142,6 +187,19 @@ for filename, (claim_id, expected) in checks.items():
     assert result.get("disclosure") == "predicate", body
     assert result.get("provenance", {}).get("source_count") == 1, body
 
+vc_evaluation_body = json.loads(vc_evaluation_file.read_text(encoding="utf-8"))
+vc_results = {item.get("claim_id"): item for item in vc_evaluation_body.get("results") or []}
+expected_vc_claims = {
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-program-active",
+}
+assert set(vc_results) == expected_vc_claims, vc_evaluation_body
+assert vc_results["dhis2-tracked-entity-first-name"].get("value"), vc_evaluation_body
+assert vc_results["dhis2-tracked-entity-last-name"].get("value"), vc_evaluation_body
+assert vc_results["dhis2-child-program-active"].get("value") is True, vc_evaluation_body
+assert vc_results["dhis2-child-program-active"].get("satisfied") is True, vc_evaluation_body
+
 credential_body = json.loads(credential_file.read_text(encoding="utf-8"))
 credential = credential_body.get("credential") or ""
 issuer_signed_jwt = credential_body.get("issuer_signed_jwt") or ""
@@ -150,7 +208,23 @@ assert credential_body.get("format") == "application/dc+sd-jwt", credential_body
 assert credential_body.get("issuer") == "did:web:dhis2-health-notary.demo.example.gov", credential_body
 assert credential_body.get("credential_id"), credential_body
 assert credential_body.get("expires_at"), credential_body
-assert credential and issuer_signed_jwt and disclosures, credential_body
+assert credential and issuer_signed_jwt, credential_body
+assert len(disclosures) == 3, credential_body
+summary = {
+    "credential_id": credential_body.get("credential_id"),
+    "credential_profile": "dhis2_child_program_sd_jwt",
+    "format": credential_body.get("format"),
+    "issuer": credential_body.get("issuer"),
+    "expires_at": credential_body.get("expires_at"),
+    "disclosure_count": len(disclosures),
+    "credential_compact_length": len(credential),
+}
+(output_dir / "smoke-dhis2-child-program-credential-summary.json").write_text(
+    json.dumps(summary, indent=2) + "\n",
+    encoding="utf-8",
+)
 PY
 
+printf '\nIssued DHIS2 child programme SD-JWT VC summary:\n'
+cat "${output_dir}/smoke-dhis2-child-program-credential-summary.json"
 printf 'DHIS2 OpenFn health evidence and VC smoke passed\n'

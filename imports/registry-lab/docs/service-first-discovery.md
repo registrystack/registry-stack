@@ -1,4 +1,9 @@
-# Service-First Discovery Story
+# Service-first discovery story
+
+Page type: concept
+Product: Registry Lab, Registry Atlas, Registry Manifest
+Layer: metadata and consultation
+Audience: integrators and maintainers reviewing service-first discovery
 
 Registry Lab publishes a standards-facing metadata bootstrap at
 `/.well-known/api-catalog`. The live story follows the CPSV-AP service
@@ -71,7 +76,7 @@ The lab does not implement OOTS Evidence Broker or Data Service Directory
 calls. OOTS-style fulfillment is represented only as portable metadata until a
 cross-border once-only flow is added.
 
-## Definition Of Done
+## Definition of done
 
 A service-first live story is done when:
 

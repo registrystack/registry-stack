@@ -80,6 +80,34 @@ curl_status() {
   curl "${args[@]}"
 }
 
+evaluation_payload() {
+  local target_id="$1"
+  local identifier_scheme="$2"
+  local claim="$3"
+  local disclosure="${4:-predicate}"
+  local format="${5:-${claim_result_format}}"
+  local target_type="Farmer"
+  if [[ "${identifier_scheme}" == "herd_id" ]]; then
+    target_type="Herd"
+  fi
+  jq -nc \
+    --arg target_id "${target_id}" \
+    --arg identifier_scheme "${identifier_scheme}" \
+    --arg target_type "${target_type}" \
+    --arg claim "${claim}" \
+    --arg disclosure "${disclosure}" \
+    --arg format "${format}" \
+    '{
+      target: {
+        type: $target_type,
+        identifiers: [{ scheme: $identifier_scheme, value: $target_id }]
+      },
+      claims: [$claim],
+      disclosure: $disclosure,
+      format: $format
+    }'
+}
+
 wait_http() {
   local name="$1"
   local url="$2"
@@ -448,93 +476,93 @@ check "eligible voucher evaluation" curl_json POST "${notary_url}/v1/evaluations
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1001\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1001" "farmer_id" "${claim}")"
 check "FARMER-1001 is eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1001.json" "${claim}" eligible
 
 check "denied voucher evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1002.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1002\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1002" "farmer_id" "${claim}")"
 check "FARMER-1002 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1002.json" "${claim}" not_eligible
 check "FARMER-1002 reason evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1002-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1002\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1002" "farmer_id" "${manual_review_claim}" "value")"
 check "FARMER-1002 inactive parcel reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1002-reason.json" "${manual_review_claim}" "parcel.status:not_active"
 
 check "already-redeemed farmer evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1003\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1003" "farmer_id" "${claim}")"
 check "FARMER-1003 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1003.json" "${claim}" not_eligible
 check "FARMER-1003 reason evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1003\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1003" "farmer_id" "${manual_review_claim}" "value")"
 check "FARMER-1003 redeemed voucher reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1003-reason.json" "${manual_review_claim}" "voucher.redemption:already_redeemed"
 
 check "stale registration farmer evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1004.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1004\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1004" "farmer_id" "${claim}")"
 check "FARMER-1004 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1004.json" "${claim}" not_eligible
 check "FARMER-1004 reason evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1004-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1004\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1004" "farmer_id" "${manual_review_claim}" "value")"
 check "FARMER-1004 inactive registration reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1004-reason.json" "${manual_review_claim}" "farmer.registration_status:not_active"
 
 check "manual-review farmer evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1005.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1005\",\"id_type\":\"farmer_id\"},\"claims\":[\"${claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1005" "farmer_id" "${claim}")"
 check "FARMER-1005 is not auto-eligible" assert_claim_outcome "${output_dir}/agri-evaluation-farmer-1005.json" "${claim}" not_eligible
 
 check "manual-review reason evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1005-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"FARMER-1005\",\"id_type\":\"farmer_id\"},\"claims\":[\"${manual_review_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "FARMER-1005" "farmer_id" "${manual_review_claim}" "value")"
 check "FARMER-1005 requires manual review" assert_claim_value "${output_dir}/agri-evaluation-farmer-1005-reason.json" "${manual_review_claim}" "data_quality:manual_review_required"
 
 check "eligible livestock movement evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2001.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"HERD-2001\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "HERD-2001" "herd_id" "${livestock_claim}")"
 check "HERD-2001 is eligible" assert_claim_outcome "${output_dir}/agri-evaluation-herd-2001.json" "${livestock_claim}" eligible
 
 check "expired-vaccination livestock movement evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2002.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"HERD-2002\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "HERD-2002" "herd_id" "${livestock_claim}")"
 check "HERD-2002 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-herd-2002.json" "${livestock_claim}" not_eligible
 check "HERD-2002 reason evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2002-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"HERD-2002\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_reason_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "HERD-2002" "herd_id" "${livestock_reason_claim}" "value")"
 check "HERD-2002 expired vaccination reason" assert_claim_value "${output_dir}/agri-evaluation-herd-2002-reason.json" "${livestock_reason_claim}" "livestock.vaccination:expired"
 
 check "quarantine livestock movement evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2003.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"HERD-2003\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_claim}\"],\"disclosure\":\"predicate\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "HERD-2003" "herd_id" "${livestock_claim}")"
 check "HERD-2003 is not eligible" assert_claim_outcome "${output_dir}/agri-evaluation-herd-2003.json" "${livestock_claim}" not_eligible
 check "HERD-2003 reason evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-herd-2003-reason.json" \
   -H "Content-Type: application/json" \
   -H "Data-Purpose: ${livestock_purpose}" \
   -H "Accept: ${claim_result_format}" \
-  --data "{\"subject\":{\"id\":\"HERD-2003\",\"id_type\":\"herd_id\"},\"claims\":[\"${livestock_reason_claim}\"],\"disclosure\":\"value\",\"format\":\"${claim_result_format}\"}"
+  --data "$(evaluation_payload "HERD-2003" "herd_id" "${livestock_reason_claim}" "value")"
 check "HERD-2003 quarantine reason" assert_claim_value "${output_dir}/agri-evaluation-herd-2003-reason.json" "${livestock_reason_claim}" "quarantine.origin:active"
 
 check "narrated agricultural client" env DEMO_OUTPUT_DIR="${demo_dir}/output/agri-client" DEMO_CORRELATION_ID="${correlation_id}" "${script_dir}/demo-agri-flow.py"

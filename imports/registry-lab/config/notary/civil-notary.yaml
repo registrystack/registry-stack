@@ -122,9 +122,6 @@ evidence:
       subject_type: person
       value:
         type: date
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         civil:
           connector: dci
@@ -133,7 +130,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -163,9 +160,6 @@ evidence:
       subject_type: person
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         civil:
           connector: dci
@@ -174,7 +168,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -204,9 +198,6 @@ evidence:
       subject_type: person
       value:
         type: string
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         civil:
           connector: dci
@@ -215,7 +206,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one
@@ -247,9 +238,6 @@ evidence:
       subject_type: person
       value:
         type: boolean
-      inputs:
-        - name: subject_id
-          type: string
       source_bindings:
         civil:
           connector: dci
@@ -258,7 +246,7 @@ evidence:
           dataset: civil_registry
           entity: civil_person
           lookup:
-            input: subject_id
+            input: target.identifiers.national_id
             field: NATIONAL_ID
             op: eq
             cardinality: one

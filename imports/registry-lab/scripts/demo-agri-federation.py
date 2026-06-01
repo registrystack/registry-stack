@@ -199,8 +199,8 @@ def federation_payload(
     jti: str,
     profile: str,
     purpose: str,
-    subject_id: str,
-    subject_id_type: str,
+    target_id: str,
+    target_identifier_scheme: str,
     claim_id: str,
 ) -> dict[str, Any]:
     now = int(time.time())
@@ -217,7 +217,10 @@ def federation_payload(
         "profile": profile,
         "purpose": purpose,
         "request": {
-            "subject": {"id": subject_id, "id_type": subject_id_type},
+            "target": {
+                "type": "Herd" if target_identifier_scheme == "herd_id" else "Farmer",
+                "identifiers": [{"scheme": target_identifier_scheme, "value": target_id}],
+            },
             "claims": [claim_id],
         },
     }
@@ -301,8 +304,8 @@ def main() -> int:
         jti=new_ulid(),
         profile="climate_smart_input_voucher_predicate",
         purpose=PURPOSE,
-        subject_id="FARMER-1001",
-        subject_id_type="farmer_id",
+        target_id="FARMER-1001",
+        target_identifier_scheme="farmer_id",
         claim_id="eligible-for-climate-smart-input-voucher",
     )
     voucher = call_profile(notary_url, client_key, response_key, out, "voucher-eligible", voucher_payload)
@@ -314,8 +317,8 @@ def main() -> int:
         jti=new_ulid(),
         profile="climate_smart_input_voucher_predicate",
         purpose=PURPOSE,
-        subject_id="FARMER-1002",
-        subject_id_type="farmer_id",
+        target_id="FARMER-1002",
+        target_identifier_scheme="farmer_id",
         claim_id="eligible-for-climate-smart-input-voucher",
     )
     denied = call_profile(notary_url, client_key, response_key, out, "voucher-not-eligible", denied_payload)
@@ -327,8 +330,8 @@ def main() -> int:
         jti=new_ulid(),
         profile="livestock_movement_permit_predicate",
         purpose=LIVESTOCK_PURPOSE,
-        subject_id="HERD-2001",
-        subject_id_type="herd_id",
+        target_id="HERD-2001",
+        target_identifier_scheme="herd_id",
         claim_id="eligible-for-livestock-movement-permit",
     )
     livestock = call_profile(notary_url, client_key, response_key, out, "livestock-eligible", livestock_payload)

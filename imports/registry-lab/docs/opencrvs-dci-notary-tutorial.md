@@ -1,11 +1,16 @@
-# OpenCRVS DCI Registry Notary Tutorial
+# Issue an OpenCRVS birth attributes credential
+
+Page type: tutorial
+Product: Registry Lab, Registry Notary, OpenCRVS DCI
+Layer: evaluation and credential
+Audience: integrators testing Registry Notary with OpenCRVS
 
 This tutorial shows how to configure the Registry Lab OpenCRVS DCI demo, verify
 evidence from OpenCRVS, and issue a demo SD-JWT VC from that evidence.
 
 It is written for operators and demo users. You do not need to write Rust code.
 
-## What You Will Run
+## What you will run
 
 The lab starts one local Registry Notary service:
 
@@ -19,23 +24,29 @@ That service calls the OpenCRVS DCI API:
 https://dci-crvs-api.farajaland-integration.opencrvs.dev
 ```
 
-The demo verifies four pieces of evidence for a seeded OpenCRVS birth record:
+The demo verifies birth-record evidence for a seeded OpenCRVS record:
 
 - `opencrvs-birth-record-exists`
 - `opencrvs-date-of-birth`
 - `opencrvs-sex`
 - `opencrvs-age-band`
+- `opencrvs-child-given-name`
+- `opencrvs-child-family-name`
+- `opencrvs-child-date-of-birth`
+- `opencrvs-child-place-of-birth`
 
-The demo can also issue an `application/dc+sd-jwt` VC using credential profile:
+The smoke also attempts the demographic lookup path without UIN, using child
+given name, family name, and date of birth. It then issues an
+`application/dc+sd-jwt` VC using credential profile:
 
 ```text
-opencrvs_birth_summary_sd_jwt
+opencrvs_birth_attributes_sd_jwt
 ```
 
 This profile is intentionally machine-to-machine for the lab. It does not bind
 the credential to a citizen wallet holder.
 
-## Before You Start
+## Before you start
 
 Install or have access to:
 
@@ -55,7 +66,7 @@ curl --version
 jq --version
 ```
 
-## Step 1: Generate Local Lab Secrets
+## Step 1: Generate local lab secrets
 
 If this is a fresh checkout, generate the lab's local `.env` file:
 
@@ -94,7 +105,7 @@ it into tickets, commits, screenshots, or chat.
 current OpenCRVS DCI smoke uses OAuth bearer-token authentication and unsigned
 DCI requests.
 
-## Step 3: Run The OpenCRVS Demo
+## Step 3: Run the OpenCRVS demo
 
 Run:
 
@@ -111,16 +122,17 @@ The script will:
 4. Discover one seeded OpenCRVS demo UIN if `OPENCRVS_DEMO_SUBJECT_UIN` is not
    already set.
 5. Start `opencrvs-dci-notary` on port `4352`.
-6. Evaluate the four OpenCRVS evidence claims.
-7. Issue an SD-JWT VC from those evidence results.
+6. Evaluate OpenCRVS evidence claims by UIN.
+7. Attempt a no-UIN lookup by child given name, family name, and date of birth.
+8. Issue an SD-JWT VC with child name, date of birth, and place of birth.
 
 Expected ending:
 
 ```text
-OpenCRVS DCI Registry Notary smoke passed
+Issued OpenCRVS birth attribute SD-JWT VC
 ```
 
-## Step 4: Inspect The Output
+## Step 4: Inspect the output
 
 The smoke writes artifacts under:
 
@@ -132,6 +144,7 @@ Useful files:
 
 - `summary.json`: evidence claim summary
 - `evaluation.json`: full JSON evidence evaluation response
+- `demographic-evaluation.json`: no-UIN lookup result or problem response
 - `vc-evaluation.json`: evaluation response prepared for VC issuance
 - `credential-summary.json`: safe credential response summary
 - `credential.json`: full SD-JWT VC issuance response
@@ -147,6 +160,7 @@ Example shape:
 ```json
 {
   "credential_id": "urn:ulid:...",
+  "credential_profile": "opencrvs_birth_attributes_sd_jwt",
   "format": "application/dc+sd-jwt",
   "issuer": "did:web:opencrvs-dci.demo.example.gov",
   "expires_at": "2026-05-30T07:42:38Z",
@@ -155,7 +169,7 @@ Example shape:
 }
 ```
 
-## Step 5: Test Evidence Manually
+## Step 5: Test evidence manually
 
 The smoke script stores a discovered seeded UIN in `.env.local` as
 `OPENCRVS_DEMO_SUBJECT_UIN`. Load it:
@@ -172,21 +186,62 @@ curl -fsS -X POST http://127.0.0.1:4352/v1/evaluations \
   -H "content-type: application/json" \
   -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
   -d "$(jq -nc --arg subject "$OPENCRVS_DEMO_SUBJECT_UIN" '{
-    subject: { id: $subject, id_type: "UIN" },
+    target: {
+      type: "Person",
+      identifiers: [{ scheme: "UIN", value: $subject, issuer: "opencrvs" }]
+    },
     claims: [
       "opencrvs-birth-record-exists",
       "opencrvs-date-of-birth",
       "opencrvs-sex",
-      "opencrvs-age-band"
+      "opencrvs-age-band",
+      "opencrvs-child-given-name",
+      "opencrvs-child-family-name",
+      "opencrvs-child-date-of-birth",
+      "opencrvs-child-place-of-birth"
     ],
     disclosure: "value",
     format: "application/vnd.registry-notary.claim-result+json"
   }')" | jq .
 ```
 
-If this succeeds, you should see four `results`.
+If this succeeds, you should see eight `results`.
 
-## Step 6: Issue A VC Manually
+You can also test the no-UIN demographic lookup path after the smoke has
+written `summary.json`:
+
+```bash
+GIVEN_NAME="$(jq -r '.claims[] | select(.claim_id == "opencrvs-child-given-name") | .value' output/opencrvs-dci/summary.json)"
+FAMILY_NAME="$(jq -r '.claims[] | select(.claim_id == "opencrvs-child-family-name") | .value' output/opencrvs-dci/summary.json)"
+BIRTHDATE="$(jq -r '.claims[] | select(.claim_id == "opencrvs-child-date-of-birth") | .value' output/opencrvs-dci/summary.json)"
+
+curl -fsS -X POST http://127.0.0.1:4352/v1/evaluations \
+  -H "x-api-key: ${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-api-token}" \
+  -H "content-type: application/json" \
+  -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
+  -d "$(jq -nc \
+    --arg given_name "$GIVEN_NAME" \
+    --arg family_name "$FAMILY_NAME" \
+    --arg birthdate "$BIRTHDATE" '{
+      target: {
+        type: "Person",
+        attributes: {
+          given_name: $given_name,
+          family_name: $family_name,
+          birthdate: $birthdate
+        }
+      },
+      claims: ["opencrvs-birth-record-exists-by-demographics"],
+      disclosure: "value",
+      format: "application/vnd.registry-notary.claim-result+json"
+    }')" | jq .
+```
+
+On the current Farajaland integration data this may return `409` when the live
+OpenCRVS search endpoint does not produce a unique match. That does not block
+the VC path, which uses the UIN-backed evidence evaluation.
+
+## Step 6: Issue a VC manually
 
 First create an evaluation in SD-JWT VC format and capture its `evaluation_id`:
 
@@ -197,12 +252,15 @@ EVAL_ID="$(
     -H "content-type: application/json" \
     -H "data-purpose: https://demo.example.gov/purpose/opencrvs-dci-lab" \
     -d "$(jq -nc --arg subject "$OPENCRVS_DEMO_SUBJECT_UIN" '{
-      subject: { id: $subject, id_type: "UIN" },
+      target: {
+        type: "Person",
+        identifiers: [{ scheme: "UIN", value: $subject, issuer: "opencrvs" }]
+      },
       claims: [
-        "opencrvs-birth-record-exists",
-        "opencrvs-date-of-birth",
-        "opencrvs-sex",
-        "opencrvs-age-band"
+        "opencrvs-child-given-name",
+        "opencrvs-child-family-name",
+        "opencrvs-child-date-of-birth",
+        "opencrvs-child-place-of-birth"
       ],
       disclosure: "value",
       format: "application/dc+sd-jwt"
@@ -220,13 +278,13 @@ curl -fsS -X POST http://127.0.0.1:4352/v1/credentials \
   -H "content-type: application/json" \
   -d "$(jq -nc --arg evaluation_id "$EVAL_ID" '{
     evaluation_id: $evaluation_id,
-    credential_profile: "opencrvs_birth_summary_sd_jwt",
+    credential_profile: "opencrvs_birth_attributes_sd_jwt",
     format: "application/dc+sd-jwt",
     claims: [
-      "opencrvs-birth-record-exists",
-      "opencrvs-date-of-birth",
-      "opencrvs-sex",
-      "opencrvs-age-band"
+      "opencrvs-child-given-name",
+      "opencrvs-child-family-name",
+      "opencrvs-child-date-of-birth",
+      "opencrvs-child-place-of-birth"
     ],
     disclosure: "value"
   }')" |
@@ -253,14 +311,17 @@ Expected result:
 }
 ```
 
-## Common Problems
+## Troubleshooting
 
 ### `source.not_found`
 
 If you send this:
 
 ```json
-"subject": { "id": "<UIN>", "id_type": "UIN" }
+"target": {
+  "type": "Person",
+  "identifiers": [{ "scheme": "UIN", "value": "<UIN>", "issuer": "opencrvs" }]
+}
 ```
 
 you are sending the literal string `<UIN>`. OpenCRVS will not have a record for
@@ -287,7 +348,7 @@ just generate
 
 Create `.env.local` using Step 2.
 
-### Token Expired Or Authentication Failed
+### Token expired or authentication failed
 
 Run the smoke again:
 
@@ -299,7 +360,7 @@ The script and Registry Notary fetch fresh OpenCRVS OAuth tokens from the
 configured client credentials. Re-check `OPENCRVS_DCI_CLIENT_ID` and
 `OPENCRVS_DCI_CLIENT_SECRET` in `.env.local` if authentication still fails.
 
-### Port 4352 Is Already In Use
+### Port 4352 is already in use
 
 Set another local port in `.env.local`:
 
@@ -315,7 +376,7 @@ just opencrvs-dci
 
 Use the new port in manual curl commands.
 
-### Docker Is Not Running
+### Docker is not running
 
 Start Docker Desktop, then rerun:
 
@@ -323,7 +384,7 @@ Start Docker Desktop, then rerun:
 just opencrvs-dci
 ```
 
-## Security Notes
+## Security notes
 
 - `.env.local` contains live OpenCRVS client credentials and should stay local.
 - `output/opencrvs-dci/credential.json` contains a full demo credential

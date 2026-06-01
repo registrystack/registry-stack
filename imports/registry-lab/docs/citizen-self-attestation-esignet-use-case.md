@@ -1,12 +1,17 @@
-# eSignet Citizen Self-Attestation Use Case
+# eSignet citizen self-attestation use case
+
+Page type: concept and task
+Product: Registry Lab, Registry Notary, eSignet
+Layer: evaluation and credential
+Audience: integrators and demo operators testing citizen self-attestation
 
 ## Goal
 
 A citizen can request a Registry Notary attestation about themself using an
 eSignet-issued OIDC credentials. Registry Notary verifies the access token,
 optionally verifies the eSignet ID token for authentication freshness, binds the
-requested subject to a verified access-token or UserInfo claim, reads only the
-configured registry fact, and returns a bounded attestation result.
+requested target identifier to a verified access-token or UserInfo claim, reads
+only the configured registry fact, and returns a bounded attestation result.
 
 ## Actors
 
@@ -19,7 +24,7 @@ configured registry fact, and returns a bounded attestation result.
   API.
 - Civil registry source: fixture-backed source of the civil fact.
 
-## Happy Path
+## Happy path
 
 1. The citizen authenticates with eSignet through the supported OIDC
    Authorization Code with PKCE flow.
@@ -33,19 +38,19 @@ configured registry fact, and returns a bounded attestation result.
 4. Registry Notary validates issuer, signature, audience, client, token
    lifetime, configured self-attestation scope, and any configured ID
    token/UserInfo companion JWTs.
-5. Registry Notary checks that `subject.id` in the request exactly matches the
-   configured token claim, for example `national_id`.
+5. Registry Notary checks that the request target identifier exactly matches
+   the configured token or UserInfo claim, for example `national_id`.
 6. Registry Notary reads the civil Relay for the allowed claim
    `person-is-alive`.
 7. Registry Notary returns a claim result showing the citizen is alive.
 
-## Security Invariants
+## Security invariants
 
-- Notary denies before any registry source read when the requested subject does
-  not match the token-bound subject.
+- Notary denies before any registry source read when the requested target
+  identifier does not match the token-bound subject.
 - Self-attestation can evaluate only explicitly allowed claims, purposes,
   disclosures, formats, and credential profiles.
-- A request for another subject, such as `NID-1002`, is rejected even if the
+- A request for another identifier, such as `NID-1002`, is rejected even if the
   token is otherwise valid.
 - Audit events carry `access_mode=self_attestation` and do not write raw bearer
   tokens or raw citizen identifiers.
@@ -53,7 +58,7 @@ configured registry fact, and returns a bounded attestation result.
   not accept unsigned, opaque, shell-decoded, or request-body identity claims
   from the wallet.
 
-## Demo Evidence
+## Demo evidence
 
 The optional smoke script writes artifacts under
 `output/citizen-self-attestation/`:
@@ -80,10 +85,10 @@ share them without redaction.
 - `report.md`: short human-readable evidence report with the successful claim,
   denied other-person control, and self-attestation audit excerpt.
 
-Optional follow-up evidence can add SD-JWT VC issuance from the successful
-evaluation once the wallet holder binding is available in the lab.
+The OID4VCI probe adds SD-JWT VC issuance from the successful evaluation when
+the lab is run with holder proof generation.
 
-## Running The Optional Smoke
+## Run the optional smoke
 
 The first implementation is intentionally not part of `just quick`. It runs only
 when requested:
@@ -132,7 +137,7 @@ Notary fetches the UserInfo endpoint itself with the access token and verifies
 the returned signed JWT before accepting the subject-binding claim. The UserInfo
 response must be JWS/JWT, not an encrypted JWE, for this lab path.
 
-### Local eSignet Mock Identity
+### Local eSignet mock identity
 
 When testing against a local eSignet mock identity store, seed the authenticated
 citizen so the signed UserInfo JWT contains the same national identifier used by
@@ -186,7 +191,7 @@ safe, redacted checkpoints for the access token, ID token assurance, signed
 UserInfo binding, discovery, successful self claim, failed other-person control,
 and audit proof.
 
-## Optional OID4VCI Probe
+## Optional OID4VCI probe
 
 The OID4VCI commands are optional and are not part of `just quick`. They reuse
 the same eSignet login/code/token flow, enable an OID4VCI block in the generated
@@ -220,7 +225,7 @@ Notary does not expose OID4VCI endpoints yet, the command fails and leaves
 `output/citizen-oid4vci/` rather than passing silently. For real wallet checks
 with Walt Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
-## Integration Decision
+## Integration decision
 
 The simplest integration is access-token subject binding:
 
@@ -249,7 +254,7 @@ access token, use the implemented companion-token path:
 
 Do not move the claim binding into an unverified request field.
 
-## Implementation Plan
+## Implementation plan
 
 1. Keep the current Zitadel scenarios as generic OIDC and machine-client demos.
 2. Add an optional eSignet citizen flow driven by
